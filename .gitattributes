@@ -1,0 +1,9 @@
+# 本仓库一律 LF——工具链可能无意识转换行符，造成整文件 diff 噪音
+* text=auto eol=lf
+# 内置 vendor 副本按字节钉固哈希校验（gen_hyperframes.py），任何换行符
+# 规范化都会改变字节、导致校验失败静默回落 CDN——一律按 binary 处理
+assets/*.min.js -text
+*.png binary
+*.jpg binary
+*.wav binary
+*.mp4 binary

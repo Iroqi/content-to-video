@@ -1,0 +1,33 @@
+/* ── verse 句子流（两画幅统一的双行窗口滚动字幕）────────────────────────
+   竖屏 = 固定标题区/固定 4:3 画布 + 钉底句子流：窗口高由 vertical.verse.windowHeight
+   控制，DOM 渲染在 seg-card 尾部、绝对定位钉在内容区底部
+   （见 composition.css 的 vertical 覆盖块）。横屏 = 左栏内的文档流窗口
+   （base 规则相对定位即命中，无需额外覆盖）。
+   开屏/结尾为 agenda 卡：其 .verse 收在 .agenda-col 列尾随流锚底
+   （豁免规则在 composition.css 的 agenda 块）。
+   clip 上下各留 verse.clipPad 内边距且滚动锚点同步同值：首句/尾句完整落在
+   mask 渐隐区（上下各 14%）之外，不被边缘虚化。不变量：
+   verse.clipPad ≥ 14% × verse.windowHeight（横屏 260→36.4、竖屏 280→39.2，
+   两画幅 clipPad 均为 40）。 */
+.verse{position:relative;width:100%;height:var(--ctv-verse-h);overflow:hidden;
+  -webkit-mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent);
+  mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent)}
+/* clip 必须定位：verse-line.offsetTop 需要相对 clip 而不是绝对定位的
+   seg-card（否则首行 offsetTop 巨大，滚动公式恒被钳到段落尾部——
+   第一句永远在窗口外） */
+/* 这里刻意**不写 transition**：成片是逐帧 seek 时间线截出来的，每一帧的
+   画面必须是"时间线时刻"的纯函数。CSS 过渡按墙上时钟走、不受 GSAP 驱动，
+   实测（seek 到 12.0s 后立即读取计算样式）状态停在过渡起点：
+   inline `translateY(-220px)` → computed `matrix(1,0,0,1,0,0)`、active 行
+   opacity 0.62（该是 1）、颜色还是主题色而非 accent，6 条 CSSTransition
+   全部 `playState:running, currentTime:0`。表现就是句子流不跟着滚动、
+   高亮不上色——而且 bleed 多少取决于抓取每帧花多久，同一条稿件两次渲染
+   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。 */
+.verse-clip{position:relative;padding:var(--ctv-verse-clip) 0}
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:.62;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+.verse-line.active{opacity:1!important}
+/* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
+   的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
+.verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
+.verse-line.past{opacity:.45!important}
+[data-aspect="vertical"] .verse{position:absolute!important;left:var(--ctv-v-pad-left)!important;right:var(--ctv-v-pad-left)!important;bottom:var(--ctv-v-verse-bottom)!important;width:auto!important;height:var(--ctv-verse-h)!important;margin:0!important}

@@ -1,0 +1,151 @@
+/* ── Content-to-Video composition stylesheet ──────────────────────────────
+   本文件是版式的**静态骨架**：结构与选择器写死，数值一律走 var(--ctv-*)。
+   变量由 html_renderer.py 从 _template.py 内联的版式数据派生后注入本文件末尾的
+   :root 块。
+   注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
+   字符串也会被替换（会把整份变量表塞进注释里）。
+   纪律：本文件内**不得出现硬编码尺寸**——改版式只改 _template.py 内联的版式数据。
+
+   双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
+   layout.vertical / layout.landscape 块）。竖屏 = 固定标题区 + 4:3 画布 +
+   钉底句子流；横屏 = 左栏垂直居中文本块 + 右侧媒体卡（垂直居中）。
+   开屏/结尾两画幅均为纯文字 agenda 卡（题头 + 章节罗列/要点总结 +
+   句子流锚底），不再配图；内容段强制配图。
+   ────────────────────────────────────────────────────────────────────── */
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:var(--ctv-w);height:var(--ctv-h);overflow:hidden;background:var(--ctv-bg-gradient)}
+/* local() 顺序即优先级：macOS/Windows 原名在前，Linux 沙箱只有
+   "Noto Sans CJK SC/JP"（"Noto Sans SC" 会回落到无 CJK 字形的
+   NotoSans-Regular.ttf），兜底名必须显式列出。 */
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei"),local("MicrosoftYaHei"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"PingFang SC";src:local("PingFang SC"),local("PingFangSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"Noto Sans SC";src:local("Noto Sans SC"),local("NotoSansSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+/* 上面三枚是"字体栈里出现过的名字都要有 @font-face"：hyperframes 的
+   StaticGuard 会把 font-family 里每个未在 @font-face / 自动解析字体表
+   中出现的家族名判成 error（font_family_without_font_face），判定基于
+   名字而不是解析结果——所以兜底名自身也必须声明，src 只用 local()，
+   本机没有该字体时依旧按字体栈正常回落。 */
+@font-face{font-family:"Noto Sans CJK SC";src:local("Noto Sans CJK SC"),local("NotoSansCJKsc-Regular")}
+@font-face{font-family:"Noto Sans CJK JP";src:local("Noto Sans CJK JP"),local("NotoSansCJKjp-Regular")}
+body{font-family:var(--ctv-font-family)}
+
+.bg{position:absolute;inset:0;background:var(--ctv-bg-gradient)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(var(--ctv-grid-color) 1px,transparent 1px),linear-gradient(90deg,var(--ctv-grid-color) 1px,transparent 1px);background-size:var(--ctv-grid-size) var(--ctv-grid-size);-webkit-mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%);mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%)}
+
+/* 段落氛围光：每段把自己的 accent 稀释成一团大半径径向光垫在内容之下
+   （z-index:-1 + isolation 把它压在卡片内容之上、却仍在页面背景/网格之上），
+   让不同段落各有色彩氛围，破除整片米白的单调。 */
+[data-aspect="vertical"] .seg-card{isolation:isolate}
+[data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
+.seg-card{position:absolute;inset:0}
+.seg-title-wrap{position:absolute}
+.seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
+.tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}
+.seg-progress{position:absolute;bottom:0;left:0;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
+/* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
+   不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。 */
+[data-aspect="vertical"] .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+/* 槽位不铺底色，素材直接落在页面背景上；图表/公式卡另有淡染面板。 */
+.seg-image{position:absolute;overflow:hidden}
+.seg-image img{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 视频与图像同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
+   横屏 <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，
+   右边留空、下边被裁）。竖屏另有 !important 版本，两画幅统一靠这条兜底。 */
+.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 所有配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边） */
+[data-aspect="vertical"] .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+
+/* ── C2 图表/公式媒体卡（chart-media 槽位）──
+   面板淡染与描边全部从 seg-card 注入的 --seg-accent 经 color-mix 派生，
+   renderer 不再逐分支传色。槽位底色与页面底色几乎同色时，没有真实图像的
+   媒体卡会"隐形"，淡染面板 + 内描边给出可辨边界；::after 盖在 canvas
+   之上只画 1px 内描边（::before 会被子元素盖住，不用）。 */
+.chart-media canvas{width:100%!important;height:100%!important;display:block}
+.chart-media{background:linear-gradient(color-mix(in srgb,var(--seg-accent) 8%,transparent),color-mix(in srgb,var(--seg-accent) 8%,transparent)),var(--ctv-media-bg)}
+.chart-formula{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--ctv-fc-pad);text-align:center;color:var(--ctv-text-color)}
+.chart-title{font-size:var(--ctv-fc-title-size);font-weight:700;opacity:var(--ctv-fc-title-opacity);margin-bottom:var(--ctv-fc-title-mb)}
+.formula-value{font-size:var(--ctv-fc-value-size);font-weight:800;letter-spacing:.03em;text-wrap:balance;font-family:var(--ctv-font-mono)}
+
+/* ── Vertical（竖屏 3:4，1080x1440）大标题 + 图片 + 句子流 ──────────────
+   仅在 #root[data-aspect="vertical"] 时命中。portrait（3:4）复用本块全部规则。
+   竖屏只有 verse 模式。结构：固定标题区（1 行优先、最多 2 行）→ 固定 4:3 画布
+   → 固定在底部的句子流。标题不参与画布与 verse 的定位。
+   侧边距统一由 --ctv-v-pad-left 控制（标题/画布/句子流对齐同一轴线）。
+   注意：本块全部是绝对定位——绝对定位子元素的包含块是 padding box，
+   segCard 的 padding 不会内缩它们，轴线必须显式写成 left/right 值；
+   同理百分比宽度按整屏 1080 解析而非内容盒宽，画布宽必须用变量
+   --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。 */
+[data-aspect="vertical"] .seg-card{position:absolute!important;inset:0!important;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)!important}
+[data-aspect="vertical"] .seg-title-wrap{position:absolute!important;left:var(--ctv-v-pad-left)!important;right:var(--ctv-v-pad-left)!important;top:var(--ctv-v-title-top)!important;height:var(--ctv-v-title-area)!important;padding:0!important;overflow:hidden!important;text-align:left!important}
+[data-aspect="vertical"] .seg-title{display:-webkit-box!important;-webkit-box-orient:vertical!important;-webkit-line-clamp:var(--ctv-v-title-lines)!important;overflow:hidden!important;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)!important}
+[data-aspect="vertical"] .tagline{margin-top:var(--ctv-v-tagline-mt)!important;padding-left:var(--ctv-v-tagline-indent);white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;position:relative}
+/* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）。
+   开屏/结尾已是纯文字 agenda 卡，不再出现 tagline。 */
+[data-aspect="vertical"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-v-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-v-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
+[data-aspect="vertical"] .seg-image{position:absolute!important;top:var(--ctv-v-img-top)!important;left:50%!important;right:auto!important;transform:translateX(-50%)!important;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2)!important;height:var(--ctv-v-img-height)!important;margin:0!important;border-radius:var(--ctv-v-img-radius)!important}
+[data-aspect="vertical"] .seg-image img,[data-aspect="vertical"] .seg-image video{width:100%!important;height:100%!important;object-fit:cover!important}
+
+__CTV_SUBTITLE_CSS__
+
+/* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
+   仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
+   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。
+   氛围光偏媒体区中心（68% 50%），纯文字 agenda 卡则回正（50% 45%）。 */
+[data-aspect="landscape"] .seg-card{isolation:isolate}
+[data-aspect="landscape"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(46% 52% at 68% 50%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
+[data-aspect="landscape"] .agenda-card::after{background:radial-gradient(46% 52% at 50% 45%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
+[data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
+[data-aspect="landscape"] .seg-title-wrap{position:static}
+/* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
+   左栏是垂直居中的 flex 列，长标题按 text-wrap:balance 自由折行，长度守卫只
+   降字号（62→54→48）。因此 _template.py 的 landscape.title 里没有 maxLines，
+   竖屏那份才有——给横屏补一个没人读的行数键，只会骗下一个改版式的人。 */
+[data-aspect="landscape"] .seg-title{line-height:var(--ctv-l-title-lh);text-wrap:balance}
+[data-aspect="landscape"] .tagline{padding-left:var(--ctv-l-tag-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+[data-aspect="landscape"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-l-tag-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-l-tag-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
+/* 媒体卡四周留 96 白、垂直居中。 */
+[data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
+[data-aspect="landscape"] .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+/* 进度条轨道与竖屏同款（整宽低对比底轨，fill 由 GSAP 推宽度）。 */
+[data-aspect="landscape"] .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+
+/* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
+   全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
+   吃留白——省出的空间用来抬进行数上限）、句子流锚底。几何差异
+   （inset/字号）全部由 --ctv-ag-* 令牌承载，renderer 对两画幅输出同一套结构。 */
+.agenda-col{position:absolute;left:var(--ctv-ag-x);right:var(--ctv-ag-x);top:var(--ctv-ag-t);bottom:var(--ctv-ag-b);display:flex;flex-direction:column;color:var(--ctv-text-color)}
+.agenda-kicker{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-kicker);font-weight:600;letter-spacing:.14em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agenda-head .seg-title{margin-top:var(--ctv-ag-title-mt);line-height:var(--ctv-ag-title-lh);text-wrap:balance}
+/* agenda 正文列表既是生长块也是可牺牲块：行数没吃满 maxRows 预算时，
+   flex:1 把列里剩的高度收进来、交给 space-evenly 在行的上下与之间均摊
+   （行距和"题头→首行"的间距一起拉开，不再把空白全堆到句子流上方）；
+   行数超出时 min-height:0 解除 flex 默认不缩底、overflow:hidden 从尾部
+   裁行。行距下限由 .agenda-row 自身的 rowPad 提供，所以满额预算时
+   space-evenly 几乎无剩余可分，版式与改动前一致。
+   .agenda-tail（cta 尾行）与题头、句子流窗口都 flex-shrink:0，永远完整。 */
+.agenda{margin-top:var(--ctv-ag-list-mt);flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:space-evenly}
+.agenda-tail{flex-shrink:0}
+.agenda-row{display:flex;align-items:baseline;gap:var(--ctv-ag-gap);padding:var(--ctv-ag-row-pad) 4px;border-top:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-row:last-child{border-bottom:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-tail .agenda-row:first-child{border-top:0}
+.ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
+/* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
+   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。 */
+.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.25;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
+/* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
+   与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让
+   长旁白按句数无限撑高、吃掉整列预算，把行列表挤出屏幕；定高窗口 +
+   运行时滚动锚点保证句子流占位恒定，挤压只落在可收缩的正文列表上。
+   margin-top:auto 由句子流吸收列内剩余空间（题头/列表贴顶成块，留白
+   全部沉到列表与句子流之间），挤压时 auto 归零、无副作用。 */
+.agenda-col .verse{position:static!important;left:auto!important;right:auto!important;bottom:auto!important;width:100%!important;max-width:var(--ctv-ag-verse-w);margin:auto 0 0!important;flex-shrink:0}
+/* agenda 标题整体豁免竖屏内容段标题钳制（-webkit-box / line-clamp /
+   overflow:hidden / max-height 四件套）：agenda 卡是全高 flex 列、没有固定
+   标题区，单行大标题不需要行数钳制，挂着 overflow:hidden 反而会把雅黑字体
+   度量盒（≈1.32em）上下各约 9px 的溢出裁掉。豁免后长标题整段折行而非静默
+   截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。 */
+[data-aspect="vertical"] .agenda-head .seg-title{display:block!important;overflow:visible!important;-webkit-line-clamp:none!important;max-height:none!important}
+
+__CTV_ROOT_VARS__

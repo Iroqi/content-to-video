@@ -455,13 +455,9 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
         if result is not None and result.returncode != 0:
             print(f"  [concat stderr] {result.stderr[-500:]}", file=sys.stderr)
 
-    # Cleanup temp files
+    # 清理临时文件（尽力而为，删不掉也不影响已产出的母带）
     for tmp in [list_file] + temp_files:
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        _remove_quiet(tmp)
 
     return result is not None and result.returncode == 0
 
@@ -515,7 +511,7 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     return True
 
 
-def build_loudnorm_filter(target_lufs=-16.0):
+def build_loudnorm_filter(target_lufs):
     """构建 ffmpeg loudnorm 滤镜串（单遍，目标整体响度 target_lufs LUFS）。
 
     目标 -16 LUFS 是网络视频/播客常见响度；TP/LRA 用固定值即可。

@@ -4,8 +4,9 @@
  * index.html 只通过外部脚本引用 preview.js（注意：注释中不要出现字面
  * 量“/script”尖括号序列，否则 hyperframes 单文件打包内联时会截断）。
  * 打开 index.html：真实浏览器直接进入预览（默认停在首帧、点击播放、窗口自适应、
- * 底部控制条、进度条、播完重播）；Hyperframes 渲染走 headless（navigator.webdriver
- * === true 且 URL 无 ?preview）时第一行退出，不影响出片。
+ * 底部控制条、进度条、播完重播）；Hyperframes 渲染走 headless 时第一行退出，
+ * 不影响出片。headless 判定用两个独立信号（navigator.webdriver 或 UA 含
+ * HeadlessChrome，任一命中即退出），URL 带 ?preview 可强制进入预览做调试。
  */
 (function () {
   // 显式 ?preview 参数（精确匹配键名）强制进入预览——headless 调试时用

@@ -208,10 +208,10 @@ class BadAudioResponseError(Exception):
     """TTS 响应里没有音频（chat.completions 返回了纯文本）。
 
     几乎总是 --base-url/--model 指向了不支持 audio 参数的网关或模型，
-    重试 N 次结果完全一样。必须整句放弃并让调用方尽早终止——否则 100 句
-    × 每句 3 次重试 = 300 次 billable 调用全部白烧后才以
-    "All sentences failed" 收场，且中间的报错是迷惑性的
-    'NoneType' object has no attribute 'data'。
+    重试 N 次结果完全一样。按确定性失败处理：首次命中即整句放弃、不进
+    重试循环（_is_non_retryable）——否则 100 句 × 每句 3 次重试 = 300 次
+    billable 调用全部白烧。全句皆败时管线以 "All sentences failed" 退出；
+    每句至多一次的探测调用是该端点错配下无法再避免的最小开销。
     """
 
 
@@ -234,6 +234,12 @@ def _is_non_retryable(exc):
     return False
 
 
+# 每句音频 (sNNN.wav) 的伴生文件后缀集合：.orig.wav 是变速前的原速备份，
+# .spd/.spd.tmp.wav 是语速状态，.failed 是"本句放弃"标记。凡动一句的音频，
+# 这些后缀都要跟着动（见 _clear_stale_sidecars / _drop_stale_cache）。
+_SIDECAR_SUFFIXES = (".orig.wav", ".spd", ".spd.tmp.wav", ".failed")
+
+
 def _clear_stale_sidecars(out_path):
     """新合成前清掉上一轮残留的变速/兜底 sidecar。
 
@@ -248,7 +254,7 @@ def _clear_stale_sidecars(out_path):
     据此跳过变速，否则残留的旧 .orig.wav 会顶掉新合成的音频。
     """
     ok = True
-    for suffix in (".orig.wav", ".spd", ".spd.tmp.wav", ".failed"):
+    for suffix in _SIDECAR_SUFFIXES:
         p = out_path + suffix
         if not os.path.exists(p):
             continue
@@ -268,8 +274,8 @@ def _clear_stale_sidecars(out_path):
 
 
 def synth_sentence(client, text, voice_id, voice_style, out_path,
-                  ffmpeg_path=None, speed=1.0, max_retries=3,
-                  sentence_label="", model="mimo-v2.5-tts", api_timeout=30):
+                   ffmpeg_path, speed, model, api_timeout,
+                   max_retries=3, sentence_label=""):
     """Call MiMo TTS API for a single sentence. Returns (ok, speed_applied).
 
     ok：TTS 音频是否成功落盘；speed_applied：atempo 变速是否落上
@@ -283,15 +289,14 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
     - audio param: {"format": "wav", "voice": voice_id}
     - Response: base64-encoded WAV in choices[0].message.audio.data
 
-    `speed` (default 1.0) applies a deterministic tempo change via
-    ffmpeg atempo after synthesis, so the spoken rate is exactly Nx
-    regardless of the TTS model's natural pace.
+    `speed` applies a deterministic tempo change via ffmpeg atempo after
+    synthesis, so the spoken rate is exactly Nx regardless of the TTS
+    model's natural pace.
 
     `sentence_label` is included in retry/error logs for easier diagnosis
     when processing long scripts with many sentences.
 
-    `api_timeout` (default 30s) prevents the pipeline from hanging on a
-    single slow API call.
+    `api_timeout` prevents the pipeline from hanging on a single slow API call.
     """
     messages = []
     if voice_style:
@@ -371,14 +376,9 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
     # 注意：这一步在 API 重试循环之外——音频已经落盘，atempo 抛异常
     # （如 subprocess 超时）时重新调 TTS 只会白烧额度。变速失败保留
     # 原速音频即可，时长由 pipeline 实测，字幕时间轴仍然准确。
-    if not ffmpeg_path:
-        # 无 ffmpeg 时变速不可能执行。必须按"未施加"上报（speed_applied=False）
-        # ——调用方据此在 .spd 里写 1.0 而非请求语速；若这里谎报已施加，下次
-        # --resume 会把仍在原速的音频永久钉在假速率上（.spd 是 resume 的唯一状态来源）。
-        print(f"    [{sentence_label or text[:30] + '...'}][speed-skip] "
-              f"ffmpeg 不可用，跳过变速（音频保持原速）",
-              file=sys.stderr, flush=True)
-        return True, False
+    # （不在此处再判 ffmpeg_path 是否为空：get_ffmpeg 最差也返回 "ffmpeg"
+    # 兜底串，main() 又用 ffmpeg_usable 预检不过就 exit——TTS 阶段根本
+    # 到不了空值状态。）
     speed_applied = True
     if abs(speed - 1.0) > 0.01:
         try:
@@ -463,7 +463,9 @@ def _drop_stale_cache(out_path):
     调用方紧接着无条件把该句排进重合成队列，合成侧以覆盖写落盘，
     失效缓存不会被当成"文件存在=可用"。
     """
-    for suffix in ("", ".sha", ".spd", ".spd.tmp.wav", ".failed", ".orig.wav"):
+    # "" = wav 本体；.sha 只在这里清（新合成路径上 .sha 由合成成功后重写，
+    # 不需要提前隔离，见 _clear_stale_sidecars 的调用注释）。
+    for suffix in ("", ".sha") + _SIDECAR_SUFFIXES:
         p = out_path + suffix
         if p and os.path.exists(p):
             try:
@@ -643,7 +645,11 @@ def _build_parser():
                         help="响度归一化目标（LUFS，如 -16）。默认不做归一化；"
                              "设置后对最终音频做单遍 loudnorm")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip sentences whose WAV already exists with valid duration")
+                        help="仅当缓存 WAV 能被「证明」属于当前稿件时跳过重合成："
+                             "内容指纹 .sha、可测时长、无截断、语速状态 .spd 全部"
+                             "对上才算命中（命中打 [skip,cached]/[skip,respeed]，"
+                             "失效打「缓存失效（原因）」）。判定口径见 "
+                             "references/tts_pipeline.md")
     parser.add_argument("--bgm", default=None,
                         help="Background music file path (mp3/wav/ogg)")
     parser.add_argument("--bgm-volume", type=float, default=0.15,
@@ -710,8 +716,6 @@ def _validate_args(parser, args):
     if args.bgm and not os.path.exists(args.bgm):
         print(f"[warn] --bgm 文件不存在，已忽略 BGM 混音：{args.bgm}",
               file=sys.stderr)
-        # 清空 args.bgm 之后混音分支压根不跑，也就走不到 bgm_mix_failed，
-        # 所以另记一个标记，"显式要了 BGM 却没有"照样进 degraded 明细。
         args.bgm_missing_file = True
         args.bgm = None
 
@@ -751,11 +755,11 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
-    # 容差必须比下游契约的"最后一句不得超出 total_duration + 250ms"更严，否则
-    # 这一步判为成功、run.py/gen_hyperframes 加载 manifest 时又必然拒收——TTS 额度
-    # 已经花完才告诉用户产物不能用，是最坏的一种失败时机。真正的偏差（格式不一致
-    # 导致的错采样率截断）量级是秒到几十秒，250ms 足够吸收逐句 round(x,3) 的累计
-    # 舍入与 concat 的边界误差。
+    # 容差与下游契约的"最后一句不得超出 total_duration + 250ms"同档（时间轴按
+    # 逐句时长+句间静音排布，这里 drift>0.25 与下游末句越界是同一个条件）：
+    # 这一步放行、下游却拒收，就意味着 TTS 额度已经花完才告诉用户产物不能用——
+    # 最坏的失败时机。真正的偏差（格式不一致导致的截断）量级是秒到几十秒，
+    # 250ms 足够吸收逐句 round(x,3) 的累计舍入与 concat 的边界误差。
     if drift > 0.25:
         print(f"[error] 拼接产物比预期短 {drift:.2f}s（实测 {total_dur:.2f}s / "
               f"预期 {expected_total:.2f}s）——多半是句子音频格式不一致或写盘被"
@@ -847,7 +851,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
             "duration": s["duration"],
         }
         if s.get("speaker"):
-            entry["speaker"] = s["speaker"]  # 双人对话段落：说话人显示标签
+            entry["speaker"] = s["speaker"]  # 对话段：说话人标签只进 manifest 数据层，画面不渲染
         if s.get("synth_failed"):
             entry["synth_failed"] = True  # TTS 失败降级为静音占位（见 --on-fail）
         manifest_sentences.append(entry)
@@ -1039,8 +1043,7 @@ def main():
     # ── Read script（--source 结构化输入，逐段独立分句）───────────────
     try:
         source_data = load_segments_source(args.source)
-        sentences, seg_config = build_parts(
-            source_data, default_speed=args.speed)
+        sentences, seg_config = build_parts(source_data)
     except ValueError as e:
         print(f"[error] 结构化稿件无效：{e}", file=sys.stderr)
         sys.exit(1)
@@ -1109,7 +1112,7 @@ def main():
     # （比如开场用甲音色、正文用乙音色）可以分别指定 voice_id/voice_style。
     sentence_speeds = {}
     sentence_voices = {}  # index -> (voice_id, voice_style)
-    sentence_speaker_labels = {}  # index -> 说话人显示标签（仅双人对话段落有值）
+    sentence_speaker_labels = {}  # index -> 说话人标签（仅对话段有值；只进 manifest 数据层）
     if seg_config:
         for seg in seg_config:
             start_idx = seg.get("start", 0)

@@ -19,11 +19,7 @@ Usage:
   python gen_hyperframes.py -m timing_manifest.json -o hf-project/index.html --images hf-project/images.json
 
 The manifest must contain:
-  - sentences[]: {index, text, start_time, duration, speaker?}
-    speaker（可选）：来自 build_from_structured.py 的 dialogue 段落。该字段
-    只保留在 cue 数据层（speaker/spk 索引）——verse 两画幅都不在画面里渲染
-    说话人标签，角色区分依靠语音与行文。绝大多数场景（单人独白）没有
-    这个字段。
+  - sentences[]: {index, text, start_time, duration}
   - total_duration: 测量得到的音频总时长
   - segments[] (optional): {id, title, tagline, accent, sentences[]}
     If absent, sentences are auto-grouped into chunks of 5.
@@ -45,12 +41,10 @@ import urllib.request
 # GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产；它的获取与安装
 # 逻辑直接归属本模块，不再套一层中间抽象。
 GSAP_VERSION = "3.14.2"
-_ASSET_MAGIC_MARKERS = (b"gsap",)
 GSAP_CDN_URL = f"https://cdn.jsdelivr.net/npm/gsap@{GSAP_VERSION}/dist/gsap.min.js"
 # 供应链钉固：这个 JS 会被引擎内的浏览器真实执行，CDN 版本又是不可变的，
-# 所以把官方 dist 的 sha256/字节数钉死（校验口径见 _validate_gsap_payload）。
+# 所以把官方 dist 的 sha256 钉死——哈希一致即逐字节相同，是唯一判定口径。
 GSAP_SHA256 = "c174bfce53a729418d57a8ad8625e7247c793a22fef8e2851e3cfa3de9cd8280"
-GSAP_BYTES = 72779
 CHARTJS_VERSION = "4.5.1"
 CHARTJS_CDN_URL = f"https://cdn.jsdelivr.net/npm/chart.js@{CHARTJS_VERSION}/dist/chart.umd.min.js"
 CHARTJS_SHA384 = "jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
@@ -62,82 +56,55 @@ _BUNDLED_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 _BUNDLED_GSAP = os.path.join(_BUNDLED_DIR, f"gsap-{GSAP_VERSION}.min.js")
 _BUNDLED_CHARTJS = os.path.join(_BUNDLED_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js")
-_MIN_GSAP_BYTES = 1000
 _MAX_VENDOR_BYTES = 8 * 1024 * 1024   # 下载响应体上限（两种资产共用）
-_MIN_CHARTJS_BYTES = 10000
-
-
-def _valid_file(path, minimum=_MIN_GSAP_BYTES):
-    try:
-        if not os.path.isfile(path) or os.path.getsize(path) < minimum:
-            return False
-        with open(path, "rb") as f:
-            head = f.read(4096).lower()
-        return any(marker in head for marker in _ASSET_MAGIC_MARKERS)
-    except OSError:
-        return False
 
 
 def _valid_trusted_gsap(path):
-    """Whether a canonical/default GSAP asset exactly matches the pinned bytes."""
-    if not _valid_file(path) or os.path.getsize(path) != GSAP_BYTES:
-        return False
+    """该文件的字节是否与钉固的官方 GSAP dist 完全一致（sha256）。"""
     try:
-        return sha256_file(path) == GSAP_SHA256
+        return os.path.isfile(path) and sha256_file(path) == GSAP_SHA256
     except OSError:
         return False
 
 
-def _validate_gsap_payload(data, url=None):
-    """GSAP 资产校验：① 内容自检——≥1KB 的 HTML 错误页/注入脚本必须在
-    这里被认出来；② 供应链钉固——默认 CDN 的 dist 是版本不可变资源，字节
-    必须与钉固的 sha256 完全一致（疑似 CDN 污染/代理劫持时拒绝写缓存）。
-    显式 URL 属于运维/测试自选来源，不套用默认钉固值。"""
-    lowered = data[:4096].lower()
-    if not any(marker in lowered for marker in _ASSET_MAGIC_MARKERS):
-        raise ValueError("downloaded file does not look like GSAP")
-    if url in (None, GSAP_CDN_URL):
-        got = hashlib.sha256(data).hexdigest()
-        if got != GSAP_SHA256:
-            raise ValueError(
-                f"GSAP {GSAP_VERSION} 内容与钉固的 sha256 不一致"
-                f"（期望 {GSAP_SHA256[:16]}…，实际 {got[:16]}…）；"
-                "疑似 CDN 被污染或代理劫持，已拒绝写入缓存")
+def _validate_gsap_payload(data):
+    """GSAP 下载体校验：供应链钉固——CDN dist 是版本不可变资源，字节必须与
+    钉固的 sha256 完全一致（疑似 CDN 污染/代理劫持/错误页时拒绝写缓存）。
+    默认下载源只有钉固 CDN 一个，没有"自选来源不套钉固"的豁免分支。"""
+    got = hashlib.sha256(data).hexdigest()
+    if got != GSAP_SHA256:
+        raise ValueError(
+            f"GSAP {GSAP_VERSION} 内容与钉固的 sha256 不一致"
+            f"（期望 {GSAP_SHA256[:16]}…，实际 {got[:16]}…）；"
+            "疑似 CDN 被污染或代理劫持，已拒绝写入缓存")
 
 
-def _validate_chartjs_payload(data, url=None):
-    """Chart.js 资产校验：sha384（base64）完整性钉固。"""
+def _validate_chartjs_payload(data):
+    """Chart.js 下载体校验：sha384（base64）完整性钉固。"""
     import base64
     got = base64.b64encode(hashlib.sha384(data).digest()).decode("ascii")
     if got != CHARTJS_SHA384:
         raise ValueError("Chart.js integrity check failed")
 
 
-def _download_to_cache(cache_dir, cache_path, timeout=15, url=None, *,
-                       asset="GSAP", min_bytes=None, max_bytes=None,
-                       validate=None):
-    """下载 vendor 资产到本地缓存（GSAP / Chart.js 共用唯一实现）。
+def _download_to_cache(cache_path, url, *, asset, validate):
+    """下载 vendor 资产到用户缓存（GSAP / Chart.js 共用唯一实现）。
 
-    完整性校验由 validate(data, url) 注入（失败 raise，资产不落盘）；
-    min/max 字节数采用当前资产验证契约；写入保持
+    完整性校验由 validate(data) 注入（失败 raise，资产不落盘）；写入保持
     mkstemp → fsync → os.replace 的原子序，失败清理临时文件。
     """
-    min_bytes = _MIN_GSAP_BYTES if min_bytes is None else min_bytes
-    max_bytes = _MAX_VENDOR_BYTES if max_bytes is None else max_bytes
+    cache_dir = os.path.dirname(cache_path)
     os.makedirs(cache_dir, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "content-to-video"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read(max_bytes + 1)
-        if len(data) < min_bytes:
-            raise ValueError(f"downloaded file too small ({len(data)} bytes)")
-        if len(data) > max_bytes:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read(_MAX_VENDOR_BYTES + 1)
+        if len(data) > _MAX_VENDOR_BYTES:
             raise ValueError(f"downloaded file too large ({len(data)} bytes)")
-        if validate is not None:
-            validate(data, url)
+        validate(data)
         with os.fdopen(fd, "wb") as f:
             fd = None
             f.write(data)
@@ -164,9 +131,7 @@ def _download_to_cache(cache_dir, cache_path, timeout=15, url=None, *,
 def _valid_chartjs(path):
     """Whether a Chart.js asset exactly matches the pinned official dist."""
     try:
-        return (os.path.isfile(path)
-                and os.path.getsize(path) > _MIN_CHARTJS_BYTES
-                and _chartjs_sha384(path) == CHARTJS_SHA384)
+        return os.path.isfile(path) and _chartjs_sha384(path) == CHARTJS_SHA384
     except OSError:
         return False
 
@@ -183,8 +148,7 @@ def _install_vendor(src, dest_path, verify, label):
     """把一份已校验过的源装进项目 vendor/：copy → 复查字节 → os.replace。
 
     拷贝后必须重算一遍：写盘被截断/磁盘满留下的半截文件若留在 dest，
-    下次 ensure_* 的 dest 命中检查会把它当成好资产直接复用（GSAP 原来
-    就有这道复查，Chart.js 没有——两条路径现在同一口径）。
+    下次 ensure_* 的 dest 命中检查会把它当成好资产直接复用（两种资产同一口径）。
     """
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     tmp = os.path.join(os.path.dirname(dest_path),
@@ -204,16 +168,14 @@ def _install_vendor(src, dest_path, verify, label):
     return True
 
 
-def _vendor_sources(bundled, cache_path, check, label, explicit_url=False):
+def _vendor_sources(bundled, cache_path, check, label):
     """列出可离线（不联网）安装的源：内置副本 → 用户缓存。
 
     内置文件存在却过不了钉固校验时点名警告——技能包被改动或下载损坏是
     一件需要让人知道的事，静默回落缓存就成了一次无人察觉的降级。
-    explicit_url 是运维自选来源，内置的 pinned 字节不是它要的东西。
     """
-    sources = [] if explicit_url else [bundled]
-    sources.append(cache_path)
-    if not explicit_url and os.path.isfile(bundled) and not check(bundled):
+    sources = [bundled, cache_path]
+    if os.path.isfile(bundled) and not check(bundled):
         print(f"[warn] 技能包内置的 {label} 副本（{bundled}）与钉固字节不符，"
               "已跳过并回退用户缓存/CDN。多为技能包被改动或传输损坏；"
               "确认技能包来源后重新获取，或设置 CTV_ALLOW_NETWORK_ASSETS=1 "
@@ -221,7 +183,7 @@ def _vendor_sources(bundled, cache_path, check, label, explicit_url=False):
     return sources
 
 
-def ensure_local_chartjs(project_dir, timeout=15, allow_network=False):
+def ensure_local_chartjs(project_dir, allow_network=False):
     project_dir = os.path.abspath(project_dir)
     cache_path = os.path.join(_CACHE_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js")
     dest_path = os.path.join(project_dir, "vendor", "chart.umd.min.js")
@@ -235,54 +197,37 @@ def ensure_local_chartjs(project_dir, timeout=15, allow_network=False):
             return "vendor/chart.umd.min.js"
     if not allow_network:
         return None
-    if not _download_to_cache(
-            _CACHE_DIR, cache_path, timeout=timeout, url=CHARTJS_CDN_URL,
-            asset="Chart.js", min_bytes=_MIN_CHARTJS_BYTES,
-            validate=_validate_chartjs_payload):
+    if not _download_to_cache(cache_path, CHARTJS_CDN_URL, asset="Chart.js",
+                              validate=_validate_chartjs_payload):
         return None
     if not _install_vendor(cache_path, dest_path, _valid_chartjs, "Chart.js"):
         return None
     return "vendor/chart.umd.min.js"
 
 
-def ensure_local_gsap(project_dir, timeout=15, cache_dir=None, cache_path=None,
-                      allow_network=False, url=None):
+def ensure_local_gsap(project_dir, allow_network=False):
     """Ensure ``project_dir/vendor/gsap.min.js`` exists and return its relative path.
 
-    默认路径只认与钉固字节完全一致的源（项目 vendor → 技能包内置 → 缓存 →
-    CDN），所以旧缓存里被污染的历史下载不会被复用。显式 url 属于运维自选
-    来源：跳过内置、只做内容自检，并且落到独立的缓存文件里，绝不写进默认
-    缓存路径——否则一次自定义下载就能污染后续默认路径。
+    只认与钉固字节完全一致的源（项目 vendor → 技能包内置 → 用户缓存 →
+    钉固 CDN），旧缓存里被污染的历史下载不会被复用。自定义源不走这条
+    链：CLI --gsap-src 直接写进 HTML 引用（可信度自负，见 --help），
+    本模块从未有过"下载任意 URL"的入口。
     """
     project_dir = os.path.abspath(project_dir)
-    cache_dir = cache_dir or _CACHE_DIR
-    cache_path = cache_path or _CACHE_PATH
-    dest_dir = os.path.join(project_dir, "vendor")
-    dest_path = os.path.join(dest_dir, "gsap.min.js")
-
-    explicit_url = bool(url)
-    check = _valid_file if explicit_url else _valid_trusted_gsap
-    if not explicit_url and _valid_trusted_gsap(dest_path):
+    dest_path = os.path.join(project_dir, "vendor", "gsap.min.js")
+    if _valid_trusted_gsap(dest_path):
         return "vendor/gsap.min.js"
-
-    # 显式 url 是运维自选来源，绝不能落进默认缓存路径——否则这次自定义下载
-    # 会被后续默认路径当成钉固资产复用。给它一个按 url 哈希命名的缓存。
-    if explicit_url and cache_path == _CACHE_PATH:
-        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-        cache_path = os.path.join(cache_dir,
-                                  f"gsap-{GSAP_VERSION}-custom-{cache_key}.min.js")
-
-    for src in _vendor_sources(_BUNDLED_GSAP, cache_path, check,
-                               "GSAP", explicit_url=explicit_url):
-        if check(src) and _install_vendor(src, dest_path, check, "GSAP"):
+    for src in _vendor_sources(_BUNDLED_GSAP, _CACHE_PATH,
+                               _valid_trusted_gsap, "GSAP"):
+        if _valid_trusted_gsap(src) and _install_vendor(
+                src, dest_path, _valid_trusted_gsap, "GSAP"):
             return "vendor/gsap.min.js"
     if not allow_network:
         return None
-    if not _download_to_cache(cache_dir, cache_path, timeout=timeout,
-                              url=url or GSAP_CDN_URL,
+    if not _download_to_cache(_CACHE_PATH, GSAP_CDN_URL, asset="GSAP",
                               validate=_validate_gsap_payload):
         return None
-    if not _install_vendor(cache_path, dest_path, check, "GSAP"):
+    if not _install_vendor(_CACHE_PATH, dest_path, _valid_trusted_gsap, "GSAP"):
         return None
     return "vendor/gsap.min.js"
 
@@ -474,10 +419,8 @@ def validate_images_files(images, out_dir, seg_durs=None):
             continue
         media_path = entry.get("src", "")
         # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
-        if media_type in ("auto", None):
+        if media_type == "auto":
             media_type = classify_media_path(media_path)
-        if not media_path:
-            continue
         p = media_path if os.path.isabs(media_path) else os.path.join(out_dir, media_path)
         if not os.path.exists(p):
             missing_imgs.append((sid, media_path))

@@ -297,9 +297,6 @@ def _normalize_images(images):
 def _build_subtitle_cues(sentences, aspect):
     """Build the JS subtitle cue payload from sentence timing and text."""
     sub_cues = []
-    # spk 只是 cue 数据层的稳定编号（说话人首次出现顺序），供下游消费；
-    # verse 画面不渲染说话人（两画幅同样），这里无需任何配色。
-    speaker_order = []
 
     def _js(value):
         return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
@@ -314,28 +311,21 @@ def _build_subtitle_cues(sentences, aspect):
                                      hard_cap=hard_cap,
                                      cue_max_lines=cue_max_lines)
         total_chars = sum(len("".join(g)) for g in groups)
-        speaker = sent.get("speaker")
         t0 = sent["start_time"]
         for group in groups:
             js_lines = "[" + ",".join(_js(line) for line in group) + "]"
-            extra = ""
-            if speaker:
-                if speaker not in speaker_order:
-                    speaker_order.append(speaker)
-                extra = (f',speaker:{_js(speaker)},'
-                         f'spk:{speaker_order.index(speaker)}')
             frac = (sum(len(line) for line in group) / total_chars) if total_chars else 1.0
             duration = sent["duration"] * frac
-            pending.append((t0, t0 + duration, sent.get("index", -1), js_lines, extra))
+            pending.append((t0, t0 + duration, sent.get("index", -1), js_lines))
             t0 += duration
     # 时长一律由"下一个 cue 的起点"倒推：t 与 d 各自独立四舍五入到 0.01s 时，
     # 相邻 cue 之间会留下至多 10ms 的空洞，24fps 下恰好吞掉一帧——那一帧落在
     # 空洞里就沿用上一句的高亮，句内换行看起来慢了一帧。
-    for i, (t_start, t_end, si, js_lines, extra) in enumerate(pending):
+    for i, (t_start, t_end, si, js_lines) in enumerate(pending):
         t_emit = round(t_start, 2)
         nxt_emit = round(t_end if i + 1 >= len(pending) else pending[i + 1][0], 2)
         sub_cues.append(f'{{t:{t_emit:.2f},d:{max(0.01, nxt_emit - t_emit):.2f},'
-                        f'si:{si},lines:{js_lines}{extra}}}')
+                        f'si:{si},lines:{js_lines}}}')
     return ",\n    ".join(sub_cues)
 
 
@@ -504,8 +494,7 @@ def _build_subtitle_layer():
     由 generate_html 拼进最终 HTML。
 
     静态骨架在 templates/subtitle-verse.{css,js}：结构与选择器写死，
-    数值走 var(--ctv-*)（由 generate_html 注入 :root）。verse 的说话人
-    配色不依赖额外 CSS 类——说话人信息只保留在 cue 数据层，由下游消费。
+    数值走 var(--ctv-*)（由 generate_html 注入 :root）。
     不可信内容的边界在两处生成期转义，运行时不参与文案：verse 行由
     generate_html 用 esc() 写成静态 DOM，cue 数组由 _build_subtitle_cues 用
     json.dumps() 序列化（JS 字符串上下文里 HTML 实体转义反而会显示成字面量）。
@@ -580,9 +569,6 @@ def generate_html(manifest, audio_src, images=None,
     # 背景渐变的十六进制色标集合：accent 派生文字色的对比度保底按其中最坏
     # 一档判定（theme_bg_stops 只解析自家 _THEMES 的渐变串）。
     _bgs = theme_bg_stops(theme)
-
-    # 对话说话人：verse 不在 DOM 渲染说话人标签（两画幅同样），说话人只按首次
-    # 出现顺序在 cue 数据层留 spk 索引，供下游消费。
 
     # 从模板加载布局/动画/字体参数
     tpl_layout = tpl["layout"][aspect]
@@ -672,7 +658,7 @@ def generate_html(manifest, audio_src, images=None,
     # ── 字幕层产物：verse（歌词式句子流） ──
     # ══════════════════════════════════════════════════════════════════
     # 分区 3/6：字幕形态 CSS + JS（输出 _sub_css / _sub_js）
-    # 下方分区索引（本函数 1200+ 行，改代码前先定位分区，避免整段通读）：
+    # 下方分区索引（本函数 600+ 行，改代码前先定位分区，避免整段通读）：
     #   1/6 参数归一化与模板装载（函数开头 ~ 配图归一化）
     #   2/6 竖屏几何派生（_v_pad_* / _v_img_*）
     #   3/6 字幕形态 CSS+JS ← 本区（已抽到模块级 _build_subtitle_layer）
@@ -959,7 +945,6 @@ def generate_html(manifest, audio_src, images=None,
         # 高亮当前句、已播句淡出、窗口随播报滚动。所有文字由句子流逐句
         # 呈现；DOM 渲染在 seg-card 尾部，竖屏绝对定位钉底、横屏在左文字栏
         # 文档流里随内容垂直居中（见 subtitle-verse.css 头部注释）。
-        verse_html = ""
         _vlines = [
             # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
             # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
@@ -1039,7 +1024,7 @@ def generate_html(manifest, audio_src, images=None,
         a_first = a_["firstSegmentFadeIn"]
         a_fadein = a_["segmentFadeIn"]
         a_fadeout = a_["segmentFadeOut"]
-        _fadein_dur = max(a_fadein["duration"], a_fadein["minDuration"])
+        _fadein_dur = a_fadein["duration"]
         if is_first:
             gsap_lines.append(
                 f'tl.fromTo("#{sid}",{{opacity:0}},{{opacity:1,'

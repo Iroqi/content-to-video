@@ -110,7 +110,7 @@ def _validate_accent(value, where):
             f"accent 会拼进成片 HTML，不接受 rgb()/var() 这类函数式写法")
 
 
-def _validate_text(value, where, *, required=False, allow_empty=True):
+def _validate_text(value, where, *, required=False):
     """Validate a user-facing text field before any downstream ``.strip()``/HTML use."""
     if value is None:
         if required:
@@ -120,18 +120,14 @@ def _validate_text(value, where, *, required=False, allow_empty=True):
         raise ValueError(f"{where} 必须是字符串（实际: {type(value).__name__}）")
     if required and not value.strip():
         raise ValueError(f"{where} 不能为空字符串")
-    if not allow_empty and not value.strip():
-        raise ValueError(f"{where} 不能为空字符串")
 
 
-def _validate_finite_number(value, where, *, positive=False, nonnegative=False):
+def _validate_finite_number(value, where, *, nonnegative=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where} 必须是数值（实际: {value!r}）")
     if not math.isfinite(float(value)):
         raise ValueError(f"{where} 必须是有限数值（实际: {value!r}）")
-    if positive and float(value) <= 0:
-        raise ValueError(f"{where} 必须大于 0（实际: {value!r}）")
     if nonnegative and float(value) < 0:
         raise ValueError(f"{where} 必须大于等于 0（实际: {value!r}）")
 
@@ -139,13 +135,11 @@ def _validate_finite_number(value, where, *, positive=False, nonnegative=False):
 def _validate_sid(sid, where, seen):
     """段落 id 校验：合法字符集 + 跨段唯一。
 
-    source 的 id 是可选的（pipeline 会生成稳定 id）；timing manifest 的
-    segments 则在调用前已要求 id 非空，所以这里仍保留 None 兼容性供 source
-    校验复用。
+    两个调用点都只在 id 非空白时才调进来（source 侧跳过缺省/空白 id，
+    manifest 侧先要求非空字符串），这里不再兼容 None/空串——收到它们
+    说明调用点写错了，直接走下面的报错。
     """
-    if sid is None or sid == "":
-        return
-    if not isinstance(sid, str) or not _SID_RE.match(sid):
+    if not is_valid_sid(sid):
         raise ValueError(
             f"{where} 的 id={sid!r} 含非法字符或格式不对——id 只允许"
             f"字母开头，字母/数字/下划线/连字符（如 seg1、opening），"
@@ -552,9 +546,6 @@ def validate_timing_manifest(data):
             raise ValueError(
                 "timing_manifest.json 的 segments 未覆盖全部顶层句子："
                 f"缺少 index {sorted(missing_indices)}。每个句子必须恰好属于一个可视段落")
-    last_end = max(float(s["start_time"]) + float(s["duration"]) for s in sentences)
-    if last_end > float(total_duration) + 0.25:
-        raise ValueError("timing_manifest.json 的最后一句超出 total_duration")
     return data
 
 
@@ -634,7 +625,10 @@ def _validate_chart_contract(chart, where):
         if kind == "pie" and sum(float(v) for v in values) <= 0:
             raise ValueError(f"{where} 的 pie chart.values 总和必须大于 0")
     elif kind == "scatter":
-        points = chart.get("points", chart.get("values"))
+        # 与 gen_charts._normalize 同一取值口径（`or` 回退）：points 键存在
+        # 但为空/None 时同样回退 values，两份校验器对同一份数据必须给同
+        # 一个答案。
+        points = chart.get("points") or chart.get("values")
         if not isinstance(points, list) or not points:
             raise ValueError(f"{where} 的 scatter chart.points 必须是非空列表")
         for i, point in enumerate(points):
@@ -712,9 +706,9 @@ def validate_images_json(data):
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
     for key, value in data.items():
-        # key 与 manifest 段 id 同一口径（_SID_RE）：这些键会拼进 HTML 的
+        # key 与 manifest 段 id 同一口径（is_valid_sid 包住 _SID_RE）：这些键会拼进 HTML 的
         # id/选择器链路，"seg 3"、"seg.png" 之类在渲染端静默失联。
-        if not isinstance(key, str) or not _SID_RE.match(key):
+        if not is_valid_sid(key):
             raise ValueError(
                 f"images.json 的段落 key 必须是合法段 id"
                 f"（字母开头，仅字母/数字/-/_，1–64 字符；实际: {key!r}）")

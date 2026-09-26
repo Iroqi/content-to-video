@@ -8,7 +8,7 @@ tl.eventCallback("onUpdate", function() {
     if (t >= cues[i].t && t < cues[i].t + Math.max(cues[i].d, 0.01)) { found = i; break; }
   }
   if (found >= 0) {
-    // 用命中的 cue 下标做键，而非 t|d|speaker：相邻句的 start 各自 round(,2)
+    // 用命中的 cue 下标做键，而非 t|d：相邻句的 start 各自 round(,2)
     // 可能坍缩成同一 t，若 d 也相同则键值碰撞，第二条 cue 的高亮永不刷新。
     // 下标天然唯一，且 si 相同的相邻 cue 重复调用 verseUpdate 幂等。
     if (found !== curCueIdx) {

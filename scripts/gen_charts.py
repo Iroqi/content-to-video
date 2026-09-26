@@ -10,7 +10,7 @@ import sys
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import setup_stdio, write_json_atomic, guard_not_in_skill_dir
-from _contracts import CHART_TYPES, _SID_RE  # 段 id 与图表类型的口径单一来源
+from _contracts import CHART_TYPES, is_valid_sid  # 段 id 与图表类型的口径单一来源
 
 # 公式求值的安全护栏：AST 白名单挡的是"能力"（不出网络/属性/下标/导入），
 # 挡不住"规模"——`9**9**9` 每个节点都合法，却要算到宇宙热寂。Pow 结果一旦
@@ -67,7 +67,7 @@ def _validate_points(chart):
     if chart["type"] == "pie" and sum(values) <= 0:
         raise ValueError(
             f"chart {chart.get('id')!r}: pie values must sum to > 0")
-    return labels, values
+    return values
 
 
 def _validate_curve_tree(tree, expr):
@@ -185,9 +185,9 @@ def _normalize(chart):
         raise ValueError(f"chart must be an object with an id: {chart!r}")
     chart = dict(chart)
     cid = str(chart["id"])
-    # 段 id 口径唯一来源是 _contracts._SID_RE（与 images.json key、HTML/GSAP
-    # 选择器同一规则）；这里不再自带宽松的 [A-Za-z0-9_-]+ 副本。
-    if not _SID_RE.match(cid):
+    # 段 id 口径唯一来源是 _contracts（is_valid_sid 包住 _SID_RE；与
+    # images.json key、HTML/GSAP 选择器同一规则），这里不再自带副本。
+    if not is_valid_sid(cid):
         raise ValueError(f"chart id 非法: {cid!r}（须字母开头，"
                          f"仅字母/数字/-/_，1–64 字符）")
     kind = str(chart.get("type") or "").lower()
@@ -195,8 +195,7 @@ def _normalize(chart):
         raise ValueError(f"chart {cid!r}: type must be one of {sorted(CHART_TYPES)}")
     chart["type"] = kind
     if kind in {"bar", "line", "pie"}:
-        _labels, norm_values = _validate_points(chart)
-        chart["values"] = norm_values
+        chart["values"] = _validate_points(chart)
     elif kind == "scatter":
         points = chart.get("points") or chart.get("values") or []
         if not points:
@@ -308,7 +307,8 @@ def merge_images_map(existing, charts_map):
     元数据"的规则矛盾。合并语义：
       · 既有条目原样保留（含 provenance 字段）；
       · chart 条目新增；
-      · 与上一次 gen_charts 产物逐字节相同的 chart 条目 → 幂等覆盖；
+      · 与上一次 gen_charts 产物语义相等（dict 比较，键序/缩进无关）的
+        chart 条目 → 幂等覆盖；
       · 同一个 key 上既有非 chart 条目（或内容不同的 chart）→ 报错。
         两种来源争同一段配图必须人工裁决，不能默认任何一边赢。
     """

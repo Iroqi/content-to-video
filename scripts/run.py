@@ -34,6 +34,7 @@ from _contracts import (DEFAULT_SPEED, list_voice_ids,  # noqa: E402
                         validate_speed, load_timing_manifest,
                         validate_images_json)
 from _contracts import is_content_sid  # noqa: E402  内容段 id 前缀约定的单一来源（配图覆盖率统计）
+from _audio import _remove_quiet  # noqa: E402  全仓唯一"尽力删文件"实现（定义在 _audio）
 from html_renderer import manifest_segments  # noqa: E402  段落分组的唯一口径（segments 缺失时按兜底规则分组）
 import _script_utils as _su  # noqa: E402
 from _script_utils import (setup_stdio,  # noqa: E402  重定向场景 stdout 强制 UTF-8
@@ -138,10 +139,12 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
 _EXIT_GRACE_SECONDS = 12.0
 _GRACE_PER_MB = 0.15
 _GRACE_CAP_SECONDS = 90.0
+_POLL_INTERVAL_SECONDS = 2.0
+_STABLE_SIZE_CHECKS = 2
 
 
-def _adaptive_grace(size_bytes, min_grace=_EXIT_GRACE_SECONDS):
-    return max(min_grace, min(_GRACE_CAP_SECONDS,
+def _adaptive_grace(size_bytes):
+    return max(_EXIT_GRACE_SECONDS, min(_GRACE_CAP_SECONDS,
                               size_bytes / (1024.0 * 1024.0) * _GRACE_PER_MB))
 
 
@@ -192,11 +195,7 @@ def try_kill_process_tree(proc):
 def _discard_partial_render(out_path):
     """失败/超时路径清掉半截 out.mp4：残片大小 >0，下次有人直接取走
     out.mp4 或只看"文件存在且非空"就会把废片当交付物。"""
-    try:
-        if os.path.exists(out_path):
-            os.remove(out_path)
-    except OSError:
-        pass
+    _remove_quiet(out_path)
 
 
 def _probe_file_size(path):
@@ -234,8 +233,7 @@ def _verify_killed_render(out_path):
             "已丢弃废片，请重跑渲染。")
 
 
-def _render_wait(cmd, out_path, cwd=None, poll_interval=2.0, stable_checks=2,
-                 grace=_EXIT_GRACE_SECONDS, max_wait=1800.0):
+def _render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
     """启动 Hyperframes render；输出文件稳定后不再死等 Node/Chrome 退出。"""
     log_path = os.path.splitext(os.path.abspath(out_path))[0] + ".render.log"
     log_dir = os.path.dirname(log_path)
@@ -276,62 +274,73 @@ def _render_wait(cmd, out_path, cwd=None, poll_interval=2.0, stable_checks=2,
         raise SystemExit(f"[run] 无法启动渲染命令 {_fmt_cmd(cmd)}：{e}\n"
                          "请确认 Node.js 已安装且 npx 在 PATH 上"
                          "（或在项目目录 npm install hyperframes 使用本地 CLI）。")
-    else:
-        t_start = time.time()
-        last_size = -1
-        last_mtime = -1.0
-        stable_count = 0
-        grace_deadline = None
-        while True:
-            elapsed = time.time() - t_start
-            if elapsed > max_wait:
-                try_kill_process_tree(proc)
-                _discard_partial_render(out_path)
-                _print_render_log_tail(log_path)
-                raise SystemExit(f"[run] 渲染超过 {max_wait:.0f}s，已停止等待。")
-
-            ret = proc.poll()
-            if ret is not None:
-                if ret != 0:
-                    _discard_partial_render(out_path)
-                    _print_render_log_tail(log_path)
-                    raise SystemExit(f"[run] Hyperframes 渲染失败，退出码 {ret}")
-                size = _probe_file_size(out_path)
-                if size is not None and size > 0:
-                    return
-                _discard_partial_render(out_path)
-                _print_render_log_tail(log_path)
-                raise SystemExit("[run] Hyperframes 退出成功，但未生成有效成片")
-
-            size = _probe_file_size(out_path)
-            if size is not None:
-                try:
-                    mtime = os.path.getmtime(out_path)
-                except OSError:
-                    mtime = -1.0
-                if size > 0 and size == last_size and mtime == last_mtime:
-                    stable_count += 1
-                else:
-                    stable_count = 0
-                    grace_deadline = None
-                last_size, last_mtime = size, mtime
-                if stable_count >= stable_checks:
-                    if grace_deadline is None:
-                        grace_deadline = time.time() + _adaptive_grace(size, grace)
-                    elif time.time() >= grace_deadline:
-                        try_kill_process_tree(proc)
-                        _verify_killed_render(out_path)
-                        return
-            else:
-                stable_count = 0
-                last_size, last_mtime = -1, -1.0
-            time.sleep(poll_interval)
+    try:
+        _render_poll_loop(proc, out_path, log_path, max_wait)
+    except BaseException:
+        # Ctrl-C（及任何异常退出）也必须先收进程树再抛：POSIX 上渲染进程
+        # 在独立会话（start_new_session），SIGINT 不会传导给它，留下就是
+        # 孤儿 Node/Chrome 继续吃 CPU；被提前掐断的半截 mp4 更不能当交付物
+        # 留在盘上。poll() 已退出（渲染自身失败的路径）就不再 taskkill——
+        # 对一个不存在的 PID 报"清理失败"是纯噪音。
+        if proc.poll() is None:
+            try_kill_process_tree(proc)
+        _discard_partial_render(out_path)
+        raise
     finally:
         if log_fh is not None:
             try:
                 log_fh.close()
             except OSError:
                 pass
+
+
+def _render_poll_loop(proc, out_path, log_path, max_wait):
+    """轮询成片直到"完成或必须停止等待"；清理与 discard 由调用方兜底。"""
+    t_start = time.time()
+    last_size = -1
+    last_mtime = -1.0
+    stable_count = 0
+    grace_deadline = None
+    while True:
+        elapsed = time.time() - t_start
+        if elapsed > max_wait:
+            _print_render_log_tail(log_path)
+            raise SystemExit(f"[run] 渲染超过 {max_wait:.0f}s，已停止等待。")
+
+        ret = proc.poll()
+        if ret is not None:
+            if ret != 0:
+                _print_render_log_tail(log_path)
+                raise SystemExit(f"[run] Hyperframes 渲染失败，退出码 {ret}")
+            size = _probe_file_size(out_path)
+            if size is not None and size > 0:
+                return
+            _print_render_log_tail(log_path)
+            raise SystemExit("[run] Hyperframes 退出成功，但未生成有效成片")
+
+        size = _probe_file_size(out_path)
+        if size is not None:
+            try:
+                mtime = os.path.getmtime(out_path)
+            except OSError:
+                mtime = -1.0
+            if size > 0 and size == last_size and mtime == last_mtime:
+                stable_count += 1
+            else:
+                stable_count = 0
+                grace_deadline = None
+            last_size, last_mtime = size, mtime
+            if stable_count >= _STABLE_SIZE_CHECKS:
+                if grace_deadline is None:
+                    grace_deadline = time.time() + _adaptive_grace(size)
+                elif time.time() >= grace_deadline:
+                    try_kill_process_tree(proc)
+                    _verify_killed_render(out_path)
+                    return
+        else:
+            stable_count = 0
+            last_size, last_mtime = -1, -1.0
+        time.sleep(_POLL_INTERVAL_SECONDS)
 
 
 # ── 制作报告：一次 run.py 跑完后，各步骤耗时/配图情况/跳过了什么散落在各
@@ -386,11 +395,8 @@ def _print_report_summary():
             f"{d.get('type')}={d.get('count', '?')}" for d in _REPORT["degraded"]))
     if _REPORT["images"] is not None:
         img = _REPORT["images"]
-        if img.get("skipped_reason"):
-            print(f"  配图：跳过（{img['skipped_reason']}）")
-        else:
-            print(f"  配图：{img['matched']}/{img['total']} 条内容已定稿"
-                  + (f"，{img['missing']} 条待人工审阅/兜底" if img.get("missing") else ""))
+        print(f"  配图：{img['matched']}/{img['total']} 条内容已定稿"
+              + (f"，{img['missing']} 条待人工审阅/兜底" if img.get("missing") else ""))
     if _REPORT["skipped"]:
         print("  跳过的步骤：" + "；".join(_REPORT["skipped"]))
     print("=" * 44)
@@ -428,7 +434,7 @@ def _run(cmd, step_name=None):
             _write_report(_report_path())
         print(f"[run] 步骤失败（退出码 {ret}）：{_fmt_cmd(resolved)}",
               file=sys.stderr)
-        sys.exit(ret or 1)
+        sys.exit(ret)
     if step_name:
         _REPORT["steps"].append(
             {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": True})
@@ -533,7 +539,8 @@ def _build_parser():
                              "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
                              "低配机器遇 V8 堆崩溃或含视频配图时建议降到 2")
     parser.add_argument("--gpu", action="store_true",
-                        help="启用 GPU 硬件编码（NVENC/VideoToolbox/VAAPI/QSV）")
+                        help="透传 --gpu 给 Hyperframes 渲染（实测增益来自抓帧光栅化"
+                             "而非硬件编码，且成片体积明显变大；见 rendering.md）")
     parser.add_argument("--allow-degraded", action="store_true",
                         help="允许 TTS 静音兜底等降级产物继续渲染；默认把 degraded artifact 作为交付阻断")
     parser.add_argument("--on-fail", default="abort", choices=["abort", "silence"],

@@ -126,7 +126,7 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     return sents, turns
 
 
-def _collect_blocks(source, default_speed=None):
+def _collect_blocks(source):
     """把结构化 source 组装成内部 Block 列表。
 
     返回 List[Block]，每个 Block 描述一个段落（id/title/tagline/accent/
@@ -159,7 +159,11 @@ def _collect_blocks(source, default_speed=None):
             tagline=opening_tagline,
             accent=DEFAULT_ACCENT,
             sentences=sents,
-            extra={"speed": source.get("opening_speed", OPENING_CLOSING_DEFAULT_SPEED)},
+            # `or` 而非 get 默认值：契约把显式 null 视同缺省放行（_validate_
+            # text/validate_speed 对 None 不报错），get(key, default) 会把
+            # null 原样取出来让 None 一路流进 seg speed。
+            extra={"speed": source.get("opening_speed")
+                   or OPENING_CLOSING_DEFAULT_SPEED},
             turns=[],
         ))
 
@@ -190,8 +194,10 @@ def _collect_blocks(source, default_speed=None):
         extra = {}
         if seg.get("speed") is not None:
             extra["speed"] = seg["speed"]
-        elif default_speed is not None:
-            extra["speed"] = default_speed
+        # 不写"全局 --speed 的复读值"：pipeline 的 sentence_speeds.get(i,
+        # args.speed) 兜底给出同一个数，两处各写一份只会让 manifest 里
+        # 每段都挂着一个没人显式要过的 speed 字段——改全局语速参数的含义
+        # 时两处漂移。缺省语义 = 字段缺席。
         # 段落级音色覆盖（可选字段，规范见 references/writing.md 段落级字段）：
         # _contracts 里校验之后由这里透传给下游，pipeline.py 读 seg_config 后即可生效。
         if seg.get("voice_id") is not None:
@@ -231,7 +237,8 @@ def _collect_blocks(source, default_speed=None):
             tagline=closing_tagline,
             accent=DEFAULT_ACCENT,
             sentences=sents,
-            extra={"speed": source.get("closing_speed", OPENING_CLOSING_DEFAULT_SPEED)},
+            extra={"speed": source.get("closing_speed")
+                   or OPENING_CLOSING_DEFAULT_SPEED},
             turns=[],
         ))
     return blocks
@@ -265,11 +272,15 @@ def _segments_from_blocks(blocks):
     return segments
 
 
-def build_parts(source, default_speed=None):
+def build_parts(source):
     """把结构化 source 转成 (sentences, segments)，供 pipeline --source 使用。
 
     对每个段落**独立**分句（不拼接成整篇再重分句）——结构化输入下每段是
     独立字符串，跨段短句合并结构上不可能发生，没有对应的失败模式。
+
+    段落语速：只有显式声明的 speed（以及 opening/closing 的默认 1.2）进
+    segments；全局 --speed 由 pipeline 侧 `sentence_speeds.get(i, args.speed)`
+    唯一兜底，这里不再复读一份。
 
     超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：显示层会做次要
     标点切行兜底（_script_utils 的 split_subtitle_lines），但 45+ 字的
@@ -281,7 +292,7 @@ def build_parts(source, default_speed=None):
         segments: 段落分组（id/title/tagline/accent/start/end/
                   可选 speed/voice_id/voice_style/turns）
     """
-    blocks = _collect_blocks(source, default_speed)
+    blocks = _collect_blocks(source)
     sentences = []
     for blk in blocks:
         sentences.extend(blk.sentences)

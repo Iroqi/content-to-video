@@ -193,8 +193,7 @@ _TEMPLATE_JSON = r'''
       "ease": "back.out(1.7)"
     },
     "segmentFadeIn": {
-      "duration": 0.3,
-      "minDuration": 0.6,
+      "duration": 0.6,
       "ease": "power2.out"
     },
     "segmentFadeOut": {

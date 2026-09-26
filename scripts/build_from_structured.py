@@ -114,7 +114,7 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
             raise ValueError(f"第 {seg_index} 段（title={seg_title!r}）"
                               f"dialogue[{j}]（speaker={spk!r}）分句后为空，"
                               "请检查文本是否以终止标点（。！？）结尾")
-        spk_cfg = speakers.get(spk, {}) if speakers else {}
+        spk_cfg = speakers.get(spk, {})
         start = len(sents)
         sents.extend(t_sents)
         turns.append({
@@ -167,9 +167,9 @@ def _collect_blocks(source):
             turns=[],
         ))
 
+    # segments 非空由 _contracts.validate_segments_source 把关（build_parts
+    # 唯一入口 pipeline --source 先过它），这里不再重复拦。
     raw_segments = source.get("segments", [])
-    if not raw_segments:
-        raise ValueError("source 中 'segments' 为空，至少需要一条内容段落")
 
     # 段落 id：可选的显式 "id" 让配图键（images.json）与配图文件名在改稿/
     # 重排后仍然稳定；缺省退回按序号的 seg{n}。_contracts 已校验显式 id 的

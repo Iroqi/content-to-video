@@ -78,9 +78,6 @@ def measure_duration(ffmpeg_path, audio_path):
     解析失败才回退 `ffmpeg -i` 的 stderr 正则解析（`Duration: HH:MM:SS.xx`
     行比字符串切分对 locale/格式变化更稳健）。
     Returns 0.0 if parsing fails (callers should treat 0.0 as invalid).
-
-    显式捕获 subprocess.TimeoutExpired —— 原裸 `except Exception` 虽也能接住，
-    但 30s 超时通常意味着 ffmpeg 卡死（罕见但可能），单独记日志便于诊断。
     """
     wav_dur = _wav_duration(audio_path)
     if wav_dur is not None:
@@ -95,9 +92,6 @@ def measure_duration(ffmpeg_path, audio_path):
         dur = parse_duration(stderr)
         if dur is not None:
             return dur
-    except subprocess.TimeoutExpired:
-        print(f"  [duration] ffmpeg -i timed out on {audio_path}",
-              file=sys.stderr)
     except Exception as e:
         print(f"  [duration] error measuring {audio_path}: {e}",
               file=sys.stderr)
@@ -212,7 +206,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 原始备份丢失、但调用方告知当前文件已被变速过：走补偿变速，
     # 且不能再把当前（已变速的）文件备份成 .orig.wav——那会让下一次
     # 换速继续在错误的基础上叠加。
-    compensate = (prev_speed is not None and prev_speed > 0
+    compensate = (prev_speed is not None
                   and abs(prev_speed - 1.0) > 0.01
                   and not os.path.exists(orig_path))
     if compensate:
@@ -546,8 +540,7 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
         ], capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=120)
     except subprocess.TimeoutExpired:
-        # 同模块其它 ffmpeg 封装都显式接 TimeoutExpired，唯独这里漏了：
-        # ffmpeg 卡死时用户直接吃裸栈
+        # 不显式接住的话，ffmpeg 卡死时用户直接吃裸栈
         print("  [loudnorm] ffmpeg timeout (120s)", file=sys.stderr)
         _remove_quiet(out_path)
         return False

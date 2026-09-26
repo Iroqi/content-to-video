@@ -460,13 +460,9 @@ def validate_timing_manifest(data):
             # 才炸 TypeError（或安静地印出 "-5" 这种假时长）。
             _sg_dur = sg.get("duration")
             if _sg_dur is not None:
-                if (isinstance(_sg_dur, bool)
-                        or not isinstance(_sg_dur, (int, float))
-                        or not math.isfinite(float(_sg_dur))
-                        or float(_sg_dur) < 0):
-                    raise ValueError(
-                        f"segments[{i}]（{sid}）的 'duration' 必须是非负有限数值"
-                        "（省略则按段内句子推算）")
+                _validate_finite_number(
+                    _sg_dur, f"segments[{i}]（{sid}）的 'duration'",
+                    nonnegative=True)
             # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
             # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
             if sg.get("takeaway") is not None:
@@ -608,10 +604,7 @@ def _validate_chart_contract(chart, where):
     chart["type"] = kind
 
     def _number(value, value_where):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{value_where} 必须是数值（实际: {value!r}）")
-        if not math.isfinite(float(value)):
-            raise ValueError(f"{value_where} 必须是有限数值（实际: {value!r}）")
+        _validate_finite_number(value, value_where)
         return float(value)
 
     if kind in {"bar", "line", "pie"}:
@@ -675,9 +668,9 @@ def _validate_chart_contract(chart, where):
 # 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
 # 之外的键（`position`/`fit`/`alt` 这类凭空发明的写法）过去会被静默丢掉：
 # "我明明写了 alt，画面上什么都没有"变成无解的困惑，与技能"不做静默降级"的
-# 纪律相悖。判定收口成这一个函数，打印点在唯一丢键的地方
-# （html_renderer._normalize_images）——收口在此是为了 run.py 预检与
-# gen_hyperframes 两处校验共用同一份清单，而不是各打印一次刷屏。
+# 纪律相悖。判定收口成这一个函数，全仓唯一的打印点在唯一丢键的地方
+# （html_renderer._normalize_images）——清单定义一次、warn 打一次，
+# run.py/gen_hyperframes 的预检走 validate_images_json，不碰这份键清单。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",

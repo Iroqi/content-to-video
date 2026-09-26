@@ -261,11 +261,11 @@ def _normalize(chart):
                 x = x_min + (x_max - x_min) * i / (points - 1)
                 try:
                     y = float(_eval_ast(tree.body, _curve_ns(x)))
-                except (ArithmeticError, ValueError, OverflowError,
-                        ZeroDivisionError, RecursionError):
-                    # RecursionError 只可能来自逐点求值阶段的超深 AST
-                    # （校验阶段的嵌套深度守卫在 walk 里）；该采样点放弃即可，
-                    # 其余点仍可成线。
+                except (ArithmeticError, ValueError, RecursionError):
+                    # OverflowError/ZeroDivisionError 都是 ArithmeticError 的
+                    # 子类，不必点名。RecursionError 只可能来自逐点求值阶段的
+                    # 超深 AST（校验阶段的嵌套深度守卫在 walk 里）；
+                    # 该采样点放弃即可，其余点仍可成线。
                     y = None
                 samples.append({"x": x, "y": y}
                                if y is not None and math.isfinite(y)

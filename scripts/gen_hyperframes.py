@@ -1,32 +1,8 @@
 #!/usr/bin/env python3
-"""Generate Hyperframes HTML composition from timing_manifest.json.
+"""timing_manifest.json → Hyperframes composition HTML（html_renderer 的 CLI 壳）。
 
-Reads the manifest (with optional segments grouping) and produces a complete
-Hyperframes composition with GSAP animations, subtitle sync, and audio track.
-
-Features:
-- Verse subtitle sentence flow, title entrance / canvas slide-in / progress bar
-  animations (portrait 1080x1440 / landscape 1920x1080, via --aspect)
-- Image cards via --images (content segments are expected to have images;
-  opening/closing are text-only agenda cards. A text-only fallback is
-  allowed but explicitly warned about)
-
-Optionally accepts an --images JSON file mapping segment IDs to image paths,
-which will be embedded as the centered 4:3 canvas below the title.
-
-Usage:
-  python gen_hyperframes.py -m timing_manifest.json -o hf-project/index.html
-  python gen_hyperframes.py -m timing_manifest.json -o hf-project/index.html --images hf-project/images.json
-
-The manifest must contain:
-  - sentences[]: {index, text, start_time, duration}
-  - total_duration: 测量得到的音频总时长
-  - segments[] (optional): {id, title, tagline, accent, sentences[]}
-    If absent, sentences are auto-grouped into chunks of 5.
-
-images.json format (all paths relative to the HTML output directory):
-  {"seg1": {"src": "images/seg1-imo.png"}, "seg2": {"src": "images/seg2-gemini.png"}, ...}
-  Each value is a media object with a required "src"; a bare string path is rejected.
+画幅/主题选择与 vendor 资产装载链见 SKILL.md 第 5 步与 references/rendering.md；
+images.json 字段见 references/image_options.md；完整参数列表见 ``--help``。
 """
 import argparse
 import hashlib

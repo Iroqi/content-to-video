@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
-"""content-to-video TTS Pipeline
+"""content-to-video TTS Pipeline：结构化写稿 → 逐句 TTS → 拼接音频 +
+timing_manifest.json（字幕时间轴的唯一来源）。
 
-Generates sentence-level TTS audio with precise timing for video sync.
-
-Key features:
-- Mixed Chinese-English text passthrough (MiMo TTS handles both natively)
-- Sentence-level TTS generation (consistent voice, precise timing)
-- Per-sentence duration measurement (wave module for WAV, ffmpeg fallback)
-- Audio concatenation with configurable gaps
-- Optional BGM mixing
-- Resume support (skip already-generated sentences)
-- Segment grouping from structured source (timing_manifest.json output)
-- Outputs timing_manifest.json for video rendering
-- Non-destructive speed change (.orig.wav preserved for re-application)
-- Configurable model/base_url via CLI or env (MIMO_TTS_MODEL / MIMO_BASE_URL)
-- Dry-run mode (--dry-run) to preview sentence split without API calls
-- Silent audio generation with Python wave fallback (no lavfi dependency)
-
-Usage:
-  python pipeline.py --source segments_source.json -o output_dir
-  python pipeline.py --source segments_source.json -o output_dir --resume
-  python pipeline.py --source segments_source.json -o output_dir --bgm bgm.mp3 --bgm-volume 0.15
-  python pipeline.py --source segments_source.json -o output_dir --dry-run
+参数与行为详见 SKILL.md 第 3 步与 references/tts_pipeline.md；
+完整参数列表见 ``--help``。
 """
 import argparse
 import base64
@@ -34,7 +16,6 @@ import sys
 import time
 
 
-# 环境变量解析只服务 TTS 管线，直接内聚；共享模块仍保持职责分离。
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

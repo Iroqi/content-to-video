@@ -117,16 +117,9 @@ def manifest_segments(manifest):
 
 
 def _segment_duration(seg):
-    """段落时长（秒）：优先取显式 duration 字段（契约允许的可选字段），
-    缺失时从 sentences 推算——末句 start_time+duration − 首句 start_time。
-    pipeline 产出的 segments 不带 duration 字段，时长基本都走推算路径。
-    空 sentences 返回 0。
+    """段落时长（秒）：从 sentences 推算——末句 start_time+duration − 首句
+    start_time。与 generate_html 的 clip 计时同一口径。空 sentences 返回 0。
     """
-    d = seg.get("duration")
-    if d is not None:
-        # 契约（validate_timing_manifest）已保证非 None 时为非负有限数值；
-        # 显式 0 也是覆盖意图，不能因假值回落到句子推算。
-        return float(d)
     sents = seg.get("sentences") or []
     if not sents:
         return 0.0
@@ -490,9 +483,6 @@ def _build_chart_boot(normalized_images, chart_palette):
 def _build_subtitle_layer():
     """生成字幕/内容呈现层的 CSS 与 JS（verse 唯一形态，两画幅共用）。
 
-    从 generate_html 抽出的纯函数：输出是 (_sub_css, _sub_js) 两个字符串，
-    由 generate_html 拼进最终 HTML。
-
     静态骨架在 templates/subtitle-verse.{css,js}：结构与选择器写死，
     数值走 var(--ctv-*)（由 generate_html 注入 :root）。
     不可信内容的边界在两处生成期转义，运行时不参与文案：verse 行由
@@ -655,16 +645,14 @@ def generate_html(manifest, audio_src, images=None,
                 f"且 textCol.width({_ltext['width']}) + columnGap({_lgap}) "
                 f"+ image.width({_il['width']}) + 2×margin({_lm}) 必须 ≤ 画布宽({width})")
 
-    # ── 字幕层产物：verse（歌词式句子流） ──
     # ══════════════════════════════════════════════════════════════════
-    # 分区 3/6：字幕形态 CSS + JS（输出 _sub_css / _sub_js）
-    # 下方分区索引（本函数 600+ 行，改代码前先定位分区，避免整段通读）：
+    # 分区索引（本函数 600+ 行，改代码前先定位分区，避免整段通读）：
     #   1/6 参数归一化与模板装载（函数开头 ~ 配图归一化）
     #   2/6 竖屏几何派生（_v_pad_* / _v_img_*）
-    #   3/6 字幕形态 CSS+JS ← 本区（已抽到模块级 _build_subtitle_layer）
-    #   4/6 段落卡片 HTML + GSAP 时间线（"Build segment card HTML + GSAP"）
-    #   5/6 图表引导脚本（_build_chart_boot，已抽为模块级函数）
-    #   6/6 装配最终 HTML（"分区 6/6：装配最终 HTML"）
+    #   3/6 字幕形态 CSS+JS（verse 句子流，两画幅共用）← 本区，模块级 _build_subtitle_layer
+    #   4/6 段落卡片 HTML + GSAP 时间线
+    #   5/6 图表引导脚本（模块级 _build_chart_boot）
+    #   6/6 装配最终 HTML
     # ══════════════════════════════════════════════════════════════════
     _sub_css, _sub_js = _build_subtitle_layer()
 
@@ -785,7 +773,6 @@ def generate_html(manifest, audio_src, images=None,
         })
 
     # ── 分区 4/6：段落卡片 HTML + GSAP 时间线 ──────────────────────
-    # ── Build segment card HTML + GSAP ─────────────────────────────
     seg_cards = []
     gsap_lines = []
 

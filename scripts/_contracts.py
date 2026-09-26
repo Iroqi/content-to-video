@@ -455,14 +455,6 @@ def validate_timing_manifest(data):
             _validate_text(sg.get("title"), f"segments[{i}].title", required=True)
             _validate_text(sg.get("tagline"), f"segments[{i}].tagline")
             _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
-            # duration 是**可选**的显式覆盖：_segment_duration 优先读它、
-            # 缺失时才按段内句子推算。不查它，坏值就要等到渲染层 float()
-            # 才炸 TypeError（或安静地印出 "-5" 这种假时长）。
-            _sg_dur = sg.get("duration")
-            if _sg_dur is not None:
-                _validate_finite_number(
-                    _sg_dur, f"segments[{i}]（{sid}）的 'duration'",
-                    nonnegative=True)
             # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
             # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
             if sg.get("takeaway") is not None:

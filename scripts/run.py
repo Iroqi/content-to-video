@@ -828,10 +828,10 @@ def main():
         _write_report(_report_path())
         raise
     _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": True})
-    if not os.path.isfile(out_mp4) or os.path.getsize(out_mp4) <= 0:
-        _write_report(_report_path())
-        print(f"[run] Hyperframes 报告成功，但没有生成有效成片文件：{out_mp4}", file=sys.stderr)
-        sys.exit(1)
+    # 走到这里成片必已存在且非空：_render_poll_loop 的所有 return 路径都以
+    # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
+    # 的整容器解码），失败路径一律 SystemExit。不再补一遍 isfile/getsize——
+    # 本文件为此专门写了 _probe_file_size 来躲 exists→getsize 的竞态窗口。
 
     print(f"\n[run] 完成。成片：{out_mp4}", flush=True)
     _write_report(_report_path())

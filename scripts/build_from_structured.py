@@ -4,51 +4,8 @@
 pipeline.py --source 直接调用本模块的 build_parts()：逐段独立分句，跨段
 短句合并结构上不可能发生，不需要任何跨段校验。
 
-结构化输入格式（segments_source.json）：
-{
-  "opening_title": "欧拉恒等式",              // 可选，开场大标题；不传则回退到顶层 title 或 "本期内容"
-  "opening_tagline": "",                     // 可选，开场 agenda 卡标题上方的 kicker；不传则不显示 kicker
-  "closing_title": "内容回顾",                 // 可选，结尾大标题；不传默认 "小结"
-  "closing_tagline": "",                     // 可选，结尾 agenda 卡标题上方的 kicker；不传则不显示 kicker
-  "opening": "大家好，欢迎收看今天的AI日报。",
-  "closing": "感谢收看，明天见。",
-  "segments": [
-    {
-      "id": "seg-openai-model",                 // 可选，稳定段落标识（必须以 seg 前缀开头 + 字母/数字/-/_）；
-                                                //   用作 images.json 键与配图文件名，改稿重排后配图不串台。
-                                                //   缺省按顺序取 seg1/seg2/…（显式与缺省名冲突时报错）
-      "title": "OpenAI 发布新一代模型",
-      "tagline": "OpenAI",                    // 公司/机构名（可选；缺省由 pipeline 兜底为 "补充阅读"）
-      "accent": "#2dd4bf",                    // 可选，缺省按顺序取调色板
-      "text": "OpenAI 发布了新一代模型，...",    // 正文，会被分句
-      "speed": 1.0,                           // 可选，缺省用 --speed
-      "takeaway": "推理涨四成，价格降一半"      // 可选，结尾 agenda 要点总结用的
-                                                //   一句话结论；不传回退段标题
-    }
-  ],
-  "cta": "关注我们，每周三分钟看懂 AI"          // 可选，结尾 agenda 至多一条尾行：
-                                                //   行动号召或下期预告二选一
-}
-
-双人对话段落（可选，用 "dialogue" 代替 "text"）：
-{
-  "speakers": {                               // 顶层声明，dialogue 段落必需
-    "host": {"voice_id": "茉莉", "label": "主播"},
-    "guide": {"voice_id": "苏打", "label": "讲解", "voice_style": "耐心讲解，逻辑清晰"}
-  },
-  "segments": [
-    {
-      "title": "反向传播算法",
-      "tagline": "深度学习基础",
-      "dialogue": [
-        {"speaker": "host", "text": "反向传播听起来很复杂，能简单说说吗？"},
-        {"speaker": "guide", "text": "简单说，就是把预测误差从输出层往回传，一层层告诉每个参数该怎么调整。"}
-      ]
-    }
-  ]
-}
-一个段落里的 dialogue 轮次会按顺序拼成该段的完整句子列表（用于字幕/时间轴），
-每轮的说话人各自使用 speakers 里声明的 voice_id/voice_style 合成语音，互不影响。
+segments_source.json 的字段规范与完整示例见 `references/writing.md`
+（字段语义的唯一真源）；本模块只负责按 _contracts 校验过的结构分组。
 """
 import os
 import sys

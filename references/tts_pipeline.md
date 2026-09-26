@@ -92,12 +92,11 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 ```
 
 - 顶层 `sentences`（非空列表）与数值 `total_duration`（ffmpeg 实测总时长）必填；每个句子对象含 `index`/`text`/`start_time`/`duration` 四个字段（对话段落的句子另有 `speaker`，TTS 失败降级为静音的句子带 `synth_failed: true`）
-- `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`/`duration`）是语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`start`/`end` 句子索引只是 pipeline 的内部中间格式，最终 manifest 不含这两个字段
+- `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`start`/`end` 句子索引只是 pipeline 的内部中间格式，最终 manifest 不含这两个字段
 
 **可选字段**：
 - `speed`（float）：段落级语速倍率，覆盖全局 `--speed`。例如开场/结尾用 `1.2`、正文段用 `1.5`。仅影响 TTS atempo 变速，不影响字幕时间轴精度
 - `voice_id` / `voice_style`（string）：内容段级的音色覆盖，覆盖全局 `--voice-id`/`--voice-style`。注意 opening/closing 是管线自动造的结构性页，**不支持**这两个字段（顶层只有 `opening_speed`/`closing_speed`）；要换开场音色就用全局 `--voice-id`
 - `turns`（数组）：仅对话段落出现，由 pipeline 从 `segments_source.json` 的 `dialogue` 自动产出（`{start, end, speaker, label, voice_id?, voice_style?}`，全局句子区间），手写 manifest 一般不需要自己拼
-- `duration`（非负数值，可选）：段落时长的显式覆盖，`html_renderer` 优先读它、缺失时才按段内句子推算；省略即默认行为
 
 `segments` 必须按时间轴顺序排列，并且恰好覆盖顶层每个 sentence index；缺句、重复句或乱序都会在 HTML 生成前直接拒绝。

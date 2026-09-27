@@ -218,7 +218,7 @@ from _contracts import (load_timing_manifest, validate_images_json,  # noqa: E40
                         classify_media_path, is_content_sid, media_needs_chartjs)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
-from _audio import get_ffmpeg, measure_duration, parse_duration  # noqa: E402
+from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
 
 from html_renderer import (  # noqa: E402
     _segment_duration, generate_html, manifest_segments,
@@ -351,10 +351,11 @@ def validate_images_files(images, out_dir, seg_durs=None):
     corrupt_imgs = []
     # 图片/视频完整性都用 ffmpeg 全解码探测（ffmpeg 是渲染必需依赖，
     # 无需再引入 Pillow）；找不到 ffmpeg 时降级为仅做存在性校验。
-    _ffmpeg_probe = None
-    try:
-        _ffmpeg_probe = get_ffmpeg()
-    except Exception:
+    # get_ffmpeg() 从不抛异常（末位回退是字面量 "ffmpeg"），所以"能不能用"
+    # 只能问 ffmpeg_usable——靠 try/except 接一个不会发生的异常会让下面的
+    # 降级警告永远打不出来，而"没有 ffmpeg"恰恰是它唯一要报的情况。
+    _ffmpeg_probe = get_ffmpeg()
+    if not ffmpeg_usable(_ffmpeg_probe):
         _ffmpeg_probe = None
 
     def _probe_media_ok(path):
@@ -371,10 +372,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
         except _sp.TimeoutExpired:
             return False, "probe timeout(15s)", None
         except OSError:
-            # ffmpeg 可执行不存在（get_ffmpeg 找不到时返回字面
-            # "ffmpeg" 兜底串，subprocess 抛 FileNotFoundError）——
-            # 降级为存在性校验通过（文件存在在调用前已查过），
-            # 不当损坏处理
+            # 兜底：调用方已用 ffmpeg_usable 预筛过，走到这里只剩"预筛之后
+            # ffmpeg 才消失"这类竞态。当真报错会把"环境问题"说成"图片损坏"，
+            # 所以退回存在性校验（文件存在在调用前已查过），不当损坏处理。
             return True, "", None
         err_text = (r.stderr or b"").decode("utf-8", "replace")
         if r.returncode != 0:
@@ -529,7 +529,7 @@ def main():
                     images.pop(k)
                 print(f"[warn] images.json 的 {'/'.join(_agenda_keys)} 键被忽略："
                       "开屏/结尾是纯文字 agenda 版式，不配图；"
-                      "建议从 images.json 移除这两个键（对应配图文件可一并清理）。",
+                      "建议从 images.json 移除上述键（对应配图文件可一并清理）。",
                       file=sys.stderr)
             # 孤儿键：images.json 里还留着 manifest 中不存在的段 id（稿件
             # 删段/改名后忘了同步）——弹出并 warn，不进渲染器，也不参与
@@ -700,10 +700,10 @@ def main():
         print("[warn] 未找到 scripts/preview.js，浏览器预览不可用"
               "（渲染不受影响）", file=sys.stderr)
 
-    seg_count = len(manifest.get("segments", []))
+    seg_count = len(manifest_segments(manifest))
     print(f"[OK] {args.output} ({len(html)} bytes)")
     print(f"     Duration: {manifest['total_duration']}s")
-    print(f"     Segments: {seg_count if seg_count else 'auto-grouped'}")
+    print(f"     Segments: {seg_count}")
     print(f"     Sentences: {len(manifest['sentences'])}")
     print(f"     Aspect: {aspect} ({w}x{h})")
     print(f"     Theme: {args.theme}")

@@ -10,7 +10,8 @@ import sys
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import setup_stdio, write_json_atomic, guard_not_in_skill_dir
-from _contracts import CHART_TYPES, is_valid_sid
+from _contracts import (CHART_TYPES, is_valid_sid, validate_images_json,
+                        SID_RULE)
 
 # 公式求值的安全护栏：AST 白名单挡的是"能力"（不出网络/属性/下标/导入），
 # 挡不住"规模"——`9**9**9` 每个节点都合法，却要算到宇宙热寂。Pow 结果一旦
@@ -188,8 +189,7 @@ def _normalize(chart):
     # 段 id 口径唯一来源是 _contracts（is_valid_sid 包住 _SID_RE；与
     # images.json key、HTML/GSAP 选择器同一规则），这里不再自带副本。
     if not is_valid_sid(cid):
-        raise ValueError(f"chart id 非法: {cid!r}（须字母开头，"
-                         f"仅字母/数字/-/_，1–64 字符）")
+        raise ValueError(f"chart id 非法: {cid!r}（{SID_RULE}）")
     kind = str(chart.get("type") or "").lower()
     if kind not in CHART_TYPES:
         raise ValueError(f"chart {cid!r}: type must be one of {sorted(CHART_TYPES)}")
@@ -257,23 +257,30 @@ def _normalize(chart):
                     f"chart {cid!r}: curves[{idx}] 表达式嵌套过深: "
                     f"{expr!r}") from e
             samples = []
+            first_err = None
             for i in range(points):
                 x = x_min + (x_max - x_min) * i / (points - 1)
                 try:
                     y = float(_eval_ast(tree.body, _curve_ns(x)))
-                except (ArithmeticError, ValueError, RecursionError):
+                except (ArithmeticError, ValueError, RecursionError) as e:
                     # OverflowError/ZeroDivisionError 都是 ArithmeticError 的
                     # 子类，不必点名。RecursionError 只可能来自逐点求值阶段的
                     # 超深 AST（校验阶段的嵌套深度守卫在 walk 里）；
                     # 该采样点放弃即可，其余点仍可成线。
+                    if first_err is None:
+                        first_err = str(e)
                     y = None
                 samples.append({"x": x, "y": y}
                                if y is not None and math.isfinite(y)
                                else {"x": x, "y": None})
             if not any(p["y"] is not None for p in samples):
+                # 带上首个求值报错：守卫（幂指数/位宽上限）在逐点 try 里被降级成
+                # y=None，若不回传就只剩"没有有限值"，用户看不出自己是 ** 嵌套太深
+                # 还是区间取错。
                 raise ValueError(
                     f"chart {cid!r}: curves[{idx}]（expr={expr!r}）"
-                    f"在整个采样区间上没有有限值")
+                    f"在整个采样区间上没有有限值"
+                    + (f"；求值报错：{first_err}" if first_err else ""))
             datasets.append({
                 "label": str(curve.get("label") or f"curve {idx + 1}"),
                 "data": samples,
@@ -305,18 +312,22 @@ def merge_images_map(existing, charts_map):
     清掉。合并语义：
       · 既有条目原样保留（含 provenance 字段）；
       · chart 条目新增；
-      · 与上一次 gen_charts 产物语义相等（dict 比较，键序/缩进无关）的
-        chart 条目 → 幂等覆盖；
-      · 同一个 key 上既有非 chart 条目（或内容不同的 chart）→ 报错。
+      · 既有条目本身是 chart → 覆盖（与上次产物语义相等时就是幂等重跑，
+        改了数值/标题后重跑则是"更新"）。chart 是 gen_charts 自己的命名空间，
+        同一来源的更新不构成冲突；把它当冲突拦下来会逼着人去手改 images.json，
+        而那份文件里正压着 A/B/D 路线不能丢的 provenance。
+      · 同一个 key 上站着**非 chart** 条目（照片/生图/视频）→ 报错。
         两种来源争同一段配图必须人工裁决，不能默认任何一边赢。
     """
     merged = dict(existing or {})
     for sid, media in charts_map.items():
-        if sid in merged and merged[sid] != media:
+        prev = merged.get(sid)
+        if prev is not None and prev != media and prev.get("type") != "chart":
             raise ValueError(
                 f"chart id '{sid}' 与既有 images.json 条目冲突：该段已有"
-                f"配图映射（{json.dumps(merged[sid], ensure_ascii=False)[:80]}…）。"
-                f"请换一个 chart id，或确认后先删除既有条目再重跑。")
+                f"非图表配图（{json.dumps(prev, ensure_ascii=False)[:80]}…）。"
+                f"两种来源争同一段配图需要人工裁决：请换一个 chart id，"
+                f"或确认后先删除既有条目再重跑。")
         merged[sid] = media
     return merged
 
@@ -351,17 +362,28 @@ def main():
                       f"拒绝合并写回（images.json 需为 {{segment_id: 映射}}）",
                       file=sys.stderr)
                 return 1
+            # 合并前先按契约校验既有映射：images.json 由 gen_charts 与 A/B/D
+            # 路线共写同一份文件，坏值（裸字符串路径、null 条目）必须在这里就
+            # 报对人——否则要么在 merge 里抛裸 AttributeError，要么被 [ok] 静默
+            # 带着写回，等下游 gen_hyperframes 才炸，届时用户已以为是本次
+            # chart 写坏了文件。
+            try:
+                existing = validate_images_json(existing)
+            except ValueError as exc:
+                print(f"[error] 既有 {args.output} 不是合法的配图映射，"
+                      f"拒绝合并写回: {exc}", file=sys.stderr)
+                return 1
         result = merge_images_map(existing, charts_map)
         # 走原子写：images.json 是下游 run.py/gen_hyperframes 的必读输入，
         # 写到一半被中断会留下截断 JSON，报错堆栈跟"上次写入没完成"这个
         # 真实原因毫无关系。全包其余落盘点都用同一套原子写，这里不再例外。
         write_json_atomic(args.output, result, indent=2)
-        kept = len(existing)
+        kept = len([k for k in existing if k not in charts_map])
         for sid, media in charts_map.items():
             print(f"[ok] {sid} ({media['chart']['type']}) -> {args.output}",
                   file=sys.stderr)
         if kept:
-            print(f"[ok] 保留既有条目 {kept} 个（合并写回，不覆盖）",
+            print(f"[ok] 原样保留既有条目 {kept} 个（charts.json 未涉及的段）",
                   file=sys.stderr)
         return 0
     except (OSError, ValueError) as exc:

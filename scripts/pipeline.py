@@ -9,19 +9,40 @@ import argparse
 import base64
 import concurrent.futures
 import hashlib
+import json
 import math
 import os
 import random
 import sys
 import time
+import urllib.error
+import urllib.request
 
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# 用户级 .env 路径
+from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
+                    ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
+                    mix_bgm, wav_data_consistent,
+                    _remove_quiet)  # 尽力删文件，不抛
+# 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
+from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, is_content_sid,  # noqa: E402
+                        list_voice_ids, load_segments_source,
+                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
+                        needs_speed_change, speed_marker_value,
+                        validate_speed, validate_timing_manifest)
+from _theme import get_default_accent  # noqa: E402
+from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
+                           write_json_atomic)
+from build_from_structured import build_parts  # noqa: E402
+
+DEFAULT_ACCENT = get_default_accent()
+
+# 密钥/模型的两级查找路径：CLI > os.environ > 这份用户级 .env
 _USER_ENV_PATH = os.path.join(os.path.expanduser("~"), ".config", "ai-video", ".env")
 DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
+
 
 def _parse_env_file(path):
     """解析一个 KEY=VALUE 格式的 .env 文件，返回 dict。
@@ -99,7 +120,7 @@ def _parse_env_file(path):
             # 先剥未加引号值的行内注释（KEY=value # 说明），只认"空格 + #"，
             # 紧贴的 #（色值、口令片段）不动；引号值取成对引号之间的内容，
             # 闭引号之后的注释自然丢弃。顺序不能反：`KEY="x" # 注释` 若先判
-            # 成对引号会失败，剥完注释又把带引号的 "x" 交给 SDK → 401
+            # 成对引号会失败，剥完注释又把带引号的 "x" 交给 API → 401
             if v[:1] in ("\"", "'"):
                 close = v.find(v[0], 1)
                 if close != -1:
@@ -162,23 +183,6 @@ def resolve_model_config(cli_model, cli_base_url, model_env_name, default_model)
     base_url = cli_base_url or env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL
     return model, base_url
 
-from _theme import get_default_accent  # noqa: E402
-from _contracts import list_voice_ids  # noqa: E402
-# 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
-from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, load_segments_source,  # noqa: E402
-                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
-                        is_content_sid, validate_speed, validate_timing_manifest,
-                        needs_speed_change, speed_marker_value)
-from _audio import get_ffmpeg, ffmpeg_usable  # noqa: E402
-from _audio import (measure_duration, generate_silence, wav_data_consistent,  # noqa: E402
-                    apply_speed, concat_audio, mix_bgm, apply_loudnorm,
-                    _remove_quiet)  # 尽力删文件，不抛
-from build_from_structured import build_parts  # noqa: E402
-from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
-                          write_json_atomic)
-
-DEFAULT_ACCENT = get_default_accent()
-
 
 # ===================================================================
 # MiMo TTS 单句合成（原 _tts.py：仅本文件使用，归位回管线本体）
@@ -187,24 +191,84 @@ DEFAULT_ACCENT = get_default_accent()
 class BadAudioResponseError(Exception):
     """TTS 响应里没有音频（chat.completions 返回了纯文本）。
 
-    几乎总是 --base-url/--model 指向了不支持 audio 参数的网关或模型，
-    重试 N 次结果完全一样。按确定性失败处理：首次命中即整句放弃、不进
-    重试循环（_is_non_retryable）——否则 100 句 × 每句 3 次重试 = 300 次
-    billable 调用全部白烧。全句皆败时管线以 "All sentences failed" 退出；
-    每句至多一次的探测调用是该端点错配下无法再避免的最小开销。
+    几乎总是 --base-url/--model 指向了不支持 audio 参数的网关或模型，换一句
+    再试也是同样的响应，因此按确定性失败处理（判定见 _is_non_retryable）。
     """
+
+
+class TtsHttpError(Exception):
+    """TTS 端点返回非 2xx。status_code 让 _is_non_retryable 区分
+    "重试也不会好"（400/401/…）与限流、网络抖动（仍走重试）。"""
+
+    def __init__(self, status_code, detail):
+        super().__init__(f"Error code: {status_code} - {detail}")
+        self.status_code = status_code
+
+
+class TtsClient:
+    """MiMo TTS 端点：一次 OpenAI 兼容的 chat/completions 调用，取回音频字节。
+
+    全管线唯一的外部网络接口，用标准库实现（urllib），让第 3 步与其余步骤一样
+    零第三方依赖。请求体与 openai SDK 的 `chat.completions.create(model=,
+    messages=, audio=)` 逐字段一致：POST {base_url}/chat/completions，
+    Authorization: Bearer <key>，body {model, messages, audio}。
+    """
+
+    def __init__(self, api_key, base_url):
+        self.api_key = api_key
+        self.url = base_url.rstrip("/") + "/chat/completions"
+
+    def audio_bytes(self, model, messages, audio_params, timeout):
+        """发起一次合成请求，返回 WAV 字节。timeout 是 socket 级读超时。"""
+        body = json.dumps({"model": model, "messages": messages,
+                           "audio": audio_params}).encode("utf-8")
+        req = urllib.request.Request(
+            self.url, data=body, method="POST",
+            headers={"Authorization": f"Bearer {self.api_key}",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise TtsHttpError(e.code, e.read().decode("utf-8", "replace")[:300]) \
+                from None
+        except ValueError as e:
+            # 200 但 body 不是 JSON（网关返回了 HTML 错误页之类）：
+            # 端点配错，重试同一次请求不会变好，按确定性失败处理。
+            raise BadAudioResponseError(
+                f"TTS 响应不是合法 JSON（{e}）——检查 --base-url 是否指向 "
+                "OpenAI 兼容的 chat/completions 端点") from None
+        return _audio_from_response(payload)
+
+
+def _audio_from_response(payload):
+    """从 chat/completions 响应里取出 base64 音频并解码。
+
+    显式检查结构而不是直接下钻 data：端点/模型配错时 message.audio 不存在，
+    裸 KeyError 不带 status_code 会被归为可重试——每句白烧满 3 次 billable
+    调用才放弃。这里转成确定性失败（见 BadAudioResponseError），首次即整句放弃。
+    """
+    choices = payload.get("choices") or []
+    message = choices[0].get("message") if choices else None
+    audio = message.get("audio") if isinstance(message, dict) else None
+    data = audio.get("data") if isinstance(audio, dict) else None
+    if not data:
+        raise BadAudioResponseError(
+            "TTS 响应不含音频（chat.completions 返回了纯文本）——"
+            "检查 --model/--base-url 是否指向支持 audio 参数的"
+            " TTS 模型（默认 mimo-v2.5-tts），不要指向普通对话模型")
+    return base64.b64decode(data)
 
 
 def _is_non_retryable(exc):
     """判断异常是否属于"重试也不会好"的确定性失败。
 
-    openai SDK 的 APIStatusError 及其子类都带 status_code 属性：
-    400（参数/内容审核拒绝）、401/403（密钥错误/无权限）、404（模型不存在）、
-    422（请求不合法）这类错误重试 N 次结果完全一样——每句烧满 3 次重试
-    只会浪费额度和时间（100 句 × 无效 key = 300 次无效调用 + 每句多等 6s），
-    直接放弃。响应不含音频（BadAudioResponseError）同理：端点/模型配错了，
-    换一句再试也是同样的纯文本响应。连接/超时/429 限流类不带 status_code
-    或带可重试码，仍走重试。
+    带 status_code 的 TtsHttpError：400（参数/内容审核拒绝）、401/403（密钥
+    错误/无权限）、404（模型不存在）、422（请求不合法）这类错误重试 N 次结果
+    完全一样——每句烧满 3 次重试只会浪费额度和时间（100 句 × 无效 key = 300
+    次无效调用 + 每句多等 6s），直接放弃。响应不含音频（BadAudioResponseError）
+    同理：端点/模型配错了，换一句再试也是同样的纯文本响应。连接/超时/429 限流
+    类不带 status_code 或带可重试码，仍走重试。
     """
     if isinstance(exc, BadAudioResponseError):
         return True
@@ -276,24 +340,8 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
 
     for attempt in range(max_retries):
         try:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                audio=audio_params,
-                timeout=api_timeout,
-            )
-            # 显式检查响应结构而不是直接下钻 .data：端点/模型配错时
-            # message.audio 为 None，AttributeError 不带 status_code 会被
-            # 归为可重试——每句白烧满 3 次 billable 调用才放弃。这里转成
-            # 确定性失败（见 BadAudioResponseError），首次即整句放弃。
-            audio_obj = getattr(completion.choices[0].message, "audio", None)
-            audio_data = getattr(audio_obj, "data", None) if audio_obj else None
-            if not audio_data:
-                raise BadAudioResponseError(
-                    "TTS 响应不含音频（chat.completions 返回了纯文本）——"
-                    "检查 --model/--base-url 是否指向支持 audio 参数的"
-                    " TTS 模型（默认 mimo-v2.5-tts），不要指向普通对话模型")
-            audio_bytes = base64.b64decode(audio_data)
+            audio_bytes = client.audio_bytes(model, messages, audio_params,
+                                             api_timeout)
         except Exception as e:
             label = sentence_label or (text[:30] + "...")
             if _is_non_retryable(e):
@@ -368,7 +416,7 @@ def _sentence_hash(text, voice_id=None, voice_style=None, model=None):
     指纹除文本外还覆盖 voice_id/voice_style/model——只含文本时
     换音色后带 --resume 重跑会静默复用旧音色音频（manifest 声明的
     是新音色、实际音频是旧音色，且无任何警告）。旧缓存（纯文本指纹）
-    会统一失配重合成（MiMo TTS 不计费，只费时间不烧额度）。
+    会统一失配重合成（宁可多花一次合成时间，也不复用指纹对不上的音频）。
     """
     payload = "\x1f".join([text, voice_id or "", voice_style or "", model or ""])
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
@@ -1046,19 +1094,8 @@ def main():
               f"尚未发起任何 TTS 调用，额度未消耗。", file=sys.stderr)
         sys.exit(1)
 
-    # ── Initialize OpenAI client ───────────────────────────────────
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        print(f"[error] TTS 步骤缺少第三方依赖 openai（{e}）。"
-              "这是全管线唯一需要 pip 安装步骤：pip install openai；"
-              "写稿、配图、生成 HTML、渲染都不受此影响。",
-              file=sys.stderr)
-        sys.exit(1)
-    # max_retries=0：SDK 内部默认还会静默重试 2 次，叠加本模块自己的
-    # 3 次应用层重试 = 单句最多 6 次 billable 请求。重试策略统一收口到
-    # synth_sentence（带退避抖动），SDK 层关掉。
-    client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+    # ── Initialize TTS client ──────────────────────────────────────
+    client = TtsClient(api_key, base_url)
     print(f"[api] model={model} base_url={base_url}", flush=True)
 
     # ── Build per-sentence speed / voice mapping ────────────────────
@@ -1117,6 +1154,10 @@ def main():
         label = f"s{i+1:03d}/{len(sentences):03d}"
         sent_speed = sentence_speeds.get(i, args.speed)
         sent_voice_id, sent_voice_style = sentence_voices.get(i, (args.voice_id, args.voice_style))
+        # 本次要合成的这一句（四条入队路径共用同一个形状，见下方 append）
+        task = {"index": i, "text_tts": sent_tts, "out_path": out_path,
+                "label": label, "speed": sent_speed,
+                "voice_id": sent_voice_id, "voice_style": sent_voice_style}
 
         # Resume: 只有当内容指纹、时长、语速状态都能证明这段音频就是当前
         # 稿件时才跳过（判定全在 resolve_resume_state，这里只执行副作用）
@@ -1132,11 +1173,7 @@ def main():
                 print(f"  [{label}] 缓存失效（{decision.reason}），重新合成",
                       flush=True)
                 _drop_stale_cache(out_path)
-                pending_tasks.append({
-                    "index": i, "text_tts": sent_tts,
-                    "out_path": out_path, "label": label, "speed": sent_speed,
-                    "voice_id": sent_voice_id, "voice_style": sent_voice_style,
-                })
+                pending_tasks.append(task)
                 continue
             restored = False
             if decision.restore_first:
@@ -1172,11 +1209,7 @@ def main():
                     print(f"  [{label}][warn] 语速对齐后时长测量失败，"
                           f"改为重新合成这一句", file=sys.stderr)
                     _drop_stale_cache(out_path)
-                    pending_tasks.append({
-                        "index": i, "text_tts": sent_tts,
-                        "out_path": out_path, "label": label, "speed": sent_speed,
-                        "voice_id": sent_voice_id, "voice_style": sent_voice_style,
-                    })
+                    pending_tasks.append(task)
                     continue
             else:
                 dur = facts.audio_duration
@@ -1190,13 +1223,7 @@ def main():
                         print(f"  [{label}][warn] 还原原速后时长测量失败，"
                               f"改为重新合成这一句", file=sys.stderr)
                         _drop_stale_cache(out_path)
-                        pending_tasks.append({
-                            "index": i, "text_tts": sent_tts,
-                            "out_path": out_path, "label": label,
-                            "speed": sent_speed,
-                            "voice_id": sent_voice_id,
-                            "voice_style": sent_voice_style,
-                        })
+                        pending_tasks.append(task)
                         continue
                     dur = _restored_dur
                     # 还原成功 = 音频已回到原速：用可读的 "1.0" marker 替换
@@ -1234,11 +1261,7 @@ def main():
             cached_count += 1
             continue
 
-        pending_tasks.append({
-            "index": i, "text_tts": sent_tts,
-            "out_path": out_path, "label": label, "speed": sent_speed,
-            "voice_id": sent_voice_id, "voice_style": sent_voice_style,
-        })
+        pending_tasks.append(task)
 
     # 进度预估按 pending_tasks 里的真实文本算平均字数：中文句长常 15-40 字，
     # 用固定的句均字数会偏短 2-3 倍。与静音兜底/estimate 同一套

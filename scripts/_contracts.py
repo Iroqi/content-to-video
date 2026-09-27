@@ -15,12 +15,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _theme import is_safe_css_color  # noqa: E402  _theme 不反向依赖本模块
 
-# 段落 id 的合法形态：字母开头，只含字母/数字/下划线/连字符。id 会被
-# gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP 选择器字符串
-# （tl.fromTo("#{sid}",...)）——手写 manifest 里带引号/点号/方括号的 sid
-# 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段 SyntaxError、
-# 字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
+# 段落 id 的合法形态见 _SID_RE / SID_RULE。之所以要收口成一条正则而不是各处
+# 宽松判断：id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP
+# 选择器字符串（tl.fromTo("#{sid}",...)）——手写 manifest 里带引号/点号/方
+# 括号的 sid 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段
+# SyntaxError、字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
 _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+# 同一条规则的对外说法。报错文案在 4 个调用点（source/manifest 的
+# _validate_sid、images.json key、html_renderer 的两道兜底、gen_charts 的 chart
+# id）各写一份汉字副本时已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64
+# 字符"）。规则本身仍以 _SID_RE 为准，这里只是给人看的那一句的唯一副本，
+# 改正则必须同步这句。
+SID_RULE = "字母开头，仅字母/数字/-/_，1–64 字符"
 # accent 的合法形态见 _theme.is_safe_css_color（hex 或 CSS 标准颜色名），
 # 白名单之外不进生成 HTML。
 
@@ -33,7 +39,7 @@ CONTENT_SID_PREFIX = "seg"
 
 
 def is_valid_sid(sid):
-    """sid 是否是合法段 id（字母开头、仅字母数字 - _、1–64 字符）。
+    """sid 是否是合法段 id（规则见 SID_RULE）。
 
     这些 id 会拼进 HTML 属性、JS 对象键与 GSAP 选择器（见 _SID_RE 注释）。
     CLI 路径由 _validate_sid/validate_images_json 强制；库调用方直接传 dict
@@ -150,8 +156,8 @@ def _validate_sid(sid, where, seen):
     """
     if not is_valid_sid(sid):
         raise ValueError(
-            f"{where} 的 id={sid!r} 含非法字符或格式不对——id 只允许"
-            f"字母开头，字母/数字/下划线/连字符（如 seg1、opening），"
+            f"{where} 的 id={sid!r} 含非法字符或格式不对——id 的合法形态是"
+            f"{SID_RULE}（如 seg1、opening），"
             f"因为它会被拼进 HTML 属性与 GSAP 选择器")
     if sid in seen:
         raise ValueError(f"{where} 的 id={sid!r} 与前面的段落重复"
@@ -349,22 +355,24 @@ def validate_timing_manifest(data):
     if data.get("gap") is not None:
         _validate_finite_number(data["gap"], "timing_manifest.json 的 gap",
                                 nonnegative=True)
+    # schema_version 与 status 都是必填：二者只有 pipeline.py 的两个合法取值
+    # （2 / ok|degraded），"缺字段"从来不是有效状态而是漏写或旧版产物。允许
+    # schema_version 缺席会留一条逃逸口——手写 manifest 少写它就能绕开 status
+    # 校验，把降级产物伪装成正常成片交给下游（降级显式化是硬规则）。
     schema_version = data.get("schema_version")
-    if schema_version is not None and schema_version != 2:
-        raise ValueError("timing_manifest.json 的 schema_version 只支持 2"
-                         f"（实际: {schema_version!r}）——该 manifest 由更早版本的"
-                         " pipeline 产出，重跑 pipeline.py 生成新 manifest")
+    if schema_version != 2:
+        raise ValueError("timing_manifest.json 必须声明 schema_version: 2"
+                         f"（实际: {schema_version!r}）——缺字段说明它出自更早版本的"
+                         " pipeline 或手写时漏写，重跑 pipeline.py 生成新 manifest")
     status = data.get("status")
-    if status is not None and (not isinstance(status, str)
-                               or status not in ("ok", "degraded")):
-        raise ValueError("timing_manifest.json 的 status 必须是 'ok' 或 'degraded'")
+    if status not in ("ok", "degraded"):
+        raise ValueError("timing_manifest.json 的 status 必须是 'ok' 或 'degraded'"
+                         f"（实际: {status!r}）")
     degraded = data.get("degraded")
     if degraded is not None and not isinstance(degraded, dict):
         raise ValueError("timing_manifest.json 的 degraded 必须是对象")
     if status == "degraded" and not degraded:
         raise ValueError("timing_manifest.json 标记为 degraded 时必须提供非空 degraded 详情")
-    if schema_version == 2 and status is None:
-        raise ValueError("timing_manifest.json schema_version=2 时必须声明 status")
 
     sentences = data.get("sentences")
     if not isinstance(sentences, list) or not sentences:
@@ -703,7 +711,7 @@ def validate_images_json(data):
         if not is_valid_sid(key):
             raise ValueError(
                 f"images.json 的段落 key 必须是合法段 id"
-                f"（字母开头，仅字母/数字/-/_，1–64 字符；实际: {key!r}）")
+                f"（{SID_RULE}；实际: {key!r}）")
         if isinstance(value, str):
             raise ValueError(
                 f"images.json 的 '{key}' 必须是媒体对象（如 {{\"src\": \"images/{key}.png\"}}），"

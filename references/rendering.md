@@ -26,7 +26,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 标题区、画布、verse 各自独立定位——这句只对**竖屏**成立：标题从一行变成两行时，只改变标题区内部排版，**画布的位置与尺寸不变，verse 也不跟着移动**。横屏的标题与 verse 同处左文字栏这一个 flex 列（整列垂直居中），标题折行时 verse 会随整列重新居中；两画幅的画布都不受标题影响。
 
 - **portrait**：标题区在上、**定高但由模板派生**（`title.maxLines × title.fontSize × typography.titleLineHeight + tagline.marginTop + tagline.fontSize × tagline.lineHeight`，改模板数字即跟着变，模板里不再存面积高度）+ 两行钳制，超过两行的部分被裁切；4:3 画布（980×735）居中，verse 钉底。标题区底边一旦压到画布顶边，生成期直接 `[template] 竖屏标题区放不进` 报错——改版式把重叠暴露成失败，而不是出一帧重叠的片子。
-- **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px 并打 `[warn]`。
+- **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
 
 opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
@@ -114,6 +114,8 @@ npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时�
 npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
 
-- `check` 会真报问题：字体栈里出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`，判定基于名字而非解析结果）——`composition.css` 因此为 CJK 兜底名 `Noto Sans CJK SC/JP` 也补了 `local()` 声明。它还会标出 `gsap_callback_dom_measurement`（本技能的 verse 滚动测量是懒缓存 + seek 幂等，属已知可接受，见 `templates/runtime.js` 注释）和 `nested_structure_needs_subcomposition`（建议把每段拆成 sub-composition，本技能刻意不拆：单文件便于 `--until html` 后人工审阅，且分段渲染实测更慢）。
+- `check` 会真报问题：字体栈里出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`，判定基于名字而非解析结果）——`composition.css` 因此为 CJK 兜底名 `Noto Sans CJK SC/JP` 也补了 `local()` 声明。同一处还有条静默代价：家族名必须是它字体映射表认识的写法，CSS 惯例名 `SFMono-Regular` 不在表内（表里认 `"SF Mono"`），命中不了只打一条 `[WARN] No deterministic font mapping`，那一族就拿不到注入的 `@font-face`。`_template.py` 的 `monoStack` 已按映射表写，改字体栈要对着这条 WARN 改。
+- 一份干净产物的 `check` 基线（竖横各跑一次实测）：Lint 只有下面四条固定噪声，Runtime / Layout / Motion / Contrast 全 0 error。四条已知可接受：`gsap_callback_dom_measurement`（verse 滚动测量是懒缓存 + seek 幂等，见 `templates/runtime.js` 注释）、`nested_structure_needs_subcomposition`（每段一条）、`timeline_track_too_dense`（同一合成根下 7 段就是 7 个 timed element，是上一条的另一种说法）、`negative_z_index`（两画幅各一条 `.seg-card::after`）。不拆 sub-composition 是刻意的：单文件便于 `--until html` 后人工审阅，且分段渲染实测更慢（见上文「性能参数」）。`negative_z_index` 是误报——浏览器实测 `getComputedStyle(.seg-card).isolation` 为 `isolate`，氛围光确实压在卡片内容之下、页面背景之上，检查器不认 `isolation` 建的层叠上下文，而它自己给的 Fix 就是"加 `isolation: isolate`"（`composition.css` 已加）。基线之外的新增条目一律当真读。
+- Runtime 的 `clip_media_fit` 和 Layout 的 `clipped_text` **不在噪声之列**：前者是音频实际时长短于 `data-duration`（成片被截到音频长度、字幕时间轴对不上），真实 pipeline 产物的 `total_duration` 就是量出来的音频时长，正常不该出现，手写/裁剪 manifest 时它是"manifest 与音频不同步"的唯一信号（实测把 `total_duration` 对齐音频后该条消失）；后者是某行文本被自己的盒子裁掉，竖屏 agenda 行的 `nameTrim` 只能挡字数超限，挡不住半角/混排的实际字宽（Python 侧 warn 与它两道闸各管一头，见 `writing.md`）。
 - `snapshot --at` 精确取时刻帧并自动拼 contact sheet，比"复制 HTML + 注入 `tl.pause(t)` + Chrome `--screenshot`"省事且不会踩 vendor 相对路径的坑；手搓探针只在需要同一页连取多帧、或 `snapshot` 不可用时作后备。
-- 渲染依赖在本机是**齐的**（`doctor` 全绿，Chrome headless shell 缓存于 `%USERPROFILE%\.cache\hyperframes\chrome\`，FFmpeg 8.1.2）——真渲染可以直接跑，不必止步于 HTML 预览。
+- 渲染前判断本机依赖齐不齐，用 `npx -y hyperframes doctor`：全绿就可以直接跑真渲染，不必止步于 HTML 预览（Chrome headless shell 由 Hyperframes 自己下载并缓存在 `~/.cache/hyperframes/chrome/`，FFmpeg 走第 3 步那条查找链）。

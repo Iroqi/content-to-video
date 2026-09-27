@@ -58,7 +58,7 @@
 
 ### 4. 四种方式统一的制作流程
 
-每个 segment 都走同一条链：选路线 → 得到媒体文件或可渲染规格 → 落 `images/` 并写进 `images.json` → **人工审关键帧**（主体、构图、文字可读性、与歌词关系）。不要因为方式不同就省略最后一步：**素材正确性和实际观感不能只靠 JSON 或脚本判断。**
+每个 segment 都走同一条链：选路线 → 得到媒体文件或可渲染规格 → 落 `images/` 并写进 `images.json` → **人工审关键帧**（主体、构图、文字可读性、与这一段旁白的关系）。不要因为方式不同就省略最后一步：**素材正确性和实际观感不能只靠 JSON 或脚本判断。**
 
 ### 5. images.json 是唯一统一入口
 
@@ -274,7 +274,7 @@ SVG 唯一的一条硬规格，写死在根节点上：
 | 次要说明下限 | `#8fa6c2` | 7.4:1；再暗一档 `#6b7c93` 只剩 4.4:1，已越线 |
 | 背景深蓝族 | `#0c1320` `#16233a` `#1a2536` | 1.0–1.3:1，出现在 `fill` 上就是瞎字 |
 
-**浅色主题**（cream，底约 `#f0ead9`）方向相反：正文 `#22262b`（12.7:1）、次级 `#3a5c8c`（5.7:1），不要用近白当正文色。这里最常发生的翻车是**串主题**：把 dark 主题的 `#eef2ee` 抄进 cream 稿，1.06:1。
+**浅色主题**（cream，底是 `#f7f3e9 → #eee7d6` 渐变，取色按较暗的那一档算）方向相反：正文 `#22262b`（12.3–13.7:1）、次级 `#3a5c8c`（5.5–6.1:1），不要用近白当正文色。这里最常发生的翻车是**串主题**：把 dark 主题的 `#eef2ee` 抄进 cream 稿，只剩 1.02–1.09:1。
 
 **三条最常踩的**：
 
@@ -307,7 +307,7 @@ SVG 唯一的一条硬规格，写死在根节点上：
 }
 ```
 
-每种 `type` 的必填字段不一样，写错字段名不会报错到画面上——只会在渲染端画成空图，所以照这张表写：
+每种 `type` 的必填字段不一样，写错字段名不会报错到画面上——只会在渲染端画成空图，所以照这张表写。**每张图另外必带 `id`（段 sid）与 `type`**，缺任一 `gen_charts.py` 直接报错：
 
 | type | 必填 | 可选 | 备注 |
 |---|---|---|---|
@@ -326,7 +326,7 @@ python scripts/gen_charts.py -i charts.json -o hf-project/images.json
 
 脚本会合并写回已有 `images.json`，不会删除 A/B/D 已存在的映射与 provenance。相同 segment 已存在非 chart 条目、**或同一 id 的 chart 内容变了**（两条目语义相等——键序、缩进无关——才幂等覆盖）时直接报错，由人工决定，不静默覆盖——改过 charts.json 后先删掉 images.json 里的旧条目再重跑。
 
-`gen_charts.py` 的职责到 `images.json` 为止：它只把 `charts.json` 转换成 `{type:"chart"}` 条目，**不产任何图片文件**——图形由 Hyperframes 渲染阶段用 Chart.js 在浏览器里绘制。注意 Chart.js 画在 canvas 上，**不走页面的 CSS 字体栈**：刻度数字用主题的内嵌等宽栈（`_template.py` 的 `monoStack`），标题/图例/轴名由浏览器系统字体兜底渲染中文，正常用字即可、没有需要额外配置的字体；`composition.css` 的 `@font-face` + `--ctv-font-family` 只管页面文字（字幕、标题、公式卡）。Python 侧不含字体代码，直接以 CLI 调用即可（自带合并写回、原子写入与 chart id 冲突检测）。
+`gen_charts.py` 的职责到 `images.json` 为止：它只把 `charts.json` 转换成 `{type:"chart"}` 条目，**不产任何图片文件**——图形由 Hyperframes 渲染阶段用 Chart.js 在浏览器里绘制。注意 Chart.js 画在 canvas 上，**不走页面的 CSS 字体栈**：刻度数字用主题的内嵌等宽栈（`_template.py` 的 `monoStack`），标题/图例/轴名由浏览器系统字体兜底渲染中文，正常用字即可、没有需要额外配置的字体；`composition.css` 的 `@font-face` + `--ctv-font-family` 只管页面文字（字幕、标题、公式卡）。Python 侧不含字体代码，直接以 CLI 调用即可（自带合并写回、原子写入；`chart` 条目由 gen_charts 覆盖更新，改完 `charts.json` 直接重跑就行，只有当同一段已被照片/生图/视频占了才报错要人工裁决）。
 
 ### 文字与尺寸
 
@@ -336,7 +336,7 @@ python scripts/gen_charts.py -i charts.json -o hf-project/images.json
 
 图表标题同理：Chart.js 的标题超出容器宽度会被截断，**标题控制在 20 字内**，单位与口径挪进轴标签（`x_label` / `y_label`，见上表）。
 
-文字放进卡片后还要**估一次宽度**：一行汉字数 ≈（容器宽 − 左右内边距）÷ 字号（26px 落在 330 宽、左右各留 34 的卡片里只能放 10 个字）。溢出时换行或加宽卡片，别靠缩字号——缩到 26px 以下两画幅缩放后就读不出来了。
+文字放进卡片后还要**估一次宽度**：一行汉字数 ≈（容器宽 − 左右内边距）÷ 字号。公式卡（C2）的实际数字：内容画布 980 宽、`formulaCard.padding` 48、值字号 52 → 一行约 17 个汉字（模板改的就是这三个数）。溢出时换行或加宽卡片，别靠缩字号——缩到 26px 以下两画幅缩放后就读不出来了。
 
 SVG 以 `<img>` 载入时是独立文档，页面的 `--ctv-font-family` 渗不进去，`<style>` 里要自带中文无衬线字体栈（如 `"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif`——Linux 沙箱里 `Noto Sans SC` 会回落到无 CJK 字形的 NotoSans-Regular，`Noto Sans CJK SC/JP` 才是能匹配上的名字，别省）。
 

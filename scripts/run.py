@@ -27,10 +27,9 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _contracts import (DEFAULT_SPEED, list_voice_ids,  # noqa: E402
+from _contracts import (DEFAULT_SPEED, is_content_sid, list_voice_ids,  # noqa: E402
                         validate_speed, load_timing_manifest,
                         validate_images_json)
-from _contracts import is_content_sid  # noqa: E402
 from _audio import _remove_quiet  # noqa: E402
 from html_renderer import manifest_segments  # noqa: E402  段落分组的唯一口径（segments 缺失时按兜底规则分组）
 import _script_utils as _su  # noqa: E402
@@ -247,8 +246,8 @@ def _render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
         except OSError:
             pass
 
-    resolved_cmd = resolve_command(cmd)
-    print(f"\n>>> {_fmt_cmd(resolved_cmd)}", flush=True)
+    # cmd 已由 build_render_command 在参数拼齐后 resolve 过，这里不再二次解析
+    print(f"\n>>> {_fmt_cmd(cmd)}", flush=True)
     print(f"[run] 渲染日志: {log_path}", file=sys.stderr)
     log_fh = None
     proc = None
@@ -262,7 +261,7 @@ def _render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
         popen_kwargs = {}
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
-        proc = subprocess.Popen(resolved_cmd, cwd=cwd,
+        proc = subprocess.Popen(cmd, cwd=cwd,
                                 stdout=log_fh, stderr=log_fh,
                                 **popen_kwargs)
     except (FileNotFoundError, OSError) as e:
@@ -522,7 +521,7 @@ def _build_parser():
     parser.add_argument("--fps", type=int, default=24, choices=[12, 24, 30, 60],
                         help="输出帧率（默认 24；12 是快速看画面的低规格迭代档）。"
                              "实测档位与耗时见 references/rendering.md「性能参数」。"
-                             "gen_hyperframes 本身接受 1–240，非法值直通渲染端只会以更隐晦的报错失败")
+                             "gen_hyperframes 自己还接受 1–240，这里只放行实测过的档位")
     parser.add_argument("--quality", default="standard",
                         choices=["draft", "standard", "high"],
                         help="渲染质量（默认 standard）")
@@ -544,12 +543,26 @@ def _build_parser():
                         help=f"语速倍率（默认 {DEFAULT_SPEED:g}，透传给 pipeline）")
     parser.add_argument("--voice-id", default=list_voice_ids()[0], choices=list_voice_ids(),
                         help="音色 ID（默认使用预置音色列表第一项，透传给 pipeline）")
+    # 下面四个只在显式给出时才透传：不给就由 pipeline 用自己的默认值，run.py
+    # 不复制第二份默认值（两处各写一份必然漂移）。--voice-style 参与句子音频
+    # 指纹，改动会让受影响句子在 --resume 下重新合成。
+    parser.add_argument("--voice-style", default=None,
+                        help="自然语言风格描述（透传给 pipeline，控制语气情绪）；"
+                             "默认沿用 pipeline 的播报风格文案")
+    parser.add_argument("--gap", type=float, default=None,
+                        help="句间静音秒数（透传给 pipeline，同时影响时间轴与"
+                             "段落淡入淡出的交叠时长）；默认 0.4")
+    parser.add_argument("--bgm", default=None,
+                        help="背景音乐文件（透传给 pipeline，自动循环混音）")
+    parser.add_argument("--bgm-volume", type=float, default=None,
+                        help="BGM 相对人声音量（0.0-1.0），需配合 --bgm")
     parser.add_argument("--dry-run", action="store_true",
                         help="只跑 pipeline --dry-run（不写文件）")
     parser.add_argument("--loudness", type=float, default=None,
                         help="对最终音频做响度归一化（LUFS，透传给 pipeline.py "
                              "--loudness）。平台有响度要求时用（如 -16）；"
-                             "默认不做归一化。开启后成片音频为 combined_loud.wav")
+                             "默认不做归一化。开启后成片改用归一化音轨，"
+                             "路径由 manifest 的 combined_audio 指路")
     return parser
 
 
@@ -607,6 +620,16 @@ def main():
     # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子进程命令，
     # 让 pipeline 的 resume 指纹与本次参数一致，不依赖两边默认值恰好相同。
     tts_cmd += ["--speed", str(args.speed), "--voice-id", args.voice_id]
+    if args.voice_style:
+        tts_cmd += ["--voice-style", args.voice_style]
+    if args.gap is not None:
+        tts_cmd += ["--gap", str(args.gap)]
+    if args.bgm:
+        tts_cmd += ["--bgm", args.bgm]
+        if args.bgm_volume is not None:
+            tts_cmd += ["--bgm-volume", str(args.bgm_volume)]
+    elif args.bgm_volume is not None:
+        parser.error("--bgm-volume 只在给了 --bgm 时才有意义")
     if args.loudness is not None:
         # 响度归一化在 pipeline 末端对拼接后的人声轨执行（可选混入 BGM 之后），
         # 归一化后的音频由 manifest 的 combined_audio 指路，下游 HTML/检查
@@ -614,11 +637,10 @@ def main():
         if not math.isfinite(args.loudness):
             parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
         tts_cmd += ["--loudness", str(args.loudness)]
-    if args.on_fail != "abort":
-        # 单句 TTS 失败的降级策略（默认 abort=整条管线失败退出）。silence
-        # 会把失败句降级为静音占位并让 manifest 进入 degraded 状态——那是
-        # SKILL.md「降级显式化」规则与下方 degraded 拦截真正能触达的入口。
-        tts_cmd += ["--on-fail", args.on_fail]
+    # 单句 TTS 失败的降级策略同样永远透传（同上一条规则）。silence 会把失败句
+    # 降级为静音占位并让 manifest 进入 degraded 状态——那是 SKILL.md
+    # 「降级显式化」规则与下方 degraded 拦截真正能触达的入口。
+    tts_cmd += ["--on-fail", args.on_fail]
     if args.dry_run:
         tts_cmd.append("--dry-run")
     _run(tts_cmd, step_name="TTS")

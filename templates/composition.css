@@ -39,10 +39,12 @@ body{font-family:var(--ctv-font-family)}
 
 /* 段落氛围光：每段把自己的 accent 稀释成一团大半径径向光垫在内容之下
    （z-index:-1 + isolation 把它压在卡片内容之上、却仍在页面背景/网格之上），
-   让不同段落各有色彩氛围，破除整片米白的单调。 */
-[data-aspect="vertical"] .seg-card{isolation:isolate}
+   让不同段落各有色彩氛围，破除整片米白的单调。
+   isolation 写在无属性限定的 .seg-card 上：两画幅都要它，且 hyperframes 的
+   negative_z_index 检查只看静态声明、不解析 [data-aspect] 作用域，写成属性
+   选择器会被误报成"祖先没有层叠上下文"。 */
 [data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
-.seg-card{position:absolute;inset:0}
+.seg-card{position:absolute;inset:0;isolation:isolate}
 .seg-title-wrap{position:absolute}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}
@@ -96,7 +98,6 @@ __CTV_SUBTITLE_CSS__
    仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
    栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。
    氛围光偏媒体区中心（68% 50%），纯文字 agenda 卡则回正（50% 45%）。 */
-[data-aspect="landscape"] .seg-card{isolation:isolate}
 [data-aspect="landscape"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(46% 52% at 68% 50%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
 [data-aspect="landscape"] .agenda-card::after{background:radial-gradient(46% 52% at 50% 45%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
 [data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}

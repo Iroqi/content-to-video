@@ -216,7 +216,7 @@ _TEMPLATE_JSON = r'''
   },
   "typography": {
     "fontFamily": "\"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans SC\", \"Noto Sans CJK SC\", \"Noto Sans CJK JP\", sans-serif",
-    "monoStack": "ui-monospace, SFMono-Regular, Consolas, \"Courier New\", monospace",
+    "monoStack": "ui-monospace, \"SF Mono\", Consolas, \"Courier New\", monospace",
     "titleWeight": 900,
     "taglineWeight": 600,
     "titleLineHeight": 1.32,

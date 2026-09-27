@@ -18,7 +18,8 @@ from _theme import (
 )
 from _template import load_template, get_canvas
 from _contracts import (classify_media_path, is_content_sid, is_valid_sid,
-                        media_needs_chartjs, unknown_media_keys, MEDIA_ENTRY_KEYS)
+                        media_needs_chartjs, unknown_media_keys, MEDIA_ENTRY_KEYS,
+                        SID_RULE)
 from _script_utils import split_subtitle_cues, subtitle_params_for
 
 
@@ -242,7 +243,7 @@ def _normalize_images(images):
         if not is_valid_sid(sid):
             raise ValueError(
                 f"images.json 的段落 key 必须是合法段 id"
-                f"（字母开头，仅字母/数字/-/_，1–64 字符；实际: {sid!r}）")
+                f"（{SID_RULE}；实际: {sid!r}）")
         if isinstance(media, dict) and "media_type" in media:
             normalized[sid] = media
             continue
@@ -347,8 +348,12 @@ def chart_palette_for_theme(theme):
     text = colors["text_color"]
     mono = load_template()["typography"]["monoStack"]
     series = [DEFAULT_ACCENT] + get_accent_palette()
-    # 注册表两主题的 text_color 都是 #rrggbb，解析不出 RGB 属于模板被改坏。
-    r, g, b = _parse_rgb(text)
+    # 注册表两主题的 text_color 都是 #rrggbb，解析不出 RGB 属于模板被改坏——
+    # int(…, 16) 直接 ValueError 炸在生成期，不留一档错配色进成片。
+    h = text.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return {
         "text": f"#{r:02x}{g:02x}{b:02x}",
         "grid_rgba": f"rgba({r},{g},{b},.12)",
@@ -357,46 +362,25 @@ def chart_palette_for_theme(theme):
     }
 
 
-def _parse_rgb(value):
-    """把 #rgb / #rrggbb / rgb() / rgba() 解析成 (r, g, b)，失败返回 None。"""
-    s = str(value).strip()
-    if s.startswith("#"):
-        h = s[1:]
-        if len(h) == 3:
-            h = "".join(ch * 2 for ch in h)
-        if len(h) >= 6:
-            try:
-                return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-            except ValueError:
-                return None
-        return None
-    m = re.match(r"rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)", s)
-    if m:
-        return tuple(int(float(x)) for x in m.groups())
-    return None
-
-
 def _build_chart_boot(normalized_images, chart_palette):
-    """生成 Chart.js 引导脚本（chart spec 内联 + 配置函数 + load 钩子）。
+    """装配 Chart.js 引导脚本（静态骨架在 templates/chart-boot.js）。
 
     纯函数：输入只有已归一化的 images 映射与一组配色，输出可直接内联进
-    <script> 的 JS 文本，不读任何外层状态。
+    <script> 的 JS 文本，不读任何外层状态。模板里只填三类**数据**：
+    每个图表段一行的 spec 载荷、主题派生的配色对象、版式数据的 chart 块；
+    选项编译函数与 load 钩子随骨架一起住在模板文件里（SKILL.md 的分工：
+    templates 存结构、Python 存数据——旧实现把静态 JS 存成 Python 字符串行，
+    还要用 lines[1:1+len] 切片对齐模板占位符，模板与代码一改就错位）。
 
     输入契约：必须传 _normalize_images 归一化"之后"的结构（该函数幂等，
     重复归一化无害）。chart 条目缺 chart 字段仍属坏数据，这里显式报错而非
     静默产出空脚本——渲染成空白图表比立刻失败难排查得多。
 
-    chart_palette：图表文字/网格配色 + 多系列色板 series。图表画在 seg-image
-    槽位里，槽位底色跟随主题（cream 是近白、dark 是深底），所以配色必须由调用方从
-    主题派生后传入，缺字段直接报错——把任一档颜色写死在这里，另一个主题
-    下坐标轴刻度就会几乎不可见。
+    chart_palette：图表文字/网格配色 + 多系列色板 series，由调用方用
+    chart_palette_for_theme 从当前主题派生。图表画在 seg-image 槽位里，槽位
+    底色跟随主题（cream 是近白、dark 是深底），所以配色必须跟着主题走——
+    把任一档颜色写死，另一个主题下坐标轴刻度就会几乎不可见。
     """
-    if not isinstance(chart_palette, dict) or not all(k in chart_palette for k in ("text", "grid_rgba", "mono", "series")):
-        raise ValueError("[renderer] chart_palette 必须由当前主题显式提供 text/grid_rgba/mono/series")
-    palette = chart_palette
-    c_text = palette["text"]
-    # 图例/标题/提示框文字色与刻度同色；网格用低透明度版本
-    c_grid_rgba = palette["grid_rgba"]
     chart_specs = []
     for sid, media in normalized_images.items():
         if media.get("media_type") != "chart":
@@ -417,55 +401,23 @@ def _build_chart_boot(normalized_images, chart_palette):
                 "请检查 images.json 中该条目的 chart 定义是否完整。"
             )
         chart_specs.append((sid, chart))
-    lines = ["const ctvCharts = {};"]
+    spec_lines = []
     for sid, chart in chart_specs:
-        payload = _js_str(chart)
         # key 与 payload 同一防护：json.dumps 不转义 `/`，段 id 若含
         # `</script>` 会截断内联 <script> 块。
-        sid_js = _js_str(sid)
-        lines.append(f"ctvCharts[{sid_js}] = {payload};")
-    if chart_specs:
-        lines.extend([
-            "const ctvInk = " + json.dumps(
-                {"text": c_text, "gridRgba": c_grid_rgba,
-                 "mono": palette["mono"], "series": palette["series"]},
-                ensure_ascii=False) + ";",
-            # 图表视觉参数由 _template 内联的 chart 块统一提供；renderer
-            # 只负责把配置编译成 Chart.js 选项，不再暗藏第二套视觉常量。
-            # `_meta` 是模板里的作者向注释，整块序列化时必须剔掉：浏览器不读它，
-            # 留着等于把内部说明（含模块私有函数名）打进每一份交付物。
-            "const CTV_CHART = " + json.dumps(
-                {k: v for k, v in _CHART_CFG.items() if k != "_meta"},
-                ensure_ascii=False) + ";",
-            "const F_TITLE = CTV_CHART.titleFontSize, F_LEGEND = CTV_CHART.legendFontSize, F_TICK = CTV_CHART.tickFontSize, F_AXTITLE = CTV_CHART.axisTitleFontSize;",
-            "const AXPAD = {x:{title:{padding:{top:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}, y:{title:{padding:{bottom:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}};",
-            "const mkScale = (spec, axisExtra={}) => ({x:{...axisExtra,ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.x_label,text:spec.x_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.x.title.padding}},y:{ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.y_label,text:spec.y_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.y.title.padding}}});",
-            "function ctvChartConfig(spec, accent) {",
-            "  const kind = spec.type === 'curve' ? 'line' : spec.type;",
-            # 图例只在多数据集时才出现。单序列图（bar/line 的常见形态）里
-            # 图例必然与标题同文，只是多一块小字噪音，且在 4:3 槽位里挤压
-            # 绘图区高度。例外：pie 的图例是"哪块是哪项"的唯一线索，必须留。
-            "  const seriesCount = (spec.curve_datasets||[]).length || 1;",
-            "  const showLegend = seriesCount > 1 || spec.type === 'pie';",
-            "  const seriesColor = (seg) => ctvInk.series[seg % ctvInk.series.length];",
-            "  const options = {responsive:true, maintainAspectRatio:false, animation:false, layout:{padding:CTV_CHART.layoutPadding}, plugins:{legend:{display:showLegend,labels:{color:ctvInk.text,font:{size:F_LEGEND,weight:'600'}}}, title:{display:!!spec.title,text:spec.title||'',color:ctvInk.text,font:{size:F_TITLE,weight:'700'},padding:{top:6,bottom:18}}, tooltip:{enabled:true,titleFont:{size:F_LEGEND},bodyFont:{size:F_TICK}}}, scales:mkScale(spec)};",
-            "  if (kind === 'pie') delete options.scales;",
-            "  let data;",
-            "  if (spec.type === 'curve') { data={datasets:(spec.curve_datasets||[]).map((d,i)=>({label:d.label,data:d.data,parsing:false,borderColor:seriesColor(i),backgroundColor:'transparent',pointRadius:CTV_CHART.curvePointRadius,borderWidth:CTV_CHART.curveBorderWidth,tension:CTV_CHART.curveTension,spanGaps:true}))}; options.scales=mkScale(spec,{type:'linear'}); }",
-            "  else if (spec.type === 'scatter') data={datasets:[{label:spec.title||'',data:(spec.points||spec.values||[]).map((v,i)=>Array.isArray(v)?{x:v[0],y:v[1]}:{x:i,y:v}),backgroundColor:accent,borderColor:accent,pointRadius:CTV_CHART.scatterPointRadius}]};",
-            "  else data={labels:spec.labels||[],datasets:[{label:spec.title||'',data:spec.values||[],backgroundColor:spec.type==='pie'?(spec.labels||[]).map((_,i)=>seriesColor(i)):accent,borderColor:spec.type==='pie'?ctvInk.text:accent,borderWidth:CTV_CHART.datasetBorderWidth,fill:false,tension:CTV_CHART.datasetTension}]};",
-            "  return {type:kind,data,options};",
-            "}",
-            "function ctvInitCharts(){ if(!window.Chart) return; for(const [sid,spec] of Object.entries(ctvCharts)){ const canvas=document.getElementById('chart-'+sid); if(!canvas) continue; const host=document.getElementById(sid); const accent=host?.dataset?.accent||" + json.dumps(DEFAULT_ACCENT) + "; new Chart(canvas.getContext('2d'),ctvChartConfig(spec,accent)); } }",
-            "window.addEventListener('load',ctvInitCharts);",
-        ])
-    # 模板装配：静态骨架在 templates/chart-boot.js。lines[0] 是骨架里已有的
-    # "const ctvCharts = {};" 声明，跳过；其后依次是 spec 数据行（len 条）与
-    # 引导函数体（无图表时为空）。必须走 _fill 的单遍替换——链式 str.replace
-    # 会让第二次替换读到第一次注入的稿件内容（注入路径见 _fill docstring）。
+        spec_lines.append(f"ctvCharts[{_js_str(sid)}] = {_js_str(chart)};")
+    # `_meta` 是模板里的作者向注释，整块序列化时必须剔掉：浏览器不读它，
+    # 留着等于把内部说明（含模块私有函数名）打进每一份交付物。
     return _fill(_load_asset("chart-boot.js"), {
-        "__CTV_CHART_SPECS__": chr(10).join(lines[1:1 + len(chart_specs)]),
-        "__CTV_CHART_BODY__": chr(10).join(lines[1 + len(chart_specs):]),
+        "__CTV_CHART_SPECS__": chr(10).join(spec_lines),
+        "__CTV_CHART_INK__": json.dumps(
+            {"text": chart_palette["text"], "gridRgba": chart_palette["grid_rgba"],
+             "mono": chart_palette["mono"], "series": chart_palette["series"]},
+            ensure_ascii=False),
+        "__CTV_CHART_CFG__": json.dumps(
+            {k: v for k, v in _CHART_CFG.items() if k != "_meta"},
+            ensure_ascii=False),
+        "__CTV_ACCENT_FALLBACK__": json.dumps(DEFAULT_ACCENT),
     }, "chart-boot.js")
 
 
@@ -731,6 +683,17 @@ def generate_html(manifest, audio_src, images=None,
         })
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
+    # closing_cta 只有结尾 agenda 卡这一个消费者：稿件没有 closing 段（或有段
+    # 无句、被上面的 clips 循环跳过）时这条尾行无处可画。不 warn 就成了
+    # "稿子里写了行动号召，画面上什么都没有"，与 writing.md 承诺的
+    # "两种丢弃都只向 stderr 打 [warn]" 口径矛盾。
+    if (str(manifest.get("closing_cta") or "").strip()
+            and not any(c["seg"].get("id") == "closing" for c in clips)):
+        print("[warn] manifest 有 closing_cta，但本次没有 closing 段可承载它——"
+              "行动号召只画在结尾 agenda 卡上，这条尾行不会出现在画面里"
+              "（要保留 cta 就在稿件里补一段 closing，或删掉 closing_cta）",
+              file=sys.stderr)
+
     seg_cards = []
     gsap_lines = []
 
@@ -747,7 +710,7 @@ def generate_html(manifest, audio_src, images=None,
         if not is_valid_sid(sid):
             raise ValueError(
                 f"timing_manifest 的段落 id 必须是合法段 id"
-                f"（字母开头，仅字母/数字/-/_，1–64 字符；实际: {sid!r}）")
+                f"（{SID_RULE}；实际: {sid!r}）")
         s = clip["start"]
         d = clip["duration"]
         # normalize_accent：accent 统一归一化成 6 位 hex——alpha 后缀

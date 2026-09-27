@@ -187,7 +187,6 @@ _TEMPLATE_JSON = r'''
   },
   "animation": {
     "titleEntrance": {
-      "type": "scale",
       "from": 0.5,
       "duration": 0.5,
       "ease": "back.out(1.7)"
@@ -224,15 +223,13 @@ _TEMPLATE_JSON = r'''
     "titleTracking": "-0.02em"
   },
   "subtitle": {
-    "_meta": "字幕切分参数（_script_utils.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；hardCap=次要标点切不动时的字符级硬切上限；cueMaxLines=整句渲染故 99。",
+    "_meta": "字幕切分参数（_script_utils.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；cueMaxLines=整句渲染故 99。",
     "vertical": {
       "maxChars": 22,
-      "hardCap": 22,
       "cueMaxLines": 99
     },
     "landscape": {
       "maxChars": 18,
-      "hardCap": 18,
       "cueMaxLines": 99
     }
   },

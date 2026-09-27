@@ -28,9 +28,7 @@ _CHART_CFG = load_template()["chart"]
 # ── 模板资产：版式的静态骨架 ────────────────────────────────────────────
 # CSS / JS / HTML 骨架是 templates/ 下的真实文件：结构与选择器写死，数值一律
 # 走 var(--ctv-*)——由本模块从 _template 内联的版式数据派生后注入 :root。
-# 因此**改版式不需要碰 Python**。
-# 模板是技能包的组成部分，随 zip 分发；缺文件即硬失败（静默产出无样式页面
-# 比立刻报错难排查得多）。
+# 缺模板文件即硬失败：静默产出无样式页面比立刻报错难排查得多。
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
@@ -191,7 +189,7 @@ def _agenda_rows(seg_id, clips, manifest, ag):
     return rows, tail_rows
 
 
-def _agenda_row_html(rows, esc):
+def _agenda_row_html(rows):
     return "".join(
         f'<div class="agenda-row"><span class="ag-idx">{idx}</span>'
         f'<span class="ag-name">{esc(name)}</span>'
@@ -201,7 +199,7 @@ def _agenda_row_html(rows, esc):
 
 
 def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
-                     title_size, esc, bgs):
+                     title_size, bgs):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流（verse）后再闭合 .agenda-col——flex 列"题头在顶、
@@ -218,9 +216,9 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
         kicker_html = (f'<div class="agenda-kicker" style="color:{_kc}">'
                        f'{esc(seg["tagline"])}</div>')
     rows, tail_rows = _agenda_rows(sid, clips, manifest, ag)
-    agenda_html = (f'<div class="agenda">{_agenda_row_html(rows, esc)}</div>'
+    agenda_html = (f'<div class="agenda">{_agenda_row_html(rows)}</div>'
                    if rows else "")
-    tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows, esc)}</div>'
+    tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
     return (f'    <div class="agenda-col">\n'
             f'      <div class="agenda-head">{kicker_html}'
@@ -251,7 +249,7 @@ def _normalize_images(images):
         if isinstance(media, dict):
             # 清单外的键在下面两条分支里都会跟着进 opts 而无人读。静默丢会让
             # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
-            # 所以点名叫出它们——清单是 _contracts 的单一来源。
+            # 所以点名叫出它们——清单定义在 _contracts。
             unknown = unknown_media_keys(media)
             if unknown:
                 print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
@@ -287,26 +285,30 @@ def _normalize_images(images):
     return normalized
 
 
+def _js_str(value):
+    """JS 字符串字面量：ensure_ascii=False 保留中文，`</` 转义防内联 <script> 被截断。
+
+    进入 <script> 文本的字符串（字幕行、chart spec、段 id）统一走这里；
+    json.dumps 不转义 `/`，用户可控文本含 `</script>` 时会截断脚本块。
+    """
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
 def _build_subtitle_cues(sentences, aspect):
     """Build the JS subtitle cue payload from sentence timing and text."""
     sub_cues = []
 
-    def _js(value):
-        return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
-
     sub_params = subtitle_params_for(aspect)
     max_chars = sub_params["max_chars"]
-    hard_cap = sub_params["hard_cap"]
     cue_max_lines = sub_params["cue_max_lines"]
     pending = []
     for sent in sentences:
         groups = split_subtitle_cues(sent["text"], max_chars=max_chars,
-                                     hard_cap=hard_cap,
                                      cue_max_lines=cue_max_lines)
         total_chars = sum(len("".join(g)) for g in groups)
         t0 = sent["start_time"]
         for group in groups:
-            js_lines = "[" + ",".join(_js(line) for line in group) + "]"
+            js_lines = "[" + ",".join(_js_str(line) for line in group) + "]"
             frac = (sum(len(line) for line in group) / total_chars) if total_chars else 1.0
             duration = sent["duration"] * frac
             pending.append((t0, t0 + duration, sent.get("index", -1), js_lines))
@@ -345,13 +347,8 @@ def chart_palette_for_theme(theme):
     text = colors["text_color"]
     mono = load_template()["typography"]["monoStack"]
     series = [DEFAULT_ACCENT] + get_accent_palette()
-    # 主文字色可能是 #rgb/#rrggbb/#rrggbbaa 或 rgb()/rgba()，统一解析出
-    # RGB 三元组用于生成网格 rgba；解析失败就退回纯色 + 固定透明度。
-    rgb = _parse_rgb(text)
-    if rgb is None:
-        return {"text": text, "grid_rgba": _with_alpha(text, 0.12),
-                "mono": mono, "series": series}
-    r, g, b = rgb
+    # 注册表两主题的 text_color 都是 #rrggbb，解析不出 RGB 属于模板被改坏。
+    r, g, b = _parse_rgb(text)
     return {
         "text": f"#{r:02x}{g:02x}{b:02x}",
         "grid_rgba": f"rgba({r},{g},{b},.12)",
@@ -379,22 +376,11 @@ def _parse_rgb(value):
     return None
 
 
-def _with_alpha(value, alpha):
-    """给颜色加透明度，解析不出 RGB 时原样返回（不静默篡改颜色）。"""
-    rgb = _parse_rgb(value)
-    if rgb is None:
-        return value
-    r, g, b = rgb
-    return f"rgba({r},{g},{b},{alpha})"
-
-
 def _build_chart_boot(normalized_images, chart_palette):
     """生成 Chart.js 引导脚本（chart spec 内联 + 配置函数 + load 钩子）。
 
-    从 generate_html 抽出的纯函数：输入只有已归一化的 images 映射与一组
-    配色，输出是可直接内联进 <script> 的 JS 文本，不读任何外层状态。抽
-    出来是因为这段逻辑与渲染流程正交（图表渲染是浏览器端的事，Python
-    侧只负责把 spec 序列化进去），且正确性完全由输入决定、易于单测。
+    纯函数：输入只有已归一化的 images 映射与一组配色，输出可直接内联进
+    <script> 的 JS 文本，不读任何外层状态。
 
     输入契约：必须传 _normalize_images 归一化"之后"的结构（该函数幂等，
     重复归一化无害）。chart 条目缺 chart 字段仍属坏数据，这里显式报错而非
@@ -433,10 +419,10 @@ def _build_chart_boot(normalized_images, chart_palette):
         chart_specs.append((sid, chart))
     lines = ["const ctvCharts = {};"]
     for sid, chart in chart_specs:
-        payload = json.dumps(chart, ensure_ascii=False).replace("</", "<\\/")
+        payload = _js_str(chart)
         # key 与 payload 同一防护：json.dumps 不转义 `/`，段 id 若含
         # `</script>` 会截断内联 <script> 块。
-        sid_js = json.dumps(sid, ensure_ascii=False).replace("</", "<\\/")
+        sid_js = _js_str(sid)
         lines.append(f"ctvCharts[{sid_js}] = {payload};")
     if chart_specs:
         lines.extend([
@@ -444,6 +430,16 @@ def _build_chart_boot(normalized_images, chart_palette):
                 {"text": c_text, "gridRgba": c_grid_rgba,
                  "mono": palette["mono"], "series": palette["series"]},
                 ensure_ascii=False) + ";",
+            # 图表视觉参数由 _template 内联的 chart 块统一提供；renderer
+            # 只负责把配置编译成 Chart.js 选项，不再暗藏第二套视觉常量。
+            # `_meta` 是模板里的作者向注释，整块序列化时必须剔掉：浏览器不读它，
+            # 留着等于把内部说明（含模块私有函数名）打进每一份交付物。
+            "const CTV_CHART = " + json.dumps(
+                {k: v for k, v in _CHART_CFG.items() if k != "_meta"},
+                ensure_ascii=False) + ";",
+            "const F_TITLE = CTV_CHART.titleFontSize, F_LEGEND = CTV_CHART.legendFontSize, F_TICK = CTV_CHART.tickFontSize, F_AXTITLE = CTV_CHART.axisTitleFontSize;",
+            "const AXPAD = {x:{title:{padding:{top:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}, y:{title:{padding:{bottom:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}};",
+            "const mkScale = (spec, axisExtra={}) => ({x:{...axisExtra,ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.x_label,text:spec.x_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.x.title.padding}},y:{ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.y_label,text:spec.y_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.y.title.padding}}});",
             "function ctvChartConfig(spec, accent) {",
             "  const kind = spec.type === 'curve' ? 'line' : spec.type;",
             # 图例只在多数据集时才出现。单序列图（bar/line 的常见形态）里
@@ -451,16 +447,11 @@ def _build_chart_boot(normalized_images, chart_palette):
             # 绘图区高度。例外：pie 的图例是"哪块是哪项"的唯一线索，必须留。
             "  const seriesCount = (spec.curve_datasets||[]).length || 1;",
             "  const showLegend = seriesCount > 1 || spec.type === 'pie';",
-            # 图表视觉参数由 _template 内联的 chart 块统一提供；renderer
-            # 只负责把配置编译成 Chart.js 选项，不再暗藏第二套视觉常量。
-            "  const CTV_CHART = " + json.dumps(_CHART_CFG, ensure_ascii=False) + ";",
             "  const seriesColor = (seg) => ctvInk.series[seg % ctvInk.series.length];",
-            "  const F_TITLE = CTV_CHART.titleFontSize, F_LEGEND = CTV_CHART.legendFontSize, F_TICK = CTV_CHART.tickFontSize, F_AXTITLE = CTV_CHART.axisTitleFontSize;",
-            "  const AXPAD = {x:{title:{padding:{top:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}, y:{title:{padding:{bottom:F_AXTITLE*CTV_CHART.axisTitlePaddingFactor}}}};",
-            "  const options = {responsive:true, maintainAspectRatio:false, animation:false, layout:{padding:CTV_CHART.layoutPadding}, plugins:{legend:{display:showLegend,labels:{color:ctvInk.text,font:{size:F_LEGEND,weight:'600'}}}, title:{display:!!spec.title,text:spec.title||'',color:ctvInk.text,font:{size:F_TITLE,weight:'700'},padding:{top:6,bottom:18}}, tooltip:{enabled:true,titleFont:{size:F_LEGEND},bodyFont:{size:F_TICK}}}, scales:{x:{ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.x_label,text:spec.x_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.x.title.padding}},y:{ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.y_label,text:spec.y_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.y.title.padding}}}};",
+            "  const options = {responsive:true, maintainAspectRatio:false, animation:false, layout:{padding:CTV_CHART.layoutPadding}, plugins:{legend:{display:showLegend,labels:{color:ctvInk.text,font:{size:F_LEGEND,weight:'600'}}}, title:{display:!!spec.title,text:spec.title||'',color:ctvInk.text,font:{size:F_TITLE,weight:'700'},padding:{top:6,bottom:18}}, tooltip:{enabled:true,titleFont:{size:F_LEGEND},bodyFont:{size:F_TICK}}}, scales:mkScale(spec)};",
             "  if (kind === 'pie') delete options.scales;",
             "  let data;",
-            "  if (spec.type === 'curve') { data={datasets:(spec.curve_datasets||[]).map((d,i)=>({label:d.label,data:d.data,parsing:false,borderColor:seriesColor(i),backgroundColor:'transparent',pointRadius:CTV_CHART.curvePointRadius,borderWidth:CTV_CHART.curveBorderWidth,tension:CTV_CHART.curveTension,spanGaps:true}))}; options.scales={x:{type:'linear',ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.x_label,text:spec.x_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.x.title.padding}},y:{ticks:{color:ctvInk.text,font:{size:F_TICK,weight:'600',family:ctvInk.mono}},grid:{color:ctvInk.gridRgba},title:{display:!!spec.y_label,text:spec.y_label||'',color:ctvInk.text,font:{size:F_AXTITLE,weight:'600'},padding:AXPAD.y.title.padding}}}; }",
+            "  if (spec.type === 'curve') { data={datasets:(spec.curve_datasets||[]).map((d,i)=>({label:d.label,data:d.data,parsing:false,borderColor:seriesColor(i),backgroundColor:'transparent',pointRadius:CTV_CHART.curvePointRadius,borderWidth:CTV_CHART.curveBorderWidth,tension:CTV_CHART.curveTension,spanGaps:true}))}; options.scales=mkScale(spec,{type:'linear'}); }",
             "  else if (spec.type === 'scatter') data={datasets:[{label:spec.title||'',data:(spec.points||spec.values||[]).map((v,i)=>Array.isArray(v)?{x:v[0],y:v[1]}:{x:i,y:v}),backgroundColor:accent,borderColor:accent,pointRadius:CTV_CHART.scatterPointRadius}]};",
             "  else data={labels:spec.labels||[],datasets:[{label:spec.title||'',data:spec.values||[],backgroundColor:spec.type==='pie'?(spec.labels||[]).map((_,i)=>seriesColor(i)):accent,borderColor:spec.type==='pie'?ctvInk.text:accent,borderWidth:CTV_CHART.datasetBorderWidth,fill:false,tension:CTV_CHART.datasetTension}]};",
             "  return {type:kind,data,options};",
@@ -468,12 +459,10 @@ def _build_chart_boot(normalized_images, chart_palette):
             "function ctvInitCharts(){ if(!window.Chart) return; for(const [sid,spec] of Object.entries(ctvCharts)){ const canvas=document.getElementById('chart-'+sid); if(!canvas) continue; const host=document.getElementById(sid); const accent=host?.dataset?.accent||" + json.dumps(DEFAULT_ACCENT) + "; new Chart(canvas.getContext('2d'),ctvChartConfig(spec,accent)); } }",
             "window.addEventListener('load',ctvInitCharts);",
         ])
-    # 模板装配：静态骨架在 templates/chart-boot.js。lines[0] 是模板里已有的
-    # "const ctvCharts = {};" 声明，跳过；其后依次是 spec 数据行（len 条）
-    # 与引导函数体（无图表时为空）。必须走 _fill 的单遍替换：链式
-    # str.replace 会让第二次替换读到第一次注入的 spec——稿件标题里原样
-    # 写着 "__CTV_CHART_BODY__" 就能把引导代码拼进 JSON 字符串字面量，
-    # 整段内联脚本 SyntaxError 且构建期零报错（与本文件 _fill 的注释同理）。
+    # 模板装配：静态骨架在 templates/chart-boot.js。lines[0] 是骨架里已有的
+    # "const ctvCharts = {};" 声明，跳过；其后依次是 spec 数据行（len 条）与
+    # 引导函数体（无图表时为空）。必须走 _fill 的单遍替换——链式 str.replace
+    # 会让第二次替换读到第一次注入的稿件内容（注入路径见 _fill docstring）。
     return _fill(_load_asset("chart-boot.js"), {
         "__CTV_CHART_SPECS__": chr(10).join(lines[1:1 + len(chart_specs)]),
         "__CTV_CHART_BODY__": chr(10).join(lines[1 + len(chart_specs):]),
@@ -501,26 +490,15 @@ def generate_html(manifest, audio_src, images=None,
     """Generate complete Hyperframes HTML composition string.
 
     Args:
-        manifest: dict with sentences[], total_duration, optional segments[]
-        audio_src: path to audio file (relative to HTML output dir)
-        images: optional dict mapping segment ID -> media object.
-            Single object format: {"src": "images/seg1.mp4", "type": "video",
-                                   "loop": true, "muted": true, "autoplay": true,
-                                   "poster": "images/seg1-poster.png"}
-            "type" defaults to "auto" (infer from file extension); static
-            images only need "src". A bare string path is rejected upstream by
-            `_contracts.validate_images_json`.
-        width, height: composition dimensions
-        gsap_src: GSAP script path. 默认使用 composition 项目内的
-            `vendor/gsap.min.js`；不自动访问 CDN。
-        aspect: 画幅比例 portrait/vertical（3:4，1080x1440）或 landscape
-            （16:9，1920x1080）；data-aspect 相应写 "vertical"/"landscape"，
-            归一化在函数体内完成，两套 CSS 规则按 data-aspect 命中。
-        theme: 主题配色（可选值以 `_theme.py` 内嵌的主题注册表为唯一权威来源，
-            当前 cream/dark），影响背景渐变、
-            网格、正文文字与配图底板色，不影响每段 accent 彩色。
-        fps: 输出帧率提示（写入 data-fps，渲染命令可用 --fps 覆盖；
-            默认 24 比 30 少抓 20% 帧、渲染更快）。
+        images: {段落 id: 媒体对象}，形态与 images.json 一致（裸字符串路径由
+            `_contracts.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
+        aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
+            画布尺寸都按它取，归一化在函数体内完成。
+        theme: 只改背景渐变/网格/正文/配图底板，不改每段 accent 彩色；
+            可选值见 _theme 的主题注册表。
+        gsap_src / chartjs_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
+        fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
+            20% 帧、出片更快。
 
         字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
     """
@@ -554,15 +532,13 @@ def generate_html(manifest, audio_src, images=None,
     # 按主题主文字色亮度判深浅底（_theme._THEMES 是唯一权威，
     # 新增主题无需改这里的枚举）——tagline 的"同色相只调明度"在深色
     # 底下方向要反过来（提亮而不是压暗）。
-    _theme_lum = relative_luminance(theme_colors["text_color"])
-    _dark_theme = _theme_lum is not None and _theme_lum > 0.5
+    _dark_theme = relative_luminance(theme_colors["text_color"]) > 0.5
     # 背景渐变的十六进制色标集合：accent 派生文字色的对比度保底按其中最坏
     # 一档判定（theme_bg_stops 只解析自家 _THEMES 的渐变串）。
     _bgs = theme_bg_stops(theme)
 
     # 从模板加载布局/动画/字体参数
     tpl_layout = tpl["layout"][aspect]
-    tpl_v = tpl["layout"]["vertical"]
     tpl_anim = tpl["animation"]
     tpl_typo = tpl["typography"]
 
@@ -583,9 +559,7 @@ def generate_html(manifest, audio_src, images=None,
     _ag = tpl_layout["agenda"]
     _v_verse_clip = _vv["clipPad"]
     if aspect == "vertical":
-        # 竖屏（3:4）：只有 verse 一种字幕形态，无模式分支。全部参数读模板
-        # vertical 块（segCard.padding / image.width/height /
-        # verse.windowHeight / verse.clipPad），改排版只动 _template.py 内联版式数据。
+        # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         _v_pad = tpl_layout["segCard"]["padding"]
         # 卡片左内边距（CSS padding 简写：3 值=上/左右/下，2 值=上下/左右，1 值=四边）。
         # 卡片内容盒由它内缩，标题与画布水平方向对齐。
@@ -603,13 +577,11 @@ def generate_html(manifest, audio_src, images=None,
             raise ValueError("[template] layout.vertical.segCard.padding 必须是合法 CSS 长度") from e
         _v_verse_h = _vv["windowHeight"]
         _v_verse_bottom = _vv["bottom"]
-        # 竖屏画布圆角（读模板 vertical.image.borderRadius）
+        # 竖屏画布圆角
         _v_img_radius = _il["borderRadius"]
-        # 竖屏画布左右外扩边距（px）：画布相对"卡片内容盒"左右各外扩
-        # marginSide（0 = 与内容盒同宽）。注意这不是"距屏幕边距"——卡片
-        # segCard.padding 的左右值（当前 50px）才是槽到屏幕边的距离，
-        # marginSide 是在此基础上再往外推多少。想让槽距屏幕 50px，保持
-        # marginSide=0 即可（内容盒本身已内缩 50px）。
+        # 画布左右外扩边距 marginSide：相对"卡片内容盒"各外扩多少（0 = 与内容盒
+        # 同宽），不是"距屏幕边距"——segCard.padding 的左右值才是槽到屏幕边的
+        # 距离。想让槽距屏幕正好是 padding 那个值，保持 marginSide=0 即可。
         _v_img_ms = _il["marginSide"]
         _v_img_bottom_gap = _il["bottomGapToVerse"]
         # 画布与 verse 都脱离标题文档流，分别固定在下半区；标题换行只影响自身，
@@ -645,15 +617,6 @@ def generate_html(manifest, audio_src, images=None,
                 f"且 textCol.width({_ltext['width']}) + columnGap({_lgap}) "
                 f"+ image.width({_il['width']}) + 2×margin({_lm}) 必须 ≤ 画布宽({width})")
 
-    # ══════════════════════════════════════════════════════════════════
-    # 分区索引（本函数 600+ 行，改代码前先定位分区，避免整段通读）：
-    #   1/6 参数归一化与模板装载（函数开头 ~ 配图归一化）
-    #   2/6 竖屏几何派生（_v_pad_* / _v_img_*）
-    #   3/6 字幕形态 CSS+JS（verse 句子流，两画幅共用）← 本区，模块级 _build_subtitle_layer
-    #   4/6 段落卡片 HTML + GSAP 时间线
-    #   5/6 图表引导脚本（模块级 _build_chart_boot）
-    #   6/6 装配最终 HTML
-    # ══════════════════════════════════════════════════════════════════
     _sub_css, _sub_js = _build_subtitle_layer()
 
     _tgl = tpl_layout["tagline"]
@@ -680,18 +643,14 @@ def generate_html(manifest, audio_src, images=None,
     css_fc_title_opacity = _fc["titleOpacity"]
     css_fc_title_mb = _fc["titleMarginBottom"]
     css_fc_value_size = _fc["valueSize"]
-    # 字体由模板统一定义，renderer 不再保留重复字面量。
     css_font_family = tpl_typo["fontFamily"]
     css_mono_family = tpl_typo["monoStack"]
     css_tagline_mt = _tgl["marginTop"]
 
-    # ── :root 变量表：版式的唯一数值出口 ──────────────────────────────────
-    # templates/*.css 里不出现硬编码尺寸，一律走 var(--ctv-*)。本表从
-    # _template 内联的版式数据派生（含标题/画布等推导值）。模板是版式
-    # 唯一真源，改版式只改模板；渲染层只负责派生 CSS 变量。
-    # 命名空间约定：无后缀 = 两画幅同名派生（值各取各块）；--ctv-v-* 仅
-    # 竖屏、--ctv-l-* 仅横屏；--ctv-ag-* agenda 变量两画幅同名，值取自
-    # 各自 layout 块的 agenda（开屏/结尾纯文字版式共用同一套结构）。
+    # ── :root 变量表 ──────────────────────────────────────────────────────
+    # templates/*.css 里不出现硬编码尺寸，一律走 var(--ctv-*)；本表从 _template
+    # 派生。命名空间：无后缀 = 两画幅同名派生（值各取各块），--ctv-v-* 仅竖屏、
+    # --ctv-l-* 仅横屏，--ctv-ag-* agenda 两画幅同名、值取各自 layout 的 agenda。
     root_shared = f"""  --ctv-w:{width}px;--ctv-h:{height}px;
   --ctv-bg-gradient:{theme_colors["bg_gradient"]};
   --ctv-font-family:{css_font_family};
@@ -719,13 +678,12 @@ def generate_html(manifest, audio_src, images=None,
   --ctv-ag-row-pad:{_ag["rowPad"]}px;--ctv-ag-verse-w:{_ag["verseMaxWidth"]}px;--ctv-ag-list-mt:{_ag["listMarginTop"]}px;"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
-        # 这个盒是 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位
-        #（竖屏三区各自固定定位，见 SKILL.md「单一版式」），所以算小了就是把
-        # tagline 静默切掉一截、算大了就是往画布上压——两头都不报错，只能靠
-        # 人工预览发现。按模板自身的字号/行数/行高派生，改版式仍只改 _template.py。
+        # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区
+        # 各自固定定位）：算小了会把 tagline 静默切掉一截，算大了会往画布上压，
+        # 两头都不报错——所以放不进时在这里直接 raise。
         _v_title_area = (_tl["maxLines"] * _tl["fontSize"] * css_title_lh
-                         + tpl_v["tagline"]["marginTop"]
-                         + tpl_v["tagline"]["fontSize"] * tpl_v["tagline"]["lineHeight"])
+                         + _tgl["marginTop"]
+                         + _tgl["fontSize"] * _tgl["lineHeight"])
         _v_title_bottom = _tl["top"] + _v_title_area
         if _v_title_bottom > _v_img_top:
             raise ValueError(
@@ -737,12 +695,12 @@ def generate_html(manifest, audio_src, images=None,
         root_aspect = f"""  --ctv-v-pad-left:{_v_pad_left:g}px;
   --ctv-v-title-top:{_tl["top"]}px;
   --ctv-v-title-area:{_v_title_area:.2f}px;--ctv-v-title-lines:{_tl["maxLines"]};
-  --ctv-v-tagline-mt:{tpl_v["tagline"]["marginTop"]}px;
-  --ctv-v-tagline-indent:{tpl_v["tagline"]["indent"]}px;
+  --ctv-v-tagline-mt:{_tgl["marginTop"]}px;
+  --ctv-v-tagline-indent:{_tgl["indent"]}px;
   --ctv-v-img-w:{int(_il["width"])}px;--ctv-v-img-ms:{_v_img_ms}px;
   --ctv-v-img-top:{_v_img_top}px;--ctv-v-img-height:{int(_il["height"])}px;--ctv-v-img-radius:{_v_img_radius}px;
   --ctv-v-verse-bottom:{_v_verse_bottom}px;
-  --ctv-v-tagline-tick:{tpl_v["tagline"]["tickWidth"]}px;"""
+  --ctv-v-tagline-tick:{_tgl["tickWidth"]}px;"""
     else:
         # 刻意不注入 --ctv-l-gap：左右两栏都是绝对定位，栏间距由 margin/textW/imgW
         # 的算术决定，注入一个没人读的空格令牌只会让人以为改它能挪版式
@@ -772,7 +730,7 @@ def generate_html(manifest, audio_src, images=None,
             "duration": round(end - start, 2),
         })
 
-    # ── 分区 4/6：段落卡片 HTML + GSAP 时间线 ──────────────────────
+    # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
     seg_cards = []
     gsap_lines = []
 
@@ -793,9 +751,8 @@ def generate_html(manifest, audio_src, images=None,
         s = clip["start"]
         d = clip["duration"]
         # normalize_accent：accent 统一归一化成 6 位 hex——alpha 后缀
-        # （{ac}40/{ac}15）只有拼在 #rrggbb 后才合法，3 位 hex（#fff）或
-        # CSS 色名（red）拼出的非法值会被浏览器整条声明静默丢弃。
-        # accent 来自稿件（信源内容经模型写入），属不可信数据，要拼进
+        # （{ac}40/{ac}15）只有拼在 #rrggbb 后才合法，3 位 hex 或 CSS 色名拼出的
+        # 非法值会被浏览器整条声明静默丢弃。accent 来自稿件、属不可信数据，要拼进
         # data-accent / style / GSAP 三处上下文——解析不了的一律回落默认色，
         # 绝不让引号/分号/括号进入 HTML。
         ac = normalize_accent(seg.get("accent", DEFAULT_ACCENT), DEFAULT_ACCENT)
@@ -803,12 +760,10 @@ def generate_html(manifest, audio_src, images=None,
         # 属性闭合仍不可能）。GSAP 的 backgroundColor:"{ac}" 是 JS 字符串
         # 字面量，走 json.dumps 语义、不能用 esc（会渲染出字面量 &quot;）。
         ac_attr = esc(ac)
-        # 文本安全 accent：cream 浅底上原色 accent（中亮色色板）做正文色对比度
-        # 不足、字面发糊，与 tagline 同法压暗（同色相只降明度）；dark 底从原色
-        # 起步。两条路径最后都过 ensure_text_contrast 保底到 check 门禁的最严
-        # 一档——色板里的黄/天蓝在 cream 上 darken 一档照样不到 4.5:1。
-        # 只喂给"写在底上的字"（活动句着色 / .ag-idx），装饰仍走
-        # 原色 --seg-accent。
+        # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
+        # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
+        # 都过 ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
+        # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
         ac_text = ensure_text_contrast(ac if _dark_theme else darken(ac), _bgs)
         ac_text_attr = esc(ac_text)
         # 开屏/结尾 = 纯文字 agenda（两画幅统一）：不配图，用章节罗列/
@@ -817,18 +772,16 @@ def generate_html(manifest, audio_src, images=None,
         is_agenda = sid in ("opening", "closing")
         has_image = (sid in images) and not is_agenda
 
-        # 动画参数快捷引用（从模板加载，替代硬编码数值）
+        # 动画参数快捷引用
         a_ = tpl_anim
 
-        # 标题字号（内联，唯一不被 CSS 覆盖的标题数值）：
-        # - agenda 页取各画幅 agenda 标题字号（竖 84 / 横 96），带长度守卫：
-        #   agenda 头豁免了行数钳制（见 composition.css），长标题会无限折行
-        #   挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数内放得下为止。
-        #   横屏 7 行上限吃满列预算，标题锁 1 行、不为第二行预留空间；竖屏
-        #   留有余量，仍允许压进 2 行；
-        # - 横屏内容段有长度守卫：超阈值先降字号（62→54→48），配合
-        #   text-wrap:balance 折行，避免长标题把左栏撑出孤字；
-        # - 竖屏内容段一律取模板 fontSize。
+        # 标题字号（内联，唯一不被 CSS 覆盖的标题数值），阈值/字号一律取模板：
+        # - agenda 页带长度守卫：agenda 头豁免了行数钳制（见 composition.css），
+        #   长标题会无限折行挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数
+        #   内放得下为止；横屏的行预算被 maxRows 吃满，标题只锁 1 行，竖屏允许
+        #   压进 2 行；
+        # - 横屏内容段超阈值按 guardSize 降档，配合 text-wrap:balance 折行，避免
+        #   长标题把左栏撑出孤字；竖屏内容段一律取 fontSize。
         if is_agenda:
             _title_font_px = _ag["titleSize"]
             _tlen = len(str(seg.get("title") or "").strip())
@@ -862,11 +815,9 @@ def generate_html(manifest, audio_src, images=None,
         # Tagline
         tagline_html = ""
         if seg.get("tagline"):
-            # 深色主题向白提亮（无差别 _darken 在 dark 下
-            # 对比度只有 ~3.3，不达 WCAG AA）。浅色主题压暗一档后仍由
-            # ensure_text_contrast 兜到门禁最严档（中亮度 accent 压一档
-            # 照样不够）。缩进与对齐由 CSS
-            # 负责（--ctv-v-tagline-indent；agenda 卡两画幅居左）。
+            # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
+            # WCAG AA）；浅色主题压暗一档后仍由 ensure_text_contrast 兜到门禁最
+            # 严档。缩进与对齐归 CSS（--ctv-v-tagline-indent）。
             _tag_color = ensure_text_contrast(
                 mix(ac, "#ffffff", 0.62) if _dark_theme else darken(ac), _bgs)
             tagline_html = (
@@ -925,13 +876,10 @@ def generate_html(manifest, audio_src, images=None,
                     f'    </div>'
                 )
 
-        # 竖屏标题区内联样式已收进 CSS 骨架（composition.css vertical 覆盖块），
-        # 这里只保留随段数据变化的 font-size 与 accent 光晕 text-shadow。
-        # 字幕 DOM 只有 verse（歌词式句子流）一种形态、两画幅共用：该段全部
-        # 句子按序渲染成静态行（完整句子，CSS 自动换行），运行时由 cue 的 si
-        # 高亮当前句、已播句淡出、窗口随播报滚动。所有文字由句子流逐句
-        # 呈现；DOM 渲染在 seg-card 尾部，竖屏绝对定位钉底、横屏在左文字栏
-        # 文档流里随内容垂直居中（见 subtitle-verse.css 头部注释）。
+        # 字幕 DOM 只有 verse（歌词式句子流）一种形态、两画幅共用：该段全部句子
+        # 按序渲染成静态行（完整句子，CSS 自动换行），运行时由 cue 的 si 高亮当前
+        # 句、已播句淡出、窗口随播报滚动。DOM 在 seg-card 尾部，竖屏绝对定位钉底、
+        # 横屏在左文字栏文档流里垂直居中（定位细节见 subtitle-verse.css 头部）。
         _vlines = [
             # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
             # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
@@ -941,14 +889,11 @@ def generate_html(manifest, audio_src, images=None,
             for _s2 in seg["sentences"]
         ]
         verse_html = (
-            # 三个 layout 豁免属性都源于同一误报机制：滚动出窗的
-            # 行视觉上被窗口 overflow:hidden 裁掉，但静态 DOM rect
-            # 仍在原位——越过窗口上缘与标题区相交（content_overlap，
-            # allow-overlap）、越过窗口下缘与底部元素（如进度条）
-            # 相交（text_occluded，allow-occlusion，portrait 底部
-            # 留白只有 80px 时会触发）、整体越出卡片（allow-
-            # overflow）。活动行锚定在窗口内 clipPad 处，真实重叠不可能
-            # 发生。
+            # 三个 layout 豁免属性源于同一误报机制：滚出窗口的行视觉上被
+            # overflow:hidden 裁掉，但静态 DOM rect 仍在原位——上越标题区
+            # （allow-overlap）、下碰底部元素如进度条（allow-occlusion）、
+            # 整体越出卡片（allow-overflow）。活动行锚定在窗口内 clipPad
+            # 处，真实重叠不可能发生。
             f'\n    <div class="verse" id="verse-{sid}" '
             f'data-layout-allow-overflow data-layout-allow-overlap '
             f'data-layout-allow-occlusion>'
@@ -979,7 +924,7 @@ def generate_html(manifest, audio_src, images=None,
             seg_cards.append(
                 card_open
                 + _agenda_col_html(seg, clips, manifest, _ag, _dark_theme,
-                                   ac, ac_attr, title_size, esc, _bgs)
+                                   ac, ac_attr, title_size, _bgs)
                 + f'    {verse_html}\n    </div>\n'
                 + progress_html
                 + '  </div>'
@@ -1023,13 +968,11 @@ def generate_html(manifest, audio_src, images=None,
                 f'{{opacity:1,duration:{_fadein_dur},'
                 f'ease:"{a_fadein["ease"]}"}},{s:.2f})'
             )
-        # Fade out + hard kill. 段落之间天然隔着一句静音（gap = 下一段 start −
-        # 本段 end）：淡出只按配置时长（0.3s）从本段结束起算时，默认 gap（0.4s）
-        # 就更长，上一段已经淡干净、下一段还没开始淡入，边界上留下只剩背景的
-        # 空帧（24fps 实测 2~3 帧）。淡出因此跨过整段间隔、铺到下一段淡入结束，
-        # 两张卡真正交叠成文档承诺的 cross-fade。
-        # （试过"静音期保持全显、再与淡入对称同步淡出"的写法：gap 一大，交接点
-        # 仍露出约 0.15s 的双低透明空档，实测 6 帧空白，故弃用。）
+        # 淡出 + 硬清。段落之间天然隔着一句静音（gap = 下一段 start − 本段 end）：
+        # 淡出只按配置时长从本段结束起算时，默认 gap 更长，上一段已淡干净、下一段
+        # 还没开始淡入，边界留下只剩背景的空帧（24fps 实测 2~3 帧）。淡出因此跨过
+        # 整段间隔、铺到下一段淡入结束，两张卡真正交叠成 cross-fade。
+        # （"静音期保持全显、再与淡入对称淡出"试过：gap 一大仍露约 0.15s 空档。）
         _next_start = clips[i + 1]["start"] if i + 1 < len(clips) else None
         _fadeout_dur = a_fadeout["duration"]
         if _next_start is not None:
@@ -1072,11 +1015,11 @@ def generate_html(manifest, audio_src, images=None,
 
     gsap_code = "\n  ".join(gsap_lines)
 
-    # ── 分区 5/6：图表引导脚本（实现见模块级 _build_chart_boot） ──
+    # ── 图表引导脚本（实现见模块级 _build_chart_boot） ──
     # images 在此处已是归一化后的结构（_build_chart_boot 要求该输入契约）。
     chart_boot = _build_chart_boot(images, chart_palette_for_theme(theme))
 
-    # ── 分区 6/6：装配最终 HTML ────────────────────────────────────
+    # ── 装配最终 HTML ────────────────────────────────────
     # 骨架在 templates/composition.html。样式与脚本各自装配好后填入占位符；
     # CSS 走 <style> 内联（无头浏览器首帧不能等外链 CSS，否则白屏错版），
     # GSAP/chart.js 是脚本、可以外链（vendor/ 相对路径）。

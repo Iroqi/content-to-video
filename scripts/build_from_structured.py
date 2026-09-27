@@ -4,8 +4,8 @@
 pipeline.py --source 直接调用本模块的 build_parts()：逐段独立分句，跨段
 短句合并结构上不可能发生，不需要任何跨段校验。
 
-segments_source.json 的字段规范与完整示例见 `references/writing.md`
-（字段语义的唯一真源）；本模块只负责按 _contracts 校验过的结构分组。
+segments_source.json 的字段规范与完整示例见 `references/writing.md`；
+本模块只负责按 _contracts 校验过的结构分组。
 """
 import os
 import sys
@@ -16,7 +16,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
 from _theme import get_accent_palette, get_default_accent  # noqa: E402
-from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402  开场/结尾默认语速单一来源
+from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
 ACCENT_PALETTE = get_accent_palette()
 DEFAULT_ACCENT = get_default_accent()
@@ -27,8 +27,6 @@ LONG_SENTENCE_CHARS = 45
 
 
 # ── 内部数据结构 ────────────────────────────────────────────────
-# 段落用 dataclass 而非位置元组：字段按名字读写，加字段或改字段名不会
-# 静默错位到别的段落上。
 @dataclass
 class Block:
     """_collect_blocks 的产物，描述一个待渲染段落的全部信息。
@@ -44,7 +42,6 @@ class Block:
     sentences: List[str]
     extra: Dict = field(default_factory=dict)
     turns: List[Dict] = field(default_factory=list)
-
 
 
 def _sentences_of(text):
@@ -84,12 +81,7 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
 
 
 def _collect_blocks(source):
-    """把结构化 source 组装成内部 Block 列表。
-
-    返回 List[Block]，每个 Block 描述一个段落（id/title/tagline/accent/
-    sentences/extra/turns）。turns 为空列表表示普通独白段落；非空表示
-    这段是"双人/多人对话"。所有文字统一走 verse 歌词字幕。
-    """
+    """把结构化 source 按 开场 → 各段 → 结尾 的顺序组装成 Block 列表。"""
     blocks: List[Block] = []
     speakers = source.get("speakers") or {}
 
@@ -151,12 +143,8 @@ def _collect_blocks(source):
         extra = {}
         if seg.get("speed") is not None:
             extra["speed"] = seg["speed"]
-        # 不写"全局 --speed 的复读值"：pipeline 的 sentence_speeds.get(i,
-        # args.speed) 兜底给出同一个数，两处各写一份只会让 manifest 里
-        # 每段都挂着一个没人显式要过的 speed 字段——改全局语速参数的含义
-        # 时两处漂移。缺省语义 = 字段缺席。
-        # 段落级音色覆盖（可选字段，规范见 references/writing.md 段落级字段）：
-        # _contracts 里校验之后由这里透传给下游，pipeline.py 读 seg_config 后即可生效。
+        # 段落级音色覆盖（可选字段，规范见 references/writing.md）：_contracts
+        # 校验之后由这里透传给下游，pipeline.py 读 seg_config 后即可生效。
         if seg.get("voice_id") is not None:
             extra["voice_id"] = seg["voice_id"]
         if seg.get("voice_style") is not None:
@@ -164,8 +152,7 @@ def _collect_blocks(source):
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
             extra["takeaway"] = str(seg["takeaway"]).strip()
-        # 所有文字统一走 verse 歌词字幕，段落内容由句子流逐句呈现，
-        # 没有常驻正文卡。段落 id 用中性前缀 seg。
+        # 缺省段落 id 用中性前缀 seg（配图键与文件名同源）。
         sid = (seg.get("id") or "").strip()
         if not sid:
             sid = f"seg{i}"

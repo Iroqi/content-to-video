@@ -64,7 +64,7 @@ def _validate_chartjs_payload(data):
 
 
 def _download_to_cache(cache_path, url, *, asset, validate):
-    """下载 vendor 资产到用户缓存（GSAP / Chart.js 共用唯一实现）。
+    """下载 vendor 资产到用户缓存（GSAP / Chart.js 走同一函数）。
 
     完整性校验由 validate(data) 注入（失败 raise，资产不落盘）；写入保持
     mkstemp → fsync → os.replace 的原子序，失败清理临时文件。
@@ -333,7 +333,7 @@ def _uncovered_content_sids(manifest, images):
 
 
 def validate_images_files(images, out_dir, seg_durs=None):
-    """校验 images.json 引用的媒体文件存在且可解码（本模块唯一实现）。
+    """校验 images.json 引用的媒体文件存在且可解码。
 
     检测项（依赖缺失时优雅降级，只降强度不改行为）：
     - 存在性：所有类型（含 svg）；
@@ -343,15 +343,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
       ffmpeg 打不开，存在性校验已足够，跳过。ffmpeg 是渲染必需依赖，
       无需再引入 Pillow。
 
-    Args:
-        images: images.json 映射（每条为含 src 的媒体对象）
-        out_dir: HTML 输出目录（相对路径的解析基准）
-        seg_durs: {segment_id: 段落时长秒}，视频截断提示用；None 跳过提示
-
-    Returns:
-        (missing, corrupt) 两个列表：missing=[(sid, media_path)]，
-        corrupt=[(sid, media_path, reason)]。是否 fail-fast 由调用方决定
-        （main() 对非空结果报错退出）。
+    返回 (missing, corrupt)：missing=[(sid, media_path)]、
+    corrupt=[(sid, media_path, reason)]；相对 src 按 out_dir 解析，
+    seg_durs=None 时跳过时长提示。是否 fail-fast 由调用方决定。
     """
     missing_imgs = []
     corrupt_imgs = []
@@ -397,7 +391,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
         # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
         if media_type == "auto":
             media_type = classify_media_path(media_path)
-        p = media_path if os.path.isabs(media_path) else os.path.join(out_dir, media_path)
+        # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
+        # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
+        p = os.path.join(out_dir, media_path)
         if not os.path.exists(p):
             missing_imgs.append((sid, media_path))
             continue
@@ -410,7 +406,7 @@ def validate_images_files(images, out_dir, seg_durs=None):
         # 一起报出来（先 continue 会让人以为"只是封面缺了"，修完才发现视频本身
         # 还是坏的，白跑一轮）。
         if poster:
-            poster_path = poster if os.path.isabs(poster) else os.path.join(out_dir, poster)
+            poster_path = os.path.join(out_dir, poster)
             if not os.path.isfile(poster_path):
                 missing_imgs.append((sid, poster))
             elif not is_inside(poster_path, out_dir):
@@ -548,12 +544,11 @@ def main():
                       "manifest 中的任何段落，已忽略：这些段落不存在于当前稿件"
                       "（可能已删段或改过 id），建议连同对应配图文件一并清理。",
                       file=sys.stderr)
-            # 引用完整性校验（fail-fast）：images.json 声明的图片若磁盘上
-            # 不存在，渲染会静默产出空白裂图——典型场景是手动改了 images.json
-            # 或替换图片改了扩展名，却忘了重跑本脚本重新生成 HTML。在生成
-            # HTML 前就报错，避免把坏图渲染进成片。
-            # 段落时长映射——视频配图比段落长时渲染只显示前段
-            # （尾部被截断），要在这里就给出提示而不是等成片后才发现。
+            # 引用完整性校验（fail-fast）：images.json 声明的图片若磁盘上不存在，
+            # 渲染会静默产出空白裂图——典型场景是改了 images.json 或替换图片改了
+            # 扩展名，却忘了重跑本脚本重新生成 HTML。
+            # 段落时长映射——视频配图比段落长时渲染只显示前段（尾部被截断），
+            # 要在这里就给出提示而不是等成片后才发现。
             # 复用上方 manifest_segments 的分组结果：裸读 manifest["segments"]
             # 在无 segments 的手写 manifest 下恒空，这条 [warn] 会永不触发。
             _seg_durs = {seg.get("id", ""): _segment_duration(seg)
@@ -642,7 +637,7 @@ def main():
         audio_src = _stage_audio_file(audio_path, out_dir)
     else:
         audio_abs = manifest.get("combined_audio", "")
-        if isinstance(audio_abs, str) and audio_abs:
+        if audio_abs:
             audio_candidates = ([audio_abs] if os.path.isabs(audio_abs)
                                 else [os.path.join(out_dir, audio_abs),
                                       os.path.abspath(audio_abs),

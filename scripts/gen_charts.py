@@ -10,7 +10,7 @@ import sys
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import setup_stdio, write_json_atomic, guard_not_in_skill_dir
-from _contracts import CHART_TYPES, is_valid_sid  # 段 id 与图表类型的口径单一来源
+from _contracts import CHART_TYPES, is_valid_sid
 
 # 公式求值的安全护栏：AST 白名单挡的是"能力"（不出网络/属性/下标/导入），
 # 挡不住"规模"——`9**9**9` 每个节点都合法，却要算到宇宙热寂。Pow 结果一旦
@@ -300,11 +300,9 @@ def build_images_map(data):
 def merge_images_map(existing, charts_map):
     """把 chart 条目合并进既有 images.json 映射（不覆盖非 chart 条目）。
 
-    既有行为是整文件覆盖：同一期视频里方式 C 与方式 A/B/D 混用时
-    （image_options.md——"三种方式同一期视频里混用很常见"），后跑
-    gen_charts 会把已定稿的真实照片/生图条目连同 provider/source_url 等
-    provenance 元数据一起静默清掉，与 SKILL.md"恢复素材时不得覆盖这些
-    元数据"的规则矛盾。合并语义：
+    整文件覆盖的旧语义在方式 C 与 A/B/D 混用时（同一期视频很常见）会把已定稿
+    的真实照片/生图条目连同 provider/source_url 等 provenance 元数据一起静默
+    清掉。合并语义：
       · 既有条目原样保留（含 provenance 字段）；
       · chart 条目新增；
       · 与上一次 gen_charts 产物语义相等（dict 比较，键序/缩进无关）的

@@ -12,7 +12,7 @@ import sys
 import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _contracts import validate_speed  # noqa: E402  领域规则单一来源
+from _contracts import validate_speed, SPEED_EPS  # noqa: E402
 
 
 def _wav_duration(audio_path):
@@ -113,10 +113,8 @@ def generate_silence(ffmpeg_path, duration, out_path, sample_rate=24000,
     concat 要么整链失败要么被静默丢弃，而调用方（pipeline 的静音兜底分支）
     已经按"异常=兜底失败"处理，能正确走 skip 路径，不会带着坏文件错位时间轴。
 
-    `sample_rate`/`channels` 由 concat_audio 传"和语音句一致的格式"：静音固定
-    24k 单声道时，原生 44.1k 的稿件（--speed 1.0 不改格式）会因为每句之间那
-    段静音而成混合采样率——concat 的 -c copy 对混合采样率会 exit 0 地产出错
-    采样率、被截断的整条音频（concat_audio 里记了实测数字）。
+    `sample_rate`/`channels` 要由调用方传"和语音句一致的格式"：静音固定 24k
+    单声道会把原生 44.1k 的稿件拼成混合采样率，后果与实测数字见 concat_audio。
     """
     # encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
     # ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
@@ -167,7 +165,7 @@ def build_atempo_filter(speed):
     这里改为立即抛 ValueError，而不是挂死。
     """
     validate_speed(speed)
-    if abs(speed - 1.0) < 0.01:
+    if abs(speed - 1.0) < SPEED_EPS:
         return None
     factors = []
     remaining = speed
@@ -207,7 +205,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 且不能再把当前（已变速的）文件备份成 .orig.wav——那会让下一次
     # 换速继续在错误的基础上叠加。
     compensate = (prev_speed is not None
-                  and abs(prev_speed - 1.0) > 0.01
+                  and abs(prev_speed - 1.0) > SPEED_EPS
                   and not os.path.exists(orig_path))
     if compensate:
         comp_filt = build_atempo_filter(speed / prev_speed)
@@ -215,10 +213,8 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
             return True  # speed == prev_speed，文件已在目标速率
         filt = comp_filt
 
-    # speed=1.0 means "restore original pace". If a backup exists (audio was
-    # previously sped up), copy it back over wav_path so the file reflects 1.0x.
-    # Without this branch, a previous 1.5x run would leave the audio stuck at
-    # 1.5x even though the user now requests 1.0x.
+    # speed=1.0 means "restore original pace": copy the backup (if any) back over
+    # wav_path. Without this branch, a previous 1.5x run stays at 1.5x.
     if not filt:
         if os.path.exists(orig_path):
             try:
@@ -231,14 +227,13 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         return True  # nothing to do (no prior speed change, no backup needed)
 
     if not compensate:
-        # Preserve the original TTS output once, so we can re-apply atempo from
-        # a clean source on subsequent runs (avoid double-sped audio).
-        # prev_speed≈1.0 是 .spd 给出的"当前文件就在原速"事实声明：备份必须
-        # 跟着刷成当前文件。pipeline 的 sidecar 清理失败路径下，盘上可能残留
-        # 上一稿的旧 .orig.wav（删不掉也改不了名），不加这条刷新就会拿旧稿音频
-        # 做变速源——新字幕配旧配音复活（见 pipeline._clear_stale_sidecars）。
+        # 首次备份原速音频，后续从干净源重放 atempo（避免二次变速）。
+        # prev_speed≈1.0 是 .spd 给出的"当前文件就在原速"事实声明：备份必须跟着
+        # 刷成当前文件。pipeline 的 sidecar 清理失败路径下，盘上可能残留上一稿的
+        # 旧 .orig.wav（删不掉也改不了名），不刷新就拿旧稿音频做变速源——新字幕配
+        # 旧配音复活（见 pipeline._clear_stale_sidecars）。
         refresh_backup = (prev_speed is not None
-                          and abs(prev_speed - 1.0) <= 0.01)
+                          and abs(prev_speed - 1.0) <= SPEED_EPS)
         if refresh_backup or not os.path.exists(orig_path):
             try:
                 shutil.copy2(wav_path, orig_path)
@@ -367,13 +362,11 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
     # 混合采样率必须在这里挡掉：concat demuxer 直接串流、不改写头部，实测把
     # 44100Hz 与 24000Hz 各 0.3s 的两个 WAV（中间隔一段静音）用 -c copy 拼起来，
     # ffmpeg **返回 0**，产物却是 44100Hz、27630 帧 = 0.627s——后一段按错误采样
-    # 率播放（音调偏高）、整条比 manifest 短，调用方看到的是成功；同一个列表改
-    # 走 `-ar 24000` 重编码也不对（Non-monotonic DTS，实测只剩 0.681s）。所以
-    # 兜底不能靠 returncode，只能保证喂给 demuxer 的输入本身同格式。
-    #
-    # 目标格式取语音句里的多数派，位深一律 16-bit（apply_speed 的产物和静音
-    # 文件都是 16-bit）。取多数派而不是写死 24000：--speed 1.0 时句子保持 TTS
-    # 原生格式（如 44.1k），写死会把整条音频白白重编码一遍。
+    # 率播放（音调偏高）、整条比 manifest 短，调用方看到的是成功；同一列表改走
+    # `-ar 24000` 重编码也不对（Non-monotonic DTS，实测只剩 0.681s）。所以兜底
+    # 不能靠 returncode，只能保证喂给 demuxer 的输入本身同格式。
+    # 目标格式取语音句里的多数派，位深一律 16-bit（apply_speed 产物与静音文件
+    # 都是 16-bit）。不写死 24000：--speed 1.0 时句子保持 TTS 原生格式（如 44.1k）。
     counts = {}
     for fmt in (_wav_format(p) for p in file_list):
         if fmt:
@@ -462,10 +455,8 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     全程使用固定的 bgm_volume。
     """
     volume_filter = f"volume={bgm_volume}"
-    # 输出格式跟着人声母带走，不写死 24000/mono：与 apply_loudnorm 同一条理由
-    # ——--speed 1.0 时 concat 保留 TTS 原生采样率（实测常见 44.1k/立体声），
-    # 写死就会把母带悄悄降一档，同一条片子带不带 BGM 格式都不一致。人声读不
-    # 出头时退回 24000/mono（混音输入已经不正常，宁可保守）。
+    # 输出格式跟着人声母带走，不写死 24000/mono（同 apply_loudnorm 的理由）。
+    # 人声读不出头时退回 24000/mono：混音输入已不正常，宁可保守。
     voice_fmt = _wav_format(voice_path)
     rate, channels = (voice_fmt[0], voice_fmt[1]) if voice_fmt else (24000, 1)
     # normalize=0：amix 默认把每路输入各乘 1/inputs（两路即人声 -6dB），
@@ -614,10 +605,8 @@ def get_ffmpeg():
 
 
 def parse_duration(stderr_text):
-    """从 `ffmpeg -i` 的 stderr 解析 `Duration: HH:MM:SS.xx`，返回秒数。
-
-    多个音频调用方（测时长与 gen_hyperframes 的视频探测）原路径各自维护
-    同一份正则，收口到这里做单一来源。解析失败返回 None。
+    """从 `ffmpeg -i` 的 stderr 解析 `Duration: HH:MM:SS.xx`，返回秒数；
+    解析失败返回 None。
     """
     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr_text or "")
     if not m:

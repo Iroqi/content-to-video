@@ -7,10 +7,9 @@
 """
 import copy
 import re
-# ── 主题注册表（内嵌常量）──
-# 主题表只放主题；accent 相关是独立常量。混在一张 dict 里靠
-# startswith("_") 区分主题与元数据，任何新加的下划线键都会被
-# list_theme_names 之外的读法误当成配色。
+# ── 主题注册表──
+# 主题表只放主题，accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
+# 区分，新加的下划线键容易被误当成配色。
 _THEMES = {
     "cream": {
         "bg_gradient": "linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%)",

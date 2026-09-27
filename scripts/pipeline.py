@@ -99,8 +99,7 @@ def _parse_env_file(path):
             # 先剥未加引号值的行内注释（KEY=value # 说明），只认"空格 + #"，
             # 紧贴的 #（色值、口令片段）不动；引号值取成对引号之间的内容，
             # 闭引号之后的注释自然丢弃。顺序不能反：`KEY="x" # 注释` 若先判
-            # 成对引号会失败，剥完注释又剩下带引号的 "x" 交给 SDK——恰是本
-            # 修复要防的 401
+            # 成对引号会失败，剥完注释又把带引号的 "x" 交给 SDK → 401
             if v[:1] in ("\"", "'"):
                 close = v.find(v[0], 1)
                 if close != -1:
@@ -165,15 +164,15 @@ def resolve_model_config(cli_model, cli_base_url, model_env_name, default_model)
 
 from _theme import get_default_accent  # noqa: E402
 from _contracts import list_voice_ids  # noqa: E402
-# 默认倍速/时长估算的单一来源在 _contracts——核心管线不反向依赖任何可选
-# 脚本，常量与估算函数统一从 _contracts 取
+# 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
 from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, load_segments_source,  # noqa: E402
                         DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
-                        is_content_sid, validate_speed, validate_timing_manifest)
+                        is_content_sid, validate_speed, validate_timing_manifest,
+                        needs_speed_change, speed_marker_value)
 from _audio import get_ffmpeg, ffmpeg_usable  # noqa: E402
 from _audio import (measure_duration, generate_silence, wav_data_consistent,  # noqa: E402
                     apply_speed, concat_audio, mix_bgm, apply_loudnorm,
-                    _remove_quiet)  # _remove_quiet：全仓唯一"尽力删文件"实现
+                    _remove_quiet)  # 尽力删文件，不抛
 from build_from_structured import build_parts  # noqa: E402
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                           write_json_atomic)
@@ -264,20 +263,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
     在 .spd 里写 1.0 这一事实，而非请求语速；写请求语速才会把原速音频
     永久钉成"已在目标速率"，见 _write_sentence_sidecars）。
 
-    MiMo TTS uses chat completions format:
-    - user role: voice style description (optional)
-    - assistant role: text to synthesize
-    - audio param: {"format": "wav", "voice": voice_id}
-    - Response: base64-encoded WAV in choices[0].message.audio.data
-
-    `speed` applies a deterministic tempo change via ffmpeg atempo after
-    synthesis, so the spoken rate is exactly Nx regardless of the TTS
-    model's natural pace.
-
-    `sentence_label` is included in retry/error logs for easier diagnosis
-    when processing long scripts with many sentences.
-
-    `api_timeout` prevents the pipeline from hanging on a single slow API call.
+    语速在合成后用 ffmpeg atempo 精确变速，与 TTS 模型的自然语速无关。
     """
     messages = []
     if voice_style:
@@ -340,28 +326,23 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
         _remove_quiet(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
         return False, False
 
-    # 新合成 = 全新内容：先清上一轮残留 sidecar（.sha 由调用方在 synth
-    # 成功后重写，不在此处动），理由见 _clear_stale_sidecars docstring。
-    # 清理失败时绝不能继续 apply_speed：残留的旧 .orig.wav 会被当作原速
-    # 源做变速（speed=1.0 的还原分支同理会拿旧备份覆盖新音频），新音频
-    # 被整体丢弃。跳过变速只损失语速且可恢复——speed_applied=False 时
-    # 调用方写 .spd=1.0 声明"当前确在原速"，下次 --resume 会在缓存音频上
-    # 重放 atempo（见 _write_sentence_sidecars）。
+    # 新合成 = 全新内容：先清上一轮残留 sidecar（.sha 由调用方在 synth 成功后
+    # 重写，不在此处动，理由见 _clear_stale_sidecars docstring）。清理失败时不能
+    # 继续 apply_speed：残留的旧 .orig.wav 会被当作原速源做变速，新音频被整体
+    # 丢弃。跳过变速只损失语速且可恢复——speed_applied=False 时调用方写
+    # .spd=1.0 声明"当前确在原速"，下次 --resume 在缓存音频上重放 atempo
+    # （见 _write_sentence_sidecars）。
     if not _clear_stale_sidecars(out_path):
         print(f"    [{sentence_label or text[:30] + '...'}][speed-skip] "
               f"残留 sidecar 无法清理，跳过变速以保护新音频（原速可用）",
               file=sys.stderr, flush=True)
         return True, False
 
-    # Enforce deterministic speech speed via ffmpeg atempo in place.
-    # 注意：这一步在 API 重试循环之外——音频已经落盘，atempo 抛异常
-    # （如 subprocess 超时）时重新调 TTS 只会白烧额度。变速失败保留
-    # 原速音频即可，时长由 pipeline 实测，字幕时间轴仍然准确。
-    # （不在此处再判 ffmpeg_path 是否为空：get_ffmpeg 最差也返回 "ffmpeg"
-    # 兜底串，main() 又用 ffmpeg_usable 预检不过就 exit——TTS 阶段根本
-    # 到不了空值状态。）
+    # 语速不交给 TTS，而是音频落盘后用 ffmpeg atempo 就地变速（确定、可复现）。
+    # 这一步在 API 重试循环之外——重新调 TTS 只会白烧额度；变速失败保留原速
+    # 音频即可，时长由 pipeline 实测，字幕时间轴仍然准确。
     speed_applied = True
-    if abs(speed - 1.0) > 0.01:
+    if needs_speed_change(speed):
         try:
             speed_applied = apply_speed(ffmpeg_path, out_path, speed)
         except Exception as e:
@@ -405,10 +386,10 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
     """
     with open(out_path + ".sha", "w", encoding="utf-8") as f:
         f.write(_sentence_hash(text, voice_id, voice_style, model))
-    if abs(speed - 1.0) > 0.01:
+    if needs_speed_change(speed):
         if speed_applied:
             with open(out_path + ".spd", "w", encoding="utf-8") as f:
-                f.write(str(round(speed, 4)))
+                f.write(str(speed_marker_value(speed)))
         else:
             with open(out_path + ".spd", "w", encoding="utf-8") as f:
                 f.write("1.0")
@@ -448,7 +429,7 @@ def _drop_stale_cache(out_path):
     # 不需要提前隔离，见 _clear_stale_sidecars 的调用注释）。
     for suffix in ("", ".sha") + _SIDECAR_SUFFIXES:
         p = out_path + suffix
-        if p and os.path.exists(p):
+        if os.path.exists(p):
             try:
                 os.remove(p)
             except OSError:
@@ -535,14 +516,15 @@ def resolve_resume_state(facts, requested_speed):
         # 是唯一可证明的基线，先恢复它再按本次请求重新施加语速。
         restore_first = True
     if (applied is None
-            and abs(requested_speed - 1.0) > 0.01
+            and needs_speed_change(requested_speed)
             and not facts.orig_wav_exists):
         return ResumeDecision("regen",
                               reason="无 .spd marker 也无可恢复的原速备份，"
                                      "无法证明当前 WAV 已是请求语速")
-    needs_reapply = (applied is None) or (applied != round(requested_speed, 4))
+    needs_reapply = (applied is None) or (applied != speed_marker_value(requested_speed))
     if needs_reapply:
-        write_spd = round(requested_speed, 4) if abs(requested_speed - 1.0) > 0.01 else None
+        write_spd = (speed_marker_value(requested_speed)
+                     if needs_speed_change(requested_speed) else None)
         return ResumeDecision("reapply", apply_speed_to=requested_speed,
                               prev_speed=applied, write_spd=write_spd,
                               restore_first=restore_first,
@@ -551,8 +533,7 @@ def resolve_resume_state(facts, requested_speed):
                           restore_first=restore_first,
                           synth_failed=facts.failed_marker_exists)
 
-def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style,
-                          model, requested_speed):
+def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style, model):
     sha_path, spd_path = out_path + ".sha", out_path + ".spd"
     sha_exists = os.path.exists(sha_path)
     sha_matches = False
@@ -566,7 +547,7 @@ def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style,
     audio_exists = os.path.exists(out_path)
     audio_duration_ok = False
     audio_duration = 0.0
-    if audio_exists and ffmpeg_path:
+    if audio_exists:
         audio_duration = measure_duration(ffmpeg_path, out_path)
         audio_duration_ok = audio_duration > 0
     spd_exists = os.path.exists(spd_path)
@@ -616,8 +597,7 @@ def _build_parser():
                         default="专业新闻播报，语速适中，语气沉稳自信，中英文表达流畅自然",
                         help="Voice style description")
     parser.add_argument("--gap", type=float, default=DEFAULT_GAP,
-                        help="Silence gap between sentences (seconds)"
-                             "（默认取 _contracts.DEFAULT_GAP 单一来源）")
+                        help="Silence gap between sentences (seconds)")
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
                         help="Speech speed multiplier via ffmpeg atempo "
                              "(1.0=normal, 1.5=faster). Default follows "
@@ -736,11 +716,9 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
-    # 容差与下游契约的"最后一句不得超出 total_duration + 250ms"同档（时间轴按
-    # 逐句时长+句间静音排布，这里 drift>0.25 与下游末句越界是同一个条件）：
-    # 这一步放行、下游却拒收，就意味着 TTS 额度已经花完才告诉用户产物不能用——
-    # 最坏的失败时机。真正的偏差（格式不一致导致的截断）量级是秒到几十秒，
-    # 250ms 足够吸收逐句 round(x,3) 的累计舍入与 concat 的边界误差。
+    # 容差与下游契约的"末句不得超出 total_duration + 250ms"同档——这一步放行、
+    # 下游却拒收，等于 TTS 额度烧完才告诉用户产物不能用。真正的截断量级是秒到
+    # 几十秒，250ms 足够吸收逐句 round(x,3) 的累计舍入与 concat 边界误差。
     if drift > 0.25:
         print(f"[error] 拼接产物比预期短 {drift:.2f}s（实测 {total_dur:.2f}s / "
               f"预期 {expected_total:.2f}s）——多半是句子音频格式不一致或写盘被"
@@ -770,13 +748,9 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         print("[warn] --bgm 文件在校验后消失，跳过混音"
               "（已记入 manifest 的 degraded 明细）", file=sys.stderr, flush=True)
     if args.bgm and os.path.exists(args.bgm):
-        # Validate bgm_volume: clamp to [0, 1] to prevent clipping (>1 amplifies
-        # into distortion) and reject nonsense values. Also guard against
-        # filter-string injection: bgm_volume is interpolated directly into the
-        # ffmpeg filter_complex string, so a malicious value like "1,aecho"
-        # would inject arbitrary filters. type=float already rejects non-numeric
-        # input；NaN/Inf 已在 argparse 阶段 parser.error 拦下（早于 TTS 不烧
-        # 额度），这里只需 clamp 越界值。
+        # bgm_volume 直接插进 ffmpeg filter_complex 字符串："1,aecho" 这类值会
+        # 注入任意滤镜，所以只取数值并 clamp 到 [0,1]（>1 会削波失真）。
+        # 非数值/NaN/Inf 已在 argparse 阶段 parser.error 拦下（早于 TTS，不烧额度）。
         if args.bgm_volume < 0 or args.bgm_volume > 1:
             clamped = max(0.0, min(1.0, args.bgm_volume))
             print(f"[warn] --bgm-volume {args.bgm_volume} out of [0,1], "
@@ -840,8 +814,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     # 成片长度必须罩住时间轴：音频比最后一句的结束时刻短一分，画面就会在字幕
     # 还没走完时提前结束。用写进 manifest 的（已 round 的）值算，与契约层
     # "最后一句不得超出 total_duration + 250ms" 校验的是同一个量。
-    # 宁可让 composition 比音频长几十毫秒（末句字幕本来就要显示完），也不能让
-    # 下游按一条它自己必然违反的规则拒收这份 manifest。
+    # 宁可让 composition 比音频长几十毫秒（末句字幕本来就要显示完），也不让下游
+    # 按一条它自己必然违反的规则拒收这份 manifest。
     _timeline_end = max((s["start_time"] + s["duration"])
                         for s in manifest_sentences)
     # 0.005s 显示精度门槛：逐句 start/duration 都是 round(x,3) 的浮点累加，
@@ -851,7 +825,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     if _timeline_end - total_dur > 0.005:
         # 补长只能兜住"round 到毫秒后差一点点"（几十毫秒量级）。契约层允许
         # 最后一句超出 total_duration 至多 250ms，所以超出 250ms 就不是舍入
-        # 问题，而是音频文件真被截断了一一（amix / loudnorm 都改写过母带）。
+        # 问题，而是音频文件真被截断了——amix / loudnorm 都改写过母带。
         # 无条件按时间轴取值会把这种截断抹平成一份 status=ok 的 manifest：
         # 片尾几秒没声音，没人知道。记进 degraded 让 run.py 的闸门拦得住。
         _deficit = _timeline_end - total_dur
@@ -1148,8 +1122,7 @@ def main():
         # 稿件时才跳过（判定全在 resolve_resume_state，这里只执行副作用）
         if args.resume and os.path.exists(out_path):
             facts = _observe_resume_state(out_path, ffmpeg_path, sent_tts,
-                                          sent_voice_id, sent_voice_style,
-                                          model, sent_speed)
+                                          sent_voice_id, sent_voice_style, model)
             decision = resolve_resume_state(facts, sent_speed)
             if decision.action == "regen":
                 # 六种失效成因（无指纹 / 指纹变了 / 文件没了 / 量不出时长 /
@@ -1239,9 +1212,8 @@ def main():
                               f"失败（{e}），下次 --resume 会重复一次还原",
                               file=sys.stderr)
                         _remove_quiet(out_path + ".spd")
-            # 这里曾经还有一块"缺 .sha 就补写一份"的自证逻辑：给一份无法
-            # 证明归属的旧音频盖上当前文本的指纹，错位从此永久固化且不再报
-            # 出来。缺指纹已在 resolve_resume_state 判为 regen，不再补写。
+            # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
+            # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
             sd = {
                 "index": i, "text": sentences[i],
                 "file": out_path, "duration": round(dur, 3)
@@ -1277,7 +1249,7 @@ def main():
     else:
         _mean_chars = 13.0  # 0 pending 时退回旧默认（也用于打日志可读性）
     est_per_sentence = round(_mean_chars / DEFAULT_CHARS_PER_SEC, 1)
-    est_total = pending_count * est_per_sentence * 1.2 / max(args.workers, 1)
+    est_total = pending_count * est_per_sentence * 1.2 / args.workers
     print(f"[est] {pending_count} sentences to synthesize, "
           f"~{est_total:.0f}s with up to {args.workers} workers "
           f"(mean {_mean_chars:.1f} chars/sentence)", flush=True)
@@ -1363,11 +1335,7 @@ def main():
                         # 模式），不然下次 --resume 时这句会走"文件已存在=缓存"
                         # 分支重建 sentence_data，那个分支不知道这个文件其实是
                         # 静音兜底——synth_failed 标记会悄悄从 manifest 里消失，
-                        # 事后再也看不出这句需要人工补录（这个坑是加 --on-fail
-                        # silence 时最先漏掉、后来自查发现的）。
-                        # 用 with + Path.touch() 风格而非裸 open().close()：
-                        # Windows 下文件被占用（杀毒扫描/播放器）时 close() 可能
-                        # 抛异常留下未关闭句柄；with 保证释放，touch 语义更直白。
+                        # 事后再也看不出这句需要人工补录。
                         try:
                             with open(out_path + ".failed", "w",
                                        encoding="utf-8"):
@@ -1380,8 +1348,6 @@ def main():
                         # 必须写 .spd marker 声明"已施加语速"——否则下次 --resume
                         # 会把这段静音再 atempo 一遍，占位时长被压缩到 2/3。
                         # .sha 内容指纹也一并落盘，跟正常合成句子的缓存语义一致。
-                        # （静音时长已按 speed 折算，speed_applied 默认 True：
-                        # 这里的 .spd 是"声明已施加语速"，与合成句语义一致）
                         # 用带兜底的写入：sidecar OSError 不该冒到下面的外层
                         # except——静音 WAV 已经在盘上，丢这句等于兜底失败。
                         _record_sentence_cache(

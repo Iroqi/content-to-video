@@ -45,7 +45,7 @@
 
 ## 预置音色列表
 
-> 音色 ID 列表的唯一权威来源是 `scripts/_contracts.py` 内嵌的 voice registry；下表补充性别与搭配建议，增删音色时与 `_contracts.py` 同步。
+> 音色 ID 列表的权威来源是 `scripts/_contracts.py` 内嵌的 voice registry；下表只补充性别与搭配建议。
 
 | voice-id | 语言 | 性别 | 适用场景 |
 |----------|------|------|----------|
@@ -96,7 +96,7 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 
 **可选字段**：
 - `speed`（float）：段落级语速倍率，覆盖全局 `--speed`。例如开场/结尾用 `1.2`、正文段用 `1.5`。仅影响 TTS atempo 变速，不影响字幕时间轴精度
-- `voice_id` / `voice_style`（string）：内容段级的音色覆盖，覆盖全局 `--voice-id`/`--voice-style`。注意 opening/closing 是管线自动造的结构性页，**不支持**这两个字段（顶层只有 `opening_speed`/`closing_speed`）；要换开场音色就用全局 `--voice-id`
+- `voice_id` / `voice_style`（string）：内容段级的音色覆盖，覆盖全局 `--voice-id`/`--voice-style`；opening/closing 不支持这两个字段（规则见 `references/writing.md` 的段落级字段一节）
 - `turns`（数组）：仅对话段落出现，由 pipeline 从 `segments_source.json` 的 `dialogue` 自动产出（`{start, end, speaker, label, voice_id?, voice_style?}`，全局句子区间），手写 manifest 一般不需要自己拼
 
 `segments` 必须按时间轴顺序排列，并且恰好覆盖顶层每个 sentence index；缺句、重复句或乱序都会在 HTML 生成前直接拒绝。

@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _theme import is_safe_css_color  # noqa: E402  颜色安全判定单一来源（_theme 不反向依赖本模块）
+from _theme import is_safe_css_color  # noqa: E402  _theme 不反向依赖本模块
 
 # 段落 id 的合法形态：字母开头，只含字母/数字/下划线/连字符。id 会被
 # gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP 选择器字符串
@@ -21,10 +21,10 @@ from _theme import is_safe_css_color  # noqa: E402  颜色安全判定单一来�
 # 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段 SyntaxError、
 # 字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
 _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-# accent 的合法形态见 _theme.is_safe_css_color（hex 或 CSS 标准颜色名）。
-# accent 必须符合安全颜色白名单，避免无效 CSS 与注入内容进入生成 HTML。
+# accent 的合法形态见 _theme.is_safe_css_color（hex 或 CSS 标准颜色名），
+# 白名单之外不进生成 HTML。
 
-# ── 内容段落 id 约定（单一来源）──────────────────────────────────
+# ── 内容段落 id 约定──────────────────────────────────────────────
 # "哪些段落需要配图" 由 sid 前缀决定：opening/closing 是结构性段落，天生
 # 不需要配图。判断"是不是内容段"一律调 is_content_sid()，不要再写一份
 # startswith（结构性页反过来按 id 字面量点名）。漏掉一处的后果是静默改变
@@ -61,7 +61,24 @@ def validate_speed(speed):
     return speed
 
 
-# ── 跨脚本默认值（单一来源）────────────────────────────────────────
+# 语速"是否偏离原速 1.0"的判定阈值 + .spd marker 的存储精度：pipeline 的变
+# 速分支与写 marker、resume 状态机、_audio 的 atempo 入口共用同一判断。原来
+# 六处各写一份 `abs(speed-1.0) > 0.01` / `round(speed, 4)`，改一处就会漂移。
+SPEED_EPS = 0.01
+SPEED_MARKER_DIGITS = 4
+
+
+def needs_speed_change(speed):
+    """本次语速是否要真的施加 atempo 变速（偏离 1.0 超过阈值）。"""
+    return abs(speed - 1.0) > SPEED_EPS
+
+
+def speed_marker_value(speed):
+    """.spd marker 里写入的语速值：统一精度，供 --resume 对账。"""
+    return round(speed, SPEED_MARKER_DIGITS)
+
+
+# ── 跨脚本默认值──────────────────────────────────────────────────
 # 各写一份且互不一致：estimate 相对 pipeline 实测系统性偏长约 50%、
 # "默认 TTS 倍速"的入口一律从这里取，改时只改这一处。
 DEFAULT_SPEED = 1.5
@@ -70,10 +87,9 @@ DEFAULT_SPEED = 1.5
 # 段落 speed 复用同一假设——两处必须一致，所以也收口在这里。
 OPENING_CLOSING_DEFAULT_SPEED = 1.2
 
-# ── 时长估算跨脚本默认值（单一来源）──────────────────────────────
-# DEFAULT_CHARS_PER_SEC / DEFAULT_GAP / estimate_sentence_seconds 原路径
-# 反向依赖这个可选 CLI 工具——核心管线不应依赖可选件，与 DEFAULT_SPEED
-# 同款收口到这里。
+# ── 时长估算跨脚本默认值──────────────────────────────────────────
+# DEFAULT_CHARS_PER_SEC / DEFAULT_GAP / estimate_sentence_seconds 放这里而不是
+# 原来的模块，是为了不让核心管线反向依赖一个可选 CLI 工具（与 DEFAULT_SPEED 同理）。
 DEFAULT_CHARS_PER_SEC = 4.3  # "语速适中"参考值，纯启发式
 # 句间停顿默认值：pipeline 的 --gap 直接 import 这里作默认，所以只有一处。
 # 估算与实测的口径差会累积成 (n-1)×Δ 的系统性偏移。
@@ -87,15 +103,8 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 def _validate_accent(value, where):
     """accent 取值校验（可选字段）：必须是浏览器认得的颜色（hex 或 CSS 标准色名）。
 
-    accent 最终会拼进成片 HTML 的 `data-accent="..."`、`style="background:..."`
-    与 GSAP 的 `backgroundColor:"..."` 三处上下文，而它来自稿件（信源内容经
-    模型写入）——按本技能"不可信内容边界"，它只该是数据，不能成为可执行内容。
-    所以这里是**白名单**：只放行 `#rgb`/`#rrggbb` 与 CSS 标准颜色名（`red`），
-    拒绝引号/分号/括号等一切能闭合属性或声明的字符。
-
-    旧路径只校验"# 开头必须是合法 hex"，非 # 开头的任意字符串原样放行，
-    `x"><script>...</script>` 因此能穿透校验（见 is_safe_css_color 注释）。
-    判定规则统一收口在 _theme.is_safe_css_color，此处不另写一份正则。
+    为什么必须白名单、放行哪两种形态、挡掉哪些字符，见 _theme.is_safe_css_color
+    ——判定规则也在那里，此处不另写一份正则。
     """
     if value is None:
         return
@@ -626,10 +635,9 @@ def _validate_chart_contract(chart, where):
             raise ValueError(f"{where} 的 formula chart.formula 必须是非空字符串")
     elif kind == "curve":
         # images.json 只接受 gen_charts 归一化后的形态（curve_datasets[].data）：
-        # 受限表达式求值只有 gen_charts 做得了，渲染端只认 curve_datasets。
-        # 曾经这里原始 curves[].expr 与归一化形态都收，结果手写 images.json 的
-        # curve 条目过了校验、却在渲染端静默变成空图——校验器给出的是假安全
-        # 感。收口成只放行能真渲染的形态，原始 curves 一律拦下并指向 gen_charts。
+        # 受限表达式求值只有 gen_charts 做得了，渲染端只认 curve_datasets。原始
+        # curves[].expr 一律拦下并指向 gen_charts——两种形态都收时，手写条目过了
+        # 校验却在渲染端静默变空图，校验器给出的是假安全感。
         datasets = chart.get("curve_datasets")
         if not isinstance(datasets, list) or not datasets:
             raise ValueError(
@@ -655,14 +663,13 @@ def _validate_chart_contract(chart, where):
                             f"{where} 的 curve chart.curve_datasets[{i}].data[{j}].y")
 
 
-# images.json 条目里渲染端**真正会读**的键（唯一清单）。
+# images.json 条目里渲染端**真正会读**的键。
 # src/type/poster/loop/muted/autoplay/playsinline → html_renderer 的媒体分支；
 # 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
 # 之外的键（`position`/`fit`/`alt` 这类凭空发明的写法）过去会被静默丢掉：
-# "我明明写了 alt，画面上什么都没有"变成无解的困惑，与技能"不做静默降级"的
-# 纪律相悖。判定收口成这一个函数，全仓唯一的打印点在唯一丢键的地方
-# （html_renderer._normalize_images）——清单定义一次、warn 打一次，
-# run.py/gen_hyperframes 的预检走 validate_images_json，不碰这份键清单。
+# "我明明写了 alt，画面上什么都没有"变成无解的困惑。判定收口在这一个函数，
+# warn 只在丢键的那一处（html_renderer
+# ._normalize_images）打；run.py/gen_hyperframes 的预检走 validate_images_json。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",

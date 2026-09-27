@@ -1,17 +1,14 @@
-"""全仓共享的基础设施（从各入口脚本抽出的"只该有一份实现"的东西）。
+"""全仓共享的基础设施，都不依赖 TTS / 网络 / 并发：
 
-包含三类，都不依赖 TTS / 网络 / 并发：
-
-1. 文本处理：`split_sentences`（中文断句，build_from_structured 复用）、
-   `split_subtitle_lines` / `split_subtitle_cues` / `subtitle_params_for`
-   （字幕显示层切行，参数读 `_template.py` 内联版式数据的 subtitle 块）。
-2. 落盘原语：`write_json_atomic` / `write_text_atomic`（先写 .tmp → fsync →
-   os.replace）、`sha256_file` —— 全仓唯一实现，禁止各脚本再写一份。
-3. 进程级设置：`setup_stdio`（Windows 重定向场景强制 UTF-8）、
-   `guard_not_in_skill_dir`（产物不得落进技能目录的守卫）、`is_inside`。
+- 文本：`split_sentences` 中文断句、`split_subtitle_lines` /
+  `split_subtitle_cues` 显示层切行（参数读 `_template.py` 的 subtitle 块）。
+- 落盘：`write_json_atomic` / `write_text_atomic`（.tmp → fsync → os.replace）、
+  `sha256_file`。
+- 进程：`setup_stdio`（Windows 重定向强制 UTF-8）、`guard_not_in_skill_dir`、
+  `is_inside`。
 
 拆成独立模块是为了让 build_from_structured 只依赖分句、不必连带 import
-pipeline 的重量级依赖；路径守卫与 manifest 读写供全管线共用。
+pipeline 的重量级依赖。
 """
 import hashlib
 import json
@@ -21,19 +18,16 @@ import sys
 
 from _template import load_template
 
-# 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——SKILL.md 的
-# 路径约定要求产物写在用户项目目录，混进技能目录会污染仓库、多次制作串台。
-# 放在共享模块是因为 pipeline / gen_hyperframes / run 三个入口都要拦同一件事，
-# 各写一份必然漂移。
+# 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——混进技能目录会污染
+# 仓库、多次制作串台。三个入口（pipeline / gen_hyperframes / run）共用这一处判定。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-# ── 原子写（全仓唯一实现）────────────────────────────────────────
-# 制作产物（timing_manifest / index.html / production_report）
-# 被 Ctrl-C 或断电打断在写到一半时会留下截断文件：manifest 下次 --resume 直接
-# 崩在 json.load，index.html 会让 render 报莫名其妙的语法错——堆栈都不
-# 指向"上次中断了，重跑一遍就好"。先写 .tmp 再 replace，要么完整要么不存在。
-# 统一到这里，避免某一处改权限/清理逻辑时其他处分叉。
+# ── 原子写────────────────────────────────────────────────────────
+# 制作产物（timing_manifest / index.html / production_report）被 Ctrl-C 或断电
+# 打断在写到一半时会留下截断文件：manifest 下次 --resume 直接崩在 json.load，
+# index.html 让 render 报莫名其妙的语法错——堆栈都不指向"上次中断了，重跑就好"。
+# 先写 .tmp 再 replace，要么完整要么不存在；三处产物共用这一个实现。
 def _atomic_replace(path, write_fn):
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
@@ -70,7 +64,7 @@ def write_text_atomic(path, text):
 
 
 def sha256_file(path):
-    """文件内容的 sha256（全仓唯一实现）。"""
+    """文件内容的 sha256。"""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -98,10 +92,9 @@ def _norm_path(path):
     try:
         return os.path.realpath(path)
     except OSError:
-        # realpath 在 Windows 上会因超长路径/ELOOP 抛错。原来直接
-        # return False 是**放行方向**的失败：guard_not_in_skill_dir 把 False
-        # 读成"不在技能目录里"，媒体越界检查同理。退回 abspath——不归一软链
-        # 接，但仍能解析 .. 与相对路径，比放弃判断好。
+        # realpath 在 Windows 上会因超长路径/ELOOP 抛错。不能直接 return False：
+        # guard_not_in_skill_dir 把 False 读成"不在技能目录里"，是**放行方向**的
+        # 失败。退回 abspath——不归一软链接，但仍能解析 .. 与相对路径。
         return os.path.abspath(path)
 
 
@@ -383,18 +376,17 @@ def _wrap_width(text, width):
     return lines
 
 
-def split_subtitle_lines(text, max_chars, hard_cap):
+def split_subtitle_lines(text, max_chars):
     """把一句长字幕切成均衡字幕行（仅显示用）。
 
-    固定宽度贪婪切行：每行尽量填满到 width = min(max_chars, hard_cap)，断点
+    固定宽度贪婪切行：每行尽量填满到 max_chars，断点
     优先标点/空格，其次 CJK 字符间；连续 ASCII 字母数字（英文词）保持完整、
-    不劈开；标点弱化处理。每行 <= width，杜绝整句交给 CSS 自然换行后溢出成
+    不劈开；标点弱化处理。每行 <= max_chars，杜绝整句交给 CSS 自然换行后溢出成
     多视觉行。
 
     Args:
         text: 单句文本（split_sentences 的一个元素）
         max_chars: 单行目标宽度（字符）；行尽量填满到此值
-        hard_cap: 物理行上限（字符）；比 max_chars 小时直接收窄行宽
 
     Returns:
         list[str]: 1..n 行
@@ -402,12 +394,11 @@ def split_subtitle_lines(text, max_chars, hard_cap):
     text = text.strip()
     if not text:
         return []
-    width = min(max_chars, hard_cap) if hard_cap else max_chars
-    return [l for l in _wrap_width(text, width) if l]
+    return [l for l in _wrap_width(text, max_chars) if l]
 
 
-def subtitle_params_for(aspect="vertical"):
-    """按画幅给出字幕切分参数——单一权威来源。
+def subtitle_params_for(aspect):
+    """按画幅给出字幕切分参数。
 
     片内字幕切分（html_renderer.py 的 cue 构建）只从这一处取参数。数值定义在
     `_template.py` 内联版式数据的顶级 subtitle 块（JSON 定义、
@@ -417,7 +408,7 @@ def subtitle_params_for(aspect="vertical"):
     横屏左栏 613px/33px 字号（≈18 字/行）。未知画幅标识直接 KeyError 暴露。
 
     Returns:
-        dict(max_chars=, hard_cap=, cue_max_lines=)
+        dict(max_chars=, cue_max_lines=)
     """
     # portrait 归一化：竖屏 3:4 复用 vertical 家族标识（与 gen_hyperframes
     # 的归一化语义一致），CLI/调用方传 "portrait" 也拿到竖屏切行参数。
@@ -425,22 +416,21 @@ def subtitle_params_for(aspect="vertical"):
         aspect = "vertical"
     params = load_template()["subtitle"][aspect]
     return {"max_chars": params["maxChars"],
-            "hard_cap": params["hardCap"],
             "cue_max_lines": params["cueMaxLines"]}
 
 
-def split_subtitle_cues(text, max_chars, cue_max_lines, hard_cap):
+def split_subtitle_cues(text, max_chars, cue_max_lines):
     """把一句长字幕切成若干"cue 组"：每屏最多 cue_max_lines 行。
 
     机制是通用的行数分组；当前模板配置 cueMaxLines=99（verse 整句单
     cue，见 _template.py subtitle 块），实际每句恒为一组，"同屏两行 +
     调用方按字符占比切分时长"的分支只在把 cueMaxLines 调小时才会走到。
-    内部先按行宽做标点均衡切行（保证超长句也能切到每行 <= max_chars，
-    hard_cap 收窄行宽），再按 cue_max_lines 顺序分组。
+    内部先按行宽做标点均衡切行（保证超长句也能切到每行 <= max_chars），
+    再按 cue_max_lines 顺序分组。
 
     Returns:
         list[list[str]]: 每个元素是一屏的行列表（1..cue_max_lines 行）
     """
-    lines = split_subtitle_lines(text, max_chars=max_chars, hard_cap=hard_cap)
+    lines = split_subtitle_lines(text, max_chars=max_chars)
     return [lines[i:i + cue_max_lines]
             for i in range(0, len(lines), cue_max_lines)]

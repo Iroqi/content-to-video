@@ -8,9 +8,6 @@
   # ↑ 迭代用：跑到 HTML 为止，在 hf-project/ 打开 index.html 或 preview 看版式和配图。
   python scripts/run.py --source segments_source.json -o audio_output
   # ↑ 定稿用：一路渲染到 hf-project/out.mp4。
-
-参数清单不在这里维护（与 SKILL.md「一键编排」、各子脚本 --help 三处重复必然
-漂移）：单项参数的语义与默认值以 ``--help`` 为准，编排行为与迭代节奏见 SKILL.md。
 """
 import argparse
 import datetime
@@ -26,15 +23,15 @@ from pathlib import Path
 from typing import List, Optional
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（与 guard_not_in_skill_dir 同一条纪律：技能目录不留制作残渣）
+sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _contracts import (DEFAULT_SPEED, list_voice_ids,  # noqa: E402
                         validate_speed, load_timing_manifest,
                         validate_images_json)
-from _contracts import is_content_sid  # noqa: E402  内容段 id 前缀约定的单一来源（配图覆盖率统计）
-from _audio import _remove_quiet  # noqa: E402  全仓唯一"尽力删文件"实现（定义在 _audio）
+from _contracts import is_content_sid  # noqa: E402
+from _audio import _remove_quiet  # noqa: E402
 from html_renderer import manifest_segments  # noqa: E402  段落分组的唯一口径（segments 缺失时按兜底规则分组）
 import _script_utils as _su  # noqa: E402
 from _script_utils import (setup_stdio,  # noqa: E402  重定向场景 stdout 强制 UTF-8
@@ -124,9 +121,9 @@ def resolve_command(cmd):
 
 
 def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         gpu: bool = False,
-                         command: Optional[List[str]] = None) -> List[str]:
-    base = list(command or hyperframes_command())
+                         command: List[str],
+                         gpu: bool = False) -> List[str]:
+    base = list(command)
     cmd = base + ["render", "-o", output, "--quality", quality,
                   "--fps", str(fps), "--workers", str(workers)]
     if gpu:
@@ -343,12 +340,10 @@ def _render_poll_loop(proc, out_path, log_path, max_wait):
         time.sleep(_POLL_INTERVAL_SECONDS)
 
 
-# ── 制作报告：一次 run.py 跑完后，各步骤耗时/配图情况/跳过了什么散落在各
-# 步骤自己的 stdout 里，人工翻起来很累。这里不改变任何步骤本身的行为，只是
-# 在旁路记一份轻量流水账，跑完打印小结 + 写一份 production_report.json，
-# 方便"这次跑得正不正常"一眼判断（例如：TTS 花了很久是不是网络问题、配图
-# 是不是大面积没搜到而不是稿件写少了）。任何一步失败退出前也会尽量把已记录
-# 的部分写盘，不指望"必须跑到最后才有报告"。
+# ── 制作报告：一次 run.py 跑完后，各步骤耗时/配图情况/跳过了什么散落在各步骤
+# 自己的 stdout 里，人工翻起来很累。这里不改任何步骤的行为，只在旁路记一份轻量
+# 流水账，跑完打印小结 + 写 production_report.json，让"这次跑得正不正常"一眼可
+# 判。任何一步失败退出前也会把已记录的部分写盘。
 _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
 # 制作报告的 out 目录：main() 一解析出 -o/--output 就赋值
 _REPORT_DIR = None
@@ -373,7 +368,7 @@ def _write_report(path):
     try:
         _REPORT["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         _REPORT["total_seconds"] = _total_seconds()
-        # 原子写统一走 _script_utils.write_json_atomic（全仓唯一实现）：
+        # 原子写走 _script_utils.write_json_atomic：
         # production_report 被 Ctrl-C 打断在写一半时落截断 JSON，下次排查
         # "这次跑得正不正常"反而先崩在 json.load。
         _su.write_json_atomic(path, _REPORT)
@@ -496,15 +491,12 @@ def _image_coverage(manifest_path, images_json):
     proj_dir = os.path.dirname(os.path.abspath(images_json))
 
     def _media_present(entry):
-        # chart 条目与 gen_hyperframes 同一口径：图形由 Chart.js 在渲染端
-        # 现画，即便附带 src（契约允许）也不做存在性检查——否则这里 exit 2
-        # 拦掉的恰好是 HTML/render 本来完全正常的条目。
-        if isinstance(entry, dict) and entry.get("type") == "chart":
+        # chart 条目与 gen_hyperframes 同一口径：图形由 Chart.js 在渲染端现画，
+        # 即便附带 src（契约允许）也不做存在性检查——否则这里 exit 2 拦掉的
+        # 恰好是 HTML/render 本来完全正常的条目。
+        if entry.get("type") == "chart":
             return True
-        src = entry.get("src") if isinstance(entry, dict) else None
-        if not src:
-            return True
-        return os.path.isfile(os.path.join(proj_dir, src))
+        return os.path.isfile(os.path.join(proj_dir, entry["src"]))
     missing_files = [s for s in sids
                      if s in mapping and not _media_present(mapping[s])]
     return sids, missing_keys, missing_files
@@ -705,13 +697,10 @@ def main():
             _print_report_summary()
             sys.exit(2)
 
-    # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断
-    # 交付；显式 --allow-degraded 才允许继续，且 production_report 会保留
-    # 可机器读取的 degraded 标记。
-    # manifest 走 _contracts 的加载器而不是裸 json.load：与上方 _image_coverage
-    # 同一口径。降级检测本身不允许静默失败模式——旧路径把读坏的 manifest
-    # 静默按"无降级"放行渲染，与"降级显式化"规则直接冲突；这里坏文件要
-    # 报人话并退出，让用户重跑 TTS。
+    # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
+    # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
+    # degraded 标记。manifest 同样走 _contracts 加载器（理由见 _image_coverage）：
+    # 把读坏的文件静默按"无降级"放行，等于没有降级检测。
     try:
         _tm = load_timing_manifest(manifest)
     except ValueError as e:
@@ -792,10 +781,8 @@ def main():
         html_cmd += ["--images", images_json]
     _run(html_cmd, step_name="生成 HTML")
 
-    # 版式正确性只靠构造期约束（模板骨架 + _template 版式数据 + _contracts
-    # 白名单）加渲染前那一遍人工预览：一条 Chrome 度量链实测一次 25-50s，
-    # 换不来人工预览 3s 就能给出的信息。所以这里只提供 --until html 收口，
-    # 不设自动检查步骤。
+    # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s
+    # 就能给出的信息（--until html 就是给人工预览收口的）。
 
     # HTML 已生成；渲染复用同一次 Hyperframes 命令解析。
     _HF_COMMAND = hyperframes_command(project)
@@ -830,8 +817,7 @@ def main():
     _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": True})
     # 走到这里成片必已存在且非空：_render_poll_loop 的所有 return 路径都以
     # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
-    # 的整容器解码），失败路径一律 SystemExit。不再补一遍 isfile/getsize——
-    # 本文件为此专门写了 _probe_file_size 来躲 exists→getsize 的竞态窗口。
+    # 的整容器解码），失败路径一律 SystemExit——不再补一遍 isfile/getsize。
 
     print(f"\n[run] 完成。成片：{out_mp4}", flush=True)
     _write_report(_report_path())

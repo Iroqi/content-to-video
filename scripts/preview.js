@@ -36,8 +36,8 @@
 
   // 字幕淡入淡出/滚动补间只属于人工预览：成片是逐帧 seek 出来的，任何按
   // 墙上时钟走的 CSS 过渡都会让"抓取到的那一帧"落后于时间线时刻（详见
-  // subtitle-verse.css 的注释）。这里——即只有预览分支会执行的位置——把
-  // 过渡补回来，浏览器里看仍然是平滑的。
+  // composition.css 的 verse 块注释）。这里——即只有预览分支会执行的位置——
+  // 把过渡补回来，浏览器里看仍然是平滑的。
   var smooth = document.createElement('style');
   smooth.textContent = '.verse-clip{transition:transform .45s cubic-bezier(.4,0,.2,1)}'
       + '.verse-line{transition:opacity .3s,color .3s}';

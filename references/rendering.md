@@ -41,6 +41,7 @@ opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶�
   固定时长会让上一段先淡干净、下一段还没淡入，边界上露出只剩背景的空帧（24fps 实测 2~3 帧）。
   现在淡出跨过整段间隔、铺到下一段淡入结束，两张卡真正交叠；因此改 `--gap` 会同时改变交叠时长。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
+  **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要给这类元素做居中/位移，用绝对定位的 auto 外边距，别用 `translateX(-50%)`：竖屏配图槽位曾经那么写、并给 CSS 的 `transform` 挂 `!important` 压住补间保住居中，代价是 `y` 滑入整条失效——实测入场窗口内 `translateY` 恒为 0、只剩淡入，而横屏（CSS 不写 `transform`）是 40 → 16.9 → 5 → 0 正常滑入。改成 auto 外边距后两画幅一致，槽位视觉横坐标逐帧不变（实测 8 个采样点全为 50px）。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
@@ -81,7 +82,7 @@ hf-project/
 └── images/
 ```
 
-`vendor/` 由 `gen_hyperframes.py` 从技能包内置副本校验后装出，正常不联网（查找链与钉固见 `assets/README.md`）；确实两级都不可用时，才在同一命令前加一次 `CTV_ALLOW_NETWORK_ASSETS=1`。
+`vendor/` 由 `gen_hyperframes.py` 装出：**用户缓存 `~/.cache/content-to-video/vendor/` → 钉固 CDN**（项目里已有合格副本就直接复用）。每级都重算哈希，钉固值与 CDN 地址是 `gen_hyperframes.py` 顶部的常量；缓存命中时全程不联网，新机器首次生成需要能访问 `cdn.jsdelivr.net` 一次（失败就重跑，或手动把官方 dist 放进缓存目录）。
 
 音频路径会在生成 HTML 前做存在性检查；manifest 中的绝对路径或项目外音频会复制到项目的 `audio/` 目录，显式 `--audio` 也遵循同一规则。manifest 的音频路径失效时会回落到项目里上次暂存的 `audio/combined.wav`——这会打 `[warn]` 并实测其时长与 manifest 时间轴对账，偏差超过 `max(1s, 2%)` 直接拒跑（拒绝用新字幕烧旧音轨）；两处都没有才报错，不生成无声预览或成片。
 

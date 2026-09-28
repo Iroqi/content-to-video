@@ -50,17 +50,21 @@ body{font-family:var(--ctv-font-family)}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}
 .seg-progress{position:absolute;bottom:0;left:0;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
 /* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
-   不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。 */
-[data-aspect="vertical"] .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+   不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。
+   轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
+   只会多出一次同步维护，没有第二种取值可表达。 */
+.seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
 /* 槽位不铺底色，素材直接落在页面背景上；图表/公式卡另有淡染面板。 */
 .seg-image{position:absolute;overflow:hidden}
-.seg-image img{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
-/* 视频与图像同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
-   横屏 <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，
-   右边留空、下边被裁）。竖屏另有 !important 版本，两画幅统一靠这条兜底。 */
-.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
-/* 所有配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边） */
-[data-aspect="vertical"] .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+/* img 与 video 共用同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
+   <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，右边留空、
+   下边被裁）。这条是**唯一**来源：inline style 会盖过一切非 important 选择器，
+   所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
+   三处并存时改一处不生效。canvas 是例外，见 chart-media 块。 */
+.seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 所有配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边）。
+   两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
+.seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
 
 /* ── C2 图表/公式媒体卡（chart-media 槽位）──
    面板淡染与描边全部从 seg-card 注入的 --seg-accent 经 color-mix 派生，
@@ -81,18 +85,61 @@ body{font-family:var(--ctv-font-family)}
    注意：本块全部是绝对定位——绝对定位子元素的包含块是 padding box，
    segCard 的 padding 不会内缩它们，轴线必须显式写成 left/right 值；
    同理百分比宽度按整屏 1080 解析而非内容盒宽，画布宽必须用变量
-   --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。 */
-[data-aspect="vertical"] .seg-card{position:absolute!important;inset:0!important;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)!important}
-[data-aspect="vertical"] .seg-title-wrap{position:absolute!important;left:var(--ctv-v-pad-left)!important;right:var(--ctv-v-pad-left)!important;top:var(--ctv-v-title-top)!important;height:var(--ctv-v-title-area)!important;padding:0!important;overflow:hidden!important;text-align:left!important}
-[data-aspect="vertical"] .seg-title{display:-webkit-box!important;-webkit-box-orient:vertical!important;-webkit-line-clamp:var(--ctv-v-title-lines)!important;overflow:hidden!important;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)!important}
-[data-aspect="vertical"] .tagline{margin-top:var(--ctv-v-tagline-mt)!important;padding-left:var(--ctv-v-tagline-indent);white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;position:relative}
+   --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。
+   本块刻意**不用 !important**：每条选择器都比 base 块多一个属性选择器
+   （0,2,0 > 0,1,0），层叠自然压过 base；渲染器写在同名元素上的 inline
+   style 只带 font-size / color / text-shadow / box-shadow / opacity，
+   与本块声明的属性零重叠，没有需要靠 importance 才能赢的对手。 */
+[data-aspect="vertical"] .seg-card{inset:0;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)}
+[data-aspect="vertical"] .seg-title-wrap{left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);top:var(--ctv-v-title-top);height:var(--ctv-v-title-area);padding:0;overflow:hidden;text-align:left}
+[data-aspect="vertical"] .seg-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-v-title-lines);overflow:hidden;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)}
+[data-aspect="vertical"] .tagline{margin-top:var(--ctv-v-tagline-mt);padding-left:var(--ctv-v-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
 /* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）。
    开屏/结尾已是纯文字 agenda 卡，不再出现 tagline。 */
 [data-aspect="vertical"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-v-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-v-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
-[data-aspect="vertical"] .seg-image{position:absolute!important;top:var(--ctv-v-img-top)!important;left:50%!important;right:auto!important;transform:translateX(-50%)!important;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2)!important;height:var(--ctv-v-img-height)!important;margin:0!important;border-radius:var(--ctv-v-img-radius)!important}
-[data-aspect="vertical"] .seg-image img,[data-aspect="vertical"] .seg-image video{width:100%!important;height:100%!important;object-fit:cover!important}
+/* 横向居中走绝对定位的左右 auto 外边距，**不走 transform:translateX(-50%)**：
+   GSAP 的入场补间往同一个元素写 inline transform，CSS 的 transform 与它互斥，
+   写了就得靠 !important 压住补间、连带把 y 滑入整条吃掉（竖屏配图只剩淡入，
+   横屏却有滑入）。用 auto 外边距居中，transform 归 GSAP 独占，两画幅动效一致。 */
+[data-aspect="vertical"] .seg-image{top:var(--ctv-v-img-top);left:0;right:0;margin:0 auto;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2);height:var(--ctv-v-img-height);border-radius:var(--ctv-v-img-radius)}
 
-__CTV_SUBTITLE_CSS__
+/* ── verse 句子流（两画幅统一的双行窗口滚动字幕）────────────────────────
+   竖屏 = 固定标题区/固定 4:3 画布 + 钉底句子流：窗口高由 vertical.verse.windowHeight
+   控制，DOM 渲染在 seg-card 尾部、绝对定位钉在内容区底部（见下面的 vertical 覆盖）。
+   横屏 = 左栏内的文档流窗口（base 规则相对定位即命中，无需额外覆盖）。
+   开屏/结尾为 agenda 卡：其 .verse 收在 .agenda-col 列尾随流锚底（豁免规则在
+   agenda 块）。
+   clip 上下各留 verse.clipPad 内边距且滚动锚点同步同值：首句/尾句完整落在
+   mask 渐隐区（上下各 14%）之外，不被边缘虚化。不变量：
+   verse.clipPad ≥ 14% × verse.windowHeight（横屏 260→36.4、竖屏 280→39.2，
+   两画幅 clipPad 均为 40）。 */
+.verse{position:relative;width:100%;height:var(--ctv-verse-h);overflow:hidden;
+  -webkit-mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent);
+  mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent)}
+/* clip 必须定位：verse-line.offsetTop 需要相对 clip 而不是绝对定位的
+   seg-card（否则首行 offsetTop 巨大，滚动公式恒被钳到段落尾部——
+   第一句永远在窗口外） */
+/* 这里刻意**不写 transition**：成片是逐帧 seek 时间线截出来的，每一帧的
+   画面必须是"时间线时刻"的纯函数。CSS 过渡按墙上时钟走、不受 GSAP 驱动，
+   实测（seek 到 12.0s 后立即读取计算样式）状态停在过渡起点：
+   inline `translateY(-220px)` → computed `matrix(1,0,0,1,0,0)`、active 行
+   opacity 0.62（该是 1）、颜色还是主题色而非 accent，6 条 CSSTransition
+   全部 `playState:running, currentTime:0`。表现就是句子流不跟着滚动、
+   高亮不上色——而且 bleed 多少取决于抓取每帧花多久，同一条稿件两次渲染
+   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。 */
+.verse-clip{position:relative;padding:var(--ctv-verse-clip) 0}
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:.62;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+/* active/past 与 base 的 .verse-line 是 0,2,0 对 0,1,0，层叠自然压过，不用
+   !important；运行时只往行上写 inline color，不写 opacity，没有对手。 */
+.verse-line.active{opacity:1}
+/* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
+   的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
+.verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
+.verse-line.past{opacity:.45}
+/* 竖屏钉底。不用 !important：本条 0,2,0 压过上面的 .verse（0,1,0）；
+   agenda 卡里的豁免由 .agenda-col .verse 用 importance 拿下（那两条选择器
+   打平，靠 importance 而非源序决胜，理由见该处注释）。 */
+[data-aspect="vertical"] .verse{position:absolute;left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);bottom:var(--ctv-v-verse-bottom);width:auto;height:var(--ctv-verse-h);margin:0}
 
 /* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
    仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
@@ -109,11 +156,9 @@ __CTV_SUBTITLE_CSS__
 [data-aspect="landscape"] .seg-title{line-height:var(--ctv-l-title-lh);text-wrap:balance}
 [data-aspect="landscape"] .tagline{padding-left:var(--ctv-l-tag-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
 [data-aspect="landscape"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-l-tag-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-l-tag-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
-/* 媒体卡四周留 96 白、垂直居中。 */
+/* 媒体卡四周留 96 白、垂直居中。内描边与进度条轨道走两画幅共用的无属性限定
+   规则（.seg-image::after / .seg-card::before），此处不再各写一份。 */
 [data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
-[data-aspect="landscape"] .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
-/* 进度条轨道与竖屏同款（整宽低对比底轨，fill 由 GSAP 推宽度）。 */
-[data-aspect="landscape"] .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
 
 /* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
    全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
@@ -144,13 +189,18 @@ __CTV_SUBTITLE_CSS__
    长旁白按句数无限撑高、吃掉整列预算，把行列表挤出屏幕；定高窗口 +
    运行时滚动锚点保证句子流占位恒定，挤压只落在可收缩的正文列表上。
    margin-top:auto 由句子流吸收列内剩余空间（题头/列表贴顶成块，留白
-   全部沉到列表与句子流之间），挤压时 auto 归零、无副作用。 */
+   全部沉到列表与句子流之间），挤压时 auto 归零、无副作用。
+   这里的 !important 是**全表唯一承重的一处**：对手是句子流样式表里那条
+   竖屏钉底规则，两条选择器同为 0,2,0 打平，靠源序决胜就等于把正确性押在
+   那份样式表的注入位置上；用 importance 决胜与注入点无关。
+   对面的规则因此不再需要 !important。 */
 .agenda-col .verse{position:static!important;left:auto!important;right:auto!important;bottom:auto!important;width:100%!important;max-width:var(--ctv-ag-verse-w);margin:auto 0 0!important;flex-shrink:0}
 /* agenda 标题整体豁免竖屏内容段标题钳制（-webkit-box / line-clamp /
    overflow:hidden / max-height 四件套）：agenda 卡是全高 flex 列、没有固定
    标题区，单行大标题不需要行数钳制，挂着 overflow:hidden 反而会把雅黑字体
    度量盒（≈1.32em）上下各约 9px 的溢出裁掉。豁免后长标题整段折行而非静默
-   截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。 */
-[data-aspect="vertical"] .agenda-head .seg-title{display:block!important;overflow:visible!important;-webkit-line-clamp:none!important;max-height:none!important}
+   截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。
+   不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
+[data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
 __CTV_ROOT_VARS__

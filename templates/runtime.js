@@ -49,7 +49,7 @@ const verseUpdate = (si) => {
       // 当前句用段落 accent 着色（字重恒定，避免 500/700 切换时字形宽度
       // 跳变）；非活动行恢复主题色。换色/换透明度在这里是**瞬时**的：
       // 淡入淡出过渡只在人工预览里由 preview.js 注入，成片逐帧 seek 时
-      // 每一帧都必须等于时间线时刻（理由见 subtitle-verse.css 的注释）
+      // 每一帧都必须等于时间线时刻（理由见 composition.css 的 verse 块注释）
       L.el.style.color = (L === act && c.accent) ? c.accent : "";
       // past 只在同一 verse（同段落）内比较，跨段句序无先后语义
       L.el.classList.toggle("past", !!act && di < si);
@@ -65,7 +65,31 @@ const verseUpdate = (si) => {
     }
   }
 };
-__CTV_SUBTITLE_JS__
+// ── verse 句子流驱动（挂在同一个 timeline 的 onUpdate）──────────────────
+// 必须留在 verseUpdate 定义之后、时间线注册之前：hyperframes 的 lint 规则按
+// 源码位置判定"注册是否早于异步构建"，注册线挪到前面会触发误报（见文件末尾）。
+let curCueIdx = -1; // 当前已处理的 cue 下标，避免每帧重复触发
+tl.eventCallback("onUpdate", function() {
+  const t = tl.time();
+  let found = -1;
+  for (let i = 0; i < cues.length; i++) {
+    if (t >= cues[i].t && t < cues[i].t + Math.max(cues[i].d, 0.01)) { found = i; break; }
+  }
+  if (found >= 0) {
+    // 用命中的 cue 下标做键，而非 t|d：相邻句的 start 各自 round(,2)
+    // 可能坍缩成同一 t，若 d 也相同则键值碰撞，第二条 cue 的高亮永不刷新。
+    // 下标天然唯一，且 si 相同的相邻 cue 重复调用 verseUpdate 幂等。
+    if (found !== curCueIdx) {
+      curCueIdx = found;
+      const c = cues[found];
+      if (c.si !== undefined && c.si >= 0) verseUpdate(c.si);
+    }
+  } else {
+    // 句间 gap：保持最后一行的状态（高亮停在末句，窗口不回滚）
+    curCueIdx = -1;
+  }
+  if (window.__pvUpdate) window.__pvUpdate(); // 预览刷新钩子（无预览时为空）
+});
 // 注册放脚本末尾（同步执行流内，行为与紧跟构建后注册等价）：hyperframes 的
 // lint 规则按源码位置判定"注册是否早于 document.fonts.ready 异步构建"
 // （window.__timelines[ 出现点必须在 fonts.ready 之后）；字幕 JS 里

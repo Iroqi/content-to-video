@@ -54,16 +54,15 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     每一轮独立调用 split_sentences（同样杜绝"短句被并入下一轮"这类跨轮错位），
     turns 记录每一轮在本段内的局部句子区间 + 说话人信息（voice_id/voice_style
     在这里就近解析好，pipeline.py 不需要再反查 speakers 字典）。
+
+    turn 的 speaker/text 非空由 _contracts.validate_segments_source 把关，这里
+    不再重复拦；只留契约管不到的"分句后为空"——纯标点文案能过非空检查却分不出句。
     """
     sents = []
     turns = []  # {start, end, speaker, label, voice_id, voice_style} 局部区间（段内 0-based）
     for j, turn in enumerate(dialogue, 1):
         spk = turn.get("speaker")
-        t_text = (turn.get("text") or "").strip()
-        if not t_text:
-            raise ValueError(f"第 {seg_index} 段（title={seg_title!r}）"
-                              f"dialogue[{j}]（speaker={spk!r}）的 'text' 为空")
-        t_sents = _sentences_of(t_text)
+        t_sents = _sentences_of((turn.get("text") or "").strip())
         if not t_sents:
             raise ValueError(f"第 {seg_index} 段（title={seg_title!r}）"
                               f"dialogue[{j}]（speaker={spk!r}）分句后为空，"
@@ -132,9 +131,8 @@ def _collect_blocks(source):
         if dialogue:
             sents, turns_local = _collect_dialogue_sentences(dialogue, speakers, i, title)
         else:
+            # 'text' 非空同样由 _contracts 把关（与 dialogue 分支同一口径）
             text = (seg.get("text") or "").strip()
-            if not text:
-                raise ValueError(f"第 {i} 段（title={title!r}）的 'text' 字段为空")
             sents = _sentences_of(text)
             if not sents:
                 raise ValueError(f"第 {i} 段（title={title!r}）分句后为空，"

@@ -11,7 +11,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import setup_stdio, write_json_atomic, guard_not_in_skill_dir
 from _contracts import (CHART_TYPES, is_valid_sid, validate_images_json,
-                        SID_RULE)
+                        SID_RULE, _read_json_file)
 
 # 公式求值的安全护栏：AST 白名单挡的是"能力"（不出网络/属性/下标/导入），
 # 挡不住"规模"——`9**9**9` 每个节点都合法，却要算到宇宙热寂。Pow 结果一旦
@@ -341,8 +341,7 @@ def main():
     args = parser.parse_args()
     guard_not_in_skill_dir(("-o/--output", os.path.abspath(args.output)))
     try:
-        with open(args.input, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+        data = _read_json_file(args.input)
         charts_map = build_images_map(data)
         # 合并写回（不再整文件覆盖）：目标文件已有条目（方式 A/B/D 配图
         # 及其 provenance 元数据）原样保留，只新增/幂等更新 chart 条目。

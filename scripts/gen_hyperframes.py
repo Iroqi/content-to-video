@@ -26,12 +26,6 @@ CHARTJS_CDN_URL = f"https://cdn.jsdelivr.net/npm/chart.js@{CHARTJS_VERSION}/dist
 CHARTJS_SHA384 = "jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "content-to-video", "vendor")
 _CACHE_PATH = os.path.join(_CACHE_DIR, f"gsap-{GSAP_VERSION}.min.js")
-# 离线内置副本（技能包 assets/ 下，逐字节 = 官方 dist）。文件名带版本号，
-# 与 _BUNDLED_* 的推导和 assets/README.md 的记录保持一致。
-_BUNDLED_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
-_BUNDLED_GSAP = os.path.join(_BUNDLED_DIR, f"gsap-{GSAP_VERSION}.min.js")
-_BUNDLED_CHARTJS = os.path.join(_BUNDLED_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js")
 _MAX_VENDOR_BYTES = 8 * 1024 * 1024   # 下载响应体上限（两种资产共用）
 
 
@@ -144,68 +138,48 @@ def _install_vendor(src, dest_path, verify, label):
     return True
 
 
-def _vendor_sources(bundled, cache_path, check, label):
-    """列出可离线（不联网）安装的源：内置副本 → 用户缓存。
+def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
+                   validate, label):
+    """把钉固字节的第三方脚本装进输出项目，返回项目内相对路径（失败 None）。
 
-    内置文件存在却过不了钉固校验时点名警告——技能包被改动或下载损坏是
-    一件需要让人知道的事，静默回落缓存就成了一次无人察觉的降级。
-    """
-    sources = [bundled, cache_path]
-    if os.path.isfile(bundled) and not check(bundled):
-        print(f"[warn] 技能包内置的 {label} 副本（{bundled}）与钉固字节不符，"
-              "已跳过并回退用户缓存/CDN。多为技能包被改动或传输损坏；"
-              "确认技能包来源后重新获取，或设置 CTV_ALLOW_NETWORK_ASSETS=1 "
-              "从钉固 CDN 重新获取。", file=sys.stderr)
-    return sources
+    取用链只有两级：**用户缓存 → 钉固 CDN**（项目 vendor/ 已有合格副本时
+    直接复用，不重拷）。每一级都重算哈希——缓存里被污染或截断的历史下载
+    不会被复用，CDN 响应体校验不过就不落盘。技能包不再内置这两个 dist：
+    280KB 的二进制副本要求"换版本必须同时改文件名 + 钉固哈希 + README"，
+    而下载路径本来就有同一套哈希校验，内置副本只是把同一条链多养一级。
 
-
-def ensure_local_chartjs(project_dir, allow_network=False):
-    project_dir = os.path.abspath(project_dir)
-    cache_path = os.path.join(_CACHE_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js")
-    dest_path = os.path.join(project_dir, "vendor", "chart.umd.min.js")
-    if _valid_chartjs(dest_path):
-        return "vendor/chart.umd.min.js"
-    # 内置 → 缓存 →（显式允许时）CDN，每一级都重新校验字节。
-    for src in _vendor_sources(_BUNDLED_CHARTJS, cache_path,
-                               _valid_chartjs, "Chart.js"):
-        if _valid_chartjs(src) and _install_vendor(
-                src, dest_path, _valid_chartjs, "Chart.js"):
-            return "vendor/chart.umd.min.js"
-    if not allow_network:
-        return None
-    if not _download_to_cache(cache_path, CHARTJS_CDN_URL, asset="Chart.js",
-                              validate=_validate_chartjs_payload):
-        return None
-    if not _install_vendor(cache_path, dest_path, _valid_chartjs, "Chart.js"):
-        return None
-    return "vendor/chart.umd.min.js"
-
-
-def ensure_local_gsap(project_dir, allow_network=False):
-    """Ensure ``project_dir/vendor/gsap.min.js`` exists and return its relative path.
-
-    只认与钉固字节完全一致的源（项目 vendor → 技能包内置 → 用户缓存 →
-    钉固 CDN），旧缓存里被污染的历史下载不会被复用。自定义源不走这条
-    链：CLI --gsap-src 直接写进 HTML 引用（可信度自负，见 --help），
-    本模块从未有过"下载任意 URL"的入口。
+    永不把远程 URL 直接写进 <script src>：渲染必须离线可跑，联网只发生在
+    "把字节落到本地"这一步。自定义源不走这条链——CLI --gsap-src/--chartjs-src
+    直接写进 HTML 引用（可信度自负，见 --help），本模块从未有过"下载任意
+    URL"的入口。
     """
     project_dir = os.path.abspath(project_dir)
-    dest_path = os.path.join(project_dir, "vendor", "gsap.min.js")
-    if _valid_trusted_gsap(dest_path):
-        return "vendor/gsap.min.js"
-    for src in _vendor_sources(_BUNDLED_GSAP, _CACHE_PATH,
-                               _valid_trusted_gsap, "GSAP"):
-        if _valid_trusted_gsap(src) and _install_vendor(
-                src, dest_path, _valid_trusted_gsap, "GSAP"):
-            return "vendor/gsap.min.js"
-    if not allow_network:
+    dest_path = os.path.join(project_dir, *dest_rel.split("/"))
+    if verify(dest_path):
+        return dest_rel
+    if verify(cache_path) and _install_vendor(cache_path, dest_path, verify,
+                                              label):
+        return dest_rel
+    if not _download_to_cache(cache_path, cdn_url, asset=label,
+                              validate=validate):
         return None
-    if not _download_to_cache(_CACHE_PATH, GSAP_CDN_URL, asset="GSAP",
-                              validate=_validate_gsap_payload):
+    if not _install_vendor(cache_path, dest_path, verify, label):
         return None
-    if not _install_vendor(_CACHE_PATH, dest_path, _valid_trusted_gsap, "GSAP"):
-        return None
-    return "vendor/gsap.min.js"
+    return dest_rel
+
+
+def ensure_local_chartjs(project_dir):
+    return _ensure_vendor(
+        project_dir, "vendor/chart.umd.min.js",
+        os.path.join(_CACHE_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js"),
+        CHARTJS_CDN_URL, _valid_chartjs, _validate_chartjs_payload, "Chart.js")
+
+
+def ensure_local_gsap(project_dir):
+    """Ensure ``project_dir/vendor/gsap.min.js`` exists and return its relative path."""
+    return _ensure_vendor(project_dir, "vendor/gsap.min.js", _CACHE_PATH,
+                          GSAP_CDN_URL, _valid_trusted_gsap,
+                          _validate_gsap_payload, "GSAP")
 
 
 # 主题配色 / 视觉模板 / HTML 组装已拆到独立模块（_theme / _template /
@@ -215,7 +189,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _contracts import (load_timing_manifest, validate_images_json,  # noqa: E402
-                        classify_media_path, is_content_sid, media_needs_chartjs)
+                        classify_media_path, is_content_sid, media_needs_chartjs,
+                        _read_json_file)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
@@ -285,11 +260,6 @@ def _stage_audio_file(audio_path, out_dir):
                 except OSError:
                     pass
     return "audio/" + os.path.basename(dst)
-
-
-def _allow_network():
-    """CTV_ALLOW_NETWORK_ASSETS 的统一判定（GSAP / Chart.js 共用一个开关）。"""
-    return os.environ.get("CTV_ALLOW_NETWORK_ASSETS", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _warn_if_local_vendor_missing(label, src, out_dir):
@@ -477,16 +447,15 @@ def main():
     parser.add_argument("--gsap-src", default=None,
                         help="GSAP script URL or local path. 默认取输出项目的 "
                              "vendor/gsap.min.js（须与钉固字节完全一致）；缺失时按"
-                             "技能包内置副本 assets/gsap-<版本>.min.js → 用户缓存的"
-                             "顺序安装，两处都没有才需要 CTV_ALLOW_NETWORK_ASSETS=1 "
-                             "从钉固 CDN 获取。传显式值（URL 或相对路径）可覆盖，"
-                             "但自定义源不做哈希钉固校验，可信度自负。")
+                             "用户缓存 → 钉固 CDN 的顺序安装（下载体过 sha256 校验"
+                             "才落盘）。传显式值（URL 或相对路径）可覆盖，但自定义源"
+                             "不做哈希钉固校验，可信度自负。")
     parser.add_argument("--chartjs-src", default=None,
                         help="Chart.js UMD script URL or local path（仅当 images.json 里"
                              "含 chart 类型时用到）。默认与 GSAP 同策略：优先用输出项目"
-                             "的 vendor/chart.umd.min.js，缺失时依次取技能包内置副本与用户"
-                             "缓存，两处都没有才需要 CTV_ALLOW_NETWORK_ASSETS=1 从 CDN 取。"
-                             "传显式值（URL 或相对路径）可覆盖，同样不做哈希校验。")
+                             "的 vendor/chart.umd.min.js，缺失时依次取用户缓存与钉固 "
+                             "CDN（sha384 校验）。传显式值（URL 或相对路径）可覆盖，"
+                             "同样不做哈希校验。")
     args = parser.parse_args()
 
     # 产物路径守卫：HTML 与它引用的音频/配图都写进 -o 所在目录，落在技能
@@ -514,8 +483,7 @@ def main():
     if args.images:
         if os.path.exists(args.images):
             try:
-                with open(args.images, 'r', encoding='utf-8-sig') as f:
-                    images = validate_images_json(json.load(f))
+                images = validate_images_json(_read_json_file(args.images))
             except ValueError as e:
                 print(f"[error] {e}", file=sys.stderr)
                 sys.exit(1)
@@ -587,20 +555,20 @@ def main():
               f"在 A/B/C/D 四条路线中选型补图（见 references/image_options.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
-    # Resolve GSAP src: explicit CLI value wins. Otherwise 项目 vendor → 技能包
-    # 内置副本 → 用户缓存，三级都不命中才需要网络（CTV_ALLOW_NETWORK_ASSETS=1）。
-    # 永不自动回落到远程 <script>：那会让渲染依赖网络。
+    # Resolve GSAP src: explicit CLI value wins. Otherwise 项目 vendor → 用户
+    # 缓存 → 钉固 CDN（下载体过哈希校验后才落盘）。永不把远程 URL 直接写进
+    # <script>：那会让渲染依赖网络。
     if args.gsap_src:
         gsap_src = args.gsap_src
         _warn_if_local_vendor_missing("GSAP", gsap_src, out_dir)
     else:
-        gsap_src = ensure_local_gsap(out_dir, allow_network=_allow_network())
+        gsap_src = ensure_local_gsap(out_dir)
         if gsap_src is None:
             raise SystemExit(
-                f"[error] 找不到可用的 GSAP：技能包内置副本（{_BUNDLED_GSAP}）与"
-                "用户缓存都不存在或与钉固字节不符。技能包通常自带这个文件——"
-                "若确实缺失，重新获取技能包；或设置 CTV_ALLOW_NETWORK_ASSETS=1 "
-                "从钉固 CDN 获取一次；或用 --gsap-src 指向本地已有文件。"
+                f"[error] 找不到可用的 GSAP：用户缓存（{_CACHE_PATH}）没有合格"
+                f"副本，从钉固 CDN 取也失败（原因见上一行 [warn]）。"
+                "联网受限的机器上先手动放一份官方 dist 到该缓存路径，"
+                "或用 --gsap-src 指向本地已有文件。"
             )
 
     has_chart = any(media_needs_chartjs(v) for v in images.values())
@@ -608,13 +576,12 @@ def main():
     if chartjs_src:
         _warn_if_local_vendor_missing("Chart.js", chartjs_src, out_dir)
     elif has_chart:
-        chartjs_src = ensure_local_chartjs(out_dir, allow_network=_allow_network())
+        chartjs_src = ensure_local_chartjs(out_dir)
         if chartjs_src is None:
             raise SystemExit(
-                f"[error] 检测到 Chart.js 图表，但找不到可用的脚本：技能包内置副本"
-                f"（{_BUNDLED_CHARTJS}）与用户缓存都不存在或与钉固字节不符。"
-                "技能包通常自带这个文件——若确实缺失，重新获取技能包；或设置 "
-                "CTV_ALLOW_NETWORK_ASSETS=1 从钉固 CDN 获取一次；或用 "
+                "[error] 检测到 Chart.js 图表，但找不到可用的脚本：用户缓存没有"
+                "合格副本，从钉固 CDN 取也失败（原因见上一行 [warn]）。"
+                "联网受限的机器上先手动放一份官方 dist 到用户缓存，或用 "
                 "--chartjs-src 指向本地已有文件。"
             )
 

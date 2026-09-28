@@ -475,17 +475,16 @@ def _image_coverage(manifest_path, images_json):
         return [], [], []
     if not os.path.isfile(images_json):
         return sids, sids, []
-    # 与上方 load_timing_manifest 同一口径：images.json 也可能是上次写入
-    # 被中断的截断 JSON——裸 json.load 会抛 JSONDecodeError traceback，与
-    # "该补图/该重写映射"这个真实原因毫无关系。统一转成人话退出。
+    # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 _read_json_file 统一
+    # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
+    # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
     try:
-        with open(images_json, "r", encoding="utf-8-sig") as f:
-            mapping = validate_images_json(json.load(f))
-    except (OSError, ValueError) as e:
+        mapping = validate_images_json(_read_json_file(images_json))
+    except ValueError as e:
         raise SystemExit(
-            f"[run] images.json 无法读取（{images_json}）：{e}\n"
-            "文件可能被上次中断的写入截断，或不是合法 JSON；"
-            "修复/重写该文件（gen_charts.py 或手动）后重跑本命令。")
+            "[run] images.json 读不出来——文件可能被上次中断的写入截断，或不是"
+            "合法 JSON；修复或重写该文件（gen_charts.py / 手动）后重跑本命令。"
+            f"\n{e}")
     missing_keys = [s for s in sids if s not in mapping]
     proj_dir = os.path.dirname(os.path.abspath(images_json))
 
@@ -580,11 +579,21 @@ def main():
     args = parser.parse_args()
     _DRY_RUN = args.dry_run
 
+    # ── 入参校验：这三条看起来像 pipeline 的重复，其实都承重 ────────────
+    # --speed / --loudness 必定透传给 pipeline，两边文案也一致，但校验不能只留
+    # 下游那份：_REPORT["params"] 里就有这两个值，而步骤失败时照样落
+    # production_report.json——实测把 run.py 的校验删掉后 `--speed nan` 会写出
+    # "speed": NaN，Python 读得回、jq / JSON.parse 读不回。fail-fast 在前，报告
+    # 里就永远只会有合法数值。
+    # --workers 更是只有这一份：它不进 tts_cmd（run.py 的是渲染抓帧 worker 数，
+    # pipeline 的同名旗标是 TTS 并发数），交给下游拦就是
+    # `npx hyperframes render --workers 0` 的莫名失败。
     try:
-        # --speed 有默认值（DEFAULT_SPEED），条件判断只会让"是否校验"看起来可变
         validate_speed(args.speed)
     except ValueError as e:
         parser.error(str(e))
+    if args.loudness is not None and not math.isfinite(args.loudness):
+        parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
     if args.workers < 1:
         parser.error("--workers 必须是正整数")
 
@@ -634,8 +643,6 @@ def main():
         # 响度归一化在 pipeline 末端对拼接后的人声轨执行（可选混入 BGM 之后），
         # 归一化后的音频由 manifest 的 combined_audio 指路，下游 HTML/检查
         # 都从 manifest 取，不在这里硬编码文件名。
-        if not math.isfinite(args.loudness):
-            parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
         tts_cmd += ["--loudness", str(args.loudness)]
     # 单句 TTS 失败的降级策略同样永远透传（同上一条规则）。silence 会把失败句
     # 降级为静音占位并让 manifest 进入 degraded 状态——那是 SKILL.md

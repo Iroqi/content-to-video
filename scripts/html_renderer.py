@@ -296,7 +296,13 @@ def _js_str(value):
 
 
 def _build_subtitle_cues(sentences, aspect):
-    """Build the JS subtitle cue payload from sentence timing and text."""
+    """Build the JS subtitle cue payload from sentence timing and text.
+
+    不可信文案进入画面有且只有两条路，都在生成期转义、运行时不再写文本：
+    verse 行由 generate_html 用 esc() 写成静态 DOM（HTML 上下文），cue 数组由
+    本函数用 _js_str() 序列化（JS 字符串上下文——这里套 HTML 实体转义反而会
+    把 &amp; 之类显示成字面量）。运行时只做 class 切换与 color 赋值。
+    """
     sub_cues = []
 
     sub_params = subtitle_params_for(aspect)
@@ -421,19 +427,6 @@ def _build_chart_boot(normalized_images, chart_palette):
     }, "chart-boot.js")
 
 
-def _build_subtitle_layer():
-    """生成字幕/内容呈现层的 CSS 与 JS（verse 唯一形态，两画幅共用）。
-
-    静态骨架在 templates/subtitle-verse.{css,js}：结构与选择器写死，
-    数值走 var(--ctv-*)（由 generate_html 注入 :root）。
-    不可信内容的边界在两处生成期转义，运行时不参与文案：verse 行由
-    generate_html 用 esc() 写成静态 DOM，cue 数组由 _build_subtitle_cues 用
-    json.dumps() 序列化（JS 字符串上下文里 HTML 实体转义反而会显示成字面量）。
-    运行时只做 class 切换与 color 赋值，不再写任何文本。
-    """
-    return _load_asset("subtitle-verse.css"), _load_asset("subtitle-verse.js")
-
-
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
@@ -518,14 +511,12 @@ def generate_html(manifest, audio_src, images=None,
         _v_pad_parts = _v_pad.split()
         if not _v_pad_parts:
             raise ValueError("[template] layout.vertical.segCard.padding 不能为空")
+        # 左右内边距永远是简写的第二个值（3 值=上/左右/下、2 值=上下/左右），
+        # 只有一个值时四边共用，就是它自己。取不到数就是模板写错了长度单位。
+        _v_pad_raw = _v_pad_parts[1] if len(_v_pad_parts) >= 2 else _v_pad_parts[0]
         try:
-            if len(_v_pad_parts) >= 3:
-                _v_pad_left = float(_v_pad_parts[1].replace("px", ""))
-            elif len(_v_pad_parts) == 2:
-                _v_pad_left = float(_v_pad_parts[1].replace("px", ""))
-            else:
-                _v_pad_left = float(_v_pad_parts[0].replace("px", ""))
-        except (ValueError, IndexError) as e:
+            _v_pad_left = float(_v_pad_raw.replace("px", ""))
+        except ValueError as e:
             raise ValueError("[template] layout.vertical.segCard.padding 必须是合法 CSS 长度") from e
         _v_verse_h = _vv["windowHeight"]
         _v_verse_bottom = _vv["bottom"]
@@ -568,8 +559,6 @@ def generate_html(manifest, audio_src, images=None,
                 f"画布高 − 2×margin({height} − 2×{_lm} = {height - 2 * _lm})，"
                 f"且 textCol.width({_ltext['width']}) + columnGap({_lgap}) "
                 f"+ image.width({_il['width']}) + 2×margin({_lm}) 必须 ≤ 画布宽({width})")
-
-    _sub_css, _sub_js = _build_subtitle_layer()
 
     _tgl = tpl_layout["tagline"]
     css_tagline_font = f'{_tgl["fontSize"]}px'
@@ -825,8 +814,7 @@ def generate_html(manifest, audio_src, images=None,
                     f'      <video id="vid-{sid}" src="{quote(media_path)}" '
                     f'data-start="{s}" data-duration="{d}" '
                     f'{loop} {muted} {autoplay} {playsinline} '
-                    f'{poster_attr} '
-                    f'style="width:100%;height:100%;object-fit:cover">\n'
+                    f'{poster_attr}>\n'
                     f'      </video>\n'
                     f'    </div>'
                 )
@@ -842,7 +830,7 @@ def generate_html(manifest, audio_src, images=None,
         # 字幕 DOM 只有 verse（歌词式句子流）一种形态、两画幅共用：该段全部句子
         # 按序渲染成静态行（完整句子，CSS 自动换行），运行时由 cue 的 si 高亮当前
         # 句、已播句淡出、窗口随播报滚动。DOM 在 seg-card 尾部，竖屏绝对定位钉底、
-        # 横屏在左文字栏文档流里垂直居中（定位细节见 subtitle-verse.css 头部）。
+        # 横屏在左文字栏文档流里垂直居中（定位细节见 composition.css 的 verse 块）。
         _vlines = [
             # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
             # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
@@ -987,7 +975,6 @@ def generate_html(manifest, audio_src, images=None,
     # CSS 走 <style> 内联（无头浏览器首帧不能等外链 CSS，否则白屏错版），
     # GSAP/chart.js 是脚本、可以外链（vendor/ 相对路径）。
     style = _fill(_load_asset("composition.css"), {
-        "__CTV_SUBTITLE_CSS__": _sub_css,
         "__CTV_ROOT_VARS__": root_vars,
     }, "composition.css")
     script = _fill(_load_asset("runtime.js"), {
@@ -995,7 +982,6 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_GSAP__": gsap_code,
         "__CTV_CUES__": sub_cues_js,
         "__CTV_VERSE_CLIP__": f"{_v_verse_clip:g}",
-        "__CTV_SUBTITLE_JS__": _sub_js,
     }, "runtime.js")
     chartjs_tag = (f'<script src="{chartjs_src_attr}"></script>') if has_chart else ''
     html = _fill(_load_asset("composition.html"), {

@@ -303,17 +303,16 @@ def validate_segments_source(data):
     return data
 
 
-def load_segments_source(path):
-    """读取并校验 segments_source.json。
+def _read_json_file(path):
+    """读一份用户/上游写出的 JSON 文件，把三种读不出来统一成带路径的 ValueError。
 
-    文件不存在/无权限（OSError 不是 ValueError 子类，调用方的
-    except ValueError 接不住会炸裸栈）与 JSON 语法错误统一转成带路径的
-    ValueError——路径打错是最常见的用户输入错误。
+    OSError 不是 ValueError 子类：不转的话调用方的 ``except ValueError`` 接不住，
+    路径打错就抛裸栈——而路径打错是最常见的用户输入错误。
 
     utf-8-sig：Windows 记事本 / PowerShell `Set-Content -Encoding UTF8` 存出来
-    的合法 JSON 带 BOM，纯 utf-8 解码会让 json 抛 "Unexpected UTF-8 BOM"，
-    把一份没写错的稿子判成语法错误。非 UTF-8（GBK/UTF-16 无 BOM）仍然失败，
-    但转成点名文件 + 给出"另存为 UTF-8"的可执行指令，而不是裸的编解码报错。
+    的合法 JSON 带 BOM，纯 utf-8 解码会让 json 抛 "Unexpected UTF-8 BOM"，把一份
+    没写错的稿子判成语法错误。非 UTF-8（GBK/UTF-16 无 BOM）仍然失败，但转成点名
+    文件 + 给出"另存为 UTF-8"的可执行指令，而不是裸的编解码报错。
     """
     try:
         with open(path, "r", encoding="utf-8-sig") as f:
@@ -326,7 +325,12 @@ def load_segments_source(path):
             "Windows 记事本/PowerShell 保存时选 UTF-8（不带 BOM 也行）") from e
     except json.JSONDecodeError as e:
         raise ValueError(f"{path} 不是合法 JSON: {e}") from e
-    return validate_segments_source(data)
+    return data
+
+
+def load_segments_source(path):
+    """读取并校验 segments_source.json（读取失败统一成带路径的 ValueError）。"""
+    return validate_segments_source(_read_json_file(path))
 
 
 def validate_timing_manifest(data):
@@ -555,23 +559,8 @@ def validate_timing_manifest(data):
 
 
 def load_timing_manifest(path):
-    """读取并校验 timing_manifest.json。
-
-    与 load_segments_source 同理：OSError / JSON 语法错误统一转成
-    带路径的 ValueError，调用方只接一种异常。编码同理走 utf-8-sig
-    （手写/改过的 manifest 可能带 Windows 编辑器留下的 BOM）。
-    """
-    try:
-        with open(path, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
-    except OSError as e:
-        raise ValueError(f"无法读取 {path}: {e}") from e
-    except UnicodeDecodeError as e:
-        raise ValueError(
-            f"{path} 不是 UTF-8 编码的 JSON（{e}）——请另存为 UTF-8 后重试") from e
-    except json.JSONDecodeError as e:
-        raise ValueError(f"{path} 不是合法 JSON: {e}") from e
-    return validate_timing_manifest(data)
+    """读取并校验 timing_manifest.json（读取失败统一成带路径的 ValueError）。"""
+    return validate_timing_manifest(_read_json_file(path))
 
 
 def validate_relative_project_path(src, where="media path"):

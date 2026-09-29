@@ -567,6 +567,7 @@ def generate_html(manifest, audio_src, images=None,
   --ctv-grid-size:{css_grid_size}px;--ctv-grid-color:{theme_colors["grid_color"]};
   --ctv-text-color:{theme_colors["text_color"]};
   --ctv-media-bg:{theme_colors["media_bg"]};
+  --ctv-img-glow:{_il["glow"]}px;
   --ctv-title-weight:{css_title_weight};
   --ctv-title-lh:{css_title_lh};--ctv-title-tracking:{css_title_tracking};
   --ctv-tagline-font:{css_tagline_font};--ctv-tagline-mt:{css_tagline_mt}px;
@@ -759,12 +760,12 @@ def generate_html(manifest, audio_src, images=None,
                 if chart_type == "formula":
                     formula = esc(str(chart.get("formula") or ""))
                     title = esc(str(chart.get("title") or ""))
-                    # 媒体卡的淡染面板/描边由 composition.css 从 --seg-accent
+                    # 媒体卡的淡染面板/描边/外发光由 composition.css 从 --seg-accent
                     # （注入在 seg-card 上）经 color-mix 派生，这里不再逐分支传色。
-                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}" style="box-shadow:0 0 {_il["glow"]}px {ac_attr}40">'
+                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}">'
                                   f'<div class="chart-formula"><div class="chart-title">{title}</div><div class="formula-value">{formula}</div></div></div>')
                 else:
-                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}" style="box-shadow:0 0 {_il["glow"]}px {ac_attr}40">'
+                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}">'
                                   f'<canvas id="chart-{sid}"></canvas></div>')
             elif media_type == "video":
                 # 视频配图：<video> 自动循环静音播放
@@ -776,8 +777,7 @@ def generate_html(manifest, audio_src, images=None,
                 poster = media_opts.get("poster", "")
                 poster_attr = f'poster="{quote(poster)}"' if poster else ""
                 image_html = (
-                    f'\n    <div class="seg-image" id="img-{sid}" '
-                    f'style="box-shadow:0 0 {_il["glow"]}px {ac_attr}40">\n'
+                    f'\n    <div class="seg-image" id="img-{sid}">\n'
                     f'      <video id="vid-{sid}" src="{quote(media_path)}" '
                     f'data-start="{s}" data-duration="{d}" '
                     f'{loop} {muted} {autoplay} {playsinline} '
@@ -786,10 +786,11 @@ def generate_html(manifest, audio_src, images=None,
                     f'    </div>'
                 )
             else:
-                # 静态图 / 动图：<img> 不变
+                # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
+                # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
+                _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
                 image_html = (
-                    f'\n    <div class="seg-image" id="img-{sid}" '
-                    f'style="box-shadow:0 0 {_il["glow"]}px {ac_attr}40">\n'
+                    f'\n    <div class="seg-image{_bare}" id="img-{sid}">\n'
                     f'      <img src="{quote(media_path)}" alt="">\n'
                     f'    </div>'
                 )

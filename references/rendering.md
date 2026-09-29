@@ -45,7 +45,7 @@ opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶�
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
-- 每段的 accent 会派生一组装饰（经 CSS `color-mix`，无需新令牌）：画面中央的氛围光、配图槽位 1px 内描边、图表/公式卡的淡染面板、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。
+- 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：画面中央的氛围光、配图槽位的外发光与 1px 内描边、图表/公式卡的淡染面板、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的 C3 一节。
 
 ## 版式真源
 

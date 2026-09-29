@@ -54,17 +54,25 @@ body{font-family:var(--ctv-font-family)}
    轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
    只会多出一次同步维护，没有第二种取值可表达。 */
 .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
-/* 槽位不铺底色，素材直接落在页面背景上；图表/公式卡另有淡染面板。 */
-.seg-image{position:absolute;overflow:hidden}
+/* 槽位不铺底色，素材直接落在页面背景上；图表/公式卡另有淡染面板。
+   外发光从祖先 seg-card 注入的 --seg-accent 派生（半径走 --ctv-img-glow），
+   两画幅同款、四个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
+.seg-image{position:absolute;overflow:hidden;box-shadow:0 0 var(--ctv-img-glow) color-mix(in srgb,var(--seg-accent) 25%,transparent)}
 /* img 与 video 共用同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
    <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，右边留空、
    下边被裁）。这条是**唯一**来源：inline style 会盖过一切非 important 选择器，
    所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
    三处并存时改一处不生效。canvas 是例外，见 chart-media 块。 */
 .seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
-/* 所有配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边）。
-   两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
+/* 配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边），SVG 配图
+   除外（见下面 bare-media）。两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
 .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+/* 无框媒体（bare-media = SVG 配图）：撤掉上面那道内描边和外发光。画布透明时
+   这两层是唯一还留着"矩形槽位"证据的东西，留着就是给一片空白画框。圆角刻意
+   保留：没有底色和描边之后它只裁到图自身的留白，且省掉一条与 [data-aspect]
+   圆角规则打架的选择器。 */
+.seg-image.bare-media{box-shadow:none}
+.bare-media::after{display:none}
 
 /* ── C2 图表/公式媒体卡（chart-media 槽位）──
    面板淡染与描边全部从 seg-card 注入的 --seg-accent 经 color-mix 派生，
@@ -88,7 +96,7 @@ body{font-family:var(--ctv-font-family)}
    --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。
    本块刻意**不用 !important**：每条选择器都比 base 块多一个属性选择器
    （0,2,0 > 0,1,0），层叠自然压过 base；渲染器写在同名元素上的 inline
-   style 只带 font-size / color / text-shadow / box-shadow / opacity，
+   style 只带 font-size / color / text-shadow / opacity，
    与本块声明的属性零重叠，没有需要靠 importance 才能赢的对手。 */
 [data-aspect="vertical"] .seg-card{inset:0;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)}
 [data-aspect="vertical"] .seg-title-wrap{left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);top:var(--ctv-v-title-top);height:var(--ctv-v-title-area);padding:0;overflow:hidden;text-align:left}

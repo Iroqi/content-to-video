@@ -1,11 +1,10 @@
 /* ── Composition 运行时：GSAP 时间线 + cue 数据 + verse 滚动 ──────────────
-   动态片段由 html_renderer.py 填进本文件的占位符：图表引导脚本（无图表时为
-   空串）、逐段补间（数据驱动，由 Python 生成）、逐句字幕 cue 数组（唯一
-   时间轴来源）、verse 滚动锚点（= 当前画幅的 verse.clipPad）。
+   动态片段由 html_renderer.py 填进本文件的占位符：逐段补间（数据驱动，由
+   Python 生成）、逐句字幕 cue 数组（唯一时间轴来源）、verse 滚动锚点（= 当前
+   画幅的 verse.clipPad）。
    注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
    字符串也会被替换（会把整段代码塞进注释，甚至因早闭注释破坏语法）。
    时钟只有一个：GSAP 时间线。渲染器逐帧 seek 触发 onUpdate。 */
-__CTV_CHART_BOOT__
 window.__timelines = window.__timelines || {};
 const tl = gsap.timeline({paused:true});
 __CTV_GSAP__

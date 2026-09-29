@@ -14,7 +14,7 @@ from typing import Dict, List
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _script_utils import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
+from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
 from _theme import get_accent_palette, get_default_accent  # noqa: E402
 from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
@@ -150,6 +150,10 @@ def _collect_blocks(source):
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
             extra["takeaway"] = str(seg["takeaway"]).strip()
+        # 整页画布开关（取值由 _contracts._validate_layout 把守，这里只透传）：
+        # 不写就不进 extra，下游按槽位版式渲染。
+        if seg.get("layout") is not None:
+            extra["layout"] = seg["layout"]
         # 缺省段落 id 用中性前缀 seg（配图键与文件名同源）。
         sid = (seg.get("id") or "").strip()
         if not sid:
@@ -225,7 +229,7 @@ def build_parts(source):
     唯一兜底，这里不再复读一份。
 
     超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：显示层会做次要
-    标点切行兜底（_script_utils 的 split_subtitle_lines），但 45+ 字的
+    标点切行兜底（_text 的 split_subtitle_lines），但 45+ 字的
     一句话念出来也偏喘不过气，根治方式是写稿时拆成两句——warn 就是提醒
     agent 这么做。
 

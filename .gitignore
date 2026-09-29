@@ -7,7 +7,6 @@ out/
 snapshots/
 segments_source.json
 timing_manifest.json
-charts.json
 candidates.json
 
 # Python 运行时

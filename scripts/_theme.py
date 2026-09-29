@@ -15,13 +15,11 @@ _THEMES = {
         "bg_gradient": "linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%)",
         "grid_color": "rgba(58,92,140,0.07)",
         "text_color": "#22262b",
-        "media_bg": "rgba(34,38,43,0.045)",
     },
     "dark": {
         "bg_gradient": "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
         "grid_color": "rgba(0,220,150,0.055)",
         "text_color": "#eef2ee",
-        "media_bg": "rgba(255,255,255,0.05)",
     },
 }
 _DEFAULT_ACCENT = "#2dd4bf"
@@ -34,13 +32,13 @@ _ACCENT_PALETTE = [
 def get_theme_colors(theme):
     """根据主题名返回主题配色字典。
 
-    影响背景渐变、网格线、文字颜色与配图底板色；每段 accent 彩色不受影响。
+    影响背景渐变、网格线与文字颜色；每段 accent 彩色不受影响。
 
     Args:
         theme: 主题名，取值见 list_theme_names()（当前为 cream/dark）
 
     Returns:
-        dict: 包含 bg_gradient, grid_color, text_color, media_bg 四个键。
+        dict: 包含 bg_gradient, grid_color, text_color 三个键。
     """
     if theme not in _THEMES:
         # 不做静默回退：未知主题名直接报错并列出可用主题。

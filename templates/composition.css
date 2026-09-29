@@ -54,15 +54,15 @@ body{font-family:var(--ctv-font-family)}
    轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
    只会多出一次同步维护，没有第二种取值可表达。 */
 .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
-/* 槽位不铺底色，素材直接落在页面背景上；图表/公式卡另有淡染面板。
+/* 槽位不铺底色，素材直接落在页面背景上。
    外发光从祖先 seg-card 注入的 --seg-accent 派生（半径走 --ctv-img-glow），
-   两画幅同款、四个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
+   两画幅同款、三个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
 .seg-image{position:absolute;overflow:hidden;box-shadow:0 0 var(--ctv-img-glow) color-mix(in srgb,var(--seg-accent) 25%,transparent)}
 /* img 与 video 共用同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
    <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，右边留空、
    下边被裁）。这条是**唯一**来源：inline style 会盖过一切非 important 选择器，
    所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
-   三处并存时改一处不生效。canvas 是例外，见 chart-media 块。 */
+   三处并存时改一处不生效。 */
 .seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
 /* 配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边），SVG 配图
    除外（见下面 bare-media）。两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
@@ -73,17 +73,6 @@ body{font-family:var(--ctv-font-family)}
    圆角规则打架的选择器。 */
 .seg-image.bare-media{box-shadow:none}
 .bare-media::after{display:none}
-
-/* ── C2 图表/公式媒体卡（chart-media 槽位）──
-   面板淡染与描边全部从 seg-card 注入的 --seg-accent 经 color-mix 派生，
-   renderer 不再逐分支传色。槽位底色与页面底色几乎同色时，没有真实图像的
-   媒体卡会"隐形"，淡染面板 + 内描边给出可辨边界；::after 盖在 canvas
-   之上只画 1px 内描边（::before 会被子元素盖住，不用）。 */
-.chart-media canvas{width:100%!important;height:100%!important;display:block}
-.chart-media{background:linear-gradient(color-mix(in srgb,var(--seg-accent) 8%,transparent),color-mix(in srgb,var(--seg-accent) 8%,transparent)),var(--ctv-media-bg)}
-.chart-formula{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--ctv-fc-pad);text-align:center;color:var(--ctv-text-color)}
-.chart-title{font-size:var(--ctv-fc-title-size);font-weight:700;opacity:var(--ctv-fc-title-opacity);margin-bottom:var(--ctv-fc-title-mb)}
-.formula-value{font-size:var(--ctv-fc-value-size);font-weight:800;letter-spacing:.03em;text-wrap:balance;font-family:var(--ctv-font-mono)}
 
 /* ── Vertical（竖屏 3:4，1080x1440）大标题 + 图片 + 句子流 ──────────────
    仅在 #root[data-aspect="vertical"] 时命中。portrait（3:4）复用本块全部规则。
@@ -167,6 +156,20 @@ body{font-family:var(--ctv-font-family)}
 /* 媒体卡四周留 96 白、垂直居中。内描边与进度条轨道走两画幅共用的无属性限定
    规则（.seg-image::after / .seg-card::before），此处不再各写一份。 */
 [data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
+
+/* ── 整页画布（段落 layout: "canvas"，两画幅同一份）──────────────────────
+   配图就是这一页：槽位盒拉满全屏，槽位那两道装饰（1px 内描边 + 外发光）一并
+   撤掉——页面边缘就是画布边缘，再描一道等于给整块屏幕套相框。HTML 的标题层与
+   句子流层由渲染器**不生成**（不是藏起来），所以画布上没有任何覆盖物，也就不
+   需要遮罩层；文字对比度由画布自己负责（见 references/rendering.md）。
+   选择器用 [data-aspect] 抬到 0,3,0，与两条画幅各自的 .seg-image 定位规则
+   （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
+[data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
+[data-aspect] .seg-canvas .seg-image::after{display:none}
+/* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
+   的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
+   段进度整个盖掉。 */
+[data-aspect] .seg-canvas .seg-progress,[data-aspect] .seg-canvas::before{z-index:2}
 
 /* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
    全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中

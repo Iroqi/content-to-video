@@ -27,8 +27,11 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 
 - **portrait**：标题区在上、**定高但由模板派生**（`title.maxLines × title.fontSize × typography.titleLineHeight + tagline.marginTop + tagline.fontSize × tagline.lineHeight`，改模板数字即跟着变，模板里不再存面积高度）+ 两行钳制，超过两行的部分被裁切；4:3 画布（980×735）居中，verse 钉底。标题区底边一旦压到画布顶边，生成期直接 `[template] 竖屏标题区放不进` 报错——改版式把重叠暴露成失败，而不是出一帧重叠的片子。
 - **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
+- **整页画布（段落 `layout: "canvas"`，两画幅同一份规则）**：上面那三层塌成一层——配图拉满整个画面（1080×1440 / 1920×1080，圆角、外发光、1px 内描边全撤），标题层与句子流层由渲染器**不生成**（不是 `display:none`：不留死 DOM、不留死补间目标，`check` 的文本普查也如实少两项）。段落入场只剩淡入，没有 `y` 滑入——整页就是画面，滑一下等于穿帮。
 
-opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
+  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期按文件拦：`gen_hyperframes.py` 要求该段有配图（否则只剩一条进度条空帧）、SVG 固有尺寸与**当前画幅**等比（不等比时 `cover` 会把画在图内的标题整块裁到画面外），并且等比之后还要按画幅**原尺寸**画——整张图按 `画幅宽 ÷ SVG 宽` 整体缩放，缩小后图内最小 px 字号跌破 26px 下限同样报错（实测按 2560 宽画的 16:9 铺进 1920 画幅缩到 0.75，28px 变 21px）。字号写成 `em`/`%`/class 时绝对值读不出来，只给 `[warn]`；照片/视频不验比例与字号，但"整段无字"照样是一条知情 `[warn]`。细则见 `references/image_options.md`「整页画布」。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
+
+opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。`layout` 只对内容段有效——给这两段写 `layout` 在契约层直接报错：画布版式不生成标题层与句子流层，用在结构性段上等于把开场标题或结尾行动号召从画面上删掉。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
 画面单位是**段落**。段内画面基本静止，只让字幕句子逐句切换与高亮；不要把本技能改成句子级重画的交互课件。
 
@@ -45,7 +48,7 @@ opening / closing 是**纯文字 agenda 卡**，不配图：kicker（取自顶�
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
-- 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：画面中央的氛围光、配图槽位的外发光与 1px 内描边、图表/公式卡的淡染面板、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的 C3 一节。
+- 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：画面中央的氛围光、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
 ## 版式真源
 
@@ -76,8 +79,7 @@ hf-project/
 ├── index.html
 ├── preview.js
 ├── vendor/
-│   ├── gsap.min.js
-│   └── chart.umd.min.js   # 仅图表需要
+│   └── gsap.min.js
 ├── audio/
 └── images/
 ```

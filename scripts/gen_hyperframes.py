@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -21,12 +22,9 @@ GSAP_CDN_URL = f"https://cdn.jsdelivr.net/npm/gsap@{GSAP_VERSION}/dist/gsap.min.
 # 供应链钉固：这个 JS 会被引擎内的浏览器真实执行，CDN 版本又是不可变的，
 # 所以把官方 dist 的 sha256 钉死——哈希一致即逐字节相同，是唯一判定口径。
 GSAP_SHA256 = "c174bfce53a729418d57a8ad8625e7247c793a22fef8e2851e3cfa3de9cd8280"
-CHARTJS_VERSION = "4.5.1"
-CHARTJS_CDN_URL = f"https://cdn.jsdelivr.net/npm/chart.js@{CHARTJS_VERSION}/dist/chart.umd.min.js"
-CHARTJS_SHA384 = "jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "content-to-video", "vendor")
 _CACHE_PATH = os.path.join(_CACHE_DIR, f"gsap-{GSAP_VERSION}.min.js")
-_MAX_VENDOR_BYTES = 8 * 1024 * 1024   # 下载响应体上限（两种资产共用）
+_MAX_VENDOR_BYTES = 8 * 1024 * 1024   # 下载响应体上限
 
 
 def _valid_trusted_gsap(path):
@@ -49,16 +47,8 @@ def _validate_gsap_payload(data):
             "疑似 CDN 被污染或代理劫持，已拒绝写入缓存")
 
 
-def _validate_chartjs_payload(data):
-    """Chart.js 下载体校验：sha384（base64）完整性钉固。"""
-    import base64
-    got = base64.b64encode(hashlib.sha384(data).digest()).decode("ascii")
-    if got != CHARTJS_SHA384:
-        raise ValueError("Chart.js integrity check failed")
-
-
 def _download_to_cache(cache_path, url, *, asset, validate):
-    """下载 vendor 资产到用户缓存（GSAP / Chart.js 走同一函数）。
+    """下载 vendor 资产到用户缓存。
 
     完整性校验由 validate(data) 注入（失败 raise，资产不落盘）；写入保持
     mkstemp → fsync → os.replace 的原子序，失败清理临时文件。
@@ -98,27 +88,11 @@ def _download_to_cache(cache_path, url, *, asset, validate):
         return False
 
 
-def _valid_chartjs(path):
-    """Whether a Chart.js asset exactly matches the pinned official dist."""
-    try:
-        return os.path.isfile(path) and _chartjs_sha384(path) == CHARTJS_SHA384
-    except OSError:
-        return False
-
-
-def _chartjs_sha384(path):
-    import base64
-    h = hashlib.sha384()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return base64.b64encode(h.digest()).decode("ascii")
-
 def _install_vendor(src, dest_path, verify, label):
     """把一份已校验过的源装进项目 vendor/：copy → 复查字节 → os.replace。
 
     拷贝后必须重算一遍：写盘被截断/磁盘满留下的半截文件若留在 dest，
-    下次 ensure_* 的 dest 命中检查会把它当成好资产直接复用（两种资产同一口径）。
+    下次 ensure_* 的 dest 命中检查会把它当成好资产直接复用。
     """
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     tmp = os.path.join(os.path.dirname(dest_path),
@@ -144,12 +118,12 @@ def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
 
     取用链与 SKILL.md「渲染资产默认离线复用」同一条：**输出项目 vendor/ → 用户
     缓存 → 钉固 CDN**，每一级都重算哈希——缓存或项目里被污染、截断的历史副本
-    不会被复用，CDN 响应体校验不过就不落盘。技能包不再内置这两个 dist：
-    280KB 的二进制副本要求"换版本必须同时改文件名 + 钉固哈希 + README"，
+    不会被复用，CDN 响应体校验不过就不落盘。技能包不再内置这个 dist：
+    二进制副本要求"换版本必须同时改文件名 + 钉固哈希 + README"，
     而下载路径本来就有同一套哈希校验，内置副本只是把同一条链多养一级。
 
     永不把远程 URL 直接写进 <script src>：渲染必须离线可跑，联网只发生在
-    "把字节落到本地"这一步。自定义源不走这条链——CLI --gsap-src/--chartjs-src
+    "把字节落到本地"这一步。自定义源不走这条链——CLI --gsap-src
     直接写进 HTML 引用（可信度自负，见 --help），本模块从未有过"下载任意
     URL"的入口。
     """
@@ -168,13 +142,6 @@ def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
     return dest_rel
 
 
-def ensure_local_chartjs(project_dir):
-    return _ensure_vendor(
-        project_dir, "vendor/chart.umd.min.js",
-        os.path.join(_CACHE_DIR, f"chartjs-{CHARTJS_VERSION}.umd.min.js"),
-        CHARTJS_CDN_URL, _valid_chartjs, _validate_chartjs_payload, "Chart.js")
-
-
 def ensure_local_gsap(project_dir):
     """Ensure ``project_dir/vendor/gsap.min.js`` exists and return its relative path."""
     return _ensure_vendor(project_dir, "vendor/gsap.min.js", _CACHE_PATH,
@@ -189,13 +156,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
-                        classify_media_path, is_content_sid, media_needs_chartjs)
+                        classify_media_path, is_content_sid)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
 
 from html_renderer import (  # noqa: E402
-    _segment_duration, generate_html,
+    segment_duration, TEMPLATES_DIR, generate_html,
 )
 
 
@@ -261,13 +228,12 @@ def _stage_audio_file(audio_path, out_dir):
     return "audio/" + os.path.basename(dst)
 
 
-def _warn_if_local_vendor_missing(label, src, out_dir):
-    """显式 --gsap-src/--chartjs-src 给的是本地路径却找不到文件时提示（URL 不判）。
+def _warn_if_local_vendor_missing(src, out_dir):
+    """显式 --gsap-src 给的是本地路径却找不到文件时提示（URL 不判）。
 
-    这类脚本 404 不会让生成失败：页面里 `gsap` 未定义，整条时间线建不起来，
+    GSAP 404 不会让生成失败：页面里 `gsap` 未定义，整条时间线建不起来，
     而每个段落卡都带内联 opacity:0——没有 GSAP 把它抬起来，成片是**全黑**
-    的无声空片，不是"停在首帧"；Chart.js 缺失则只有图表槽位空白。
-    这些只在真正打开浏览器或渲染时才暴露。
+    的无声空片，不是"停在首帧"。这些只在真正打开浏览器或渲染时才暴露。
     显式值允许指到项目外的本地文件，所以只 warn 不 fail。
     """
     if "://" in src or src.lower().startswith("data:"):
@@ -277,12 +243,10 @@ def _warn_if_local_vendor_missing(label, src, out_dir):
             return
     if os.path.isfile(src):
         return
-    _effect = ("整条时间线建不起来，每个段落卡都停在内联 opacity:0——成片为全黑无声空片"
-               if label == "GSAP" else
-               "所有图表槽位空白（字幕/音频不受影响）")
-    print(f"[warn] 显式传入的 {label} 脚本路径不存在（{src}，相对 HTML 输出目录 "
-          f"{out_dir} 或当前目录都找不到）。HTML 仍会生成，但页面里 {label} 未定义、"
-          f"{_effect}。请补上该文件，或去掉这个参数走 vendor/ 默认路径。",
+    print(f"[warn] 显式传入的 GSAP 脚本路径不存在（{src}，相对 HTML 输出目录 "
+          f"{out_dir} 或当前目录都找不到）。HTML 仍会生成，但页面里 gsap 未定义、"
+          "整条时间线建不起来，每个段落卡都停在内联 opacity:0——成片为全黑无声空片。"
+          "请补上该文件，或去掉这个参数走 vendor/ 默认路径。",
           file=sys.stderr)
 
 
@@ -354,8 +318,6 @@ def validate_images_files(images, out_dir, seg_durs=None):
     for sid, entry in images.items():
         # 上游 validate_images_json 已保证每条都是媒体对象
         media_type = entry.get("type", "auto")
-        if media_type == "chart":
-            continue
         media_path = entry.get("src", "")
         # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
         if media_type == "auto":
@@ -415,6 +377,131 @@ def validate_images_files(images, out_dir, seg_durs=None):
     return missing_imgs, corrupt_imgs
 
 
+def _svg_intrinsic_size(path):
+    """从 SVG 文件头取固有像素尺寸：优先根标签的 width/height（纯数字，
+    带 % / em 的不算像素，直接不认），拿不到再退回 viewBox 的第 3/4 段。
+    读不出返回 None（调用方按"没法验"报错，不静默放行）。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(8192)
+    except OSError:
+        return None
+    tag = re.search(r"<svg\b[^>]*>", head, re.S)
+    if not tag:
+        return None
+    tag = tag.group(0)
+
+    def _px(name):
+        m = re.search(rf'\b{name}="\s*([\d.]+)\s*"', tag)
+        return float(m.group(1)) if m else None
+
+    sw, sh = _px("width"), _px("height")
+    if sw and sh:
+        return sw, sh
+    vb = re.search(r'\bviewBox="\s*[-\d.]+[,\s]+[-\d.]+[,\s]+([\d.]+)[,\s]+([\d.]+)\s*"', tag)
+    if vb:
+        w, h = float(vb.group(1)), float(vb.group(2))
+        if w and h:
+            return w, h
+    return None
+
+
+# 图内文字可读下限（px）：与 references/image_options.md「文字与尺寸」的 26px
+# 同一条线，那边是写给画图的约定，这里是门禁端的复读。
+CANVAS_MIN_FONT_PX = 26
+
+
+def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
+    """整页画布（段落 layout: "canvas"）的配图体检，返回 (错误, 警告) 两组说明。
+
+    四件事只有这里查得到（画布版式不生成标题层与句子流层，画面全靠那张图）：
+    - 有配图：没图就只剩一条进度条空帧——error。
+    - SVG 与当前画幅**等比**：槽位版式里 cover 多裁一点边只是留白变窄；画布
+      版式的标题和文字就画在图内，比例一错就被整块裁到画面外。实测把 3:4 的
+      画布塞进 16:9 段落，标题与 kicker 直接消失，而 hyperframes check 依旧
+      0 error、Contrast 38/38 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
+    - SVG 的**缩放档**：等比不等于能读。按 2560×1440 画的 16:9 塞进 1920 画幅，
+      比例对、整张图却被缩到 0.75，图内 26px 折算后只剩 19.5px——低于
+      `references/image_options.md`「文字与尺寸」的 26px 下限就是读不出来，
+      这条也只有在这里量得到。
+    - 文案下落：这一段的 N 句旁白不会出现在画面上，图内的 `<text>` 数量是唯一
+      能对上的账——warn，因为"把要点画进图里"本来就没有机械判据。
+    照片/视频不验比例与字号（它们没有"画在里面的字"，cover 裁边是正常取景），
+    但整段无字是后果，照样给一条 warn 让人知情。
+    """
+    errs, warns = [], []
+    for seg in segments:
+        if seg.get("layout") != "canvas":
+            continue
+        sid = seg.get("id", "?")
+        entry = images.get(sid)
+        if not entry:
+            errs.append(f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），"
+                        f"images.json 里却没有它的配图——画布版式不画标题层和"
+                        f"句子流层，没有配图就什么都不剩")
+            continue
+        src = entry.get("src", "")
+        path = os.path.join(out_dir, src)
+        n_sent = len(seg.get("sentences") or [])
+        if os.path.splitext(src.lower())[1] != ".svg":
+            warns.append(f"段落 '{sid}' 的整页画布配图是 {src}（不是 SVG）——"
+                         f"画布版式不生成标题层与句子流层，照片/视频里也没有"
+                         f"图内文字，这一整段画面上不会出现任何文字。"
+                         "若这就是要的效果可忽略本条；想留标题就把这一段的要点"
+                         "画成 SVG")
+            continue
+        size = _svg_intrinsic_size(path)
+        if size is None:
+            errs.append(f"段落 '{sid}' 的画布 {src} 读不出固有尺寸：根标签要有"
+                        f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
+            continue
+        sw, sh = size
+        if abs(sw * canvas_h - sh * canvas_w) > 0.002 * canvas_w * canvas_h:
+            errs.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，与当前画幅 "
+                        f"{canvas_w}×{canvas_h} 不等比——object-fit:cover 会把画在"
+                        f"图内的标题整块裁到画面外，而 check 看不见这种丢失。"
+                        f"按当前画幅重画这张 SVG（两画幅各出一版）")
+            continue
+        # 等比之后才算缩放：成片把 SVG 按 canvas_w/sw 放大或缩小，图内每个
+        # 字号都乘这个系数。只有缩小的方向会跌破可读下限。
+        scale = canvas_w / sw
+        min_px, n_text = _svg_text_metrics(path)
+        if min_px is not None and min_px * scale < CANVAS_MIN_FONT_PX:
+            errs.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，铺进 "
+                        f"{canvas_w}×{canvas_h} 会整体缩到 {scale:.2f} 倍，图内最小"
+                        f"字号 {min_px:g}px 折算后只有 {min_px * scale:.1f}px，低于 "
+                        f"{CANVAS_MIN_FONT_PX}px 下限（成片压缩编码后读不出来）。"
+                        f"按当前画幅原尺寸重画：竖屏 1080×1440、横屏 1920×1080")
+        elif min_px is None and scale < 0.999:
+            warns.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，铺进 "
+                         f"{canvas_w}×{canvas_h} 会整体缩到 {scale:.2f} 倍，但文件里"
+                         f"读不到 px 字号（写成 class / em / 相对单位了）——"
+                         f"折算后是否还够 {CANVAS_MIN_FONT_PX}px 下限没人验得了，"
+                         f"按画幅原尺寸画就不用猜")
+        warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白不会出现在画面上"
+                     f"（标题层与句子流层都不生成），这张 SVG 里有 {n_text} 个"
+                     " <text>——请确认要点已经画进图内；句子越少越要确认")
+    return errs, warns
+
+
+def _svg_text_metrics(path):
+    """从 SVG 全文取 (最小 px 字号, <text> 个数)，读不到字号时返回 (None, n)。
+
+    字号只认 px：`font-size="26"`、`font-size: 26px`、`font-size="26.5px"` 都算，
+    em / % / pt 一律不认——相对单位要乘父级才知绝对值，这里没有布局引擎，硬猜
+    会把"能读"和"读不准"混成一类，宁可交回调用方按"没法验"给 warn。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            body = f.read()
+    except OSError:
+        return None, 0
+    sizes = [float(m.group(1)) for m in re.finditer(
+        r'font-size\s*[=:]\s*["\']?\s*(\d+(?:\.\d+)?)\s*(?:px)?(?![\w.%])', body)]
+    return (min(sizes) if sizes else None), len(re.findall(r"<text\b", body))
+
+
 def main():
     setup_stdio()
     parser = argparse.ArgumentParser(
@@ -449,12 +536,6 @@ def main():
                              "用户缓存 → 钉固 CDN 的顺序安装（下载体过 sha256 校验"
                              "才落盘）。传显式值（URL 或相对路径）可覆盖，但自定义源"
                              "不做哈希钉固校验，可信度自负。")
-    parser.add_argument("--chartjs-src", default=None,
-                        help="Chart.js UMD script URL or local path（仅当 images.json 里"
-                             "含 chart 类型时用到）。默认与 GSAP 同策略：优先用输出项目"
-                             "的 vendor/chart.umd.min.js，缺失时依次取用户缓存与钉固 "
-                             "CDN（sha384 校验）。传显式值（URL 或相对路径）可覆盖，"
-                             "同样不做哈希校验。")
     args = parser.parse_args()
 
     # 产物路径守卫：HTML 与它引用的音频/配图都写进 -o 所在目录，落在技能
@@ -518,7 +599,7 @@ def main():
             # 要在这里就给出提示而不是等成片后才发现。
             # 复用上方 _segs（契约已保证 manifest["segments"] 非空）：段 id 的
             # 唯一来源，与渲染器读的是同一份分组。
-            _seg_durs = {seg.get("id", ""): _segment_duration(seg)
+            _seg_durs = {seg.get("id", ""): segment_duration(seg)
                          for seg in _segs}
             missing_imgs, corrupt_imgs = validate_images_files(
                 images, out_dir, _seg_durs)
@@ -558,7 +639,7 @@ def main():
     # ensure_local_gsap 的钉固取用链（链路与"永不写远程 URL"见其 docstring）。
     if args.gsap_src:
         gsap_src = args.gsap_src
-        _warn_if_local_vendor_missing("GSAP", gsap_src, out_dir)
+        _warn_if_local_vendor_missing(gsap_src, out_dir)
     else:
         gsap_src = ensure_local_gsap(out_dir)
         if gsap_src is None:
@@ -569,25 +650,21 @@ def main():
                 "或用 --gsap-src 指向本地已有文件。"
             )
 
-    has_chart = any(media_needs_chartjs(v) for v in images.values())
-    chartjs_src = args.chartjs_src
-    if chartjs_src:
-        _warn_if_local_vendor_missing("Chart.js", chartjs_src, out_dir)
-    elif has_chart:
-        chartjs_src = ensure_local_chartjs(out_dir)
-        if chartjs_src is None:
-            raise SystemExit(
-                "[error] 检测到 Chart.js 图表，但找不到可用的脚本：用户缓存没有"
-                "合格副本，从钉固 CDN 取也失败（原因见上一行 [warn]）。"
-                "联网受限的机器上先手动放一份官方 dist 到用户缓存，或用 "
-                "--chartjs-src 指向本地已有文件。"
-            )
-
     # 画幅：portrait（默认，1080×1440 竖屏）/ landscape（1920×1080 横屏），
     # 单一画幅出单一 HTML；下游（get_canvas / generate_html）自带
     # portrait→vertical 归一化，画布尺寸随画幅从模板取。
     aspect = args.aspect
     w, h = get_canvas(aspect)
+
+    # 整页画布的配图体检（为什么只能在这里查，见 canvas_layout_errors）
+    _canvas_errs, _canvas_warns = canvas_layout_errors(
+        images, manifest["segments"], out_dir, w, h)
+    for _w in _canvas_warns:
+        print(f"[warn] {_w}", file=sys.stderr)
+    if _canvas_errs:
+        for _e in _canvas_errs:
+            print(f"[error] {_e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.audio:
         requested_audio = args.audio
@@ -642,7 +719,7 @@ def main():
 
     html = generate_html(manifest, audio_src,
                          images=images,
-                         width=w, height=h, gsap_src=gsap_src, chartjs_src=chartjs_src,
+                         width=w, height=h, gsap_src=gsap_src,
                          aspect=aspect, theme=args.theme, fps=args.fps)
 
     # 原子写：index.html 是渲染输入，写到一半被打断会留下半份 HTML——
@@ -650,8 +727,8 @@ def main():
     write_text_atomic(args.output, html)
 
     # 复制预览脚本到 HTML 输出目录（index.html 引用同目录 preview.js）
-    preview_js = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "preview.js")
+    # 路径复用 html_renderer.TEMPLATES_DIR：模板资产的位置只认一处，别在这再拼一遍
+    preview_js = str(TEMPLATES_DIR / "preview.js")
     if os.path.isfile(preview_js):
         _dst_preview = os.path.join(out_dir, "preview.js")
         # Windows 上 copy2 会沿用源文件的只读属性，而 copy 到已存在的只读文件
@@ -662,7 +739,7 @@ def main():
         shutil.copy2(preview_js, _dst_preview)
         os.chmod(_dst_preview, 0o644)
     else:
-        print("[warn] 未找到 scripts/preview.js，浏览器预览不可用"
+        print("[warn] 未找到 templates/preview.js，浏览器预览不可用"
               "（渲染不受影响）", file=sys.stderr)
 
     seg_count = len(manifest["segments"])

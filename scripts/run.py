@@ -29,9 +29,8 @@ from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme �
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _contracts import (DEFAULT_SPEED, is_content_sid, list_voice_ids,  # noqa: E402
                         validate_speed, load_timing_manifest, load_images_json)
-from _audio import _remove_quiet  # noqa: E402
-import _script_utils as _su  # noqa: E402
-from _script_utils import (setup_stdio,  # noqa: E402  重定向场景 stdout 强制 UTF-8
+from _audio import remove_quiet  # noqa: E402
+from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
 
 # ── Hyperframes / render runtime：只服务 run.py，直接内聚。 ──
@@ -189,7 +188,7 @@ def try_kill_process_tree(proc):
 def _discard_partial_render(out_path):
     """失败/超时路径清掉半截 out.mp4：残片大小 >0，下次有人直接取走
     out.mp4 或只看"文件存在且非空"就会把废片当交付物。"""
-    _remove_quiet(out_path)
+    remove_quiet(out_path)
 
 
 def _probe_file_size(path):
@@ -368,7 +367,7 @@ def _write_report(path):
         # 原子写走 _script_utils.write_json_atomic：
         # production_report 被 Ctrl-C 打断在写一半时落截断 JSON，下次排查
         # "这次跑得正不正常"反而先崩在 json.load。
-        _su.write_json_atomic(path, _REPORT)
+        write_json_atomic(path, _REPORT)
     except Exception as e:
         print(f"[run] 写制作报告失败（不影响主流程产出）：{e}", file=sys.stderr)
 
@@ -480,20 +479,14 @@ def _image_coverage(manifest_path, images_json):
     except ValueError as e:
         raise SystemExit(
             "[run] images.json 读不出来——文件可能被上次中断的写入截断，或不是"
-            "合法 JSON；修复或重写该文件（gen_charts.py / 手动）后重跑本命令。"
+            "合法 JSON；修复或手写该文件后重跑本命令。"
             f"\n{e}")
     missing_keys = [s for s in sids if s not in mapping]
     proj_dir = os.path.dirname(os.path.abspath(images_json))
 
-    def _media_present(entry):
-        # chart 条目与 gen_hyperframes 同一口径：图形由 Chart.js 在渲染端现画，
-        # 即便附带 src（契约允许）也不做存在性检查——否则这里 exit 2 拦掉的
-        # 恰好是 HTML/render 本来完全正常的条目。
-        if entry.get("type") == "chart":
-            return True
-        return os.path.isfile(os.path.join(proj_dir, entry["src"]))
     missing_files = [s for s in sids
-                     if s in mapping and not _media_present(mapping[s])]
+                     if s in mapping and not os.path.isfile(
+                         os.path.join(proj_dir, mapping[s]["src"]))]
     return sids, missing_keys, missing_files
 
 
@@ -651,7 +644,7 @@ def main():
 
     # ── 第 4 步：配图 ─────────────────────────────────────────────
     # 配图不由本脚本产出：agent 在第 4 步用 ImageGen 生图（方式 B）、
-    # gen_charts.py 画图表（方式 C）、或 VideoGen/手动放置视频素材（方式 D），
+    # 手绘 SVG 矢量示意（方式 C）、或 VideoGen/手动放置视频素材（方式 D），
     # 落进 images/ 并把映射写进 images.json。run.py 只负责统计这份映射
     # 的覆盖率，并只在真要渲染时拦缺图（--until html 只警告）。
     manifest = os.path.join(out, "timing_manifest.json")
@@ -709,7 +702,7 @@ def main():
         images_dir = os.path.join(project, "images")
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
-              "请按第 4 步补图：ImageGen 生图（方式 B）、gen_charts.py 图表"
+              "请按第 4 步补图：ImageGen 生图（方式 B）、手绘 SVG 矢量示意图"
               "（方式 C）、或 VideoGen 生成/手动放置视频素材（方式 D）；需要真实照片时由你"
               "自己联网检索并下载到 "
               f"{images_dir}。\n"

@@ -22,8 +22,8 @@ from _theme import is_safe_css_color  # noqa: E402  _theme 不反向依赖本模
 # SyntaxError、字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
 _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # 同一条规则的对外说法。报错文案在 4 个调用点（source/manifest 的
-# _validate_sid、images.json key、html_renderer 的两道兜底、gen_charts 的 chart
-# id）各写一份汉字副本时已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64
+# _validate_sid、images.json key、html_renderer 的两道兜底）各写一份汉字副本时
+# 已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64
 # 字符"）。规则本身仍以 _SID_RE 为准，这里只是给人看的那一句的唯一副本，
 # 改正则必须同步这句。
 SID_RULE = "字母开头，仅字母/数字/-/_，1–64 字符"
@@ -123,6 +123,36 @@ def _validate_accent(value, where):
             f"{where} 的 accent={value!r} 不是合法颜色：只接受 #rgb / #rrggbb "
             f"十六进制（如 #2dd4bf）或浏览器标准色名（如 red、tomato）。"
             f"accent 会拼进成片 HTML，不接受 rgb()/var() 这类函数式写法")
+
+
+# 段落版式。不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
+# 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布
+# 自己画）。版式后果见 references/rendering.md「画面结构」，画这张图的规格见
+# references/image_options.md「整页画布」。
+LAYOUT_VALUES = ("canvas",)
+
+
+def _validate_layout(value, where, *, agenda=False):
+    """layout 取值校验（可选字段）。严格匹配：不做大小写归一、不 strip。
+    放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式
+    渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
+
+    agenda=True（结构性段 opening/closing）时任何 layout 值都是 error：开屏/结尾
+    是纯文字 agenda 卡，画布版式不生成标题层与句子流层，写上去等于把开场标题或
+    结尾行动号召从画面上删掉——而 `check` 只数 HTML 文本，看不见这种丢失。
+    """
+    if value is None:
+        return
+    if agenda:
+        raise ValueError(
+            f"{where} 写了 layout={value!r}，但 opening/closing 是结构性 agenda 卡"
+            "（只有文字版式）——layout 只对内容段有效：画布版式不生成标题层与"
+            "句子流层，用在结构性段上会把开场标题/结尾行动号召整个抹掉")
+    if not isinstance(value, str) or value not in LAYOUT_VALUES:
+        raise ValueError(
+            f"{where} 的 layout={value!r} 不是合法版式：只接受 "
+            f"{'、'.join(repr(v) for v in LAYOUT_VALUES)}，或整个不写"
+            "（不写 = 槽位版式：标题区 + 配图槽 + 句子流）")
 
 
 def _validate_text(value, where, *, required=False):
@@ -265,6 +295,8 @@ def validate_segments_source(data):
         _validate_text(seg.get("voice_style"),
                        f"segments[{i}]（title={seg.get('title')!r}）的 voice_style")
         _validate_accent(seg.get("accent"),
+                         f"segments[{i}]（title={seg.get('title')!r}）")
+        _validate_layout(seg.get("layout"),
                          f"segments[{i}]（title={seg.get('title')!r}）")
         dialogue = seg.get("dialogue")
         # 类型必须在这里拦下：非列表的 truthy dialogue（字符串/对象）若放行，
@@ -480,6 +512,9 @@ def validate_timing_manifest(data):
         _validate_text(sg.get("title"), f"segments[{i}].title", required=True)
         _validate_text(sg.get("tagline"), f"segments[{i}].tagline")
         _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
+        _validate_layout(sg.get("layout"),
+                         f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
+                         agenda=not is_content_sid(sid))
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:
@@ -591,79 +626,6 @@ def validate_relative_project_path(src, where="media path"):
             depth += 1
     return norm
 
-CHART_TYPES = {"bar", "line", "pie", "scatter", "formula", "curve"}
-
-
-def _validate_chart_contract(chart, where):
-    """Validate chart structure; gen_charts remains the semantic validator."""
-    if not isinstance(chart, dict):
-        raise ValueError(f"{where} 的 chart 必须是对象")
-    kind = chart.get("type")
-    if not isinstance(kind, str) or kind.lower() not in CHART_TYPES:
-        raise ValueError(
-            f"{where} 的 chart.type 必须是 {sorted(CHART_TYPES)}（实际: {kind!r}）")
-    kind = kind.lower()
-    chart["type"] = kind
-
-    def _number(value, value_where):
-        _validate_finite_number(value, value_where)
-        return float(value)
-
-    if kind in {"bar", "line", "pie"}:
-        labels, values = chart.get("labels"), chart.get("values")
-        if not isinstance(labels, list) or not labels:
-            raise ValueError(f"{where} 的 {kind} chart.labels 必须是非空列表")
-        if not isinstance(values, list) or len(values) != len(labels) or not values:
-            raise ValueError(f"{where} 的 {kind} chart.values 必须与 labels 等长且非空")
-        for i, value in enumerate(values):
-            _number(value, f"{where} 的 {kind} chart.values[{i}]")
-        if kind == "pie" and sum(float(v) for v in values) <= 0:
-            raise ValueError(f"{where} 的 pie chart.values 总和必须大于 0")
-    elif kind == "scatter":
-        # 与 gen_charts._normalize 同一取值口径（`or` 回退）：points 键存在
-        # 但为空/None 时同样回退 values，两份校验器对同一份数据必须给同
-        # 一个答案。
-        points = chart.get("points") or chart.get("values")
-        if not isinstance(points, list) or not points:
-            raise ValueError(f"{where} 的 scatter chart.points 必须是非空列表")
-        for i, point in enumerate(points):
-            if not isinstance(point, (list, tuple)) or len(point) != 2:
-                raise ValueError(f"{where} 的 scatter chart.points[{i}] 必须是 [x, y]")
-            _number(point[0], f"{where} 的 scatter chart.points[{i}][0]")
-            _number(point[1], f"{where} 的 scatter chart.points[{i}][1]")
-    elif kind == "formula":
-        if not isinstance(chart.get("formula"), str) or not chart["formula"].strip():
-            raise ValueError(f"{where} 的 formula chart.formula 必须是非空字符串")
-    elif kind == "curve":
-        # images.json 只接受 gen_charts 归一化后的形态（curve_datasets[].data）：
-        # 受限表达式求值只有 gen_charts 做得了，渲染端只认 curve_datasets。原始
-        # curves[].expr 一律拦下并指向 gen_charts——两种形态都收时，手写条目过了
-        # 校验却在渲染端静默变空图，校验器给出的是假安全感。
-        datasets = chart.get("curve_datasets")
-        if not isinstance(datasets, list) or not datasets:
-            raise ValueError(
-                f"{where} 的 curve chart 只接受 gen_charts 归一化后的 "
-                "curve_datasets（非空列表）；原始 curves[].expr 请先经 "
-                "gen_charts.py 生成 images.json，手写该形态渲染端不认、"
-                "会静默变成空图")
-        for i, dataset in enumerate(datasets):
-            if not isinstance(dataset, dict) or not isinstance(dataset.get("data"), list) or not dataset["data"]:
-                raise ValueError(
-                    f"{where} 的 curve chart.curve_datasets[{i}].data 必须是非空列表")
-            for j, point in enumerate(dataset["data"]):
-                if not isinstance(point, dict):
-                    raise ValueError(
-                        f"{where} 的 curve chart.curve_datasets[{i}].data[{j}] 必须是对象")
-                if "x" not in point or "y" not in point:
-                    raise ValueError(
-                        f"{where} 的 curve chart.curve_datasets[{i}].data[{j}] 缺少 x/y")
-                _number(point["x"],
-                        f"{where} 的 curve chart.curve_datasets[{i}].data[{j}].x")
-                if point["y"] is not None:
-                    _number(point["y"],
-                            f"{where} 的 curve chart.curve_datasets[{i}].data[{j}].y")
-
-
 # images.json 条目里渲染端**真正会读**的键。
 # src/type/poster/loop/muted/autoplay/playsinline → html_renderer 的媒体分支；
 # 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
@@ -675,15 +637,11 @@ MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
 })
-# 方式 C 的图表条目多一个 chart 键（规格本体，由 _validate_chart_contract 查）。
-CHART_ENTRY_KEYS = MEDIA_ENTRY_KEYS | {"chart"}
 
 
 def unknown_media_keys(entry):
     """该 images.json 条目里渲染端不会读的键（升序列表）。"""
-    allowed = (CHART_ENTRY_KEYS if entry.get("type") == "chart"
-               else MEDIA_ENTRY_KEYS)
-    return sorted(set(entry) - allowed)
+    return sorted(set(entry) - MEDIA_ENTRY_KEYS)
 
 
 def validate_images_json(data):
@@ -711,31 +669,31 @@ def validate_images_json(data):
                 f"不接受裸字符串路径")
         if isinstance(value, dict):
             src = value.get("src")
-            if value.get("type") != "chart":
-                if "src" not in value:
-                    raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
-                if not value["src"]:
-                    raise ValueError(f"images.json 的 '{key}' 的 'src' 不能为空")
-            if "type" in value and value["type"] not in ("auto", "image", "video", "gif", "chart"):
+            # type 先查、src 后查：旧 C1/C2 项目留下的 {"type": "chart"} 本来就没有
+            # src，先查 src 会报"缺少 src"，把人往错的方向引。
+            _t = value.get("type")
+            if _t is not None and _t not in ("auto", "image", "video", "gif"):
                 raise ValueError(
-                    f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif/chart"
-                    f"（实际: {value['type']!r}）")
-            if value.get("type") == "chart":
-                chart = value.get("chart")
-                _validate_chart_contract(chart, f"images.json 的 '{key}'")
+                    f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif"
+                    f"（实际: {_t!r}）"
+                    + ("——图表 / 公式卡（旧 C1/C2）已从本技能移除，数据图和公式"
+                       "改走手绘 SVG，需要整页表达时给段落 layout: \"canvas\""
+                       if _t in ("chart", "formula") else ""))
+            if "src" not in value:
+                raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
+            if not value["src"]:
+                raise ValueError(f"images.json 的 '{key}' 的 'src' 不能为空")
         else:
             raise ValueError(
                 f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
-        # chart 条目不强制 src（图形由 Chart.js 绘制），但一旦携带 src/poster
-        # 就必须走与媒体条目同一路径口径——否则任意串能塞进 chart 条目的这两
-        # 个键、绕过全部路径守卫流到渲染端。
-        if src is not None:
-            if not isinstance(src, str) or not src:
-                raise ValueError(f"images.json 的 '{key}' 的 src 必须是非空字符串")
-            # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
-            # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
-            value["src"] = validate_relative_project_path(
-                src, f"images.json 的 '{key}' 的 src")
+        # 走到这里 src 必然存在且非空（上面 dict 分支已拦缺键与空值）——旧 chart
+        # 条目"可以不写 src"的豁免随 C1/C2 一起删掉了，这里不再留条件。
+        if not isinstance(src, str) or not src:
+            raise ValueError(f"images.json 的 '{key}' 的 src 必须是非空字符串")
+        # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
+        # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
+        value["src"] = validate_relative_project_path(
+            src, f"images.json 的 '{key}' 的 src")
         # poster 与 src 同一校验口径：禁绝对路径/越出项目根。键存在就必须是
         # 非空字符串——旧写法 `if poster:` 让空串 "" 与 None 同判，坏空串原样
         # 流到渲染端当封面路径用。
@@ -783,23 +741,6 @@ def classify_media_path(path, explicit_type="auto"):
     if ext == ".gif":
         return "gif"
     return "image"
-
-
-def media_needs_chartjs(media):
-    """该 images.json 条目是否真的需要 Chart.js（决定是否装 vendor/chart.umd.min.js）。
-
-    formula 卡走纯 DOM 文本、不用 canvas，必须排除，否则纯公式项目会被
-    vendor 缺失检查误拦。判定只有这一份：gen_hyperframes 在归一化**之前**
-    看原始条目，html_renderer 在归一化**之后**看渲染器形状，两处共用避免
-    口径漂移，因此两种形状（type/chart 与 media_type/opts.chart）都认。
-    """
-    if not isinstance(media, dict):
-        return False
-    if media.get("type", media.get("media_type")) != "chart":
-        return False
-    chart = (media.get("chart")
-             or (media.get("opts") or {}).get("chart") or {})
-    return str(chart.get("type", "")).lower() != "formula"
 
 # ── Voice registry（内嵌） ──
 # MiMo TTS 预置音色。CLI choices 与 _contracts 校验的唯一权威来源，

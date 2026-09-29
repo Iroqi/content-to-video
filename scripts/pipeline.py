@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
                     mix_bgm, wav_data_consistent,
-                    _remove_quiet)  # 尽力删文件，不抛
+                    remove_quiet)  # 尽力删文件，不抛
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
 from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, is_content_sid,  # noqa: E402
                         list_voice_ids, load_segments_source,
@@ -349,7 +349,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
                       flush=True)
                 # 失败即清掉 out_path：磁盘写满等异常可能留下半截 WAV，
                 # 其 wave 头完整、下次 --resume 会把它当有效缓存跳过。
-                _remove_quiet(out_path)
+                remove_quiet(out_path)
                 return False, False
             print(f"    [{label}][retry {attempt+1}/{max_retries}] {e}",
                   flush=True)
@@ -367,11 +367,11 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             label = sentence_label or (text[:30] + "...")
             print(f"    [{label}][fatal] 音频写盘失败（{e}），不重试",
                   file=sys.stderr, flush=True)
-            _remove_quiet(out_path)
+            remove_quiet(out_path)
             return False, False
         break  # API 成功、音频已落盘，跳出重试循环
     else:
-        _remove_quiet(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
+        remove_quiet(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
         return False, False
 
     # 新合成 = 全新内容：先清上一轮残留 sidecar（.sha 由调用方在 synth 成功后
@@ -442,7 +442,7 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
             with open(out_path + ".spd", "w", encoding="utf-8") as f:
                 f.write("1.0")
     else:
-        _remove_quiet(out_path + ".spd")
+        remove_quiet(out_path + ".spd")
 
 def _record_sentence_cache(out_path, text, speed, speed_applied=True,
                            voice_id=None, voice_style=None, model=None):
@@ -955,9 +955,12 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
                 "accent": seg.get("accent", DEFAULT_ACCENT),
                 "sentences": seg_sentences,
             }
-            # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）。
+            # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）、
+            # layout（整页画布开关）。
             if seg.get("speed") is not None:
                 seg_out["speed"] = seg["speed"]
+            if seg.get("layout") is not None:
+                seg_out["layout"] = seg["layout"]
             if seg.get("voice_id") is not None:
                 seg_out["voice_id"] = seg["voice_id"]
             if seg.get("voice_style") is not None:
@@ -1196,7 +1199,7 @@ def main():
                                   f"失败（{e}），下次 --resume 会重新对齐语速",
                                   file=sys.stderr)
                     elif os.path.exists(out_path + ".spd"):
-                        _remove_quiet(out_path + ".spd")
+                        remove_quiet(out_path + ".spd")
                 else:
                     print(f"  [{label}][warn] atempo re-apply failed; "
                           f"audio kept at previous speed", file=sys.stderr)
@@ -1238,7 +1241,7 @@ def main():
                         print(f"  [{label}][warn] .spd marker 写入"
                               f"失败（{e}），下次 --resume 会重复一次还原",
                               file=sys.stderr)
-                        _remove_quiet(out_path + ".spd")
+                        remove_quiet(out_path + ".spd")
             # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
             # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
             sd = {
@@ -1329,7 +1332,7 @@ def main():
                         # resume 会把这个已经补录好的句子又标成 synth_failed。
                         stale_marker = out_path + ".failed"
                         if os.path.exists(stale_marker):
-                            _remove_quiet(stale_marker)
+                            remove_quiet(stale_marker)
                         print(f"[TTS {done_count}/{pending_count}] {label} "
                               f"{preview} -> {dur:.2f}s", flush=True)
                         continue

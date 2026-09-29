@@ -18,24 +18,23 @@ from _theme import (
 )
 from _template import load_template, get_canvas
 from _contracts import (classify_media_path, is_content_sid, is_valid_sid,
-                        media_needs_chartjs, unknown_media_keys, MEDIA_ENTRY_KEYS,
+                        unknown_media_keys, MEDIA_ENTRY_KEYS,
                         SID_RULE)
-from _script_utils import split_subtitle_cues, subtitle_params_for
+from _text import split_subtitle_cues, subtitle_params_for
 
 
 DEFAULT_ACCENT = get_default_accent()
-_CHART_CFG = load_template()["chart"]
 
 # ── 模板资产：版式的静态骨架 ────────────────────────────────────────────
 # CSS / JS / HTML 骨架是 templates/ 下的真实文件：结构与选择器写死，数值一律
 # 走 var(--ctv-*)——由本模块从 _template 内联的版式数据派生后注入 :root。
 # 缺模板文件即硬失败：静默产出无样式页面比立刻报错难排查得多。
-_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 def _load_asset(name):
     """读取 templates/ 下的模板资产（CSS / JS / HTML 骨架）。"""
-    p = _TEMPLATES_DIR / name
+    p = TEMPLATES_DIR / name
     if not p.is_file():
         raise FileNotFoundError(f"[renderer] 模板资产缺失: {p}")
     return p.read_text(encoding="utf-8")
@@ -83,7 +82,7 @@ def esc(text):
             .replace("'", "&#39;"))
 
 
-def _segment_duration(seg):
+def segment_duration(seg):
     """段落时长（秒）：从 sentences 推算——末句 start_time+duration − 首句
     start_time。与 generate_html 的 clip 计时同一口径。空 sentences 返回 0。
     """
@@ -201,7 +200,7 @@ def _normalize_images(images):
     """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。
 
     幂等：已归一化（含 media_type 键）的结构原样返回——再来一遍会把
-    chart spec 当成未知字段清成 null。
+    条目里的字段当成未知键清掉。
     """
     normalized = {}
     for sid, media in (images or {}).items():
@@ -223,14 +222,10 @@ def _normalize_images(images):
             if unknown:
                 print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
                       f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
-                      f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}（图表条目另加 chart）；"
+                      f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
                       "写错了就删掉。"
                       "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
                       file=sys.stderr)
-            if media.get("type") == "chart":
-                normalized[sid] = {"src": "", "media_type": "chart",
-                                   "opts": {k: v for k, v in media.items() if k != "type"}}
-                continue
             media_path = media.get("src")
             if not isinstance(media_path, str) or not media_path.strip():
                 # 契约层已要求 src；作为库直接调用时给出行号级病因，
@@ -257,7 +252,7 @@ def _normalize_images(images):
 def _js_str(value):
     """JS 字符串字面量：ensure_ascii=False 保留中文，`</` 转义防内联 <script> 被截断。
 
-    进入 <script> 文本的字符串（字幕行、chart spec、段 id）统一走这里；
+    进入 <script> 文本的字符串（字幕行、段 id）统一走这里；
     json.dumps 不转义 `/`，用户可控文本含 `</script>` 时会截断脚本块。
     """
     return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
@@ -299,106 +294,12 @@ def _build_subtitle_cues(sentences, aspect):
     return ",\n    ".join(sub_cues)
 
 
-# vendor 资源的默认相对路径。收口成常量：调用方（gen_hyperframes）在没有
-# 图表段落时会显式传 chartjs_src=None，直接覆盖掉签名默认值，而下方
-# gsap_src/chartjs_src 又要无条件 .replace() 做属性转义——None 会让每次
-# 生成 HTML 崩在 AttributeError。默认值只有一处，调用方传 None 也安全。
 _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
-_DEFAULT_CHARTJS_SRC = "vendor/chart.umd.min.js"
-
-
-def chart_palette_for_theme(theme):
-    """按主题派生图表配色（刻度/图例/标题文字色 + 网格线色 + 多系列色板）。
-
-    图表渲染在 seg-image 槽位里，槽位背景跟随主题明暗，因此图表文字必须
-    跟着翻转：深底用浅字、浅底用深字。这里以主题主文字色为准（_theme._THEMES
-    是唯一权威），网格线用同色低透明度，保证在任意主题下刻度都清晰可读。
-
-    series 是多系列/多扇区色板：默认 accent 打头、接 _accent_palette 轮询，
-    pie 按扇区、curve 按数据集轮询取色——旧实现只有 accent+主题辅色两色，
-    三个以上扇区的饼图第二块起全是同一个颜色，占比无法分辨。
-    """
-    colors = get_theme_colors(theme)
-    text = colors["text_color"]
-    mono = load_template()["typography"]["monoStack"]
-    series = [DEFAULT_ACCENT] + get_accent_palette()
-    # 注册表两主题的 text_color 都是 #rrggbb，解析不出 RGB 属于模板被改坏——
-    # int(…, 16) 直接 ValueError 炸在生成期，不留一档错配色进成片。
-    h = text.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return {
-        "text": f"#{r:02x}{g:02x}{b:02x}",
-        "grid_rgba": f"rgba({r},{g},{b},.12)",
-        "mono": mono,
-        "series": series,
-    }
-
-
-def _build_chart_boot(normalized_images, chart_palette):
-    """装配 Chart.js 引导脚本（静态骨架在 templates/chart-boot.js）。
-
-    纯函数：输入只有已归一化的 images 映射与一组配色，输出可直接内联进
-    <script> 的 JS 文本，不读任何外层状态。模板里只填三类**数据**：
-    每个图表段一行的 spec 载荷、主题派生的配色对象、版式数据的 chart 块；
-    选项编译函数与 load 钩子随骨架一起住在模板文件里（SKILL.md 的分工：
-    templates 存结构、Python 存数据——旧实现把静态 JS 存成 Python 字符串行，
-    还要用 lines[1:1+len] 切片对齐模板占位符，模板与代码一改就错位）。
-
-    输入契约：必须传 _normalize_images 归一化"之后"的结构（该函数幂等，
-    重复归一化无害）。chart 条目缺 chart 字段仍属坏数据，这里显式报错而非
-    静默产出空脚本——渲染成空白图表比立刻失败难排查得多。
-
-    chart_palette：图表文字/网格配色 + 多系列色板 series，由调用方用
-    chart_palette_for_theme 从当前主题派生。图表画在 seg-image 槽位里，槽位
-    底色跟随主题（cream 是近白、dark 是深底），所以配色必须跟着主题走——
-    把任一档颜色写死，另一个主题下坐标轴刻度就会几乎不可见。
-    """
-    chart_specs = []
-    for sid, media in normalized_images.items():
-        if media.get("media_type") != "chart":
-            continue
-        opts = media.get("opts") or {}
-        if "chart" not in opts:
-            raise ValueError(
-                f"配图 {sid!r} 的 media_type 是 chart，但 opts 里没有 chart 字段。"
-                "这通常意味着传进来的 images 是原始结构而非 _normalize_images 的"
-                "输出，或该结构被二次归一化过。请只归一化一次再传入。"
-            )
-        chart = opts.get("chart") or {}
-        if chart.get("type") == "formula":
-            continue
-        if not chart:
-            raise ValueError(
-                f"配图 {sid!r} 的 chart spec 为空（None/{{}}），无法渲染。"
-                "请检查 images.json 中该条目的 chart 定义是否完整。"
-            )
-        chart_specs.append((sid, chart))
-    spec_lines = []
-    for sid, chart in chart_specs:
-        # key 与 payload 同一防护：json.dumps 不转义 `/`，段 id 若含
-        # `</script>` 会截断内联 <script> 块。
-        spec_lines.append(f"ctvCharts[{_js_str(sid)}] = {_js_str(chart)};")
-    # `_meta` 是模板里的作者向注释，整块序列化时必须剔掉：浏览器不读它，
-    # 留着等于把内部说明（含模块私有函数名）打进每一份交付物。
-    return _fill(_load_asset("chart-boot.js"), {
-        "__CTV_CHART_SPECS__": chr(10).join(spec_lines),
-        "__CTV_CHART_INK__": json.dumps(
-            {"text": chart_palette["text"], "gridRgba": chart_palette["grid_rgba"],
-             "mono": chart_palette["mono"], "series": chart_palette["series"]},
-            ensure_ascii=False),
-        "__CTV_CHART_CFG__": json.dumps(
-            {k: v for k, v in _CHART_CFG.items() if k != "_meta"},
-            ensure_ascii=False),
-        "__CTV_ACCENT_FALLBACK__": json.dumps(DEFAULT_ACCENT),
-    }, "chart-boot.js")
 
 
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  chartjs_src=_DEFAULT_CHARTJS_SRC,
                   aspect="portrait", theme="dark", fps=24):
     """Generate complete Hyperframes HTML composition string.
 
@@ -407,9 +308,9 @@ def generate_html(manifest, audio_src, images=None,
             `_contracts.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
         aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
             画布尺寸都按它取，归一化在函数体内完成。
-        theme: 只改背景渐变/网格/正文/配图底板，不改每段 accent 彩色；
+        theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
             可选值见 _theme 的主题注册表。
-        gsap_src / chartjs_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
+        gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
         fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
             20% 帧、出片更快。
 
@@ -426,21 +327,17 @@ def generate_html(manifest, audio_src, images=None,
         width, height = get_canvas(aspect)
 
     # ── 配图/视频归一化（只做一次）─────────────────────────────────
-    # 后续渲染阶段（含下面的 has_chart 判定）都复用这份结果，同一输入
-    # 不经过第二次归一化。
+    # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
     images = _normalize_images(images or {})
     total_dur = manifest["total_duration"]
     sentences = manifest["sentences"]
     # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插
     # 会破坏 head 结构（媒体路径都走了 quote/转义；这里不能 URL 编码——
     # CDN 地址的 :/? 会被 quote 破坏）
-    # None 安全：调用方可能显式传 None（见上方常量注释），回落默认路径。
+    # None 安全：调用方可能显式传 None，回落默认路径。
     gsap_src_attr = (gsap_src or _DEFAULT_GSAP_SRC).replace("&", "&amp;").replace('"', "&quot;")
-    chartjs_src_attr = (chartjs_src or _DEFAULT_CHARTJS_SRC).replace("&", "&amp;").replace('"', "&quot;")
-    # 是否需要 Chart.js：判定与 gen_hyperframes 装 vendor 时共用 _contracts 那一份
-    has_chart = any(media_needs_chartjs(v) for v in images.values())
 
-    # 主题配色（背景/网格/文字/配图底板），accent 色不受主题影响
+    # 主题配色（背景/网格/文字），accent 色不受主题影响
     theme_colors = get_theme_colors(theme)
     # 按主题主文字色亮度判深浅底（_theme._THEMES 是唯一权威，
     # 新增主题无需改这里的枚举）——tagline 的"同色相只调明度"在深色
@@ -544,14 +441,6 @@ def generate_html(manifest, audio_src, images=None,
     css_title_lh = tpl_typo["titleLineHeight"]
     css_title_tracking = tpl_typo["titleTracking"]
     css_tagline_weight = tpl_typo["taglineWeight"]
-    # C2 公式文本卡（chart type=formula）的版式参数：全部来自模板顶层
-    # formulaCard（唯一来源在模板，这里不留字面量兜底）；字段缺失时严格失败。
-    _fc = tpl["formulaCard"]
-    css_fc_pad = _fc["padding"]
-    css_fc_title_size = _fc["titleSize"]
-    css_fc_title_opacity = _fc["titleOpacity"]
-    css_fc_title_mb = _fc["titleMarginBottom"]
-    css_fc_value_size = _fc["valueSize"]
     css_font_family = tpl_typo["fontFamily"]
     css_mono_family = tpl_typo["monoStack"]
     css_tagline_mt = _tgl["marginTop"]
@@ -566,16 +455,12 @@ def generate_html(manifest, audio_src, images=None,
   --ctv-font-mono:{css_mono_family};
   --ctv-grid-size:{css_grid_size}px;--ctv-grid-color:{theme_colors["grid_color"]};
   --ctv-text-color:{theme_colors["text_color"]};
-  --ctv-media-bg:{theme_colors["media_bg"]};
   --ctv-img-glow:{_il["glow"]}px;
   --ctv-title-weight:{css_title_weight};
   --ctv-title-lh:{css_title_lh};--ctv-title-tracking:{css_title_tracking};
   --ctv-tagline-font:{css_tagline_font};--ctv-tagline-mt:{css_tagline_mt}px;
   --ctv-tagline-lh:{css_tagline_lh};--ctv-tagline-weight:{css_tagline_weight};
   --ctv-prog-height:{css_prog_height}px;
-  --ctv-fc-pad:{css_fc_pad}px;--ctv-fc-title-size:{css_fc_title_size}px;
-  --ctv-fc-title-opacity:{css_fc_title_opacity};
-  --ctv-fc-title-mb:{css_fc_title_mb}px;--ctv-fc-value-size:{css_fc_value_size}px;
   --ctv-sub-font:{css_sub_font};
   --ctv-verse-h:{_vv["windowHeight"]}px;--ctv-verse-clip:{_vv["clipPad"]}px;
   --ctv-verse-line:{_vv["linePad"]}px;--ctv-verse-lh:{_vv["lineHeight"]};
@@ -631,13 +516,11 @@ def generate_html(manifest, audio_src, images=None,
     # Calculate clip timing
     clips = []
     for seg in segments:
-        seg_sents = seg["sentences"]
-        start = seg_sents[0]["start_time"]
-        end = seg_sents[-1]["start_time"] + seg_sents[-1]["duration"]
+        start = seg["sentences"][0]["start_time"]
         clips.append({
             "seg": seg,
             "start": round(start, 2),
-            "duration": round(end - start, 2),
+            "duration": round(segment_duration(seg), 2),
         })
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
@@ -691,6 +574,17 @@ def generate_html(manifest, audio_src, images=None,
         # images 键弹出，库调用方仍带映射时这里也强制忽略。
         is_agenda = sid in ("opening", "closing")
         has_image = (sid in images) and not is_agenda
+        # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
+        # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
+        # _contracts._validate_layout 把守；这里只认 canvas 且必须有配图。
+        is_canvas = seg.get("layout") == "canvas"
+        if is_canvas and not has_image:
+            # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
+            raise ValueError(
+                f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），但没有配图"
+                "——画布版式不渲染标题层与句子流层，没有配图就什么都不剩。"
+                "请在 images.json 给该段配一张按当前画幅出的图，或去掉 layout 字段"
+                "回到槽位版式。")
 
         # 动画参数快捷引用
         a_ = tpl_anim
@@ -754,20 +648,7 @@ def generate_html(manifest, audio_src, images=None,
             media_path = media_info["src"]
             media_type = media_info["media_type"]
             media_opts = media_info["opts"]
-            if media_type == "chart":
-                chart = media_opts.get("chart") or {}
-                chart_type = str(chart.get("type") or "").lower()
-                if chart_type == "formula":
-                    formula = esc(str(chart.get("formula") or ""))
-                    title = esc(str(chart.get("title") or ""))
-                    # 媒体卡的淡染面板/描边/外发光由 composition.css 从 --seg-accent
-                    # （注入在 seg-card 上）经 color-mix 派生，这里不再逐分支传色。
-                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}">'
-                                  f'<div class="chart-formula"><div class="chart-title">{title}</div><div class="formula-value">{formula}</div></div></div>')
-                else:
-                    image_html = (f'\n    <div class="seg-image chart-media" id="img-{sid}">'
-                                  f'<canvas id="chart-{sid}"></canvas></div>')
-            elif media_type == "video":
+            if media_type == "video":
                 # 视频配图：<video> 自动循环静音播放
                 loop = "loop" if media_opts.get("loop", True) else ""
                 muted = "muted" if media_opts.get("muted", True) else ""
@@ -819,7 +700,8 @@ def generate_html(manifest, audio_src, images=None,
             f'<div class="verse-clip" data-accent="{ac_text_attr}">'
             f'{"".join(_vlines)}</div></div>'
         )
-        _cls_extra = " agenda-card" if is_agenda else ""
+        _cls_extra = (" agenda-card" if is_agenda
+                      else " seg-canvas" if is_canvas else "")
         card_open = (
             f'  <div id="{sid}" class="clip seg-card{_cls_extra}" '
             f'data-start="{s:.2f}" data-duration="{d:.2f}" data-accent="{ac_attr}" '
@@ -845,6 +727,16 @@ def generate_html(manifest, audio_src, images=None,
                 + _agenda_col_html(seg, clips, manifest, _ag, _dark_theme,
                                    ac, ac_attr, title_size, _bgs)
                 + f'    {verse_html}\n    </div>\n'
+                + progress_html
+                + '  </div>'
+            )
+        elif is_canvas:
+            # 整页画布：只有画布 + 进度条。标题层/句子流层连 DOM 都不生成
+            # （不是 display:none）：留着的空盒子会给 Layout/Contrast 门禁添一
+            # 笔不存在的账，标题补间也会指向一个永远看不见的元素。
+            seg_cards.append(
+                card_open
+                + f'{image_html}\n'
                 + progress_html
                 + '  </div>'
             )
@@ -907,20 +799,22 @@ def generate_html(manifest, audio_src, images=None,
         # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
         _eb = a_["entranceBudget"]
         _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
-        # Title entrance
-        a_title = a_["titleEntrance"]
-        gsap_lines.append(
-            f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
-            f'duration:{a_title["duration"] * _k:.2f},'
-            f'ease:"{a_title["ease"]}"}},{s:.2f})'
-        )
+        # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
+        if not is_canvas:
+            a_title = a_["titleEntrance"]
+            gsap_lines.append(
+                f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
+                f'duration:{a_title["duration"] * _k:.2f},'
+                f'ease:"{a_title["ease"]}"}},{s:.2f})'
+            )
         if has_image:
             a_img = a_["imageEntrance"]
             # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
-            _img_ent = f'y:{a_img["vert_y"]}'
+            # 整页画布例外：满幅媒体再位移 40px 就在页底露出一条 40px 页面底
+            # （实测 t=48.6s 帧），只剩淡入。
+            _img_ent = "" if is_canvas else f',y:{a_img["vert_y"]}'
             gsap_lines.append(
-                f'tl.from("#img-{sid}",{{opacity:0,'
-                f'{_img_ent},'
+                f'tl.from("#img-{sid}",{{opacity:0{_img_ent},'
                 f'duration:{a_img["duration"] * _k:.2f},'
                 f'ease:"{a_img["ease"]}"}},'
                 f'{s + a_img["startDelay"] * _k:.2f})'
@@ -934,27 +828,20 @@ def generate_html(manifest, audio_src, images=None,
 
     gsap_code = "\n  ".join(gsap_lines)
 
-    # ── 图表引导脚本（实现见模块级 _build_chart_boot） ──
-    # images 在此处已是归一化后的结构（_build_chart_boot 要求该输入契约）。
-    chart_boot = _build_chart_boot(images, chart_palette_for_theme(theme))
-
     # ── 装配最终 HTML ────────────────────────────────────
     # 骨架在 templates/composition.html。样式与脚本各自装配好后填入占位符；
     # CSS 走 <style> 内联（无头浏览器首帧不能等外链 CSS，否则白屏错版），
-    # GSAP/chart.js 是脚本、可以外链（vendor/ 相对路径）。
+    # GSAP 是脚本、可以外链（vendor/ 相对路径）。
     style = _fill(_load_asset("composition.css"), {
         "__CTV_ROOT_VARS__": root_vars,
     }, "composition.css")
     script = _fill(_load_asset("runtime.js"), {
-        "__CTV_CHART_BOOT__": chart_boot,
         "__CTV_GSAP__": gsap_code,
         "__CTV_CUES__": sub_cues_js,
         "__CTV_VERSE_CLIP__": f"{_v_verse_clip:g}",
     }, "runtime.js")
-    chartjs_tag = (f'<script src="{chartjs_src_attr}"></script>') if has_chart else ''
     html = _fill(_load_asset("composition.html"), {
         "__CTV_GSAP_SRC__": gsap_src_attr,
-        "__CTV_CHARTJS_TAG__": chartjs_tag,
         "__CTV_STYLE__": style,
         "__CTV_SCRIPT__": script,
         "__CTV_SEG_CARDS__": chr(10).join(seg_cards),

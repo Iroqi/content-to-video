@@ -223,7 +223,7 @@ _TEMPLATE_JSON = r'''
     "titleTracking": "-0.02em"
   },
   "subtitle": {
-    "_meta": "字幕切分参数（_script_utils.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；cueMaxLines=整句渲染故 99。",
+    "_meta": "字幕切分参数（_text.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；cueMaxLines=整句渲染故 99。",
     "vertical": {
       "maxChars": 22,
       "cueMaxLines": 99
@@ -232,29 +232,6 @@ _TEMPLATE_JSON = r'''
       "maxChars": 18,
       "cueMaxLines": 99
     }
-  },
-  "formulaCard": {
-    "_meta": "C2 公式文本卡（chart type=formula，html_renderer 消费）。标题/公式字号与卡片内边距统一由模板控制。",
-    "padding": 48,
-    "titleSize": 30,
-    "titleOpacity": 0.82,
-    "titleMarginBottom": 28,
-    "valueSize": 52
-  },
-  "chart": {
-    "_meta": "Chart.js 视觉参数（html_renderer._build_chart_boot 编译成 options）。刻意没有 animation 项：图表在页面 load 时创建，自身补间走浏览器墙钟，与口播时间轴无关——渲染器逐帧 seek 时同一秒可能抓到半张图，所以一律关掉，入场观感交给段卡的 cross-fade。",
-    "titleFontSize": 40,
-    "legendFontSize": 30,
-    "tickFontSize": 34,
-    "axisTitleFontSize": 30,
-    "axisTitlePaddingFactor": 0.7,
-    "layoutPadding": 24,
-    "curvePointRadius": 0,
-    "curveBorderWidth": 5,
-    "curveTension": 0.2,
-    "scatterPointRadius": 8,
-    "datasetBorderWidth": 3,
-    "datasetTension": 0.25
   }
 }
 '''

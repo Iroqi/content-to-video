@@ -112,9 +112,10 @@ def _collect_blocks(source):
             # null 原样取出来让 None 一路流进 seg speed。
             extra={"speed": source.get("opening_speed")
                    or OPENING_CLOSING_DEFAULT_SPEED,
-                   # 版式由 pipeline 盖章，不给作者选：html_renderer 按 layout
-                   # 分派，manifest 因此是自描述的（见 _contracts.seg_layout）。
-                   "layout": "agenda"},
+                   # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
+                   # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
+                   # 自描述的（见 _contracts.seg_layout）。
+                   "layout": source.get("opening_layout") or "agenda"},
             turns=[],
         ))
 
@@ -188,7 +189,7 @@ def _collect_blocks(source):
             sentences=sents,
             extra={"speed": source.get("closing_speed")
                    or OPENING_CLOSING_DEFAULT_SPEED,
-                   "layout": "agenda"},
+                   "layout": source.get("closing_layout") or "agenda"},
             turns=[],
         ))
     return blocks

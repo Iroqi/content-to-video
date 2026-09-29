@@ -543,9 +543,9 @@ def generate_html(manifest, audio_src, images=None,
         ac_text = ensure_text_contrast(ac if _dark_theme else darken(ac), _bgs)
         ac_text_attr = esc(ac_text)
         # 版式一律由 _contracts.seg_layout 分派（layout 字段优先，结构性页按 id 兜
-        # 档），不再各处写 sid 字面量。agenda = 纯文字页：不配图，用章节罗列/要点
-        # 总结填充。gen_hyperframes 已把 opening/closing 的 images 键弹出，库调用方
-        # 仍带映射时这里也强制忽略。
+        # 档），不再各处写 sid 字面量。agenda = 纯文字投影卡：不配图，用章节罗列/
+        # 要点总结填充。gen_hyperframes 已把 agenda 版式的 opening/closing 键弹出，
+        # 库调用方仍带映射时这里也强制忽略。
         _layout = seg_layout(seg)
         is_agenda = _layout == "agenda"
         has_image = (sid in images) and not is_agenda

@@ -134,10 +134,10 @@ def _validate_accent(value, where):
 
 # 段落版式三档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
 # 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
-# 画）；"agenda" = 开屏/结尾那张纯文字页。两个显式值各自绑死段 id：canvas 只属于
-# 内容段，agenda 只属于 opening/closing——版式由 layout 分派，内容来源不由它分派
-# （agenda 的行是对全片其它段的投影，作者写不了也不该写，见 seg_layout）。
-# 版式后果见 references/rendering.md「画面结构」，画布规格见
+# 画）；"agenda" = 开屏/结尾那张纯文字页。只有 agenda 绑段 id：它是结构性页专属
+# 的投影卡（行来自全片其它段——作者能选这一档，选不了它印什么，见 seg_layout）；
+# canvas 两段通用——内容段用它换整页画布，结构性页用它把整页让给一张海报。
+# 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
 # references/image_options.md「整页画布」。
 LAYOUT_VALUES = ("canvas", "agenda")
 STRUCTURAL_SIDS = ("opening", "closing")
@@ -157,13 +157,15 @@ def seg_layout(seg):
     return "agenda" if (seg.get("id") or "") in STRUCTURAL_SIDS else "slot"
 
 
-def _validate_layout(value, where, *, agenda=False):
+def _validate_layout(value, where, *, content=False):
     """layout 取值校验（可选字段）。严格匹配：不做大小写归一、不 strip。
     放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式
     渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
 
-    agenda 与 canvas 互斥地绑在段 id 上：结构性段只可能是 agenda（由 pipeline
-    盖上），内容段只可能是 canvas 或不写。写反了都在这里拦下。
+    两个显式值里只有 agenda 绑段 id：它是结构性页那张投影卡，内容段借用它等于在
+    画面上印别人的目录。canvas 反过来谁都能用，包括 opening/closing——那条路的
+    代价（标题层、句子流、章节列表全都不再上画面）由作者自愿承担，门禁只保证
+    画布本身成立（有图、等比、字号够，见 gen_hyperframes.canvas_layout_errors）。
     """
     if value is None:
         return
@@ -172,12 +174,7 @@ def _validate_layout(value, where, *, agenda=False):
             f"{where} 的 layout={value!r} 不是合法版式：只接受 "
             f"{'、'.join(repr(v) for v in LAYOUT_VALUES)}，或整个不写"
             "（不写 = 槽位版式：标题区 + 配图槽 + 句子流）")
-    if agenda and value != "agenda":
-        raise ValueError(
-            f"{where} 写了 layout={value!r}，但 opening/closing 只能是 \"agenda\"："
-            "画布版式不生成标题层与句子流层，用在结构性段上会把开场标题/结尾行动"
-            "号召整个抹掉，而 `check` 只数 HTML 文本，看不见这种丢失")
-    if not agenda and value == "agenda":
+    if content and value == "agenda":
         raise ValueError(
             f"{where} 写了 layout=\"agenda\"，但 agenda 只属于 opening/closing："
             "它的行是对全片其它段的投影（开屏=各段标题+时长，结尾=各段 takeaway），"
@@ -251,6 +248,11 @@ def validate_segments_source(data):
                 validate_speed(data[key])
             except ValueError as e:
                 raise ValueError(f"segments_source.json 的 '{key}' 非法：{e}") from e
+
+    # 结构性页的版式覆盖：不写 = agenda 投影卡（pipeline 盖章），写 "canvas" =
+    # 整页海报。只有这两个去向，所以这里按取值分派、不看段 id（content=False）。
+    for key in ("opening_layout", "closing_layout"):
+        _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
 
     # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
     # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。
@@ -326,7 +328,8 @@ def validate_segments_source(data):
         _validate_accent(seg.get("accent"),
                          f"segments[{i}]（title={seg.get('title')!r}）")
         _validate_layout(seg.get("layout"),
-                         f"segments[{i}]（title={seg.get('title')!r}）")
+                         f"segments[{i}]（title={seg.get('title')!r}）",
+                         content=True)
         dialogue = seg.get("dialogue")
         # 类型必须在这里拦下：非列表的 truthy dialogue（字符串/对象）若放行，
         # 会绕过 has_dialogue 判定、又在 build_from_structured 的 if dialogue:
@@ -531,7 +534,7 @@ def validate_timing_manifest(data):
         sid = sg.get("id")
         if not isinstance(sid, str) or not sid.strip():
             raise ValueError(f"segments[{i}].id 必须是非空字符串")
-        if not (sid == "opening" or sid == "closing" or is_content_sid(sid)):
+        if not (sid in STRUCTURAL_SIDS or is_content_sid(sid)):
             raise ValueError(
                 f"segments[{i}].id={sid!r} 必须是 opening/closing 或以 "
                 f"{CONTENT_SID_PREFIX} 开头")
@@ -544,7 +547,7 @@ def validate_timing_manifest(data):
         _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
-                         agenda=not is_content_sid(sid))
+                         content=is_content_sid(sid))
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:

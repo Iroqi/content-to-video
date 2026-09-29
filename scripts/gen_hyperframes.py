@@ -568,23 +568,28 @@ def main():
             except ValueError as e:
                 print(f"[error] {e}", file=sys.stderr)
                 sys.exit(1)
-            # 开屏/结尾是纯文字 agenda 卡，不消费配图：images.json 里的
-            # opening/closing 键先弹出并提示（不参与缺图判定）。必须在引用
-            # 完整性校验之前——否则指向缺失文件的这两个键会被 fail-fast 误拦，
-            # 与"忽略并给出 [warn]"的文档口径矛盾。
-            _agenda_keys = [k for k in STRUCTURAL_SIDS if k in images]
+            # 结构性页默认是纯文字 agenda 卡，不消费配图：images.json 里 agenda
+            # 版式的那一两页先弹出并提示（不参与缺图判定）。必须在引用完整性校验
+            # 之前——否则指向缺失文件的这两个键会被 fail-fast 误拦，与"忽略并给出
+            # [warn]"的文档口径矛盾。声明 layout:"canvas" 的结构性页是例外：整页
+            # 画布只有那张图，弹出它就等于把这一页渲染成一帧空背景。
+            _segs = manifest["segments"]
+            _seg_by_id = {seg.get("id", ""): seg for seg in _segs}
+            _agenda_keys = [k for k in STRUCTURAL_SIDS
+                            if k in images and k in _seg_by_id
+                            and seg_layout(_seg_by_id[k]) == "agenda"]
             if _agenda_keys:
                 for k in _agenda_keys:
                     images.pop(k)
                 print(f"[warn] images.json 的 {'/'.join(_agenda_keys)} 键被忽略："
-                      "开屏/结尾是纯文字 agenda 版式，不配图；"
-                      "建议从 images.json 移除上述键（对应配图文件可一并清理）。",
+                      "该结构性页是纯文字 agenda 版式，不配图；想让开屏/结尾整页出"
+                      "海报请写 opening_layout / closing_layout: \"canvas\"，"
+                      "否则建议从 images.json 移除上述键（配图文件可一并清理）。",
                       file=sys.stderr)
             # 孤儿键：images.json 里还留着 manifest 中不存在的段 id（稿件
             # 删段/改名后忘了同步）——弹出并 warn，不进渲染器，也不参与
             # 下方缺图判定（指向已删除配图文件的旧键不该阻断本次生成）。
-            _segs = manifest["segments"]
-            _known_sids = {seg.get("id", "") for seg in _segs}
+            _known_sids = set(_seg_by_id)
             _orphan_keys = [k for k in images if k not in _known_sids]
             if _orphan_keys:
                 for k in _orphan_keys:

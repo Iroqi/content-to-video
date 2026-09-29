@@ -27,7 +27,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _contracts import (DEFAULT_SPEED, is_content_sid, list_voice_ids,  # noqa: E402
+from _contracts import (DEFAULT_SPEED, list_voice_ids, needs_image,  # noqa: E402
                         validate_speed, load_timing_manifest, load_images_json)
 from _audio import remove_quiet  # noqa: E402
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
@@ -523,8 +523,9 @@ def _image_coverage(manifest_path, images_json):
     fail-fast——把它混进"只警告"里等于承诺一个根本兑现不了的继续（实测
     先打印"继续生成 HTML"、下一步整体 exit 1）。
 
-    口径：只有内容段落（seg…）需要配图，判定收口在 _contracts.is_content_sid。
-    开屏/结尾是纯文字 agenda 卡（章节罗列/要点总结），两画幅都不配图。
+    口径收口在 _contracts.needs_image：内容段一律需要配图；开屏/结尾默认是纯文字
+    agenda 卡（章节罗列/要点总结），两画幅都不配图，但那一页换成整页画布
+    （opening_layout / closing_layout: "canvas"）后，配图就是它唯一的画面，同样计入。
     """
     # 走 _contracts 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
     # 的半途，文件是截断的 JSON，裸 load 会抛 JSONDecodeError traceback，
@@ -540,8 +541,7 @@ def _image_coverage(manifest_path, images_json):
             "请重跑 TTS 步骤重新生成后再来。")
     # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
     # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。
-    sids = [seg.get("id", "") for seg in manifest["segments"]
-            if is_content_sid(seg.get("id"))]
+    sids = [seg.get("id", "") for seg in manifest["segments"] if needs_image(seg)]
     if not sids:
         return [], [], []
     if not os.path.isfile(images_json):
@@ -773,7 +773,7 @@ def main():
 
     if missing_keys:
         # 只有真要出片才拦：--until html 是"图没画完先看版式"的迭代路径，
-        # 同一份缺图清单在那里只降级成警告。missing 只含内容段。
+        # 同一份缺图清单在那里只降级成警告。missing 的口径见 _image_coverage。
         images_dir = os.path.join(project, "images")
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"

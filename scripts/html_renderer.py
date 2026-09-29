@@ -497,15 +497,17 @@ def generate_html(manifest, audio_src, images=None,
         })
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
-    # closing_cta 只有结尾 agenda 卡这一个消费者：稿件没有 closing 段时这条尾行
-    # 无处可画。不 warn 就成了"稿子里写了行动号召，画面上什么都没有"，与
-    # writing.md 承诺的"两种丢弃都只向 stderr 打 [warn]"口径矛盾。
+    # closing_cta 只有结尾 agenda 卡这一个消费者：没有 closing 段、或那一页被作者
+    # 换成整页海报（closing_layout: "canvas"）时，这条尾行都无处可画。不 warn 就成了
+    # "稿子里写了行动号召，画面上什么都没有"，与 writing.md 承诺的"丢弃都只向
+    # stderr 打 [warn]"口径矛盾。
     if (str(manifest.get("closing_cta") or "").strip()
-            and not any(c["seg"].get("id") == "closing" for c in clips)):
-        print("[warn] manifest 有 closing_cta，但本次没有 closing 段可承载它——"
+            and not any(c["seg"].get("id") == "closing"
+                        and seg_layout(c["seg"]) == "agenda" for c in clips)):
+        print("[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它——"
               "行动号召只画在结尾 agenda 卡上，这条尾行不会出现在画面里"
-              "（要保留 cta 就在稿件里补一段 closing，或删掉 closing_cta）",
-              file=sys.stderr)
+              "（要保留 cta 就补一段 closing 并把 closing_layout 留空/改回 agenda，"
+              "或删掉 closing_cta）", file=sys.stderr)
 
     seg_cards = []
     gsap_lines = []

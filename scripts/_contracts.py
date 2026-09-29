@@ -31,11 +31,11 @@ SID_RULE = "字母开头，仅字母/数字/-/_，1–64 字符"
 # 白名单之外不进生成 HTML。
 
 # ── 内容段落 id 约定──────────────────────────────────────────────
-# "哪些段落需要配图" 由 sid 前缀决定：opening/closing 是结构性段落，天生
-# 不需要配图。判断"是不是内容段"一律调 is_content_sid()，不要再写一份
-# startswith（结构性页一律用 STRUCTURAL_SIDS 点名，别在各处写字面量）。漏掉
-# 一处的后果是静默改变配图覆盖率统计口径（把不该算的算进去，或该配图的段落
-# 被跳过拦截）。
+# 段 id 的前缀决定"这是内容段还是结构性页"；"哪些段落要配图"另有一档，由前缀
+# 加版式共同决定，一律调 needs_image()（见下）。判断"是不是内容段"一律调
+# is_content_sid()，不要再写一份 startswith（结构性页一律用 STRUCTURAL_SIDS
+# 点名，别在各处写字面量）。漏掉一处的后果是静默改变配图覆盖率统计口径（把不该
+# 算的算进去，或该配图的段落被跳过拦截）。
 CONTENT_SID_PREFIX = "seg"
 
 
@@ -50,8 +50,23 @@ def is_valid_sid(sid):
 
 
 def is_content_sid(sid):
-    """该 sid 是否属于"需要配图的内容段落"（排除 opening/closing）。"""
+    """该 sid 是否属于"需要配图的内容段落"（排除 opening/closing）。
+
+    注意这只回答"段 id 是不是内容段"，不再等于"这一页要不要配图"——结构性页
+    换成整页画布后那一页的唯一画面就是配图。判配图一律走 needs_image()。
+    """
     return (sid or "").startswith(CONTENT_SID_PREFIX)
+
+
+def needs_image(seg):
+    """该段是否计入"配图覆盖率 / 缺图拦截"。run.py 与 gen_hyperframes 共用这一条。
+
+    内容段一律计入（槽位版式缺图只是少一块画面，仍然该报）；结构性页默认不计入
+    （agenda 卡纯文字），但 layout:"canvas" 那一页整页就是那张图，不计入的话
+    覆盖率会报"全部命中"而 HTML 步骤必然 exit 1。两边各写一份口径的代价就是
+    一个拦一个放，报告数字和实际能不能出片对不上。
+    """
+    return is_content_sid(seg.get("id")) or seg_layout(seg) == "canvas"
 
 
 def validate_speed(speed):

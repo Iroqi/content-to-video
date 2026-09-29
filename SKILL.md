@@ -70,7 +70,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 四条路线：真实照片检索（A）、ImageGen（B）、SVG 矢量示意（C：数据图、公式、示意图都走这一条，手绘 `.svg` 直接落 `images/`，没有中间生成脚本）、VideoGen 视频/动图素材（D）。ImageGen / VideoGen / A 的联网搜索都是**能力泛称**——模型自身多模态或搜索能力、平台工具、已安装 Skill，任一可调用即可。四条路线的选型逻辑、画布规格、质量标准和落盘方式统一见 `references/image_options.md`。
 
-开屏与结尾在默认的 agenda 版式下不配图；`images.json` 里出现 `opening` / `closing` 键会被忽略并打 `[warn]`（只有那一页换成 `opening_layout` / `closing_layout: "canvas"` 时它的配图才是画面本身）。配图覆盖率只统计内容段。
+开屏与结尾在默认的 agenda 版式下不配图；`images.json` 里出现 `opening` / `closing` 键会被忽略并打 `[warn]`（只有那一页换成 `opening_layout` / `closing_layout: "canvas"` 时它的配图才是画面本身）。配图覆盖率按 `_contracts.needs_image` 统计：内容段 + 换成画布的那一页。
 
 画 SVG 矢量示意（方式 C）前，先读 `references/image_options.md` 的「画布几何：根节点必须是 4:3」「图内文字的对比度：定色在前，自查在后」「数据图的几何自查」「文字与尺寸」四节并按约束下笔（第一版就按约束画，别靠重画收敛；含图内字体栈、字号与宽度预算）。三条无人能替你检查的硬约束：① 根节点必须写死 4:3，② 图内文字的对比度与溢出全靠下笔时自己盯，③ **数据图的刻度分档与长度/角度比例——从前 Chart.js 替你算，现在你自己算**（比例画错没有任何门禁会报，画面却在规定观众读一份错数据）。SVG 以 `<img>` 载入，`gen_hyperframes.py` 除整页画布那一组按文件的对账（比例 + 图内 px 字号折算）外只校验文件存在。画完想快速看一眼用 Chrome 无头截图（一次约 1s）：`chrome --headless=new --disable-gpu --window-size=980,735 --screenshot=<绝对路径>.png file:///<svg 绝对路径>`。
 

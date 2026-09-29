@@ -156,7 +156,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
-                        classify_media_path, is_content_sid, seg_layout,
+                        classify_media_path, needs_image, seg_layout,
                         STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
@@ -251,17 +251,16 @@ def _warn_if_local_vendor_missing(src, out_dir):
           file=sys.stderr)
 
 
-def _uncovered_content_sids(manifest, images):
+def _uncovered_image_sids(manifest, images):
     """manifest 中没有配图映射的『需要配图的段落』sid 列表。
 
-    口径：只有内容段落（seg…）需要配图。开屏/结尾是纯文字 agenda
-    卡，不配图（images.json 里若还留着这两个键，渲染器也会忽略）。
-    与 run.py _image_coverage 同一口径。gen_hyperframes 对缺图只提示
-    不拦截（run.py 一键编排有缺图拦截，分步执行保留显式 warn，
-    避免把"漏配/没找到合适的图"误当"不需要图"）。
+    口径收口在 _contracts.needs_image：内容段一律算，结构性页只在换成整页画布时
+    算（agenda 卡纯文字，那一页的 images 键上面就被弹掉了）。与 run.py
+    _image_coverage 同一口径。gen_hyperframes 对缺图只提示不拦截（run.py 一键编排
+    有缺图拦截，分步执行保留显式 warn，避免把"漏配/没找到合适的图"误当"不需要图"）。
+    画布段这里会多报一条 warn，权威判据是下面 canvas_layout_errors 的 error。
     """
-    _segs = manifest["segments"]
-    _need = [seg.get("id", "") for seg in _segs if is_content_sid(seg.get("id"))]
+    _need = [seg.get("id", "") for seg in manifest["segments"] if needs_image(seg)]
     return [sid for sid in _need if sid and sid not in images]
 
 
@@ -634,7 +633,7 @@ def main():
     # 时提示。静默无图会让 agent 把"漏配/没找到合适的图"误当"不需要图"——
     # run.py 一键编排会在交付前拦截；分步执行保留显式 warn，提醒调用方补图
     # 或确认纯文字兜底。
-    _uncovered = _uncovered_content_sids(manifest, images)
+    _uncovered = _uncovered_image_sids(manifest, images)
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"

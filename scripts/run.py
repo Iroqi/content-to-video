@@ -28,10 +28,8 @@ sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _contracts import (DEFAULT_SPEED, is_content_sid, list_voice_ids,  # noqa: E402
-                        validate_speed, load_timing_manifest,
-                        validate_images_json)
+                        validate_speed, load_timing_manifest, load_images_json)
 from _audio import _remove_quiet  # noqa: E402
-from html_renderer import manifest_segments  # noqa: E402  段落分组的唯一口径（segments 缺失时按兜底规则分组）
 import _script_utils as _su  # noqa: E402
 from _script_utils import (setup_stdio,  # noqa: E402  重定向场景 stdout 强制 UTF-8
                            guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
@@ -466,20 +464,19 @@ def _image_coverage(manifest_path, images_json):
             f"[run] timing_manifest.json 无法读取（{manifest_path}）：{e}\n"
             "文件可能被上次中断的写入截断或结构不合法；"
             "请重跑 TTS 步骤重新生成后再来。")
-    # manifest_segments 而非裸读 segments：契约允许手写/裁剪的 manifest
-    # 不带 segments 字段（渲染端按兜底规则自动分组）。只读 manifest["segments"]
-    # 会让 sids 恒空——缺图拦截静默失效，与画面实际用的段 id 漂移。
-    sids = [seg.get("id", "") for seg in manifest_segments(manifest)
+    # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
+    # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。
+    sids = [seg.get("id", "") for seg in manifest["segments"]
             if is_content_sid(seg.get("id"))]
     if not sids:
         return [], [], []
     if not os.path.isfile(images_json):
         return sids, sids, []
-    # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 _read_json_file 统一
+    # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 load_images_json 统一
     # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
     # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
     try:
-        mapping = validate_images_json(_read_json_file(images_json))
+        mapping = load_images_json(images_json)
     except ValueError as e:
         raise SystemExit(
             "[run] images.json 读不出来——文件可能被上次中断的写入截断，或不是"

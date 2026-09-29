@@ -32,7 +32,7 @@ description: 把文本、文档、网页或结构化资料转成带字幕、配�
 
 渲染资产默认离线复用：
 
-- GSAP `3.14.2` 与 Chart.js `4.5.1` 的官方 dist **不随技能包分发**：`gen_hyperframes.py` 按 **输出项目 `vendor/` → 用户缓存 `~/.cache/content-to-video/vendor/` → 钉固 CDN** 取用，每级都重算哈希（GSAP sha256 / Chart.js sha384，钉固值是 `gen_hyperframes.py` 顶部的常量，升级版本只改那里），校验不过就不装、不落盘。新机器第一次生成需要联网取一次，之后缓存命中即永久离线；HTML 里永远只引用本地 `vendor/`，不会把远程 URL 写进 `<script>`。
+- GSAP `3.14.2` 与 Chart.js `4.5.1` 的官方 dist **不随技能包分发**：`gen_hyperframes.py` 按 **输出项目 `vendor/` → 用户缓存 `~/.cache/content-to-video/vendor/` → 钉固 CDN（`cdn.jsdelivr.net`）** 取用，每级都重算哈希（GSAP sha256 / Chart.js sha384，钉固值是 `gen_hyperframes.py` 顶部的常量，升级版本只改那里），校验不过就不装、不落盘。新机器第一次生成需要联网取一次，之后缓存命中即永久离线；取用失败（网络抖动、缓存被截断）直接重跑同一条命令即可。HTML 里永远只引用本地 `vendor/`，不会把远程 URL 写进 `<script>`。
 - 逃生口 `gen_hyperframes.py --gsap-src/--chartjs-src`（URL 或相对路径）：显式传入的源**不做哈希钉固校验**（只查存在性），可信度自负。取不到 CDN 的机器也可以手动把官方 dist 放进上面那个缓存目录（文件名 `gsap-<版本>.min.js` / `chartjs-<版本>.umd.min.js`，字节须与钉固哈希一致，否则会被拒用）。
 
 常用环境变量：

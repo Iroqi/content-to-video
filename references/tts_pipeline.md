@@ -94,7 +94,8 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 }
 ```
 
-- 顶层 `schema_version`（只能是 `2`）、`status`（`ok` / `degraded`）、`sentences`（非空列表）与数值 `total_duration`（ffmpeg 实测总时长）必填；`degraded` 只在 `status` 为 `degraded` 时必须是非空对象。每个句子对象含 `index`/`text`/`start_time`/`duration` 四个字段（对话段落的句子另有 `speaker`，TTS 失败降级为静音的句子带 `synth_failed: true`）
+- 顶层 `schema_version`（只能是 `2`）、`status`（`ok` / `degraded`）、`sentences`（非空列表）、`segments`（非空列表）与数值 `total_duration`（ffmpeg 实测总时长）必填；`degraded` 只在 `status` 为 `degraded` 时必须是非空对象。每个句子对象含 `index`/`text`/`start_time`/`duration` 四个字段（对话段落的句子另有 `speaker`，TTS 失败降级为静音的句子带 `synth_failed: true`）
+- 顶层 `closing_cta`（可选，单行字符串）：结尾 agenda 卡的 `→` 尾行，pipeline 从稿件顶层 `cta` 原样透传；手写 manifest 要有这行就直接写。它只在存在 `closing` 段时才有地方画，否则生成阶段打 `[warn] manifest 有 closing_cta，但本次没有 closing 段可承载它`
 - `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`start`/`end` 句子索引只是 pipeline 的内部中间格式，最终 manifest 不含这两个字段
 
 **可选字段**：

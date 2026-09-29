@@ -82,7 +82,7 @@ hf-project/
 └── images/
 ```
 
-`vendor/` 由 `gen_hyperframes.py` 装出：**用户缓存 `~/.cache/content-to-video/vendor/` → 钉固 CDN**（项目里已有合格副本就直接复用）。每级都重算哈希，钉固值与 CDN 地址是 `gen_hyperframes.py` 顶部的常量；缓存命中时全程不联网，新机器首次生成需要能访问 `cdn.jsdelivr.net` 一次（失败就重跑，或手动把官方 dist 放进缓存目录）。
+`vendor/` 由 `gen_hyperframes.py` 在这一步自动装好——取用链、哈希钉固与取不到时的处置口径，见 SKILL.md「渲染资产默认离线复用」。
 
 音频路径会在生成 HTML 前做存在性检查；manifest 中的绝对路径或项目外音频会复制到项目的 `audio/` 目录，显式 `--audio` 也遵循同一规则。manifest 的音频路径失效时会回落到项目里上次暂存的 `audio/combined.wav`——这会打 `[warn]` 并实测其时长与 manifest 时间轴对账，偏差超过 `max(1s, 2%)` 直接拒跑（拒绝用新字幕烧旧音轨）；两处都没有才报错，不生成无声预览或成片。
 

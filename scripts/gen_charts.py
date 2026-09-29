@@ -10,7 +10,7 @@ import sys
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import setup_stdio, write_json_atomic, guard_not_in_skill_dir
-from _contracts import (CHART_TYPES, is_valid_sid, validate_images_json,
+from _contracts import (CHART_TYPES, is_valid_sid, load_images_json,
                         SID_RULE, _read_json_file)
 
 # 公式求值的安全护栏：AST 白名单挡的是"能力"（不出网络/属性/下标/导入），
@@ -347,30 +347,17 @@ def main():
         # 及其 provenance 元数据）原样保留，只新增/幂等更新 chart 条目。
         existing = {}
         if os.path.exists(args.output):
+            # 合并前先过同一份契约：images.json 由 gen_charts 与 A/B/D 路线共写，
+            # 坏值（截断、顶层不是对象、裸字符串路径、null 条目）必须在这里就报对
+            # 人——否则要么在 merge 里抛裸 AttributeError，要么被 [ok] 静默带着写回，
+            # 等下游 gen_hyperframes 才炸，届时用户已以为是本次 chart 写坏了文件。
+            # 缺文件/非 UTF-8/截断 JSON 三种读不出来的形态都由 load_images_json
+            # 统一成带路径的 ValueError，本文件不再自己 open + json.load。
             try:
-                with open(args.output, "r", encoding="utf-8-sig") as f:
-                    existing = json.load(f)
-            except (OSError, ValueError) as exc:
-                # （json.JSONDecodeError 是 ValueError 子类，无需单列）
-                print(f"[error] 目标 {args.output} 无法读取，拒绝合并写回"
-                      f"（文件可能被截断，请先修复或删除它）: {exc}",
-                      file=sys.stderr)
-                return 1
-            if not isinstance(existing, dict):
-                print(f"[error] 目标 {args.output} 顶层不是 JSON 对象，"
-                      f"拒绝合并写回（images.json 需为 {{segment_id: 映射}}）",
-                      file=sys.stderr)
-                return 1
-            # 合并前先按契约校验既有映射：images.json 由 gen_charts 与 A/B/D
-            # 路线共写同一份文件，坏值（裸字符串路径、null 条目）必须在这里就
-            # 报对人——否则要么在 merge 里抛裸 AttributeError，要么被 [ok] 静默
-            # 带着写回，等下游 gen_hyperframes 才炸，届时用户已以为是本次
-            # chart 写坏了文件。
-            try:
-                existing = validate_images_json(existing)
+                existing = load_images_json(args.output)
             except ValueError as exc:
-                print(f"[error] 既有 {args.output} 不是合法的配图映射，"
-                      f"拒绝合并写回: {exc}", file=sys.stderr)
+                print(f"[error] 既有 {args.output} 无法合并写回"
+                      f"（请先修复或删除它）: {exc}", file=sys.stderr)
                 return 1
         result = merge_images_map(existing, charts_map)
         # 走原子写：images.json 是下游 run.py/gen_hyperframes 的必读输入，

@@ -142,8 +142,8 @@ def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
                    validate, label):
     """把钉固字节的第三方脚本装进输出项目，返回项目内相对路径（失败 None）。
 
-    取用链只有两级：**用户缓存 → 钉固 CDN**（项目 vendor/ 已有合格副本时
-    直接复用，不重拷）。每一级都重算哈希——缓存里被污染或截断的历史下载
+    取用链与 SKILL.md「渲染资产默认离线复用」同一条：**输出项目 vendor/ → 用户
+    缓存 → 钉固 CDN**，每一级都重算哈希——缓存或项目里被污染、截断的历史副本
     不会被复用，CDN 响应体校验不过就不落盘。技能包不再内置这两个 dist：
     280KB 的二进制副本要求"换版本必须同时改文件名 + 钉固哈希 + README"，
     而下载路径本来就有同一套哈希校验，内置副本只是把同一条链多养一级。
@@ -188,15 +188,14 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
-from _contracts import (load_timing_manifest, validate_images_json,  # noqa: E402
-                        classify_media_path, is_content_sid, media_needs_chartjs,
-                        _read_json_file)
+from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
+                        classify_media_path, is_content_sid, media_needs_chartjs)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
 
 from html_renderer import (  # noqa: E402
-    _segment_duration, generate_html, manifest_segments,
+    _segment_duration, generate_html,
 )
 
 
@@ -296,7 +295,7 @@ def _uncovered_content_sids(manifest, images):
     不拦截（run.py 一键编排有缺图拦截，分步执行保留显式 warn，
     避免把"漏配/没找到合适的图"误当"不需要图"）。
     """
-    _segs = manifest_segments(manifest)
+    _segs = manifest["segments"]
     _need = [seg.get("id", "") for seg in _segs if is_content_sid(seg.get("id"))]
     return [sid for sid in _need if sid and sid not in images]
 
@@ -483,7 +482,7 @@ def main():
     if args.images:
         if os.path.exists(args.images):
             try:
-                images = validate_images_json(_read_json_file(args.images))
+                images = load_images_json(args.images)
             except ValueError as e:
                 print(f"[error] {e}", file=sys.stderr)
                 sys.exit(1)
@@ -502,7 +501,7 @@ def main():
             # 孤儿键：images.json 里还留着 manifest 中不存在的段 id（稿件
             # 删段/改名后忘了同步）——弹出并 warn，不进渲染器，也不参与
             # 下方缺图判定（指向已删除配图文件的旧键不该阻断本次生成）。
-            _segs = manifest_segments(manifest)
+            _segs = manifest["segments"]
             _known_sids = {seg.get("id", "") for seg in _segs}
             _orphan_keys = [k for k in images if k not in _known_sids]
             if _orphan_keys:
@@ -517,8 +516,8 @@ def main():
             # 扩展名，却忘了重跑本脚本重新生成 HTML。
             # 段落时长映射——视频配图比段落长时渲染只显示前段（尾部被截断），
             # 要在这里就给出提示而不是等成片后才发现。
-            # 复用上方 manifest_segments 的分组结果：裸读 manifest["segments"]
-            # 在无 segments 的手写 manifest 下恒空，这条 [warn] 会永不触发。
+            # 复用上方 _segs（契约已保证 manifest["segments"] 非空）：段 id 的
+            # 唯一来源，与渲染器读的是同一份分组。
             _seg_durs = {seg.get("id", ""): _segment_duration(seg)
                          for seg in _segs}
             missing_imgs, corrupt_imgs = validate_images_files(
@@ -555,9 +554,8 @@ def main():
               f"在 A/B/C/D 四条路线中选型补图（见 references/image_options.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
-    # Resolve GSAP src: explicit CLI value wins. Otherwise 项目 vendor → 用户
-    # 缓存 → 钉固 CDN（下载体过哈希校验后才落盘）。永不把远程 URL 直接写进
-    # <script>：那会让渲染依赖网络。
+    # GSAP 取用：显式 --gsap-src 直接写进 HTML 引用（不校验），否则走
+    # ensure_local_gsap 的钉固取用链（链路与"永不写远程 URL"见其 docstring）。
     if args.gsap_src:
         gsap_src = args.gsap_src
         _warn_if_local_vendor_missing("GSAP", gsap_src, out_dir)
@@ -667,7 +665,7 @@ def main():
         print("[warn] 未找到 scripts/preview.js，浏览器预览不可用"
               "（渲染不受影响）", file=sys.stderr)
 
-    seg_count = len(manifest_segments(manifest))
+    seg_count = len(manifest["segments"])
     print(f"[OK] {args.output} ({len(html)} bytes)")
     print(f"     Duration: {manifest['total_duration']}s")
     print(f"     Segments: {seg_count}")

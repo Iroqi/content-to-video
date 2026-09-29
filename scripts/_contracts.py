@@ -449,112 +449,116 @@ def validate_timing_manifest(data):
             "timing_manifest.json 含 synth_failed 句子，却标记为 status=ok；"
             "请重跑 pipeline，或将降级状态正确标记为 degraded")
     # segments 若提供，每段必须自带非空 sentences 列表——
-    # gen_hyperframes.py 对 seg["sentences"] 是直接下标访问（分组渲染的
-    # 数据源），缺失时炸裸 KeyError: 'sentences'，不指向真正缺的键。
-    # 显性化成契约错误，手写/裁剪 manifest 时第一时间报对人。
+    # segments 必填且非空：画面标题/tagline/accent 与开屏/结尾 agenda 只从这些分组
+    # 取，没有它就没有内容段版式可渲染。段内 sentences 一并显性化：
+    # gen_hyperframes.py 对 seg["sentences"] 是直接下标访问，缺失时炸裸
+    # KeyError: 'sentences'，不指向真正缺的键——手写/裁剪 manifest 的报错
+    # 必须第一时间报对人。
     segs = data.get("segments")
-    if segs is not None:
-        if not isinstance(segs, list):
-            raise ValueError("timing_manifest.json 的 'segments' 必须是列表")
-        _seen_sids = set()
-        assigned_indices = set()
-        previous_segment_end = None
-        for i, sg in enumerate(segs):
-            if not isinstance(sg, dict):
-                raise ValueError(f"segments[{i}] 必须是对象")
-            sid = sg.get("id")
-            if not isinstance(sid, str) or not sid.strip():
-                raise ValueError(f"segments[{i}].id 必须是非空字符串")
-            if not (sid == "opening" or sid == "closing" or is_content_sid(sid)):
-                raise ValueError(
-                    f"segments[{i}].id={sid!r} 必须是 opening/closing 或以 "
-                    f"{CONTENT_SID_PREFIX} 开头")
-            # id 会拼进 HTML 属性与 GSAP 选择器字符串（见 _SID_RE 注释），
-            # 手写 manifest 里坏 sid 的失败模式是"动画静默丢失/整段脚本
-            # 语法错误"，必须在契约层报对人
-            _validate_sid(sg.get("id"), f"segments[{i}]", _seen_sids)
-            _validate_text(sg.get("title"), f"segments[{i}].title", required=True)
-            _validate_text(sg.get("tagline"), f"segments[{i}].tagline")
-            _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
-            # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
-            # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
-            if sg.get("takeaway") is not None:
-                if not isinstance(sg["takeaway"], str):
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
-                        "'takeaway' 必须是字符串")
-                # 与 source 侧同一单行约束（writing.md）：manifest 可手写，
-                # 含换行的 takeaway 会挤爆结尾 agenda 的行数预算
-                if "\n" in sg["takeaway"] or "\r" in sg["takeaway"]:
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
-                        "'takeaway' 必须是单行（含换行会挤爆 agenda 行数预算）")
-            # 段级 voice_id 与顶层同一白名单口径（pipeline 从已校验的 source
-            # 透传，手写 manifest 是另一条入口）：坏音色名混进来只会在配音
-            # 错位时才被发现
-            _seg_vid = sg.get("voice_id")
-            if _seg_vid is not None:
-                if (not isinstance(_seg_vid, str)
-                        or not all(is_valid_voice_id(v)
-                                   for v in _seg_vid.split(","))):
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sid}' 的 voice_id="
-                        f"{_seg_vid!r} 含不在预置音色里的值"
-                        f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
-            ss = sg.get("sentences")
-            if not isinstance(ss, list) or not ss:
-                sid = sg.get("id", f"segments[{i}]")
-                raise ValueError(
-                    f"timing_manifest.json 的段落 '{sid}' 缺少非空 "
-                    f"'sentences' 列表（segments 分组渲染的数据源，"
-                    f"pipeline.py 产出格式）")
-            # 段内句子与顶层 sentences 走同一份必需字段校验（只查
-            # "非空列表"的话，段内缺 start_time 会在 gen_hyperframes/
-            # 下游炸裸 KeyError，不指向真正缺的键）
-            segment_seen = set()
-            segment_prev = None
-            for j, s in enumerate(ss):
-                _check_sentence_fields(
-                    s, f"segments[{i}]（{sg.get('id', '?')}）.sentences[{j}]")
-                if s["index"] not in seen_indices:
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 引用了不存在的 sentence index {s['index']}")
-                if s["index"] in segment_seen:
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 内 sentence index 重复：{s['index']}")
-                if s["index"] in assigned_indices:
-                    raise ValueError(
-                        f"timing_manifest.json 的 sentence index {s['index']} 被多个段落重复引用")
-                top_sentence = top_by_index[s["index"]]
-                if s.get("text") != top_sentence.get("text"):
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
-                        f"index {s['index']} 的 text 与顶层 sentences 不一致")
-                if abs(float(s["start_time"]) - float(top_sentence["start_time"])) > 1e-6 or \
-                   abs(float(s["duration"]) - float(top_sentence["duration"])) > 1e-6:
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
-                        f"index {s['index']} 的时间轴与顶层 sentences 不一致")
-                segment_seen.add(s["index"])
-                assigned_indices.add(s["index"])
-                start = float(s["start_time"])
-                if segment_prev is not None and start + 1e-6 < segment_prev:
-                    raise ValueError(
-                        f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentences 必须按 start_time 升序排列")
-                segment_prev = start
-            segment_start = float(ss[0]["start_time"])
-            segment_end = float(ss[-1]["start_time"]) + float(ss[-1]["duration"])
-            if previous_segment_end is not None and segment_start + 1e-6 < previous_segment_end:
-                raise ValueError(
-                    f"timing_manifest.json 的 segments 顺序与时间轴不一致："
-                    f"'{sid}' 从 {segment_start:.3f}s 开始，但前一段结束于 "
-                    f"{previous_segment_end:.3f}s")
-            previous_segment_end = segment_end
-        missing_indices = seen_indices - assigned_indices
-        if missing_indices:
+    if not isinstance(segs, list) or not segs:
+        raise ValueError(
+            "timing_manifest.json 需要非空的 'segments' 列表（分组渲染的数据源："
+            "画面标题/tagline/accent 与开屏/结尾 agenda 只从这里取；pipeline.py 恒写"
+            "该字段，手写/裁剪 manifest 请按格式给出分组）")
+    _seen_sids = set()
+    assigned_indices = set()
+    previous_segment_end = None
+    for i, sg in enumerate(segs):
+        if not isinstance(sg, dict):
+            raise ValueError(f"segments[{i}] 必须是对象")
+        sid = sg.get("id")
+        if not isinstance(sid, str) or not sid.strip():
+            raise ValueError(f"segments[{i}].id 必须是非空字符串")
+        if not (sid == "opening" or sid == "closing" or is_content_sid(sid)):
             raise ValueError(
-                "timing_manifest.json 的 segments 未覆盖全部顶层句子："
-                f"缺少 index {sorted(missing_indices)}。每个句子必须恰好属于一个可视段落")
+                f"segments[{i}].id={sid!r} 必须是 opening/closing 或以 "
+                f"{CONTENT_SID_PREFIX} 开头")
+        # id 会拼进 HTML 属性与 GSAP 选择器字符串（见 _SID_RE 注释），
+        # 手写 manifest 里坏 sid 的失败模式是"动画静默丢失/整段脚本
+        # 语法错误"，必须在契约层报对人
+        _validate_sid(sg.get("id"), f"segments[{i}]", _seen_sids)
+        _validate_text(sg.get("title"), f"segments[{i}].title", required=True)
+        _validate_text(sg.get("tagline"), f"segments[{i}].tagline")
+        _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
+        # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
+        # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
+        if sg.get("takeaway") is not None:
+            if not isinstance(sg["takeaway"], str):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
+                    "'takeaway' 必须是字符串")
+            # 与 source 侧同一单行约束（writing.md）：manifest 可手写，
+            # 含换行的 takeaway 会挤爆结尾 agenda 的行数预算
+            if "\n" in sg["takeaway"] or "\r" in sg["takeaway"]:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
+                    "'takeaway' 必须是单行（含换行会挤爆 agenda 行数预算）")
+        # 段级 voice_id 与顶层同一白名单口径（pipeline 从已校验的 source
+        # 透传，手写 manifest 是另一条入口）：坏音色名混进来只会在配音
+        # 错位时才被发现
+        _seg_vid = sg.get("voice_id")
+        if _seg_vid is not None:
+            if (not isinstance(_seg_vid, str)
+                    or not all(is_valid_voice_id(v)
+                               for v in _seg_vid.split(","))):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sid}' 的 voice_id="
+                    f"{_seg_vid!r} 含不在预置音色里的值"
+                    f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+        ss = sg.get("sentences")
+        if not isinstance(ss, list) or not ss:
+            sid = sg.get("id", f"segments[{i}]")
+            raise ValueError(
+                f"timing_manifest.json 的段落 '{sid}' 缺少非空 "
+                f"'sentences' 列表（segments 分组渲染的数据源，"
+                f"pipeline.py 产出格式）")
+        # 段内句子与顶层 sentences 走同一份必需字段校验（只查
+        # "非空列表"的话，段内缺 start_time 会在 gen_hyperframes/
+        # 下游炸裸 KeyError，不指向真正缺的键）
+        segment_seen = set()
+        segment_prev = None
+        for j, s in enumerate(ss):
+            _check_sentence_fields(
+                s, f"segments[{i}]（{sg.get('id', '?')}）.sentences[{j}]")
+            if s["index"] not in seen_indices:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 引用了不存在的 sentence index {s['index']}")
+            if s["index"] in segment_seen:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 内 sentence index 重复：{s['index']}")
+            if s["index"] in assigned_indices:
+                raise ValueError(
+                    f"timing_manifest.json 的 sentence index {s['index']} 被多个段落重复引用")
+            top_sentence = top_by_index[s["index"]]
+            if s.get("text") != top_sentence.get("text"):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
+                    f"index {s['index']} 的 text 与顶层 sentences 不一致")
+            if abs(float(s["start_time"]) - float(top_sentence["start_time"])) > 1e-6 or \
+               abs(float(s["duration"]) - float(top_sentence["duration"])) > 1e-6:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
+                    f"index {s['index']} 的时间轴与顶层 sentences 不一致")
+            segment_seen.add(s["index"])
+            assigned_indices.add(s["index"])
+            start = float(s["start_time"])
+            if segment_prev is not None and start + 1e-6 < segment_prev:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentences 必须按 start_time 升序排列")
+            segment_prev = start
+        segment_start = float(ss[0]["start_time"])
+        segment_end = float(ss[-1]["start_time"]) + float(ss[-1]["duration"])
+        if previous_segment_end is not None and segment_start + 1e-6 < previous_segment_end:
+            raise ValueError(
+                f"timing_manifest.json 的 segments 顺序与时间轴不一致："
+                f"'{sid}' 从 {segment_start:.3f}s 开始，但前一段结束于 "
+                f"{previous_segment_end:.3f}s")
+        previous_segment_end = segment_end
+    missing_indices = seen_indices - assigned_indices
+    if missing_indices:
+        raise ValueError(
+            "timing_manifest.json 的 segments 未覆盖全部顶层句子："
+            f"缺少 index {sorted(missing_indices)}。每个句子必须恰好属于一个可视段落")
     return data
 
 
@@ -755,6 +759,11 @@ def validate_images_json(data):
                 raise ValueError(f"images.json 的 '{key}' 的 {field} 必须是字符串")
 
     return data
+
+
+def load_images_json(path):
+    """读取并校验 images.json（读取失败统一成带路径的 ValueError）。"""
+    return validate_images_json(_read_json_file(path))
 
 
 MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}

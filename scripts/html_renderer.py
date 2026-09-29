@@ -83,38 +83,6 @@ def esc(text):
             .replace("'", "&#39;"))
 
 
-def fallback_segments(sentences):
-    """manifest 没有 segments 字段时的兜底分组：每 5 句一组。
-
-    独立成模块级函数（而不是内联在 generate_html 里）。分组规则只写一遍，
-    所有调用方共享同一份 timing_manifest.json 作为权威场景描述。
-    """
-    segments = []
-    chunk = 5
-    for i in range(0, len(sentences), chunk):
-        group = sentences[i:i + chunk]
-        segments.append({
-            "id": f"seg{len(segments) + 1}",
-            "title": group[0]["text"][:20],
-            "tagline": "",
-            "accent": DEFAULT_ACCENT,
-            "sentences": group,
-            # 不注入 speed —— auto-group 不应假设语速，必须由上游 manifest 显式声明。
-        })
-    return segments
-
-
-def manifest_segments(manifest):
-    """本次使用的段落分组：manifest 自带的 segments，没有则按兜底规则自动分组。
-
-    分组结果必须有唯一一份：gen_hyperframes 的孤儿键判定、缺图判定与视频截断
-    提示都要按段 id 对账，而自动分组的 seg1/seg2/… 只存在于渲染阶段。各处各自
-    重推（或干脆只读 manifest 的 segments）就会与画面实际用的 id 漂移——最坏的
-    一种是无 segments 的 manifest 下 images.json 的每个键都被判成孤儿并删掉。
-    """
-    return manifest.get("segments") or fallback_segments(manifest["sentences"])
-
-
 def _segment_duration(seg):
     """段落时长（秒）：从 sentences 推算——末句 start_time+duration − 首句
     start_time。与 generate_html 的 clip 计时同一口径。空 sentences 返回 0。
@@ -654,15 +622,15 @@ def generate_html(manifest, audio_src, images=None,
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
     root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
 
-    # Auto-group if no segments provided.
-    segments = manifest_segments(manifest)
+    # 段落分组只有一份：manifest["segments"]（_contracts 已保证非空、每段自带
+    # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
+    # 在这里另推一套 id 就会和画面实际用的段 id 漂移。
+    segments = manifest["segments"]
 
     # Calculate clip timing
     clips = []
     for seg in segments:
         seg_sents = seg["sentences"]
-        if not seg_sents:
-            continue
         start = seg_sents[0]["start_time"]
         end = seg_sents[-1]["start_time"] + seg_sents[-1]["duration"]
         clips.append({
@@ -672,10 +640,9 @@ def generate_html(manifest, audio_src, images=None,
         })
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
-    # closing_cta 只有结尾 agenda 卡这一个消费者：稿件没有 closing 段（或有段
-    # 无句、被上面的 clips 循环跳过）时这条尾行无处可画。不 warn 就成了
-    # "稿子里写了行动号召，画面上什么都没有"，与 writing.md 承诺的
-    # "两种丢弃都只向 stderr 打 [warn]" 口径矛盾。
+    # closing_cta 只有结尾 agenda 卡这一个消费者：稿件没有 closing 段时这条尾行
+    # 无处可画。不 warn 就成了"稿子里写了行动号召，画面上什么都没有"，与
+    # writing.md 承诺的"两种丢弃都只向 stderr 打 [warn]"口径矛盾。
     if (str(manifest.get("closing_cta") or "").strip()
             and not any(c["seg"].get("id") == "closing" for c in clips)):
         print("[warn] manifest 有 closing_cta，但本次没有 closing 段可承载它——"

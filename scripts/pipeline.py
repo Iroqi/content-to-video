@@ -969,7 +969,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
             "sentences": seg_sentences,
         }
         # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）、
-        # layout（整页画布开关）。
+        # layout（版式：内容段的 canvas 由作者写，结构页的 agenda 由
+        # build_from_structured 盖，这里一律原样带走）。
         if seg.get("speed") is not None:
             seg_out["speed"] = seg["speed"]
         if seg.get("layout") is not None:

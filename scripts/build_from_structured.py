@@ -111,7 +111,10 @@ def _collect_blocks(source):
             # text/validate_speed 对 None 不报错），get(key, default) 会把
             # null 原样取出来让 None 一路流进 seg speed。
             extra={"speed": source.get("opening_speed")
-                   or OPENING_CLOSING_DEFAULT_SPEED},
+                   or OPENING_CLOSING_DEFAULT_SPEED,
+                   # 版式由 pipeline 盖章，不给作者选：html_renderer 按 layout
+                   # 分派，manifest 因此是自描述的（见 _contracts.seg_layout）。
+                   "layout": "agenda"},
             turns=[],
         ))
 
@@ -184,7 +187,8 @@ def _collect_blocks(source):
             accent=DEFAULT_ACCENT,
             sentences=sents,
             extra={"speed": source.get("closing_speed")
-                   or OPENING_CLOSING_DEFAULT_SPEED},
+                   or OPENING_CLOSING_DEFAULT_SPEED,
+                   "layout": "agenda"},
             turns=[],
         ))
     return blocks

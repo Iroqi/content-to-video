@@ -156,7 +156,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
-                        classify_media_path, is_content_sid)
+                        classify_media_path, is_content_sid, seg_layout,
+                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
@@ -432,7 +433,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
     """
     errs, warns = [], []
     for seg in segments:
-        if seg.get("layout") != "canvas":
+        if seg_layout(seg) != "canvas":
             continue
         sid = seg.get("id", "?")
         entry = images.get(sid)
@@ -571,7 +572,7 @@ def main():
             # opening/closing 键先弹出并提示（不参与缺图判定）。必须在引用
             # 完整性校验之前——否则指向缺失文件的这两个键会被 fail-fast 误拦，
             # 与"忽略并给出 [warn]"的文档口径矛盾。
-            _agenda_keys = [k for k in ("opening", "closing") if k in images]
+            _agenda_keys = [k for k in STRUCTURAL_SIDS if k in images]
             if _agenda_keys:
                 for k in _agenda_keys:
                     images.pop(k)

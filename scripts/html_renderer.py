@@ -17,7 +17,7 @@ from _theme import (
 )
 from _template import load_template, get_canvas
 from _contracts import (classify_media_path, is_content_sid, is_valid_sid,
-                        unknown_media_keys, MEDIA_ENTRY_KEYS,
+                        seg_layout, unknown_media_keys, MEDIA_ENTRY_KEYS,
                         SID_RULE)
 
 
@@ -542,15 +542,17 @@ def generate_html(manifest, audio_src, images=None,
         # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
         ac_text = ensure_text_contrast(ac if _dark_theme else darken(ac), _bgs)
         ac_text_attr = esc(ac_text)
-        # 开屏/结尾 = 纯文字 agenda（两画幅统一）：不配图，用章节罗列/
-        # 要点总结的文字内容填充。gen_hyperframes 已把 opening/closing 的
-        # images 键弹出，库调用方仍带映射时这里也强制忽略。
-        is_agenda = sid in ("opening", "closing")
+        # 版式一律由 _contracts.seg_layout 分派（layout 字段优先，结构性页按 id 兜
+        # 档），不再各处写 sid 字面量。agenda = 纯文字页：不配图，用章节罗列/要点
+        # 总结填充。gen_hyperframes 已把 opening/closing 的 images 键弹出，库调用方
+        # 仍带映射时这里也强制忽略。
+        _layout = seg_layout(seg)
+        is_agenda = _layout == "agenda"
         has_image = (sid in images) and not is_agenda
         # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
         # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
         # _contracts._validate_layout 把守；这里只认 canvas 且必须有配图。
-        is_canvas = seg.get("layout") == "canvas"
+        is_canvas = _layout == "canvas"
         if is_canvas and not has_image:
             # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
             raise ValueError(

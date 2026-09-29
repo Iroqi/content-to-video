@@ -33,8 +33,9 @@ SID_RULE = "字母开头，仅字母/数字/-/_，1–64 字符"
 # ── 内容段落 id 约定──────────────────────────────────────────────
 # "哪些段落需要配图" 由 sid 前缀决定：opening/closing 是结构性段落，天生
 # 不需要配图。判断"是不是内容段"一律调 is_content_sid()，不要再写一份
-# startswith（结构性页反过来按 id 字面量点名）。漏掉一处的后果是静默改变
-# 配图覆盖率统计口径（把不该算的算进去，或该配图的段落被跳过拦截）。
+# startswith（结构性页一律用 STRUCTURAL_SIDS 点名，别在各处写字面量）。漏掉
+# 一处的后果是静默改变配图覆盖率统计口径（把不该算的算进去，或该配图的段落
+# 被跳过拦截）。
 CONTENT_SID_PREFIX = "seg"
 
 
@@ -131,11 +132,29 @@ def _validate_accent(value, where):
             f"accent 会拼进成片 HTML，不接受 rgb()/var() 这类函数式写法")
 
 
-# 段落版式。不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
-# 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布
-# 自己画）。版式后果见 references/rendering.md「画面结构」，画这张图的规格见
+# 段落版式三档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
+# 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
+# 画）；"agenda" = 开屏/结尾那张纯文字页。两个显式值各自绑死段 id：canvas 只属于
+# 内容段，agenda 只属于 opening/closing——版式由 layout 分派，内容来源不由它分派
+# （agenda 的行是对全片其它段的投影，作者写不了也不该写，见 seg_layout）。
+# 版式后果见 references/rendering.md「画面结构」，画布规格见
 # references/image_options.md「整页画布」。
-LAYOUT_VALUES = ("canvas",)
+LAYOUT_VALUES = ("canvas", "agenda")
+STRUCTURAL_SIDS = ("opening", "closing")
+
+
+def seg_layout(seg):
+    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'agenda'。
+
+    agenda 由 pipeline 自动盖进 manifest，所以正常数据里它已经在 `layout` 字段上；
+    这里仍按 id 兜一档，是因为手写 manifest 是本技能支持的用法（见
+    references/tts_pipeline.md），漏盖 layout 时该页仍该是 agenda——静默按槽位版式
+    渲染会把章节列表挤成一句 verse，比报错难发现得多。
+    """
+    lay = seg.get("layout")
+    if lay:
+        return lay
+    return "agenda" if (seg.get("id") or "") in STRUCTURAL_SIDS else "slot"
 
 
 def _validate_layout(value, where, *, agenda=False):
@@ -143,22 +162,26 @@ def _validate_layout(value, where, *, agenda=False):
     放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式
     渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
 
-    agenda=True（结构性段 opening/closing）时任何 layout 值都是 error：开屏/结尾
-    是纯文字 agenda 卡，画布版式不生成标题层与句子流层，写上去等于把开场标题或
-    结尾行动号召从画面上删掉——而 `check` 只数 HTML 文本，看不见这种丢失。
+    agenda 与 canvas 互斥地绑在段 id 上：结构性段只可能是 agenda（由 pipeline
+    盖上），内容段只可能是 canvas 或不写。写反了都在这里拦下。
     """
     if value is None:
         return
-    if agenda:
-        raise ValueError(
-            f"{where} 写了 layout={value!r}，但 opening/closing 是结构性 agenda 卡"
-            "（只有文字版式）——layout 只对内容段有效：画布版式不生成标题层与"
-            "句子流层，用在结构性段上会把开场标题/结尾行动号召整个抹掉")
     if not isinstance(value, str) or value not in LAYOUT_VALUES:
         raise ValueError(
             f"{where} 的 layout={value!r} 不是合法版式：只接受 "
             f"{'、'.join(repr(v) for v in LAYOUT_VALUES)}，或整个不写"
             "（不写 = 槽位版式：标题区 + 配图槽 + 句子流）")
+    if agenda and value != "agenda":
+        raise ValueError(
+            f"{where} 写了 layout={value!r}，但 opening/closing 只能是 \"agenda\"："
+            "画布版式不生成标题层与句子流层，用在结构性段上会把开场标题/结尾行动"
+            "号召整个抹掉，而 `check` 只数 HTML 文本，看不见这种丢失")
+    if not agenda and value == "agenda":
+        raise ValueError(
+            f"{where} 写了 layout=\"agenda\"，但 agenda 只属于 opening/closing："
+            "它的行是对全片其它段的投影（开屏=各段标题+时长，结尾=各段 takeaway），"
+            "不是这一段自己的文字——内容段用它在画面上印别人的目录")
 
 
 def _validate_text(value, where, *, required=False):

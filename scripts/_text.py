@@ -1,16 +1,14 @@
-"""文本切分：把一段稿件切成 TTS 句与字幕行。
+"""文本切分：把稿件切成 TTS 句。
 
-- 朗读层：`split_sentences` 按终止标点断句（中文 。！？；、ASCII .!? 带边界
-  守卫），供 pipeline / build_from_structured 逐句合成。
-- 显示层：`split_subtitle_lines` / `split_subtitle_cues` 按行宽均衡切行，
-  参数只从 `subtitle_params_for` 取（数值在 `_template.py` 的 subtitle 块）。
+朗读层：`split_sentences` 按终止标点断句（中文 。！？；、ASCII .!? 带边界
+守卫），供 pipeline / build_from_structured 逐句合成。
 
-两层刻意分开：断句只认终止标点，句间停顿由 `--gap` 决定；切行是显示排版辅助，
-不会引入额外交付停顿。本模块只依赖 `_template`，不碰磁盘、进程与网络。
+字幕不再有"显示层切行"这一步：verse 把整句渲染成一条静态行、由 CSS 自然折行，
+cue 数组只带时间与段内句序（见 html_renderer._build_subtitle_cues）。断句只认
+终止标点，句间停顿由 `--gap` 决定。本模块不依赖任何其他模块，不碰磁盘、进程与
+网络。
 """
 import re
-
-from _template import load_template
 
 # 中文终止符：。！？＋中文分号＋ASCII 分号＋换行（保持稳定的断句行为）。
 # ASCII 的 .!? 由下方扫描逻辑带边界守卫地补充（见 split_sentences）。
@@ -23,7 +21,8 @@ _CN_TRAILERS = "。！？；”」』）】》'"
 
 # 常见英文缩写词尾：句点即使后面跟着空白也不视为句子结束。全小写比对；
 # 含内部点的形式（e.g / i.e / u.s）。维护原则：漏收一个缩写只是"少切一刀"
-# （句子偏长、可被显示层切行兜住）；误收一个普通词会把完整句子劈成两半。
+# （句子偏长，念稿喘不过气、build_from_structured 会打超长句 warn）；误收一个
+# 普通词会把完整句子劈成两半。
 _EN_ABBREV_TAILS = {
     "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "etc",
     "cf", "al", "fig", "no", "inc", "ltd", "co", "corp", "col", "gen",
@@ -182,137 +181,3 @@ def split_sentences(text):
         else:
             merged.append(buf)
     return merged
-
-
-# 字幕二次切行（显示层）：固定宽度均衡切行。
-# 断点优先级：标点 / 空格 > CJK 字符间；连续 ASCII 字母数字（英文词）保持
-# 完整不劈开。每行尽量填满到 max_chars，保证等宽、且不交给 CSS 二次折行。
-# 注意这仅是**显示层**排版辅助——TTS 断句仍只认终止标点（split_sentences），
-# 句间停顿 --gap 按"每两句之间"插入，标点处切行不会引入额外停顿。
-
-
-def _is_joiner(ch):
-    """组合修饰符：ZWJ / 变体选择符 / emoji 肤色修饰符 / 组合变音符。
-
-    它们依附前一个码点成字形，前后都不是合法断点——否则 👨‍‍👧
-    会被字幕断行劈成两半（半截序列在多数字体里渲染成 tofu）。
-    """
-    o = ord(ch)
-    return (o == 0x200D or 0xFE00 <= o <= 0xFE0F
-            or 0x1F3FB <= o <= 0x1F3FF or 0x0300 <= o <= 0x036F)
-
-
-def _is_break_after(text, idx):
-    """能否在 text[idx] 之后断行（把 text[idx] 纳入当前行、于 idx+1 处断开）。
-
-    断行规则：空白、非 ASCII 字符（CJK/全角宽字符）、ASCII 标点/符号 均
-    可在其后断；连续 ASCII 字母/数字（英文词）仅在该词**结尾**（后一字符
-    非字母数字）时才可断，从而整词不被劈开。
-    """
-    ch = text[idx]
-    if ch.isspace():
-        return True
-    if _is_joiner(ch):
-        return False
-    nxt = text[idx + 1] if idx + 1 < len(text) else ""
-    if nxt and _is_joiner(nxt):
-        return False
-    if not ch.isascii():
-        return True
-    if ch.isalnum():
-        return not (nxt.isascii() and nxt.isalnum())  # 词尾才断
-    return True  # 其余 ASCII 符号（标点等）可断
-
-
-def _wrap_width(text, width):
-    """固定宽度贪婪切行：每行尽量填满到 width，断点取窗口内最靠后的合法断点。
-
-    保证 "".join(结果) == text（仅去掉首尾空白），不丢失任何字符（含空格），
-    可直接用于需 join 校验 / 内容保真的场景。每行长度恒 <= width，杜绝整句
-    交给 CSS 自然换行后溢出成多视觉行。
-    """
-    text = text.strip()
-    if not text:
-        return []
-    n = len(text)
-    if n <= width:
-        return [text]
-    lines = []
-    start = 0
-    while start < n:
-        end = min(start + width, n)
-        if end >= n:
-            lines.append(text[start:n])
-            break
-        # 从 end 往回找最远的合法断点（优先填满，实现等宽）
-        brk = -1
-        for j in range(end, start, -1):
-            if _is_break_after(text, j - 1):
-                brk = j
-                break
-        if brk <= start:
-            # 窗口内无断点（超长英文专名占满 width）→ 在 width 处硬切
-            brk = start + width
-        lines.append(text[start:brk])
-        start = brk
-    return lines
-
-
-def split_subtitle_lines(text, max_chars):
-    """把一句长字幕切成均衡字幕行（仅显示用）。
-
-    固定宽度贪婪切行：每行尽量填满到 max_chars，断点
-    优先标点/空格，其次 CJK 字符间；连续 ASCII 字母数字（英文词）保持完整、
-    不劈开；标点弱化处理。每行 <= max_chars，杜绝整句交给 CSS 自然换行后溢出成
-    多视觉行。
-
-    Args:
-        text: 单句文本（split_sentences 的一个元素）
-        max_chars: 单行目标宽度（字符）；行尽量填满到此值
-
-    Returns:
-        list[str]: 1..n 行
-    """
-    text = text.strip()
-    if not text:
-        return []
-    return [l for l in _wrap_width(text, max_chars) if l]
-
-
-def subtitle_params_for(aspect):
-    """按画幅给出字幕切分参数。
-
-    片内字幕切分（html_renderer.py 的 cue 构建）只从这一处取参数。数值定义在
-    `_template.py` 内联版式数据的顶级 subtitle 块（JSON 定义、
-    本函数只做画幅归一化与取数），改切行宽度只动模板文件。
-
-    两画幅各有独立的 subtitle 块：竖屏 980px 物理宽/40px 字号（≈22 字/行），
-    横屏左栏 613px/33px 字号（≈18 字/行）。未知画幅标识直接 KeyError 暴露。
-
-    Returns:
-        dict(max_chars=, cue_max_lines=)
-    """
-    # portrait 归一化：竖屏 3:4 复用 vertical 家族标识（与 gen_hyperframes
-    # 的归一化语义一致），CLI/调用方传 "portrait" 也拿到竖屏切行参数。
-    if aspect == "portrait":
-        aspect = "vertical"
-    params = load_template()["subtitle"][aspect]
-    return {"max_chars": params["maxChars"],
-            "cue_max_lines": params["cueMaxLines"]}
-
-
-def split_subtitle_cues(text, max_chars, cue_max_lines):
-    """把一句长字幕切成若干"cue 组"：每屏最多 cue_max_lines 行。
-
-    机制是通用的行数分组；当前模板配置 cueMaxLines=99（verse 整句单
-    cue，见 _template.py subtitle 块），实际每句恒为一组，"同屏两行 +
-    调用方按字符占比切分时长"的分支只在把 cueMaxLines 调小时才会走到。
-    内部先按行宽做标点均衡切行（保证超长句也能切到每行 <= max_chars），
-    再按 cue_max_lines 顺序分组。
-
-    Returns:
-        list[list[str]]: 每个元素是一屏的行列表（1..cue_max_lines 行）
-    """
-    lines = split_subtitle_lines(text, max_chars=max_chars)
-    return [lines[i:i + cue_max_lines]
-            for i in range(0, len(lines), cue_max_lines)]

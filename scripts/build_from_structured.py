@@ -21,8 +21,8 @@ from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 ACCENT_PALETTE = get_accent_palette()
 DEFAULT_ACCENT = get_default_accent()
 
-# 超长句提醒阈值：字幕二次切行（split_subtitle_lines）是显示层兜底，
-# 念稿节奏的根治方式还是写稿时控制在一句一口气能念完的长度。
+# 超长句提醒阈值：一句念完要憋一口气，字幕也会折成好几行占掉句子流窗口；
+# 根治方式是写稿时控制在一句一口气能念完的长度。
 LONG_SENTENCE_CHARS = 45
 
 
@@ -228,10 +228,9 @@ def build_parts(source):
     segments；全局 --speed 由 pipeline 侧 `sentence_speeds.get(i, args.speed)`
     唯一兜底，这里不再复读一份。
 
-    超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：显示层会做次要
-    标点切行兜底（_text 的 split_subtitle_lines），但 45+ 字的
-    一句话念出来也偏喘不过气，根治方式是写稿时拆成两句——warn 就是提醒
-    agent 这么做。
+    超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：句子会整句写进一行
+    字幕、由 CSS 折行数行，念出来也偏喘不过气，根治方式是写稿时拆成两句
+    ——warn 就是提醒 agent 这么做。
 
     Returns:
         sentences: list[str]，按段落顺序排列的全部句子

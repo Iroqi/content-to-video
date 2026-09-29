@@ -101,6 +101,12 @@ DEFAULT_CHARS_PER_SEC = 4.3  # "语速适中"参考值，纯启发式
 # 估算与实测的口径差会累积成 (n-1)×Δ 的系统性偏移。
 DEFAULT_GAP = 0.4
 
+# 时间轴对账的唯一容差。pipeline 的"拼接产物不得比预期短 250ms"与下面
+# validate_timing_manifest 的"末句不得超出 total_duration 250ms"是同一个量级
+# 判断：分成两处写字面量就会漂移——上游放宽到 0.3s、下游仍按 0.25s 拒收，
+# 等于 TTS 额度烧完才告诉用户产物不能用。
+TIMELINE_TOLERANCE = 0.25
+
 def estimate_sentence_seconds(sentence, chars_per_sec, speed):
     """单句预计时长（秒）：字数 / 语速 / 倍速。"""
     return len(sentence) / chars_per_sec / max(speed, 0.01)
@@ -445,8 +451,9 @@ def validate_timing_manifest(data):
             raise ValueError(f"{where}.speaker 必须是非空字符串")
         if "synth_failed" in s and not isinstance(s["synth_failed"], bool):
             raise ValueError(f"{where}.synth_failed 必须是布尔值")
-        if float(start) + float(duration) > float(total_duration) + 0.25:
-            raise ValueError(f"{where} 超出 total_duration（允许 250ms 浮点/编码裕量）")
+        if float(start) + float(duration) > float(total_duration) + TIMELINE_TOLERANCE:
+            raise ValueError(f"{where} 超出 total_duration"
+                             f"（允许 {TIMELINE_TOLERANCE * 1000:.0f}ms 浮点/编码裕量）")
 
     seen_indices = set()
     top_by_index = {}

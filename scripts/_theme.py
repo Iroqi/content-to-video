@@ -118,8 +118,9 @@ def is_safe_css_color(color):
     """颜色值是否是浏览器真正认得的 hex / CSS 颜色名（且可安全嵌入 HTML 属性）。
 
     accent 来自稿件（信源内容经模型写入），本项目把它当**不可信数据**：
-    它会被拼进 `data-accent="..."`、`style="background:..."` 与 GSAP 的
-    `backgroundColor:"..."` 三处上下文。只放行两种形态——`#rgb`/`#rrggbb`
+    它会被拼进 `data-accent="..."` 与 `style="background:..."` 两处 HTML
+    上下文（GSAP 补间只写 opacity/scale/width，颜色经 CSS 变量派生，不进 JS
+    字面量）。只放行两种形态——`#rgb`/`#rrggbb`
     十六进制，或 CSS 标准颜色名（`red` / `tomato`）——从而排除引号、
     分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片 HTML 会被
     preview.js 打开、被 headless Chrome 渲染，所以

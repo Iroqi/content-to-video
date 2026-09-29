@@ -1,6 +1,6 @@
 """视觉模板。模板数据直接内联为模块常量，支持竖屏 3:4（1080×1440）与
 横屏 16:9（1920×1080）两种画幅，布局参数分别挂在 layout.vertical /
-layout.landscape 下（canvas、subtitle 同理）。
+layout.landscape 下（顶层只有 canvas 与 layout 按画幅分块）。
 
 注意：_TEMPLATE_JSON 是**严格 JSON**（json.loads 直解），内部一律不能写
 `#` / `//` 注释——写了整份模板在模块加载时就崩。要给某个数值留说明，
@@ -221,17 +221,6 @@ _TEMPLATE_JSON = r'''
     "taglineWeight": 600,
     "titleLineHeight": 1.32,
     "titleTracking": "-0.02em"
-  },
-  "subtitle": {
-    "_meta": "字幕切分参数（_text.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；cueMaxLines=整句渲染故 99。",
-    "vertical": {
-      "maxChars": 22,
-      "cueMaxLines": 99
-    },
-    "landscape": {
-      "maxChars": 18,
-      "cueMaxLines": 99
-    }
   }
 }
 '''

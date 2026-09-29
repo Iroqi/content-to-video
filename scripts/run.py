@@ -393,6 +393,81 @@ def _print_report_summary():
     print("=" * 44)
 
 
+# ── 交付级降级的唯一一份清单 ─────────────────────────────────────
+# timing_manifest 的 degraded 里每一项都意味着"交付的不是用户要的那一版"。闸门
+# 条件、production_report 的机器可读条目、以及给用户看的那句人话，全部从
+# degraded_items() 这一次遍历派生：以前同一组键在同一个函数里被枚举两遍，加一
+# 种降级就得同步改两处，漏一处的后果是"报告里没有、但照样拦人"或反过来。
+#
+# 每个 reader 返回 (计数, 人话说明) 或 None（None = 这一项没发生）。读法各家
+# 不同是 manifest 的历史事实，不是这里的设计：计数可能是 bool 旗标、可能是
+# sid 列表、也可能是被写坏的字符串，所以逐键保留原有的容错语义。
+def _read_synth_failed(_tm, deg):
+    # 计数从 sentences 现场数，不读 degraded 里的汇总键：万一汇总键被写坏或
+    # 没写，逐句的 synth_failed 边车状态仍然成立。
+    n = sum(1 for s in _tm.get("sentences", []) if s.get("synth_failed"))
+    return (n, f"{n} 句 TTS 失败并使用静音兜底") if n else None
+
+
+def _read_lost(_tm, deg):
+    # 兜底也没兜住的句子压根不在 sentences 里（--on-fail silence 下 TTS 与
+    # 静音双双失败），只看 synth_failed 会让"少了几句配音和字幕"的产物按正常
+    # 成片放行。
+    try:
+        n = int(deg.get("tts_lost_sentence_count") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return (n, f"{n} 句完全丢失（连静音占位都没生成）") if n else None
+
+
+def _read_flag(key, label):
+    def reader(_tm, deg):
+        return (1, label) if deg.get(key) else None
+    return reader
+
+
+def _read_dropped(_tm, deg):
+    # segments_dropped 是 pipeline 写下的被剔除 sid 列表（不是计数）
+    ids = deg.get("segments_dropped") or []
+    if isinstance(ids, list) and ids:
+        return (len(ids), f"{len(ids)} 个段落因没有任何可用音频被剔除"
+                          f"（{', '.join(str(s) for s in ids)}）")
+    return None
+
+
+def _read_audio_short(_tm, deg):
+    # 音频比时间轴短：末尾那几秒画面有字幕没声音，是交付级差异
+    v = deg.get("audio_shorter_than_timeline")
+    if isinstance(v, (int, float)) and v > 0:
+        return (round(v, 2), f"音频比时间轴终点短 {v:.2f}s（片尾无配音）")
+    return None
+
+
+# 顺序即 production_report.degraded 的顺序，也是人话说明的拼接顺序。
+_DEGRADED_READERS = (
+    ("tts_silence_fallback", _read_synth_failed),
+    ("tts_lost_sentences", _read_lost),
+    # BGM/响度不影响"内容在不在"，但 --bgm 传了却没混进、--loudness 传了却没
+    # 过响度，都属于必须让人先看见的差异。
+    ("bgm_mix_failed", _read_flag("bgm_mix_failed", "BGM 混音失败（成片为纯人声）")),
+    ("bgm_missing_file", _read_flag("bgm_missing_file", "--bgm 文件不存在，成片未混 BGM")),
+    ("loudness_norm_failed", _read_flag("loudness_norm_failed", "响度归一化失败（响度未达标）")),
+    ("segments_dropped", _read_dropped),
+    ("audio_shorter_than_timeline", _read_audio_short),
+)
+
+
+def degraded_items(_tm):
+    """读 timing_manifest，返回 [(报告 type, 计数, 人话说明), ...]。"""
+    deg = _tm.get("degraded") or {}
+    items = []
+    for _type, reader in _DEGRADED_READERS:
+        got = reader(_tm, deg)
+        if got:
+            items.append((_type, got[0], got[1]))
+    return items
+
+
 def _script(name):
     return os.path.join(SCRIPTS_DIR, name)
 
@@ -728,53 +803,12 @@ def main():
               "文件可能被上次中断的写入截断或结构不合法；"
               "请重跑 TTS 步骤重新生成后再来。", file=sys.stderr)
         sys.exit(1)
-    _degraded_tts = sum(1 for _s in _tm.get("sentences", [])
-                        if _s.get("synth_failed"))
-    # 兜底也没兜住的句子压根不在 sentences 里（--on-fail silence 下 TTS 与
-    # 静音双双失败），只看 synth_failed 会让"少了几句配音和字幕"的产物按
-    # 正常成片放行。以 manifest 的 status 为准，明细计数缺失也不漏拦。
-    _deg = _tm.get("degraded") or {}
-    try:
-        _degraded_lost = int(_deg.get("tts_lost_sentence_count") or 0)
-    except (TypeError, ValueError):
-        _degraded_lost = 0
-    # pipeline 写进 degraded 的其余项（BGM 混音/响度归一化失败、段落被剔除）。
-    # 这些不影响"内容在不在"，但影响"交付的是不是用户要的那一版"：--bgm 传了
-    # 却没混进 BGM、--loudness 传了却没过响度，都属于必须让人先看见的差异。
-    _flagged = []
-    for _k, _label in (("bgm_mix_failed", "BGM 混音失败（成片为纯人声）"),
-                       ("bgm_missing_file", "--bgm 文件不存在，成片未混 BGM"),
-                       ("loudness_norm_failed", "响度归一化失败（响度未达标）")):
-        if _deg.get(_k):
-            _flagged.append(_label)
-    # segments_dropped 是 pipeline 写下的被剔除 sid 列表（不是计数）
-    _dropped = _deg.get("segments_dropped") or []
-    if isinstance(_dropped, list) and _dropped:
-        _flagged.append(f"{len(_dropped)} 个段落因没有任何可用音频被剔除"
-                        f"（{', '.join(str(s) for s in _dropped)}）")
-    # 音频比时间轴短：末尾那几秒画面有字幕没声音，是交付级差异
-    _short = _deg.get("audio_shorter_than_timeline")
-    if isinstance(_short, (int, float)) and _short > 0:
-        _flagged.append(f"音频比时间轴终点短 {_short:.2f}s（片尾无配音）")
-    if (_tm.get("status") == "degraded" or _degraded_tts or _degraded_lost
-            or _flagged):
-        if _degraded_tts:
-            _REPORT["degraded"].append({"type": "tts_silence_fallback", "count": _degraded_tts})
-        if _degraded_lost:
-            _REPORT["degraded"].append({"type": "tts_lost_sentences", "count": _degraded_lost})
-        for _k in ("bgm_mix_failed", "bgm_missing_file", "loudness_norm_failed"):
-            if _deg.get(_k):
-                _REPORT["degraded"].append({"type": _k, "count": 1})
-        if isinstance(_dropped, list) and _dropped:
-            _REPORT["degraded"].append({"type": "segments_dropped",
-                                        "count": len(_dropped)})
-        if isinstance(_short, (int, float)) and _short > 0:
-            _REPORT["degraded"].append({"type": "audio_shorter_than_timeline",
-                                        "count": round(_short, 2)})
-        _why = "、".join(x for x in (
-            f"{_degraded_tts} 句 TTS 失败并使用静音兜底" if _degraded_tts else "",
-            f"{_degraded_lost} 句完全丢失（连静音占位都没生成）" if _degraded_lost else "",
-        ) + tuple(_flagged) if x) or "manifest 标记为 degraded"
+    _deg_items = degraded_items(_tm)
+    # status 是 pipeline 写下的总旗标：明细一条都没读出来（键被写坏或整个漏写）
+    # 时照样拦，"以 manifest 的 status 为准"这条兜底不依赖下面的逐项计数。
+    if _deg_items or _tm.get("status") == "degraded":
+        _REPORT["degraded"].extend({"type": t, "count": c} for t, c, _w in _deg_items)
+        _why = "、".join(w for _t, _c, w in _deg_items) or "manifest 标记为 degraded"
         # --until html 是迭代预览边界：允许先看版式，但不能把这个成功
         # 状态误解成可交付成片。真正 render 仍要求显式 --allow-degraded。
         if not args.allow_degraded and args.until == "render":

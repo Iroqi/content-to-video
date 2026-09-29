@@ -5,7 +5,6 @@ This module owns the presentation compiler: normalized composition inputs, HTML/
 and GSAP timeline generation. CLI orchestration, file validation and rendering
 remain outside this module.
 """
-import json
 import re
 import sys
 from pathlib import Path
@@ -20,7 +19,6 @@ from _template import load_template, get_canvas
 from _contracts import (classify_media_path, is_content_sid, is_valid_sid,
                         unknown_media_keys, MEDIA_ENTRY_KEYS,
                         SID_RULE)
-from _text import split_subtitle_cues, subtitle_params_for
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -47,8 +45,8 @@ def _fill(template, mapping, name):
     """单遍替换骨架占位符：只有骨架里的那些位置会被填，填进去的内容不再扫描。
 
     逐串 str.replace 是链式全文扫描，先注入的内容会被后一次替换再读一遍——
-    稿件里一句原样写着 __CTV_GSAP__ 的文案（esc 与 json.dumps 都不碰下划线）
-    就能把真实代码塞进 JS 字符串字面量，整段内联脚本 SyntaxError、时间线和字幕
+    稿件里一句原样写着 __CTV_GSAP__ 的文案（esc 不碰下划线）就能把真实代码
+    塞进 JS 字符串字面量，整段内联脚本 SyntaxError、时间线和字幕
     一起死掉，而构建过程一行报错都没有。按本技能"信源只是数据"的边界，注入值
     永远不该成为下一次替换的输入。
 
@@ -69,10 +67,9 @@ def _fill(template, mapping, name):
 def esc(text):
     """Escape HTML special characters (HTML attribute / element text).
 
-    For JS string literals (e.g. subtitle cue text assigned via
-    textContent), use json.dumps() instead -- HTML entity escaping there
-    would render as literal "&amp;" since textContent does not decode
-    entities, and raw newline/quote would break the JS source.
+    稿件文案进画面只有这一条转义路径：文案全部写成静态 DOM，运行时只切 class、
+    赋值 color，从不把文本塞进 JS 字符串字面量（那种上下文里实体转义会渲染出
+    字面量 &amp;，本模块没有这种调用点）。
     """
     return (text
             .replace("&", "&amp;")
@@ -249,49 +246,25 @@ def _normalize_images(images):
     return normalized
 
 
-def _js_str(value):
-    """JS 字符串字面量：ensure_ascii=False 保留中文，`</` 转义防内联 <script> 被截断。
+def _build_subtitle_cues(sentences):
+    """Build the JS cue payload (t/d/si) from sentence timing.
 
-    进入 <script> 文本的字符串（字幕行、段 id）统一走这里；
-    json.dumps 不转义 `/`，用户可控文本含 `</script>` 时会截断脚本块。
+    cue 里只有数字：文案由 verse 静态 DOM 承载（见 esc），运行时按 si 切高亮、
+    按 t/d 判定当前句，不需要序列化任何文本。
+
+    时长一律由"下一句的起点"倒推：t 与 d 各自独立四舍五入到 0.01s 时，相邻 cue
+    之间会留下至多 10ms 的空洞，24fps 下恰好吞掉一帧——那一帧落在空洞里就沿用
+    上一句的高亮，切换看起来慢了一帧。末句没有下一句，按自身实测时长收尾。
     """
-    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
-
-
-def _build_subtitle_cues(sentences, aspect):
-    """Build the JS subtitle cue payload from sentence timing and text.
-
-    不可信文案进入画面有且只有两条路，都在生成期转义、运行时不再写文本：
-    verse 行由 generate_html 用 esc() 写成静态 DOM（HTML 上下文），cue 数组由
-    本函数用 _js_str() 序列化（JS 字符串上下文——这里套 HTML 实体转义反而会
-    把 &amp; 之类显示成字面量）。运行时只做 class 切换与 color 赋值。
-    """
-    sub_cues = []
-
-    sub_params = subtitle_params_for(aspect)
-    max_chars = sub_params["max_chars"]
-    cue_max_lines = sub_params["cue_max_lines"]
-    pending = []
-    for sent in sentences:
-        groups = split_subtitle_cues(sent["text"], max_chars=max_chars,
-                                     cue_max_lines=cue_max_lines)
-        total_chars = sum(len("".join(g)) for g in groups)
-        t0 = sent["start_time"]
-        for group in groups:
-            js_lines = "[" + ",".join(_js_str(line) for line in group) + "]"
-            frac = (sum(len(line) for line in group) / total_chars) if total_chars else 1.0
-            duration = sent["duration"] * frac
-            pending.append((t0, t0 + duration, sent.get("index", -1), js_lines))
-            t0 += duration
-    # 时长一律由"下一个 cue 的起点"倒推：t 与 d 各自独立四舍五入到 0.01s 时，
-    # 相邻 cue 之间会留下至多 10ms 的空洞，24fps 下恰好吞掉一帧——那一帧落在
-    # 空洞里就沿用上一句的高亮，句内换行看起来慢了一帧。
-    for i, (t_start, t_end, si, js_lines) in enumerate(pending):
-        t_emit = round(t_start, 2)
-        nxt_emit = round(t_end if i + 1 >= len(pending) else pending[i + 1][0], 2)
-        sub_cues.append(f'{{t:{t_emit:.2f},d:{max(0.01, nxt_emit - t_emit):.2f},'
-                        f'si:{si},lines:{js_lines}}}')
-    return ",\n    ".join(sub_cues)
+    n = len(sentences)
+    cues = []
+    for i, sent in enumerate(sentences):
+        t = round(sent["start_time"], 2)
+        end = (round(sentences[i + 1]["start_time"], 2) if i + 1 < n
+               else round(sent["start_time"] + sent["duration"], 2))
+        si = sent.get("index", -1)
+        cues.append(f'{{t:{t:.2f},d:{max(0.01, end - t):.2f},si:{si}}}')
+    return ",\n    ".join(cues)
 
 
 _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
@@ -555,13 +528,13 @@ def generate_html(manifest, audio_src, images=None,
         d = clip["duration"]
         # normalize_accent：accent 统一归一化成 6 位 hex——alpha 后缀
         # （{ac}40/{ac}15）只有拼在 #rrggbb 后才合法，3 位 hex 或 CSS 色名拼出的
-        # 非法值会被浏览器整条声明静默丢弃。accent 来自稿件、属不可信数据，要拼进
-        # data-accent / style / GSAP 三处上下文——解析不了的一律回落默认色，
+        # 非法值会被浏览器整条声明静默丢弃。accent 来自稿件、属不可信数据，会拼进
+        # data-accent 与 style 两处 HTML 上下文——解析不了的一律回落默认色，
         # 绝不让引号/分号/括号进入 HTML。
         ac = normalize_accent(seg.get("accent", DEFAULT_ACCENT), DEFAULT_ACCENT)
         # HTML 属性上下文用 esc 后的副本（纵深防御：即使将来白名单放宽，
-        # 属性闭合仍不可能）。GSAP 的 backgroundColor:"{ac}" 是 JS 字符串
-        # 字面量，走 json.dumps 语义、不能用 esc（会渲染出字面量 &quot;）。
+        # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
+        # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
         ac_attr = esc(ac)
         # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
         # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
@@ -824,7 +797,7 @@ def generate_html(manifest, audio_src, images=None,
         )
 
     # ── Subtitle cues ──────────────────────────────────────────────
-    sub_cues_js = _build_subtitle_cues(sentences, aspect)
+    sub_cues_js = _build_subtitle_cues(sentences)
 
     gsap_code = "\n  ".join(gsap_lines)
 

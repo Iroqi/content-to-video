@@ -5,7 +5,7 @@
 - 进程与路径：`setup_stdio`（Windows 重定向强制 UTF-8）、`guard_not_in_skill_dir`、
   `is_inside`、`SKILL_DIR`。
 
-文本切分（断句 / 字幕切行）不在这里——那是带领域规则的 `_text.py`，两者消费者
+文本切分（TTS 断句）不在这里——那是带领域规则的 `_text.py`，两者消费者
 与改动时机都不同。
 """
 import hashlib

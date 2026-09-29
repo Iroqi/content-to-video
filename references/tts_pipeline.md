@@ -103,4 +103,4 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 - `voice_id` / `voice_style`（string）：内容段级的音色覆盖，覆盖全局 `--voice-id`/`--voice-style`；opening/closing 不支持这两个字段（规则见 `references/writing.md` 的段落级字段一节）
 - `turns`（数组）：仅对话段落出现，由 pipeline 从 `segments_source.json` 的 `dialogue` 自动产出（`{start, end, speaker, label, voice_id?, voice_style?}`，全局句子区间），手写 manifest 一般不需要自己拼
 
-`segments` 必须按时间轴顺序排列，并且恰好覆盖顶层每个 sentence index；缺句、重复句或乱序都会在 HTML 生成前直接拒绝。
+`segments` 必须按时间轴顺序排列，并且恰好覆盖顶层每个 sentence index；缺句、重复句或乱序都会在 HTML 生成前直接拒绝。手写时另外两条同样会被拒收，别等报错才发现：相邻两句的 `[start_time, start_time+duration)` 区间不得重叠（正常管线里句间至少隔 `--gap`，重叠说明时间轴被手改坏），以及段内句子的 `text` / `start_time` / `duration` 必须与顶层同 index 的句子逐字段一致。

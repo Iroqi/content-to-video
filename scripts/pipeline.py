@@ -27,20 +27,21 @@ from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
                     mix_bgm, wav_data_consistent,
                     remove_quiet)  # 尽力删文件，不抛
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
-from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, is_content_sid,  # noqa: E402
+from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
+                        is_content_sid,
                         list_voice_ids, load_segments_source,
                         DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
                         needs_speed_change, speed_marker_value,
                         validate_speed, validate_timing_manifest)
-from _theme import get_default_accent  # noqa: E402
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                            write_json_atomic)
 from build_from_structured import build_parts  # noqa: E402
 
-DEFAULT_ACCENT = get_default_accent()
-
 # 密钥/模型的两级查找路径：CLI > os.environ > 这份用户级 .env
 _USER_ENV_PATH = os.path.join(os.path.expanduser("~"), ".config", "ai-video", ".env")
+# 默认模型名/base URL 只在这里写一次：--help 文案、"没配 key"的报错和实际请求
+# 用的必须是同一个值，否则改了默认还在告诉用户旧的。
+DEFAULT_MODEL = "mimo-v2.5-tts"
 DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 
@@ -169,17 +170,15 @@ def get_key(name, cli_value=None):
     return load_env().get(name) or None
 
 
-def resolve_model_config(cli_model, cli_base_url, model_env_name, default_model):
+def resolve_model_config(cli_model, cli_base_url):
     """按 CLI > 环境变量/配置文件 > 默认值 解析模型名与 API base URL。
 
     与密钥一样走"环境变量 > ~/.config/ai-video/.env"两级查找：
-      - model: cli_model > env[model_env_name] > default_model
-      - base_url: cli_base_url > env[MIMO_BASE_URL] > DEFAULT_BASE_URL
-
-    pipeline.py（TTS 模型）使用此函数，避免各脚本重复实现同一套解析逻辑。
+      - model: cli_model > env["MIMO_TTS_MODEL"] > DEFAULT_MODEL
+      - base_url: cli_base_url > env["MIMO_BASE_URL"] > DEFAULT_BASE_URL
     """
     env = load_env()
-    model = cli_model or env.get(model_env_name) or default_model
+    model = cli_model or env.get("MIMO_TTS_MODEL") or DEFAULT_MODEL
     base_url = cli_base_url or env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL
     return model, base_url
 
@@ -256,7 +255,7 @@ def _audio_from_response(payload):
         raise BadAudioResponseError(
             "TTS 响应不含音频（chat.completions 返回了纯文本）——"
             "检查 --model/--base-url 是否指向支持 audio 参数的"
-            " TTS 模型（默认 mimo-v2.5-tts），不要指向普通对话模型")
+            f" TTS 模型（默认 {DEFAULT_MODEL}），不要指向普通对话模型")
     return base64.b64decode(data)
 
 
@@ -317,6 +316,17 @@ def _clear_stale_sidecars(out_path):
     return ok
 
 
+def _log_label(text, sentence_label=None):
+    """日志里代表这一句的字符串：优先用调用方给的 label，否则取原文前 30 字。
+
+    省略号只在**真的截断了**才补。短句子挂上 `...` 会让日志读起来像后半句被吞了，
+    排查 `[fail]` 时误判成"音频被截短"那一类故障。
+    """
+    if sentence_label:
+        return sentence_label
+    return text[:30] + ("..." if len(text) > 30 else "")
+
+
 def synth_sentence(client, text, voice_id, voice_style, out_path,
                    ffmpeg_path, speed, model, api_timeout,
                    max_retries=3, sentence_label=""):
@@ -343,7 +353,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             audio_bytes = client.audio_bytes(model, messages, audio_params,
                                              api_timeout)
         except Exception as e:
-            label = sentence_label or (text[:30] + "...")
+            label = _log_label(text, sentence_label)
             if _is_non_retryable(e):
                 print(f"    [{label}][fatal] {e}（确定性失败，不重试）",
                       flush=True)
@@ -364,7 +374,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             with open(out_path, 'wb') as f:
                 f.write(audio_bytes)
         except OSError as e:
-            label = sentence_label or (text[:30] + "...")
+            label = _log_label(text, sentence_label)
             print(f"    [{label}][fatal] 音频写盘失败（{e}），不重试",
                   file=sys.stderr, flush=True)
             remove_quiet(out_path)
@@ -381,7 +391,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
     # .spd=1.0 声明"当前确在原速"，下次 --resume 在缓存音频上重放 atempo
     # （见 _write_sentence_sidecars）。
     if not _clear_stale_sidecars(out_path):
-        print(f"    [{sentence_label or text[:30] + '...'}][speed-skip] "
+        print(f"    [{_log_label(text, sentence_label)}][speed-skip] "
               f"残留 sidecar 无法清理，跳过变速以保护新音频（原速可用）",
               file=sys.stderr, flush=True)
         return True, False
@@ -395,7 +405,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             speed_applied = apply_speed(ffmpeg_path, out_path, speed)
         except Exception as e:
             speed_applied = False
-            label = sentence_label or (text[:30] + "...")
+            label = _log_label(text, sentence_label)
             print(f"    [{label}][speed-skip] atempo 变速失败，保留原始语速: {e}",
                   flush=True)
     return True, speed_applied
@@ -458,12 +468,11 @@ def _record_sentence_cache(out_path, text, speed, speed_applied=True,
                                  speed_applied=speed_applied,
                                  voice_id=voice_id, voice_style=voice_style,
                                  model=model)
-        return True
     except OSError as e:
         print(f"    [sidecar][warn] {os.path.basename(out_path)} 的 .sha/.spd "
               f"写入失败（{e}）：音频可用，但下次 --resume 会重合成这一句",
               file=sys.stderr, flush=True)
-        return False
+
 
 def _drop_stale_cache(out_path):
     """缓存判为失效（resolve_resume_state 返回 regen）时清掉旧音频及其全部
@@ -487,8 +496,8 @@ def _drop_stale_cache(out_path):
 
 
 # ===================================================================
-# Resume 决策（纯函数，不含文件 IO / ffmpeg 调用，可单测；
-# 副作用留在 main 执行层）
+# Resume 决策（纯函数：只吃已读出的边车事实，不碰文件 IO / ffmpeg；
+# 副作用留在 main 执行层——读盘与写盘的错误处理因此只有一处）
 # ===================================================================
 
 class ResumeDecision:
@@ -664,11 +673,11 @@ def _build_parser():
     parser.add_argument("--bgm-volume", type=float, default=0.15,
                         help="BGM volume relative to voice (0.0-1.0, default 0.15)")
     parser.add_argument("--model", default=None,
-                        help="TTS model name (default: MIMO_TTS_MODEL env var or "
-                             "'mimo-v2.5-tts')")
+                        help=f"TTS model name (default: MIMO_TTS_MODEL env var or "
+                             f"'{DEFAULT_MODEL}')")
     parser.add_argument("--base-url", default=None,
-                        help="MiMo TTS API base URL (default: MIMO_BASE_URL env var "
-                             "or 'https://api.xiaomimimo.com/v1')")
+                        help=f"MiMo TTS API base URL (default: MIMO_BASE_URL env var "
+                             f"or '{DEFAULT_BASE_URL}')")
     parser.add_argument("--api-timeout", type=float, default=30.0,
                         help="单次 TTS API 调用超时（默认 30s）")
 
@@ -729,10 +738,9 @@ def _validate_args(parser, args):
         args.bgm = None
 
 
-
 def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, seg_config,
                                  silence_fallback_count, total_sentences, cached_count,
-                                 voices_used=None):
+                                 voices_used):
     # 降级明细：任何"用户显式要了、但这次没做到"的事都记在这里，最后统一
     # 翻成 status=degraded 交给 run.py 的 --allow-degraded 闸门。只打一行
     # 滚动过的 [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头
@@ -764,10 +772,10 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
-    # 容差与下游契约的"末句不得超出 total_duration + 250ms"同档——这一步放行、
+    # 容差与下游契约用的是 _contracts 里的同一个 TIMELINE_TOLERANCE：这一步放行、
     # 下游却拒收，等于 TTS 额度烧完才告诉用户产物不能用。真正的截断量级是秒到
-    # 几十秒，250ms 足够吸收逐句 round(x,3) 的累计舍入与 concat 边界误差。
-    if drift > 0.25:
+    # 几十秒，这点裕量足够吸收逐句 round(x,3) 的累计舍入与 concat 边界误差。
+    if drift > TIMELINE_TOLERANCE:
         print(f"[error] 拼接产物比预期短 {drift:.2f}s（实测 {total_dur:.2f}s / "
               f"预期 {expected_total:.2f}s）——多半是句子音频格式不一致或写盘被"
               f"截断。检查 {combined_path} 与音频目录里各句 WAV 的采样率/声道；"
@@ -877,10 +885,11 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         # 无条件按时间轴取值会把这种截断抹平成一份 status=ok 的 manifest：
         # 片尾几秒没声音，没人知道。记进 degraded 让 run.py 的闸门拦得住。
         _deficit = _timeline_end - total_dur
-        if _deficit > 0.25:
+        if _deficit > TIMELINE_TOLERANCE:
             _degraded["audio_shorter_than_timeline"] = round(_deficit, 3)
             print(f"[duration][warn] 音频实测 {total_dur:.2f}s 比时间轴终点 "
-                  f"{_timeline_end:.2f}s 短 {_deficit:.2f}s（超出 250ms 舍入裕量，"
+                  f"{_timeline_end:.2f}s 短 {_deficit:.2f}s（超出 "
+                  f"{TIMELINE_TOLERANCE * 1000:.0f}ms 舍入裕量，"
                   f"多半是混音/响度归一化把文件截断了），total_duration 按时间轴"
                   f"取值，末尾 {_deficit:.2f}s 无音频，已记入 degraded 明细",
                   file=sys.stderr, flush=True)
@@ -921,68 +930,72 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     if _val:
         manifest["closing_cta"] = _val
 
-    # ── Optional segment grouping (seg_config loaded earlier) ─────
-    if seg_config:
-        grouped = []
-        dropped = []
-        for seg in seg_config:
-            start_idx = seg["start"]   # 0-based sentence index (inclusive)
-            end_idx = seg["end"]       # exclusive
-            seg_sentences = [
-                s for s in manifest_sentences
-                if start_idx <= s["index"] < end_idx
-            ]
-            _seg_id = seg.get("id", f"seg{len(grouped)+1}")
-            if not seg_sentences:
-                # 该段所有句子都没产出音频（TTS 连续失败 + --on-fail abort，
-                # 或段落本身被上游丢空）。空段落进 manifest 会被 _contracts
-                # 的校验直接拒收（"缺少非空 sentences 列表"），
-                # gen_hyperframes 随之退出——一次失败就让整条视频出不来。
-                # 剔除并报对人，而不是写出一份下游必然拒收的 manifest。
-                dropped.append(_seg_id)
-                continue
-            # tagline 兜底：只对 seg… 内容段落兜底为 "补充阅读"，避免画面
-            # 缺字；opening/closing 是结构性段落，留空即不显示小标题，不塞
-            # 通用标签。兜底文案必须是内容中立词（本技能信源不限于 AI 资讯），
-            # 与 SKILL.md 字段说明保持一致。
-            _tagline = seg.get("tagline", "")
-            if not _tagline and is_content_sid(_seg_id):
-                _tagline = "补充阅读"
-            seg_out = {
-                "id": _seg_id,
-                "title": seg.get("title", ""),
-                "tagline": _tagline,
-                "accent": seg.get("accent", DEFAULT_ACCENT),
-                "sentences": seg_sentences,
-            }
-            # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）、
-            # layout（整页画布开关）。
-            if seg.get("speed") is not None:
-                seg_out["speed"] = seg["speed"]
-            if seg.get("layout") is not None:
-                seg_out["layout"] = seg["layout"]
-            if seg.get("voice_id") is not None:
-                seg_out["voice_id"] = seg["voice_id"]
-            if seg.get("voice_style") is not None:
-                seg_out["voice_style"] = seg["voice_style"]
-            if seg.get("takeaway") is not None:
-                seg_out["takeaway"] = seg["takeaway"]
-            if seg.get("turns"):
-                seg_out["turns"] = seg["turns"]
-            grouped.append(seg_out)
-        manifest["segments"] = grouped
-        if dropped:
-            # 整段消失是这行日志里最重的一种降级：稿子写了 8 段、画面只有 6 段。
-            # 光打 [warn] 不够——下游只看 manifest 状态就会当正常片放行。
-            _degraded["segments_dropped"] = list(dropped)
-            # 静默剔除会让"我写了 8 段、成片只有 6 段"变成无解的困惑；
-            # 报出被剔除的 sid 与原因，让失败可归因。
-            print(f"\n[warn] {len(dropped)} 个段落没有任何可用音频，"
-                  f"已从 manifest 剔除：{', '.join(dropped)}\n"
-                  f"       常见原因是这几段 TTS 连续失败且 --on-fail abort"
-                  f"（默认）——检查一下上面这些句子的 [fail] 日志，修掉后"
-                  f"重跑即可自动补回；--on-fail silence 会生成静音占位、"
-                  f"不会触发剔除。", file=sys.stderr, flush=True)
+    # ── 段落分组：manifest 的 segments 逐段构造 ────────────────────
+    # seg_config 由 build_parts 生成，_contracts 保证至少一段、每段都能分句
+    # 出内容，所以这里无条件执行（少一段是下面 dropped 的事）。
+    grouped = []
+    dropped = []
+    for seg in seg_config:
+        start_idx = seg["start"]   # 0-based sentence index (inclusive)
+        end_idx = seg["end"]       # exclusive
+        seg_sentences = [
+            s for s in manifest_sentences
+            if start_idx <= s["index"] < end_idx
+        ]
+        _seg_id = seg["id"]
+        if not seg_sentences:
+            # 该段所有句子都没产出音频（TTS 连续失败 + --on-fail abort，
+            # 或段落本身被上游丢空）。空段落进 manifest 会被 _contracts
+            # 的校验直接拒收（"缺少非空 sentences 列表"），
+            # gen_hyperframes 随之退出——一次失败就让整条视频出不来。
+            # 剔除并报对人，而不是写出一份下游必然拒收的 manifest。
+            dropped.append(_seg_id)
+            continue
+        # tagline 兜底：只对 seg… 内容段落兜底为 "补充阅读"，避免画面
+        # 缺字；opening/closing 是结构性段落，留空即不显示小标题，不塞
+        # 通用标签。兜底文案必须是内容中立词（本技能信源不限于 AI 资讯），
+        # 与 SKILL.md 字段说明保持一致。
+        _tagline = seg["tagline"]
+        if not _tagline and is_content_sid(_seg_id):
+            _tagline = "补充阅读"
+        # id/title/tagline/accent/start/end 由 build_from_structured 的
+        # _segments_from_blocks 逐段构造，必然存在——这里直接下标取值，
+        # 缺键就是上游写坏了，该崩在该崩的地方而不是被默认值掩盖。
+        seg_out = {
+            "id": _seg_id,
+            "title": seg["title"],
+            "tagline": _tagline,
+            "accent": seg["accent"],
+            "sentences": seg_sentences,
+        }
+        # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）、
+        # layout（整页画布开关）。
+        if seg.get("speed") is not None:
+            seg_out["speed"] = seg["speed"]
+        if seg.get("layout") is not None:
+            seg_out["layout"] = seg["layout"]
+        if seg.get("voice_id") is not None:
+            seg_out["voice_id"] = seg["voice_id"]
+        if seg.get("voice_style") is not None:
+            seg_out["voice_style"] = seg["voice_style"]
+        if seg.get("takeaway") is not None:
+            seg_out["takeaway"] = seg["takeaway"]
+        if seg.get("turns"):
+            seg_out["turns"] = seg["turns"]
+        grouped.append(seg_out)
+    manifest["segments"] = grouped
+    if dropped:
+        # 整段消失是这行日志里最重的一种降级：稿子写了 8 段、画面只有 6 段。
+        # 光打 [warn] 不够——下游只看 manifest 状态就会当正常片放行。
+        _degraded["segments_dropped"] = list(dropped)
+        # 静默剔除会让"我写了 8 段、成片只有 6 段"变成无解的困惑；
+        # 报出被剔除的 sid 与原因，让失败可归因。
+        print(f"\n[warn] {len(dropped)} 个段落没有任何可用音频，"
+              f"已从 manifest 剔除：{', '.join(dropped)}\n"
+              f"       常见原因是这几段 TTS 连续失败且 --on-fail abort"
+              f"（默认）——检查一下上面这些句子的 [fail] 日志，修掉后"
+              f"重跑即可自动补回；--on-fail silence 会生成静音占位、"
+              f"不会触发剔除。", file=sys.stderr, flush=True)
 
     # ── Write manifest ─────────────────────────────────────────────
     # 降级状态收口：上面任何一条"显式要了却没做到"都会把 status 翻成
@@ -1043,8 +1056,7 @@ def main():
         sys.exit(1)
 
     # ── Resolve model + base_url (CLI > env/config > default) ──────
-    model, base_url = resolve_model_config(
-        args.model, args.base_url, "MIMO_TTS_MODEL", "mimo-v2.5-tts")
+    model, base_url = resolve_model_config(args.model, args.base_url)
 
     # ── Read script（--source 结构化输入，逐段独立分句）───────────────
     try:
@@ -1052,10 +1064,6 @@ def main():
         sentences, seg_config = build_parts(source_data)
     except ValueError as e:
         print(f"[error] 结构化稿件无效：{e}", file=sys.stderr)
-        sys.exit(1)
-    if not sentences:
-        print("[error] 结构化稿件分句为空，请检查 segments_source.json 的文本",
-              file=sys.stderr)
         sys.exit(1)
 
     print(f"[script] {sum(len(s) for s in sentences)} chars", flush=True)
@@ -1108,41 +1116,41 @@ def main():
     sentence_speeds = {}
     sentence_voices = {}  # index -> (voice_id, voice_style)
     sentence_speaker_labels = {}  # index -> 说话人标签（仅对话段有值；只进 manifest 数据层）
-    if seg_config:
-        for seg in seg_config:
-            start_idx = seg.get("start", 0)
-            end_idx = seg.get("end", len(sentences))
-            seg_speed = seg.get("speed")
-            if seg_speed is not None:
-                for si in range(start_idx, min(end_idx, len(sentences))):
-                    sentence_speeds[si] = seg_speed
-            seg_voice_id = seg.get("voice_id")
-            seg_voice_style = seg.get("voice_style")
-            if seg_voice_id or seg_voice_style:
-                for si in range(start_idx, min(end_idx, len(sentences))):
+    for seg in seg_config:
+        start_idx = seg["start"]
+        end_idx = seg["end"]
+        seg_speed = seg.get("speed")
+        if seg_speed is not None:
+            for si in range(start_idx, min(end_idx, len(sentences))):
+                sentence_speeds[si] = seg_speed
+        seg_voice_id = seg.get("voice_id")
+        seg_voice_style = seg.get("voice_style")
+        if seg_voice_id or seg_voice_style:
+            for si in range(start_idx, min(end_idx, len(sentences))):
+                sentence_voices[si] = (
+                    seg_voice_id or args.voice_id,
+                    seg_voice_style if seg_voice_style is not None else args.voice_style,
+                )
+        # ── 双人对话（turns）：比 segment 更细的子区间，按句覆盖 ────
+        # segment 级设置——同一段里 A/B 两人交替发言，各自用各自的音色。
+        # build_from_structured.py 已把 speakers 解析成每个 turn 自带的
+        # voice_id/voice_style，这里不需要再反查任何 speakers 字典。
+        for turn in seg.get("turns", []):
+            t_start, t_end = turn["start"], turn["end"]
+            t_voice_id = turn.get("voice_id")
+            t_voice_style = turn.get("voice_style")
+            # label 由 build_from_structured 写成 "speakers 里的 label 或说话人
+            # 名"，_contracts 保证 speaker 非空，所以这里必然拿到非空标签。
+            t_label = turn["label"]
+            for si in range(t_start, min(t_end, len(sentences))):
+                if t_voice_id or t_voice_style:
+                    base_id, base_style = sentence_voices.get(
+                        si, (args.voice_id, args.voice_style))
                     sentence_voices[si] = (
-                        seg_voice_id or args.voice_id,
-                        seg_voice_style if seg_voice_style is not None else args.voice_style,
+                        t_voice_id or base_id,
+                        t_voice_style if t_voice_style is not None else base_style,
                     )
-            # ── 双人对话（turns）：比 segment 更细的子区间，按句覆盖 ────
-            # segment 级设置——同一段里 A/B 两人交替发言，各自用各自的音色。
-            # build_from_structured.py 已把 speakers 解析成每个 turn 自带的
-            # voice_id/voice_style，这里不需要再反查任何 speakers 字典。
-            for turn in seg.get("turns", []):
-                t_start, t_end = turn.get("start", start_idx), turn.get("end", end_idx)
-                t_voice_id = turn.get("voice_id")
-                t_voice_style = turn.get("voice_style")
-                t_label = turn.get("label") or turn.get("speaker")
-                for si in range(t_start, min(t_end, len(sentences))):
-                    if t_voice_id or t_voice_style:
-                        base_id, base_style = sentence_voices.get(
-                            si, (args.voice_id, args.voice_style))
-                        sentence_voices[si] = (
-                            t_voice_id or base_id,
-                            t_voice_style if t_voice_style is not None else base_style,
-                        )
-                    if t_label:
-                        sentence_speaker_labels[si] = t_label
+                sentence_speaker_labels[si] = t_label
 
     # ── Generate TTS per sentence (parallel) ──────────────────────
     sentence_data = []
@@ -1305,7 +1313,7 @@ def main():
                 sent_orig = sentences[idx]
                 out_path = task["out_path"]
                 label = task["label"]
-                preview = sent_orig[:30] + "..." if len(sent_orig) > 30 else sent_orig
+                preview = _log_label(sent_orig)
 
                 if ok and os.path.exists(out_path):
                     dur = measure_duration(ffmpeg_path, out_path)

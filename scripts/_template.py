@@ -96,7 +96,6 @@ _TEMPLATE_JSON = r'''
         "size": 60
       },
       "agenda": {
-        "_meta": "开屏/结尾纯文字 agenda（竖屏）：全高 flex 列（题头在顶、agenda 紧跟题头、句子流锚底），上限 7 行。",
         "insetX": 72,
         "insetTop": 88,
         "insetBottom": 96,
@@ -163,7 +162,6 @@ _TEMPLATE_JSON = r'''
         "size": 60
       },
       "agenda": {
-        "_meta": "开屏/结尾纯文字 agenda（横屏）：全幅 flex 列，题头在顶、agenda 紧跟题头、句子流锚底 max-width 900，上限 7 行（与竖屏一致）——标题锁 1 行不预留第二行 + 紧行距（rowPad 8 / titleMarginTop 12）换出第 6/7 行预算，实测 kicker+单行标题+7 行+定高句子流不挤。insetX 96 / insetBottom 72（句子流下移），insetTop 单独收到 80：列顶比两侧再高 16px，整块空白让给下方行列表，行数吃满时行距仍有余量（代价是 agenda 卡顶不再与左右 96 对齐；内容段走 --ctv-l-margin，不受影响）。",
         "insetX": 96,
         "insetTop": 80,
         "insetBottom": 72,
@@ -203,7 +201,6 @@ _TEMPLATE_JSON = r'''
       "duration": 0.4
     },
     "entranceBudget": {
-      "_meta": "入场动效时长的段长归一化：factor = clamp(d / normSeconds, minFactor, 1.0)，短段压缩、长段维持原速（html_renderer 消费）。",
       "minFactor": 0.45,
       "normSeconds": 4.0
     },

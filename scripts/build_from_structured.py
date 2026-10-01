@@ -48,6 +48,23 @@ def _sentences_of(text):
     return split_sentences(text.strip())
 
 
+def _warn_orphan_structural(source, page, text):
+    """该页没有口播正文时，同族字段会跟着整页一起静默失效——报一行。
+
+    判据按 `{page}_` 前缀认，不列白名单：键名写错（把结尾正文写成
+    `closing_text`）正好落进这一族，多写的无关键又不会误报；而前缀只依赖
+    opening/closing 这两个本模块本来就写死的名字，不会和 writing.md 漂移。
+    """
+    if text:
+        return
+    orphans = sorted(k for k in source if k.startswith(page + "_"))
+    if orphans:
+        print(f"[warn] 稿件没有 '{page}' 口播正文，这一页不会生成；"
+              f"{'、'.join(orphans)} 也跟着不上画面"
+              f"（该页口播正文的键名是 '{page}'，见 references/writing.md）",
+              file=sys.stderr, flush=True)
+
+
 def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     """把一个段落的 'dialogue'（多轮对话）拆成扁平句子列表 + 局部 turns。
 
@@ -96,6 +113,7 @@ def _collect_blocks(source):
     # 契约把显式 null 视同缺省（_validate_text 对 None 直接放行），这里
     # 用 `or ""` 兜底，否则 get 的默认值不生效、None.strip() 抛裸 AttributeError
     opening_text = (source.get("opening") or "").strip()
+    _warn_orphan_structural(source, "opening", opening_text)
     if opening_text:
         sents = _sentences_of(opening_text)
         if not sents:
@@ -176,6 +194,7 @@ def _collect_blocks(source):
         ))
 
     closing_text = (source.get("closing") or "").strip()
+    _warn_orphan_structural(source, "closing", closing_text)
     if closing_text:
         sents = _sentences_of(closing_text)
         if not sents:

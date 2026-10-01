@@ -6,7 +6,7 @@
 
 - `--api-key`：可选，默认从环境变量或 `~/.config/ai-video/.env` 读取 `MIMO_API_KEY`
 - `--source segments_source.json`：结构化输入（必填）。逐段独立分句，直接产出带 segments 分组的 manifest
-- `--voice-id`：预置音色 ID，见下表（默认 `冰糖`）
+- `--voice-id`：预置音色 ID，见下表（默认 `冰糖`）。下表只写**听感与选型建议**（那是不查代码就得不出来的部分）；可用音色的**名单以 `python scripts/pipeline.py --help` 的 choices 为准**——它由 `_contracts.list_voice_ids()` 现生成，跟着音色注册表走，本表只可能是它的滞后副本。
 - `--voice-style`：自然语言风格描述，控制语气情绪（如"清晰沉稳的讲解风格，语速适中"）
 - `--gap 0.4`：相邻两句之间的静音间隔（秒，默认 `0.4`）。拼接音频与 manifest 时间轴都会在句间插入这段静音
 - `--speed 1.5`：**语速倍率**，默认 `1.5`（比正常快一半）。通过 ffmpeg `atempo` 对每句合成音频做精确变速，**与 TTS 模型自然语速无关、完全确定**。设 `1.0` 即原始语速。字幕时间轴会按变速后实测时长对齐，依然精准同步
@@ -19,7 +19,11 @@
 - `--api-timeout`：单次 TTS API 调用超时（默认 30s，必须是 `>0` 的有限秒数）。`0`/负数/`NaN` 在 argparse 阶段就被拒——它们会让每句白重试 3 次、最后只报"全部句子失败"，把矛头指向 API 而不是参数
 - `--on-fail {abort,silence}`：单句 TTS 失败时的处理方式（默认 `abort`，任何句子失败都阻断管线，避免悄悄丢失内容）。`silence` 改为静音占位继续：时长按字数/语速启发式估算折算、落 `.failed` marker、manifest 对应句子带 `synth_failed: true`，不阻断整条视频，事后可定位补录
 
-> **manifest 的降级字段**：`status` 只有 `ok` / `degraded` 两种，`degraded` 是明细对象，
+> **manifest 的降级字段**：`status` 只有 `ok` / `degraded` 两种，`degraded` 是明细对象。
+> 它的键是一份**封闭集合**，由 `scripts/_degraded.py` 的注册表 `KINDS` 派生（`_contracts.DEGRADED_KEYS` 是它的别名），并在 `validate_timing_manifest`
+> 拦截未知键（拼错的键会让制作报告静默少一条，只剩 `status` 拦交付却说不出拦的是哪一项）。
+> 新增一档降级只改 `_degraded.py` 一处登记（加键名常量 + reader + 在 `KINDS` 里登记一行），`pipeline.py` 写入时用该常量（`D.<常量>`，拼错是 NameError，不会静默丢失）；
+> 词汇表、校验、人话文案由同一张表派生，`tests/test_degraded.py` 会核对 pipeline 写的键与登记一一对应。
 > 目前会出现的键：
 > - `tts_silence_fallback_count`：静音占位句数；
 > - `tts_lost_sentence_count`：**连静音都没生成、已从成片里消失**的句数（按"应产出句数 − 实际句数"算）；
@@ -64,7 +68,7 @@
 
 ## manifest 的 `segments` 字段格式
 
-manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 manifest 少见，以 pipeline 产出为准**；确需手写/裁剪时按下述格式提供（契约层会校验，缺字段直接报错）：
+manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 manifest 少见，以 pipeline 产出为准**；确需手写/裁剪时按下述格式提供（契约层会校验，**缺字段和多字段都直接报错**：顶层 / `segments[i]` / 句子对象三层的字段集都封闭，清单在 `_contracts.MANIFEST_TOP_KEYS` / `MANIFEST_SEGMENT_KEYS` / `MANIFEST_SENTENCE_KEYS`。`takeaway` 拼成 `take_away` 会让结尾那一行悄悄退回标题、`layout` 拼错会让那页默默回到槽位版式、`combined_audio` 拼错读侧直接兜默认值，三类都不出声）：
 
 ```json
 {

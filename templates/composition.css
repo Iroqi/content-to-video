@@ -174,7 +174,11 @@ body{font-family:var(--ctv-font-family)}
 /* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
    全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
    吃留白——省出的空间用来抬进行数上限）、句子流锚底。几何差异
-   （inset/字号）全部由 --ctv-ag-* 令牌承载，renderer 对两画幅输出同一套结构。 */
+   （inset/字号）全部由 --ctv-ag-* 令牌承载，renderer 对两画幅输出同一套结构。
+   横屏的 --ctv-ag-t(80) 刻意小于左右 --ctv-ag-x(96)：列顶再抬 16px，把整块空白
+   让给行列表，行数吃满时行距仍有余量（7 行预算正是靠"标题锁 1 行 + rowPad 8 /
+   titleMarginTop 12"的紧行距换出来的，实测题头+7 行+定高句子流不挤）。代价是那一页
+   的卡顶不与内容段的 96 轴线对齐——内容段走 --ctv-l-margin，不受这里影响。 */
 .agenda-col{position:absolute;left:var(--ctv-ag-x);right:var(--ctv-ag-x);top:var(--ctv-ag-t);bottom:var(--ctv-ag-b);display:flex;flex-direction:column;color:var(--ctv-text-color)}
 .agenda-kicker{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-kicker);font-weight:600;letter-spacing:.14em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .agenda-head .seg-title{margin-top:var(--ctv-ag-title-mt);line-height:var(--ctv-ag-title-lh);text-wrap:balance}

@@ -29,7 +29,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 - **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
 - **整页画布（段落 `layout: "canvas"`，两画幅同一份规则）**：上面那三层塌成一层——配图拉满整个画面（1080×1440 / 1920×1080，圆角、外发光、1px 内描边全撤），标题层与句子流层由渲染器**不生成**（不是 `display:none`：不留死 DOM、不留死补间目标，`check` 的文本普查也如实少两项）。段落入场只剩淡入，没有 `y` 滑入——整页就是画面，滑一下等于穿帮。
 
-  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（否则只剩一条进度条空帧），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
+  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（否则只剩一条进度条空帧），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，用 `image_options.md`「图内文字的对比度」那条**内联副本 + `check`** 的一次性程序（实测同一份稿 26/26 与 30/30 之差全在这一步）——内联版只活在 scratch 里，交付用的 HTML 必须仍是 `<img>`：内联 SVG 会执行文件里的 `<script>`，`<img>` 载入的不会。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
 
 opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。这一页自己就是一个版式值 `layout: "agenda"`，由 pipeline 盖章（它不是这一段自己的文字，而是对全片其它段的投影）；作者要把它换成整页海报，用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页就退化成内容段画布那条路：只剩一张满幅配图 + 进度条，标题层、句子流、章节行、`cta` 尾行连 DOM 都不生成——而 `check` 只数 HTML 文本，看不见这种丢失，画面上该有什么、读不读得清，全由那张图自己负责。渲染器只按 `layout` 分派三档版式（`_contracts.seg_layout()`），不再按 id 猜。漏盖 `layout` 不会报错也不会塌成槽位页：`seg_layout()` 按 id 兜回 agenda。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
@@ -44,7 +44,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   固定时长会让上一段先淡干净、下一段还没淡入，边界上露出只剩背景的空帧（24fps 实测 2~3 帧）。
   现在淡出跨过整段间隔、铺到下一段淡入结束，两张卡真正交叠；因此改 `--gap` 会同时改变交叠时长。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
-  **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要给这类元素做居中/位移，用绝对定位的 auto 外边距，别用 `translateX(-50%)`：竖屏配图槽位曾经那么写、并给 CSS 的 `transform` 挂 `!important` 压住补间保住居中，代价是 `y` 滑入整条失效——实测入场窗口内 `translateY` 恒为 0、只剩淡入，而横屏（CSS 不写 `transform`）是 40 → 16.9 → 5 → 0 正常滑入。改成 auto 外边距后两画幅一致，槽位视觉横坐标逐帧不变（实测 8 个采样点全为 50px）。
+  **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`（曾因此让竖屏配图的 y 滑入整条失效，实测过程见 CHANGELOG）。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
@@ -70,7 +70,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 python scripts/gen_hyperframes.py   -m audio_output/timing_manifest.json   -o hf-project/index.html   --images hf-project/images.json   --fps 24
 ```
 
-画幅与主题在这一步烧进 HTML，渲染分辨率随之切换（默认 portrait + dark，见 SKILL.md「一键编排」参数表）。
+画幅与主题在这一步烧进 HTML，渲染分辨率随之切换（默认 portrait + dark，见 SKILL.md「常用参数」）。
 
 生成目录应至少包含：
 
@@ -84,7 +84,7 @@ hf-project/
 └── images/
 ```
 
-`vendor/` 由 `gen_hyperframes.py` 在这一步自动装好——取用链、哈希钉固与取不到时的处置口径，见 SKILL.md「渲染资产默认离线复用」。
+`vendor/` 由 `gen_hyperframes.py` 在这一步自动装好——取用链、哈希钉固与取不到时的处置口径，见 SKILL.md「环境」的 GSAP 一段。
 
 音频路径会在生成 HTML 前做存在性检查；manifest 中的绝对路径或项目外音频会复制到项目的 `audio/` 目录，显式 `--audio` 也遵循同一规则。manifest 的音频路径失效时会回落到项目里上次暂存的 `audio/combined.wav`——这会打 `[warn]` 并实测其时长与 manifest 时间轴对账，偏差超过 `max(1s, 2%)` 直接拒跑（拒绝用新字幕烧旧音轨）；两处都没有才报错，不生成无声预览或成片。
 
@@ -94,18 +94,17 @@ hf-project/
 
 ### 3. 正式渲染
 
-渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md「一键编排」）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
+渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
 
 ## 性能参数
 
-- `fps`：默认 24；30/60 用于更高流畅度。**抓帧耗时与帧数严格线性**，是这里唯一的一阶杠杆：12.5s 竖屏 1080×1440 实测 24fps 抓帧 13.9s → 12fps 抓帧 7.3s（总时长 20.6s → 12.6s）。快速看画面对不对，用 `--fps 12 --quality draft` 出一版低规格片，别拿定稿规格反复试。
-- `workers`：默认 4；run.py 只把该值字面透传给 `hyperframes render --workers`，没有自动校准。实测（12.5s/300 帧竖屏，同机同片 16 核）：2 worker 抓帧 22.2s、4 17.2s、8 13.9s、12 13.5s——**8 之前是有效区间（4→8 省 19%），8 之后饱和**。每个 worker 是一个独立 Chrome（约 256MB 常驻），默认取 4 是为了省内存，迭代片可显式 `--workers 8`；含视频素材或遇 V8 堆崩溃时降到 2。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out` 这条 WARN（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
-- `quality`：`draft` / `standard` / `high`。实测 8 worker 下 draft 抓帧 12.1s vs standard 13.9s、编码 1.4s vs 2.1s（约省 15%），画质损失换预览够用。
-- `gpu`：默认关。实测同一片开 `--gpu` 总时长 170.7s vs 192.3s，但省下的 21s 全在抓帧阶段（编码 23.4s ≈ 23.8s，几乎没变），也就是增益来自 GPU 光栅化而非硬件编码器；代价是成片体积 27.7MB vs 17.2MB（+61%）。
-- **固定开销**：一次 `render` 调用里与帧数无关的部分约 4s，再加 npx/Node 进程启动约 4.5s 墙钟——**每调用一次渲染就白付约 8.5s**，冷跑第一次还多约 6s setup。所以"改一处重渲一次"的小步迭代很不划算：先 `--until html` + 快照看够，再整片渲一次。
-- **两条已被实测否证的"提速思路"**（下文 `HF_STATIC_DEDUP_VERIFY` / `HF_SEGMENTED_CAPTURE` 是上游 Hyperframes 渲染器的环境变量，本仓代码不读取），别再往回走：
-  - *静态帧去重*：上游确实有 `static-frame dedup`，但要先判定"该帧无任何 tween 覆盖"。本技能的合成里背景光/网格/句子流一直在动，实测 303 帧只判出 **1 帧**可复用（`HF_STATIC_DEDUP_VERIFY=false` 强制关掉成本核算也一样），默认路径则直接判 `unprofitable`。除非砍掉所有常驻氛围动效，否则没有收益。
-  - *分段渲染 + 断点续渲*（`HF_SEGMENTED_CAPTURE=true` + `--resume`）：12.5s 单段片实测总时长 52.8s vs 常规 20.6s（**慢 2.6 倍**，编码从 2.1s 涨到 26.5s），且改一字即换 `planHash`、无改动重跑也没命中复用。它的定位是"长片崩溃后接着渲"，不是增量构建；按段拆 sub-composition 做增量渲染的收益远小于预期。
+- `fps`：默认 24；抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
+- `workers`：默认 4，`run.py` 字面透传给 `hyperframes render --workers`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；含视频素材或遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
+- `quality`：`draft` / `standard` / `high`；draft 约省 15%，预览够用。
+- `gpu`：默认关。增益只来自抓帧的 GPU 光栅化，编码阶段几乎不变，代价是成片体积约 +61%。
+- **固定开销**：每调用一次渲染约白付 8.5s（与帧数无关），冷跑第一次还多约 6s。所以"改一处重渲一次"很不划算：先 `--until html` + 快照看够，再整片渲一次。
+
+具体实测数字见 `CHANGELOG.md`「渲染性能实测」。
 
 ## 官方校验命令（优先于手搓探针）
 

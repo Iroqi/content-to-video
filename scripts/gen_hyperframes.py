@@ -116,7 +116,7 @@ def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
                    validate, label):
     """把钉固字节的第三方脚本装进输出项目，返回项目内相对路径（失败 None）。
 
-    取用链与 SKILL.md「渲染资产默认离线复用」同一条：**输出项目 vendor/ → 用户
+    取用链与 SKILL.md「环境」GSAP 一段同一条：**输出项目 vendor/ → 用户
     缓存 → 钉固 CDN**，每一级都重算哈希——缓存或项目里被污染、截断的历史副本
     不会被复用，CDN 响应体校验不过就不落盘。技能包不再内置这个 dist：
     二进制副本要求"换版本必须同时改文件名 + 钉固哈希 + README"，
@@ -156,7 +156,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
-                        classify_media_path, needs_image, seg_layout,
+                        classify_media_path, sids_needing_image, seg_layout,
                         STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
@@ -255,14 +255,13 @@ def _uncovered_image_sids(manifest, images):
     """manifest 中没有配图映射的『需要配图的段落』sid 列表。
 
     口径收口在 _contracts.needs_image：内容段一律算，结构性页只在换成整页画布时
-    算（agenda 卡纯文字，那一页的 images 键上面就被弹掉了）。与 run.py
-    _image_coverage 同一口径。gen_hyperframes 对缺图只提示不拦截（run.py 一键编排
-    有缺图拦截，分步执行保留显式 warn，避免把"漏配/没找到合适的图"误当"不需要图"）。
+    算（agenda 卡纯文字，那一页的 images 键上面就被弹掉了）。遍历封装同样收口在
+    _contracts.sids_needing_image，与 run.py _image_coverage 共用一条口径。
+    gen_hyperframes 对缺图只提示不拦截（run.py 一键编排有缺图拦截，分步执行保留
+    显式 warn，避免把"漏配/没找到合适的图"误当"不需要图"）。
     画布段这里会多报一条 warn，权威判据是下面 canvas_layout_errors 的 error。
     """
-    _need = [seg.get("id", "") for seg in manifest["segments"] if needs_image(seg)]
-    return [sid for sid in _need if sid and sid not in images]
-
+    return [sid for sid in sids_needing_image(manifest) if sid not in images]
 
 
 def validate_images_files(images, out_dir, seg_durs=None):
@@ -502,7 +501,9 @@ def _svg_text_metrics(path):
     return (min(sizes) if sizes else None), len(re.findall(r"<text\b", body))
 
 
-def main():
+def main(argv=None):
+    """argv=None 走 sys.argv；run.py 进程内直调时传入参数列表，
+    参数校验只有本文件这一份 parser，run.py 不再复制。"""
     setup_stdio()
     parser = argparse.ArgumentParser(
         description="Generate Hyperframes composition from timing manifest"
@@ -536,7 +537,7 @@ def main():
                              "用户缓存 → 钉固 CDN 的顺序安装（下载体过 sha256 校验"
                              "才落盘）。传显式值（URL 或相对路径）可覆盖，但自定义源"
                              "不做哈希钉固校验，可信度自负。")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # 产物路径守卫：HTML 与它引用的音频/配图都写进 -o 所在目录，落在技能
     # 目录里会污染仓库（分步执行绕开 run.py 时这道守卫是唯一拦截）

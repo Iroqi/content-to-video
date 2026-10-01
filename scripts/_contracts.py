@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _theme import is_safe_css_color  # noqa: E402  _theme 不反向依赖本模块
+from _degraded import KEYS as DEGRADED_KEYS  # noqa: E402  降级词汇表（注册表派生，单一来源）
 
 # 段落 id 的合法形态见 _SID_RE / SID_RULE。之所以要收口成一条正则而不是各处
 # 宽松判断：id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP
@@ -67,6 +68,18 @@ def needs_image(seg):
     一个拦一个放，报告数字和实际能不能出片对不上。
     """
     return is_content_sid(seg.get("id")) or seg_layout(seg) == "canvas"
+
+
+def sids_needing_image(manifest):
+    """manifest 里"需要配图"的段 id 列表（按段落顺序，跳过空 id）。
+
+    这是 needs_image() 的遍历封装，存在的理由只有一个：run.py 的覆盖率统计与
+    gen_hyperframes 的缺图提示原先各抄一份同样的列表推导，并在注释里互相指认
+    "同一口径"——那种口径靠人维持，改一边就漏一边（报告说图齐了而出片失败）。
+    要不要因缺图而拦，仍归各自决定，这里只回答"该有哪些段有图"。
+    """
+    return [sid for seg in manifest.get("segments", [])
+            if (sid := seg.get("id", "")) and needs_image(seg)]
 
 
 def validate_speed(speed):
@@ -236,6 +249,34 @@ def _validate_sid(sid, where, seen):
     seen.add(sid)
 
 
+# segments_source.json 的封闭字段集：顶层 / 段落 / 对话轮次 / speakers 条目四层
+# 各自只读列出的这些键，多出来的键一律报错。
+# 为什么不留"未知键静默忽略"的余地：读侧全是 .get()，拼错的字段不会生效也不会
+# 报错，最坏的一类后果是整页悄悄消失——实测把 closing 写成 closing_text 后，
+# 结尾 agenda 卡压根不生成，而产物看起来完全正常（帧是两张槽位页，check 全绿）。
+# 清单必须与下面 validate_segments_source 里逐个 .get() 的字段同步。
+SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
+               "opening_speed", "opening_layout", "closing", "closing_title",
+               "closing_tagline", "closing_speed", "closing_layout", "cta",
+               "speakers", "segments")
+SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
+                "speed", "voice_id", "voice_style", "takeaway", "layout")
+SPEAKER_KEYS = ("voice_id", "voice_style", "label")
+# 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
+# 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
+TURN_KEYS = ("speaker", "text")
+
+
+def _reject_unknown_keys(obj, allowed, where):
+    """未知键拦截：一次报全所有未知键，并把本层合法清单一起给出。"""
+    unknown = sorted(str(k) for k in obj if k not in allowed)
+    if unknown:
+        raise ValueError(
+            f"{where} 有未知字段 {'、'.join(repr(k) for k in unknown)}——"
+            f"本层只认 {'、'.join(repr(k) for k in allowed)}。"
+            "字段名拼错不会生效也不会被读出（整页可能悄悄少掉），请改名或删掉")
+
+
 def validate_segments_source(data):
     """segments_source.json：需要非空的 segments 列表，opening/closing 可选。
 
@@ -244,9 +285,11 @@ def validate_segments_source(data):
 
     除了结构校验，还做取值校验：speed 必须是 >0 的有限数值、voice_id 必须是
     预置音色之一。这样坏参数在进 TTS 之前就 fail-fast，而不是每句重试到超时。
+    字段集封闭（SOURCE_KEYS / SEGMENT_KEYS / SPEAKER_KEYS），未知键直接报错。
     """
     if not isinstance(data, dict):
         raise ValueError("segments_source.json 顶层必须是 JSON 对象")
+    _reject_unknown_keys(data, SOURCE_KEYS, "segments_source.json 顶层")
     segments = data.get("segments")
     if not isinstance(segments, list) or not segments:
         raise ValueError("segments_source.json 需要非空的 'segments' 列表"
@@ -290,6 +333,8 @@ def validate_segments_source(data):
             if not isinstance(spk_cfg, dict):
                 raise ValueError(f"segments_source.json 的 speakers['{spk}'] 必须是对象"
                                  "（{voice_id, voice_style?, label?}）")
+            _reject_unknown_keys(spk_cfg, SPEAKER_KEYS,
+                                 f"segments_source.json 的 speakers['{spk}']")
             vid = spk_cfg.get("voice_id")
             if vid is None or not isinstance(vid, str) or not is_valid_voice_id(vid):
                 raise ValueError(
@@ -303,6 +348,8 @@ def validate_segments_source(data):
     for i, seg in enumerate(segments, 1):
         if not isinstance(seg, dict):
             raise ValueError(f"segments[{i}] 必须是对象")
+        _reject_unknown_keys(seg, SEGMENT_KEYS,
+                             f"segments[{i}]（title={seg.get('title')!r}）")
         _validate_text(seg.get("title"), f"segments[{i}].title", required=True)
         _validate_text(seg.get("tagline"), f"segments[{i}].tagline")
         # 可选的稳定 id：SKILL.md 承诺"给段稳定 id，改稿顺序不乱时间轴锚点"。
@@ -370,6 +417,8 @@ def validate_segments_source(data):
             for j, turn in enumerate(dialogue, 1):
                 if not isinstance(turn, dict):
                     raise ValueError(f"segments[{i}].dialogue[{j}] 必须是对象 {{speaker, text}}")
+                _reject_unknown_keys(turn, TURN_KEYS,
+                                     f"segments[{i}].dialogue[{j}]")
                 spk = turn.get("speaker")
                 if not isinstance(spk, str) or not spk.strip():
                     raise ValueError(f"segments[{i}].dialogue[{j}] 缺少 'speaker' 字段")
@@ -412,10 +461,30 @@ def load_segments_source(path):
     return validate_segments_source(_read_json_file(path))
 
 
+# timing_manifest.degraded 的全部合法键 = _degraded.KEYS（注册表派生，见 _degraded.py 文件头）。
+
+# timing_manifest 的两个对象层同样字段集封闭（清单 = pipeline 写侧的原样产出，
+# 少一个键就会在 producer 自校验时立刻炸，多一个键说明有人手写过它）。
+# 收这一层的理由与 source 侧不同：manifest 是文档明写"确需手写可按格式提供"的
+# 接口，而读侧全是 .get()——takeaway 拼成 take_away 时结尾 agenda 那行悄悄退回
+# 标题、layout 拼错时段默默回到槽位版式，产物照样"完全正常"。
+MANIFEST_SENTENCE_KEYS = ("index", "text", "start_time", "duration",
+                          "speaker", "synth_failed")
+MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
+                         "speed", "layout", "voice_id", "voice_style",
+                         "takeaway", "turns")
+# 顶层也一起封闭：只封下面两层会留一半——combined_audio / closing_cta 都是可选键，
+# 拼错了读侧 .get() 兜默认值，一声不吭（清单在 17 份真实 manifest 上实测稳定）。
+MANIFEST_TOP_KEYS = ("schema_version", "status", "degraded", "sentences",
+                     "segments", "total_duration", "gap", "voice_id",
+                     "combined_audio", "closing_cta")
+
+
 def validate_timing_manifest(data):
     """timing_manifest.json：sentences（非空）与 total_duration（数值）必填。"""
     if not isinstance(data, dict):
         raise ValueError("timing_manifest.json 顶层必须是 JSON 对象")
+    _reject_unknown_keys(data, MANIFEST_TOP_KEYS, "timing_manifest.json 顶层")
     # 结尾 agenda 尾行（pipeline 从 segments_source 顶层 cta 透传）：
     # 同样只接受单行字符串，renderer 直接切片/转义。
     if data.get("closing_cta") is not None:
@@ -454,6 +523,17 @@ def validate_timing_manifest(data):
     degraded = data.get("degraded")
     if degraded is not None and not isinstance(degraded, dict):
         raise ValueError("timing_manifest.json 的 degraded 必须是对象")
+    if isinstance(degraded, dict):
+        # 降级项的键是一份跨模块词汇表：pipeline.py 写、run.py 的制作报告读、这里
+        # 验。三处各知一份时，写侧把键拼错（或多一档新降级没登记）就会让报告静默
+        # 少一条，只剩 status 兜底拦交付却说不清拦的是哪一项。收在这里，坏键在
+        # producer 侧（pipeline 写盘前自己会 validate 一遍）就炸，不等到渲染完。
+        stray = sorted(str(k) for k in degraded if k not in DEGRADED_KEYS)
+        if stray:
+            raise ValueError(
+                f"timing_manifest.json 的 degraded 有未知键 {'、'.join(repr(k) for k in stray)}"
+                f"——只认 {'、'.join(repr(k) for k in DEGRADED_KEYS)}"
+                "（新增降级档要同时在这里登记，否则制作报告读不到它）")
     if status == "degraded" and not degraded:
         raise ValueError("timing_manifest.json 标记为 degraded 时必须提供非空 degraded 详情")
 
@@ -470,6 +550,7 @@ def validate_timing_manifest(data):
     def _check_sentence_fields(s, where):
         if not isinstance(s, dict):
             raise ValueError(f"{where} 必须是对象")
+        _reject_unknown_keys(s, MANIFEST_SENTENCE_KEYS, f"{where}")
         for key in ("index", "text", "start_time", "duration"):
             if key not in s:
                 raise ValueError(f"{where} 缺少字段 '{key}'"
@@ -546,6 +627,9 @@ def validate_timing_manifest(data):
     for i, sg in enumerate(segs):
         if not isinstance(sg, dict):
             raise ValueError(f"segments[{i}] 必须是对象")
+        _reject_unknown_keys(sg, MANIFEST_SEGMENT_KEYS,
+                             f"timing_manifest.json 的 segments[{i}]"
+                             f"（id={sg.get('id', '?')}）")
         sid = sg.get("id")
         if not isinstance(sid, str) or not sid.strip():
             raise ValueError(f"segments[{i}].id 必须是非空字符串")
@@ -717,15 +801,15 @@ def validate_images_json(data):
                 f"不接受裸字符串路径")
         if isinstance(value, dict):
             src = value.get("src")
-            # type 先查、src 后查：旧 C1/C2 项目留下的 {"type": "chart"} 本来就没有
+            # type 先查、src 后查：写着 {"type": "chart"} 的旧稿件本来就没有
             # src，先查 src 会报"缺少 src"，把人往错的方向引。
             _t = value.get("type")
             if _t is not None and _t not in ("auto", "image", "video", "gif"):
                 raise ValueError(
                     f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif"
                     f"（实际: {_t!r}）"
-                    + ("——图表 / 公式卡（旧 C1/C2）已从本技能移除，数据图和公式"
-                       "改走手绘 SVG，需要整页表达时给段落 layout: \"canvas\""
+                    + ("——图表 / 公式卡已从本技能移除，数据图和公式改走手绘 SVG"
+                       "（需要整页表达时给段落 layout: \"canvas\"）"
                        if _t in ("chart", "formula") else ""))
             if "src" not in value:
                 raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
@@ -734,8 +818,7 @@ def validate_images_json(data):
         else:
             raise ValueError(
                 f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
-        # 走到这里 src 必然存在且非空（上面 dict 分支已拦缺键与空值）——旧 chart
-        # 条目"可以不写 src"的豁免随 C1/C2 一起删掉了，这里不再留条件。
+        # 走到这里 src 必然存在且非空（上面 dict 分支已拦缺键与空值）。
         if not isinstance(src, str) or not src:
             raise ValueError(f"images.json 的 '{key}' 的 src 必须是非空字符串")
         # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端

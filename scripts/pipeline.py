@@ -24,8 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
-                    mix_bgm, wav_data_consistent,
-                    remove_quiet)  # 尽力删文件，不抛
+                    mix_bgm, wav_data_consistent)
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
 from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
                         is_content_sid,
@@ -33,8 +32,9 @@ from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa:
                         DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
                         needs_speed_change, speed_marker_value,
                         validate_speed, validate_timing_manifest)
+import _degraded as D  # noqa: E402  降级键常量（拼错即 NameError）
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
-                           write_json_atomic)
+                           write_json_atomic, remove_if_exists)
 from build_from_structured import build_parts  # noqa: E402
 
 # 密钥/模型的两级查找路径：CLI > os.environ > 这份用户级 .env
@@ -359,7 +359,7 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
                       flush=True)
                 # 失败即清掉 out_path：磁盘写满等异常可能留下半截 WAV，
                 # 其 wave 头完整、下次 --resume 会把它当有效缓存跳过。
-                remove_quiet(out_path)
+                remove_if_exists(out_path)
                 return False, False
             print(f"    [{label}][retry {attempt+1}/{max_retries}] {e}",
                   flush=True)
@@ -377,11 +377,11 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             label = _log_label(text, sentence_label)
             print(f"    [{label}][fatal] 音频写盘失败（{e}），不重试",
                   file=sys.stderr, flush=True)
-            remove_quiet(out_path)
+            remove_if_exists(out_path)
             return False, False
         break  # API 成功、音频已落盘，跳出重试循环
     else:
-        remove_quiet(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
+        remove_if_exists(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
         return False, False
 
     # 新合成 = 全新内容：先清上一轮残留 sidecar（.sha 由调用方在 synth 成功后
@@ -452,7 +452,7 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
             with open(out_path + ".spd", "w", encoding="utf-8") as f:
                 f.write("1.0")
     else:
-        remove_quiet(out_path + ".spd")
+        remove_if_exists(out_path + ".spd")
 
 def _record_sentence_cache(out_path, text, speed, speed_applied=True,
                            voice_id=None, voice_style=None, model=None):
@@ -738,14 +738,13 @@ def _validate_args(parser, args):
         args.bgm = None
 
 
-def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, seg_config,
-                                 silence_fallback_count, total_sentences, cached_count,
-                                 voices_used):
-    # 降级明细：任何"用户显式要了、但这次没做到"的事都记在这里，最后统一
-    # 翻成 status=degraded 交给 run.py 的 --allow-degraded 闸门。只打一行
-    # 滚动过的 [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头
-    # 看警告，而响度没归一化、BGM 没混进去、少了一整段这些事实都已经丢了。
-    _degraded = {}
+def _concat_voice_audio(args, ffmpeg_path, sentence_data, degraded):
+    """拼接句音频成母带并做时长对账，返回 (combined_path, total_dur)。
+
+    拼接失败 / 测量失败 / 与逐句预期对不上都是硬失败——缺音频 = 字幕从
+    某一刻起整体提前，成片照样能播完，所以宁可在这里停住让人查，也不要
+    悄悄少一段。
+    """
     # ── Concatenate ────────────────────────────────────────────────
     print(f"\n[concat] {len(sentence_data)} clips (gap {args.gap}s)...", flush=True)
     audio_files = [s["file"] for s in sentence_data]
@@ -767,8 +766,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     # 实测总时长必须跟"逐句时长之和 + 句间静音"对得上：ffmpeg 的 concat
     # demuxer 在输入格式不一致时会**返回 0** 却吐出错采样率、被截断的音频
     # （实测数字记在 _audio.concat_audio 的注释里），只看 returncode 检不出
-    # 这类静默损坏。缺音频 = 字幕从某一刻起整体提前，成片照样能播完，
-    # 所以宁可在这里停住让人查，也不要悄悄少一段。
+    # 这类静默损坏。
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
@@ -783,24 +781,18 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
               file=sys.stderr)
         sys.exit(1)
     print(f"[done] Total audio: {total_dur:.2f}s", flush=True)
+    return combined_path, total_dur
 
-    # ── Calculate start times ──────────────────────────────────────
-    # 提前到 BGM 混音之前算，因为混音后的 manifest 需要每句的 start_time。
-    cumulative = 0.0
-    for i, sd in enumerate(sentence_data):
-        sd["start_time"] = round(cumulative, 3)
-        cumulative += sd["duration"]
-        if i < len(sentence_data) - 1:
-            cumulative += args.gap
 
-    # ── Optional BGM mix ───────────────────────────────────────────
+def _mix_bgm(args, ffmpeg_path, combined_path, total_dur, degraded):
+    """可选 BGM 混音：成功换母带并重量长度，失败记降级走纯人声。"""
     # 三种"要了 BGM 却没有"：文件在校验后被删（本 if 不进）、--bgm 校验时就
     # 不存在（上面已清空并打 bgm_missing_file）、混音本身失败（下面的
     # bgm_mix_failed）。三者都必须落到 degraded 明细，否则成片静音轨照常交付。
     if getattr(args, "bgm_missing_file", False):
-        _degraded["bgm_missing_file"] = True
+        degraded[D.BGM_MISSING_FILE] = True
     if args.bgm and not os.path.exists(args.bgm):
-        _degraded["bgm_missing_file"] = True
+        degraded[D.BGM_MISSING_FILE] = True
         print("[warn] --bgm 文件在校验后消失，跳过混音"
               "（已记入 manifest 的 degraded 明细）", file=sys.stderr, flush=True)
     if args.bgm and os.path.exists(args.bgm):
@@ -824,35 +816,42 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
                 total_dur = mixed_dur
             print(f"  [OK] {mixed_path}", flush=True)
         else:
-            _degraded["bgm_mix_failed"] = True
+            degraded[D.BGM_MIX_FAILED] = True
             print("  [warn] BGM mix failed, using voice-only audio"
                   "（本次成片不含 BGM，已记入 manifest 的 degraded 明细）",
                   file=sys.stderr, flush=True)
+    return combined_path, total_dur
 
-    # ── Optional loudness normalization ────────────────────────────
-    if args.loudness is not None:
-        loud_path = os.path.join(args.output, "combined_loud.wav")
-        if apply_loudnorm(ffmpeg_path, combined_path, loud_path, args.loudness):
-            loud_dur = measure_duration(ffmpeg_path, loud_path)
-            if loud_dur and loud_dur > 0:
-                combined_path = loud_path
-                total_dur = loud_dur
-                print(f"  [loudness] normalized to {args.loudness} LUFS -> {loud_path}",
-                      flush=True)
-            else:
-                _degraded["loudness_norm_failed"] = True
-                # 换文件后测量失败会把 total_dur 置 0，契约层仍放行"合法但废掉"
-                # 的 manifest——回退未归一化音频并保留原时长，比交给下游强校验好
-                print("  [warn] loudness 产物时长测量失败，沿用未归一化音频"
-                      "（响度未达标，已记入 manifest 的 degraded 明细）",
-                      file=sys.stderr, flush=True)
+
+def _normalize_loudness(args, ffmpeg_path, combined_path, total_dur, degraded):
+    """可选响度归一化：产物可用才换母带并采用新时长，否则回退并记降级。"""
+    if args.loudness is None:
+        return combined_path, total_dur
+    loud_path = os.path.join(args.output, "combined_loud.wav")
+    if apply_loudnorm(ffmpeg_path, combined_path, loud_path, args.loudness):
+        loud_dur = measure_duration(ffmpeg_path, loud_path)
+        if loud_dur and loud_dur > 0:
+            combined_path = loud_path
+            total_dur = loud_dur
+            print(f"  [loudness] normalized to {args.loudness} LUFS -> {loud_path}",
+                  flush=True)
         else:
-            _degraded["loudness_norm_failed"] = True
-            print("  [warn] loudness normalization failed, using un-normalized audio"
+            degraded[D.LOUDNESS_NORM_FAILED] = True
+            # 换文件后测量失败会把 total_dur 置 0，契约层仍放行"合法但废掉"
+            # 的 manifest——回退未归一化音频并保留原时长，比交给下游强校验好
+            print("  [warn] loudness 产物时长测量失败，沿用未归一化音频"
                   "（响度未达标，已记入 manifest 的 degraded 明细）",
                   file=sys.stderr, flush=True)
+    else:
+        degraded[D.LOUDNESS_NORM_FAILED] = True
+        print("  [warn] loudness normalization failed, using un-normalized audio"
+              "（响度未达标，已记入 manifest 的 degraded 明细）",
+              file=sys.stderr, flush=True)
+    return combined_path, total_dur
 
-    # ── Build manifest ─────────────────────────────────────────────
+
+def _manifest_sentence_entries(sentence_data):
+    """句数据 → manifest.sentences 行（只带下游要读的键）。"""
     manifest_sentences = []
     for s in sentence_data:
         entry = {
@@ -866,7 +865,11 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         if s.get("synth_failed"):
             entry["synth_failed"] = True  # TTS 失败降级为静音占位（见 --on-fail）
         manifest_sentences.append(entry)
+    return manifest_sentences
 
+
+def _reconcile_timeline(manifest_sentences, total_dur, degraded):
+    """把成片长度与时间轴终点对账，返回最终 total_dur。"""
     # 成片长度必须罩住时间轴：音频比最后一句的结束时刻短一分，画面就会在字幕
     # 还没走完时提前结束。用写进 manifest 的（已 round 的）值算，与契约层
     # "最后一句不得超出 total_duration + 250ms" 校验的是同一个量。
@@ -886,7 +889,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         # 片尾几秒没声音，没人知道。记进 degraded 让 run.py 的闸门拦得住。
         _deficit = _timeline_end - total_dur
         if _deficit > TIMELINE_TOLERANCE:
-            _degraded["audio_shorter_than_timeline"] = round(_deficit, 3)
+            degraded[D.AUDIO_SHORTER_THAN_TIMELINE] = round(_deficit, 3)
             print(f"[duration][warn] 音频实测 {total_dur:.2f}s 比时间轴终点 "
                   f"{_timeline_end:.2f}s 短 {_deficit:.2f}s（超出 "
                   f"{TIMELINE_TOLERANCE * 1000:.0f}ms 舍入裕量，"
@@ -897,40 +900,11 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
             print(f"[duration] 音频实测 {total_dur:.2f}s 短于时间轴终点 "
                   f"{_timeline_end:.2f}s，total_duration 按时间轴取值", flush=True)
         total_dur = _timeline_end
+    return total_dur
 
-    # 丢失句数按"应产出 − 实产出"算，而不是复用调用方的 failed 列表：
-    # 每个 index 在 sentence_data 里恰好出现一次（缓存分支或合成分支各
-    # append 一次），所以差额就是凭空消失的句子。这样任何一条"某句没进
-    # manifest"的路径（含静音兜底自身也失败）都会把 status 翻成 degraded，
-    # 而不是只剩一行滚动过的 [warn]，下游 run.py 的 --allow-degraded 闸门
-    # 才有东西可拦。
-    lost_count = max(0, total_sentences - len(sentence_data))
-    if silence_fallback_count:
-        _degraded["tts_silence_fallback_count"] = silence_fallback_count
-    if lost_count:
-        _degraded["tts_lost_sentence_count"] = lost_count
-    _voices = sorted(voices_used or {args.voice_id})
-    manifest = {
-        "schema_version": 2,
-        # status 在写盘前按 _degraded 统一复核（段落剔除发生在下面）。
-        "status": "ok",
-        "degraded": _degraded,
-        "sentences": manifest_sentences,
-        "total_duration": round(total_dur, 3),
-        "gap": args.gap,
-        # 本次真正用到的音色：对话稿/分段音色会让顶层 --voice-id 只代表"默认值"，
-        # 照抄 args.voice_id 等于在 manifest 里声明一件不成立的事。单一音色时
-        # 仍是那一个词，多音色时是逗号连接的清单。
-        "voice_id": ",".join(_voices),
-        "combined_audio": os.path.abspath(combined_path),
-    }
-    # 结尾 agenda 卡的至多一条可选尾行：行动号召或下期预告二选一，
-    # 顶层字段透传进 manifest，renderer 拼在要点总结之后。
-    _val = str(source_data.get("cta") or "").strip()
-    if _val:
-        manifest["closing_cta"] = _val
 
-    # ── 段落分组：manifest 的 segments 逐段构造 ────────────────────
+def _group_segments(seg_config, manifest_sentences, degraded):
+    """段落分组：manifest 的 segments 逐段构造；没有任何可用音频的段剔除并记降级。"""
     # seg_config 由 build_parts 生成，_contracts 保证至少一段、每段都能分句
     # 出内容，所以这里无条件执行（少一段是下面 dropped 的事）。
     grouped = []
@@ -984,11 +958,10 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         if seg.get("turns"):
             seg_out["turns"] = seg["turns"]
         grouped.append(seg_out)
-    manifest["segments"] = grouped
     if dropped:
         # 整段消失是这行日志里最重的一种降级：稿子写了 8 段、画面只有 6 段。
         # 光打 [warn] 不够——下游只看 manifest 状态就会当正常片放行。
-        _degraded["segments_dropped"] = list(dropped)
+        degraded[D.SEGMENTS_DROPPED] = list(dropped)
         # 静默剔除会让"我写了 8 段、成片只有 6 段"变成无解的困惑；
         # 报出被剔除的 sid 与原因，让失败可归因。
         print(f"\n[warn] {len(dropped)} 个段落没有任何可用音频，"
@@ -997,20 +970,27 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
               f"（默认）——检查一下上面这些句子的 [fail] 日志，修掉后"
               f"重跑即可自动补回；--on-fail silence 会生成静音占位、"
               f"不会触发剔除。", file=sys.stderr, flush=True)
+    return grouped
 
+
+def _validate_and_write_manifest(args, manifest, degraded):
+    """降级状态收口 → 写盘前自证 → 原子落盘。
+
+    产物不合格要在产出这一刻说：这些校验原本只在 run.py / gen_hyperframes
+    加载时跑——于是 pipeline 报"[done] 成功"、额度也花了，用户却在几秒后
+    收到一份"manifest 不合法"。
+    """
     # ── Write manifest ─────────────────────────────────────────────
     # 降级状态收口：上面任何一条"显式要了却没做到"都会把 status 翻成
     # degraded，run.py 的 --allow-degraded 闸门才有东西可拦。
-    manifest["status"] = "degraded" if _degraded else "ok"
-    if _degraded:
-        print(f"[degraded] 本次产物含降级项：{_degraded}\n"
+    manifest["status"] = "degraded" if degraded else "ok"
+    if degraded:
+        print(f"[degraded] 本次产物含降级项：{degraded}\n"
               "           明细见 timing_manifest.json 的 degraded 字段；"
               "默认会阻断正式渲染，确认接受后再加 --allow-degraded。",
               file=sys.stderr, flush=True)
 
-    # 自证：写盘前按下游同一份契约校一遍。这些校验原本只在 run.py /
-    # gen_hyperframes 加载时跑——于是 pipeline 报"[done] 成功"、额度也花了，
-    # 用户却在几秒后收到一份"manifest 不合法"。产物不合格要在产出这一刻说。
+    # 自证：写盘前按下游同一份契约校一遍。
     try:
         validate_timing_manifest(manifest)
     except ValueError as e:
@@ -1026,17 +1006,96 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     write_json_atomic(manifest_path, manifest, indent=2)
 
     print(f"\n[manifest] {manifest_path}", flush=True)
+
+
+def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, seg_config,
+                                 silence_fallback_count, total_sentences, cached_count,
+                                 voices_used):
+    """TTS 之后的收口编排：拼接 → BGM → 响度 → 时长对账 → 组装 manifest → 校验落盘。
+
+    各阶段是独立函数，(combined_path, total_dur) 顺序传递；任何
+    "用户显式要了、但这次没做到"的事都记进 degraded 明细，最后统一翻成
+    status=degraded 交给 run.py 的 --allow-degraded 闸门。只打一行滚动过的
+    [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头看警告，
+    而响度没归一化、BGM 没混进去、少了一整段这些事实都已经丢了。
+    """
+    degraded = {}
+
+    combined_path, total_dur = _concat_voice_audio(
+        args, ffmpeg_path, sentence_data, degraded)
+
+    # ── Calculate start times ──────────────────────────────────────
+    # 提前到 BGM 混音之前算，因为混音后的 manifest 需要每句的 start_time。
+    cumulative = 0.0
+    for i, sd in enumerate(sentence_data):
+        sd["start_time"] = round(cumulative, 3)
+        cumulative += sd["duration"]
+        if i < len(sentence_data) - 1:
+            cumulative += args.gap
+
+    combined_path, total_dur = _mix_bgm(
+        args, ffmpeg_path, combined_path, total_dur, degraded)
+    combined_path, total_dur = _normalize_loudness(
+        args, ffmpeg_path, combined_path, total_dur, degraded)
+
+    manifest_sentences = _manifest_sentence_entries(sentence_data)
+    total_dur = _reconcile_timeline(manifest_sentences, total_dur, degraded)
+
+    # 丢失句数按"应产出 − 实产出"算，而不是复用调用方的 failed 列表：
+    # 每个 index 在 sentence_data 里恰好出现一次（缓存分支或合成分支各
+    # append 一次），所以差额就是凭空消失的句子。这样任何一条"某句没进
+    # manifest"的路径（含静音兜底自身也失败）都会把 status 翻成 degraded，
+    # 而不是只剩一行滚动过的 [warn]，下游 run.py 的 --allow-degraded 闸门
+    # 才有东西可拦。
+    lost_count = max(0, total_sentences - len(sentence_data))
+    if silence_fallback_count:
+        degraded[D.SILENCE_FALLBACK_COUNT] = silence_fallback_count
+    if lost_count:
+        degraded[D.LOST_SENTENCE_COUNT] = lost_count
+    _voices = sorted(voices_used or {args.voice_id})
+    manifest = {
+        "schema_version": 2,
+        # status 在写盘前按 degraded 明细统一复核（段落剔除发生在下面）。
+        "status": "ok",
+        "degraded": degraded,
+        "sentences": manifest_sentences,
+        "total_duration": round(total_dur, 3),
+        "gap": args.gap,
+        # 本次真正用到的音色：对话稿/分段音色会让顶层 --voice-id 只代表"默认值"，
+        # 照抄 args.voice_id 等于在 manifest 里声明一件不成立的事。单一音色时
+        # 仍是那一个词，多音色时是逗号连接的清单。
+        "voice_id": ",".join(_voices),
+        "combined_audio": os.path.abspath(combined_path),
+    }
+    # 结尾 agenda 卡的至多一条可选尾行：行动号召或下期预告二选一，
+    # 顶层字段透传进 manifest，renderer 拼在要点总结之后。
+    _val = str(source_data.get("cta") or "").strip()
+    if _val:
+        manifest["closing_cta"] = _val
+
+    manifest["segments"] = _group_segments(seg_config, manifest_sentences, degraded)
+
+    _validate_and_write_manifest(args, manifest, degraded)
+
     # total_sentences / cached_count 由调用方传入：它们都是 main() 的局部
     # 变量，这里若直接引用会在每次 TTS 成功走到这一行时崩 NameError
     # （该路径必须保持独立守卫，避免单行输入触发假死）。
-    print(f"[stats] {len(sentence_data)}/{total_sentences} sentences OK "
-          f"({cached_count} cached)", flush=True)
+    # 计数按"有没有配音"算，不按行数算：--on-fail silence 的静音占位也在
+    # sentence_data 里，整条 API 打不通时旧写法会打成 "6/6 sentences OK"，
+    # 紧接着三行就是 [degraded] 与 run.py 的渲染阻断——自相矛盾的流水账会让
+    # 人不信这条链，也就抵消了"降级显式化"的意义。
+    _voiced = len(sentence_data) - silence_fallback_count
+    print(f"[stats] {_voiced}/{total_sentences} sentences 有配音"
+          + (f"，{silence_fallback_count} 句静音占位" if silence_fallback_count else "")
+          + f"（{cached_count} cached）", flush=True)
     print(f"[duration] {total_dur:.2f}s", flush=True)
 
-def main():
+def main(argv=None):
+    """argv=None 走 sys.argv；run.py 进程内直调时传入参数列表，
+    参数校验只有本文件这一份 parser，run.py 不再复制。"""
     setup_stdio()
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     _validate_args(parser, args)
 
     # ── Validate required args ────────────────────────────────────
@@ -1208,7 +1267,7 @@ def main():
                                   f"失败（{e}），下次 --resume 会重新对齐语速",
                                   file=sys.stderr)
                     elif os.path.exists(out_path + ".spd"):
-                        remove_quiet(out_path + ".spd")
+                        remove_if_exists(out_path + ".spd")
                 else:
                     print(f"  [{label}][warn] atempo re-apply failed; "
                           f"audio kept at previous speed", file=sys.stderr)
@@ -1250,7 +1309,7 @@ def main():
                         print(f"  [{label}][warn] .spd marker 写入"
                               f"失败（{e}），下次 --resume 会重复一次还原",
                               file=sys.stderr)
-                        remove_quiet(out_path + ".spd")
+                        remove_if_exists(out_path + ".spd")
             # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
             # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
             sd = {
@@ -1341,7 +1400,7 @@ def main():
                         # resume 会把这个已经补录好的句子又标成 synth_failed。
                         stale_marker = out_path + ".failed"
                         if os.path.exists(stale_marker):
-                            remove_quiet(stale_marker)
+                            remove_if_exists(stale_marker)
                         print(f"[TTS {done_count}/{pending_count}] {label} "
                               f"{preview} -> {dur:.2f}s", flush=True)
                         continue

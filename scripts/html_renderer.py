@@ -8,10 +8,11 @@ remain outside this module.
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 from _theme import (
-    get_theme_colors, get_default_accent, get_accent_palette, darken,
+    get_theme_colors, get_default_accent, darken,
     relative_luminance, mix, normalize_accent, theme_bg_stops,
     ensure_text_contrast,
 )
@@ -270,63 +271,43 @@ def _build_subtitle_cues(sentences):
 _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
 
 
-def generate_html(manifest, audio_src, images=None,
-                  width=None, height=None,
-                  gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme="dark", fps=24):
-    """Generate complete Hyperframes HTML composition string.
+# ── 渲染上下文：一次派生，处处共用 ──────────────────────────────────────
+# generate_html 只做三件事：归一化入参 → 建上下文 → 逐卡装配。主题、模板
+# 几何与 :root 变量表都在 _build_render_context 里派生一次；单卡的归一、
+# 装配与动画各自成函数，版式差异只体现在装配一处。
 
-    Args:
-        images: {段落 id: 媒体对象}，形态与 images.json 一致（裸字符串路径由
-            `_contracts.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
-        aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
-            画布尺寸都按它取，归一化在函数体内完成。
-        theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
-            可选值见 _theme 的主题注册表。
-        gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
-        fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
-            20% 帧、出片更快。
 
-        字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
+def _build_render_context(tpl, aspect, width, height, theme, images):
+    """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
+    :root 变量表。任何一条护栏发现模板配错即 raise。
+
+    返回 SimpleNamespace：generate_html 与各卡片函数只从它取值，不再各自
+    摸模板——同一数值的第二个真相源就是漂移的开始。
     """
-    # 先归一化画幅，再按对应画幅取默认画布。否则库调用方省略
-    # width/height 时，即使传入 landscape 也会拿到竖屏尺寸。
-    if aspect == "portrait":
-        aspect = "vertical"
-    elif aspect not in ("vertical", "landscape"):
-        raise ValueError(f"[renderer] 未知画幅 {aspect!r}（可用: portrait/vertical、landscape）")
-    tpl = load_template()
-    if width is None or height is None:
-        width, height = get_canvas(aspect)
-
-    # ── 配图/视频归一化（只做一次）─────────────────────────────────
-    # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
-    images = _normalize_images(images or {})
-    total_dur = manifest["total_duration"]
-    sentences = manifest["sentences"]
-    # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插
-    # 会破坏 head 结构（媒体路径都走了 quote/转义；这里不能 URL 编码——
-    # CDN 地址的 :/? 会被 quote 破坏）
-    # None 安全：调用方可能显式传 None，回落默认路径。
-    gsap_src_attr = (gsap_src or _DEFAULT_GSAP_SRC).replace("&", "&amp;").replace('"', "&quot;")
+    rc = SimpleNamespace(aspect=aspect, width=width, height=height,
+                         images=images)
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
-    theme_colors = get_theme_colors(theme)
+    rc.theme_colors = get_theme_colors(theme)
     # 按主题主文字色亮度判深浅底（_theme._THEMES 是唯一权威，
     # 新增主题无需改这里的枚举）——tagline 的"同色相只调明度"在深色
     # 底下方向要反过来（提亮而不是压暗）。
-    _dark_theme = relative_luminance(theme_colors["text_color"]) > 0.5
+    rc.dark = relative_luminance(rc.theme_colors["text_color"]) > 0.5
     # 背景渐变的十六进制色标集合：accent 派生文字色的对比度保底按其中最坏
     # 一档判定（theme_bg_stops 只解析自家 _THEMES 的渐变串）。
-    _bgs = theme_bg_stops(theme)
+    rc.bgs = theme_bg_stops(theme)
 
     # 从模板加载布局/动画/字体参数
     tpl_layout = tpl["layout"][aspect]
-    tpl_anim = tpl["animation"]
+    rc.anim = tpl["animation"]
     tpl_typo = tpl["typography"]
 
     # 从模板提取 CSS 变量值
-    _tl = tpl_layout["title"]
+    _tl = rc.tl = tpl_layout["title"]
+    _ag = rc.ag = tpl_layout["agenda"]
+    _vv = rc.vv = tpl_layout["verse"]
+    _il = rc.il = tpl_layout["image"]
+    _tgl = rc.tgl = tpl_layout["tagline"]
 
     _sl = tpl_layout["subtitle"]
     # 字幕字号是唯一被消费的 subtitle 参数（两画幅各读各的 subtitle 块）
@@ -337,10 +318,7 @@ def generate_html(manifest, audio_src, images=None,
     # 都消费的键才两边都写。竖屏独有的定位键（segCard.padding、verse.bottom、
     # image.marginSide/bottomGapToVerse）只存在于 vertical 块——横屏是弹性
     # 列，没有这些概念，放一个 0 值占位只会让人以为改得动。
-    _vv = tpl_layout["verse"]
-    _il = tpl_layout["image"]
-    _ag = tpl_layout["agenda"]
-    _v_verse_clip = _vv["clipPad"]
+    _v_verse_clip = rc.verse_clip = _vv["clipPad"]
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         _v_pad = tpl_layout["segCard"]["padding"]
@@ -398,7 +376,6 @@ def generate_html(manifest, audio_src, images=None,
                 f"且 textCol.width({_ltext['width']}) + columnGap({_lgap}) "
                 f"+ image.width({_il['width']}) + 2×margin({_lm}) 必须 ≤ 画布宽({width})")
 
-    _tgl = tpl_layout["tagline"]
     css_tagline_font = f'{_tgl["fontSize"]}px'
     # tagline 显式行高：竖屏标题组几何推导需要确定行高（依赖浏览器 normal
     # 行高约 1.14-1.2 随字体浮动，会让几何不可推导）。
@@ -423,11 +400,11 @@ def generate_html(manifest, audio_src, images=None,
     # 派生。命名空间：无后缀 = 两画幅同名派生（值各取各块），--ctv-v-* 仅竖屏、
     # --ctv-l-* 仅横屏，--ctv-ag-* agenda 两画幅同名、值取各自 layout 的 agenda。
     root_shared = f"""  --ctv-w:{width}px;--ctv-h:{height}px;
-  --ctv-bg-gradient:{theme_colors["bg_gradient"]};
+  --ctv-bg-gradient:{rc.theme_colors["bg_gradient"]};
   --ctv-font-family:{css_font_family};
   --ctv-font-mono:{css_mono_family};
-  --ctv-grid-size:{css_grid_size}px;--ctv-grid-color:{theme_colors["grid_color"]};
-  --ctv-text-color:{theme_colors["text_color"]};
+  --ctv-grid-size:{css_grid_size}px;--ctv-grid-color:{rc.theme_colors["grid_color"]};
+  --ctv-text-color:{rc.theme_colors["text_color"]};
   --ctv-img-glow:{_il["glow"]}px;
   --ctv-title-weight:{css_title_weight};
   --ctv-title-lh:{css_title_lh};--ctv-title-tracking:{css_title_tracking};
@@ -479,7 +456,367 @@ def generate_html(manifest, audio_src, images=None,
   --ctv-l-tag-indent:{_tgl["indent"]}px;--ctv-l-tag-tick:{_tgl["tickWidth"]}px;
   --ctv-l-img-w:{int(_il["width"])}px;--ctv-l-img-h:{_l_img_h}px;
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
-    root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
+    rc.root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
+    return rc
+
+
+def _card_colors(rc, seg):
+    """一段卡的 accent 三形态：归一化 hex、HTML 属性副本、正文安全色副本。"""
+    # normalize_accent：accent 统一归一化成 6 位 hex——alpha 后缀
+    # （{ac}40/{ac}15）只有拼在 #rrggbb 后才合法，3 位 hex 或 CSS 色名拼出的
+    # 非法值会被浏览器整条声明静默丢弃。accent 来自稿件、属不可信数据，会拼进
+    # data-accent 与 style 两处 HTML 上下文——解析不了的一律回落默认色，
+    # 绝不让引号/分号/括号进入 HTML。
+    ac = normalize_accent(seg.get("accent", DEFAULT_ACCENT), DEFAULT_ACCENT)
+    # HTML 属性上下文用 esc 后的副本（纵深防御：即使将来白名单放宽，
+    # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
+    # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
+    ac_attr = esc(ac)
+    # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
+    # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
+    # 都过 ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
+    # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
+    ac_text = ensure_text_contrast(ac if rc.dark else darken(ac), rc.bgs)
+    return ac, ac_attr, esc(ac_text)
+
+
+def _title_font_px(rc, seg, sid, is_agenda):
+    """标题字号（内联，唯一不被 CSS 覆盖的标题数值），阈值/字号一律取模板：
+    - agenda 页带长度守卫：agenda 头豁免了行数钳制（见 composition.css），
+      长标题会无限折行挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数
+      内放得下为止；横屏的行预算被 maxRows 吃满，标题只锁 1 行，竖屏允许
+      压进 2 行；
+    - 横屏内容段超阈值按 guardSize 降档，配合 text-wrap:balance 折行，避免
+      长标题把左栏撑出孤字；竖屏内容段一律取 fontSize。
+    """
+    _tl, _ag, aspect, width = rc.tl, rc.ag, rc.aspect, rc.width
+    if is_agenda:
+        _title_font_px = _ag["titleSize"]
+        _tlen = len(str(seg.get("title") or "").strip())
+        _ag_avail = width - 2 * _ag["insetX"]
+        _ag_lines = 1 if aspect == "landscape" else 2
+        # 折行按整行离散打包（每行放 floor(宽/字号) 个 CJK 字），
+        # 面积估算会在边界处差一个字挤成下一行；降字号到
+        # 每行至少 ceil(字数/目标行数) 个字为止。
+        _cap = _ag_avail // _title_font_px
+        if _tlen > _ag_lines * _cap:
+            _fit = _ag_avail // -(-_tlen // _ag_lines)
+            print(f"[warn] agenda 标题长 {_tlen} 字（{sid}，单行容量 "
+                  f"{_cap} 字），降字号压进 {_ag_lines} 行：{_title_font_px}→{_fit}px"
+                  "——建议写稿时压到短句", file=sys.stderr)
+            _title_font_px = _fit
+    elif aspect == "landscape":
+        _title_font_px = _tl["fontSize"]
+        _tlen = len(seg.get("title") or "")
+        if _tlen > _tl["guardChars2"]:
+            _title_font_px = _tl["guardSize2"]
+        elif _tlen > _tl["guardChars1"]:
+            _title_font_px = _tl["guardSize1"]
+        if _tlen > _tl["guardChars1"]:
+            print(f"[warn] 横屏标题长 {_tlen} 字（>{_tl['guardChars1']}），"
+                  f"字号降为 {_title_font_px}px：{seg.get('title')!r}"
+                  "——建议写稿时压到短句", file=sys.stderr)
+    else:
+        _title_font_px = _tl["fontSize"]
+    return f"{_title_font_px}px"
+
+
+def _tagline_html(rc, seg, sid, ac):
+    """段落 tagline 行（可空）。缩进与对齐归 CSS（--ctv-v-tagline-indent）。"""
+    if not seg.get("tagline"):
+        return ""
+    # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
+    # WCAG AA）；浅色主题压暗一档后仍由 ensure_text_contrast 兜到门禁最
+    # 严档。
+    _tag_color = ensure_text_contrast(
+        mix(ac, "#ffffff", 0.62) if rc.dark else darken(ac), rc.bgs)
+    return (f'<div class="tagline" id="tag-{sid}" '
+            f'style="color:{_tag_color}">{esc(seg["tagline"])}</div>')
+
+
+def _media_html(rc, sid, s, d):
+    """配图/视频容器 HTML（右栏或画布槽位）。无配图返回空串。"""
+    if sid not in rc.images:
+        return ""
+    media_info = rc.images[sid]
+    media_path = media_info["src"]
+    media_type = media_info["media_type"]
+    media_opts = media_info["opts"]
+    if media_type == "video":
+        # 视频配图：<video> 自动循环静音播放
+        loop = "loop" if media_opts.get("loop", True) else ""
+        muted = "muted" if media_opts.get("muted", True) else ""
+        playsinline = "playsinline" if media_opts.get("playsinline", True) else ""
+        # autoplay 同样读 images.json 选项（与其余 video 选项一致）
+        autoplay = "autoplay" if media_opts.get("autoplay", True) else ""
+        poster = media_opts.get("poster", "")
+        poster_attr = f'poster="{quote(poster)}"' if poster else ""
+        return (
+            f'\n    <div class="seg-image" id="img-{sid}">\n'
+            f'      <video id="vid-{sid}" src="{quote(media_path)}" '
+            f'data-start="{s}" data-duration="{d}" '
+            f'{loop} {muted} {autoplay} {playsinline} '
+            f'{poster_attr}>\n'
+            f'      </video>\n'
+            f'    </div>'
+        )
+    # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
+    # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
+    _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
+    return (
+        f'\n    <div class="seg-image{_bare}" id="img-{sid}">\n'
+        f'      <img src="{quote(media_path)}" alt="">\n'
+        f'    </div>'
+    )
+
+
+def _verse_html(seg, sid, ac_text_attr):
+    """句子流（歌词式 verse）DOM：该段全部句子按序渲染成静态行。"""
+    _vlines = [
+        # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
+        # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
+        # 永久失灵或错行——宁可都不高亮，也不错误高亮
+        f'<div class="verse-line" data-i="{_s2.get("index", -1)}">'
+        f'{esc(_s2["text"])}</div>'
+        for _s2 in seg["sentences"]
+    ]
+    return (
+        # 三个 layout 豁免属性源于同一误报机制：滚出窗口的行视觉上被
+        # overflow:hidden 裁掉，但静态 DOM rect 仍在原位——上越标题区
+        # （allow-overlap）、下碰底部元素如进度条（allow-occlusion）、
+        # 整体越出卡片（allow-overflow）。活动行锚定在窗口内 clipPad
+        # 处，真实重叠不可能发生。
+        f'\n    <div class="verse" id="verse-{sid}" '
+        f'data-layout-allow-overflow data-layout-allow-overlap '
+        f'data-layout-allow-occlusion>'
+        f'<div class="verse-clip" data-accent="{ac_text_attr}">'
+        f'{"".join(_vlines)}</div></div>'
+    )
+
+
+def _prepare_card(rc, clip, i):
+    """把一段归一成渲染消费的全部形状：id/颜色/版式判定 + 标题字号 +
+    各部件 HTML（题头组、配图、句子流、卡壳、进度条）。
+
+    版式差异（agenda/canvas/slot）在这里只做判定和护栏，装配顺序留给
+    _assemble_card。
+    """
+    seg = clip["seg"]
+    # 用 .get + 默认 id，避免缺 id 字段时 KeyError 让整个渲染崩溃。
+    # 上游 pipeline.py 已保证有 id，但 gen_hyperframes 也要能独立处理
+    # 用户手写/外部工具产出的 manifest，做防御性兜底。
+    sid = seg.get("id") or f"seg{i+1}"
+    # sid 会拼进 id="..." 属性与 GSAP "#..." 选择器。CLI 路径由
+    # validate_timing_manifest 的 _validate_sid 把守；库调用方直接传
+    # manifest 时这里与 _normalize_images 同口径补一道，不让坏 sid
+    # 变成"动画静默丢失/内联脚本 SyntaxError"。
+    if not is_valid_sid(sid):
+        raise ValueError(
+            f"timing_manifest 的段落 id 必须是合法段 id"
+            f"（{SID_RULE}；实际: {sid!r}）")
+    s = clip["start"]
+    d = clip["duration"]
+    ac, ac_attr, ac_text_attr = _card_colors(rc, seg)
+    # 版式一律由 _contracts.seg_layout 分派（layout 字段优先，结构性页按 id 兜
+    # 档），不再各处写 sid 字面量。agenda = 纯文字投影卡：不配图，用章节罗列/
+    # 要点总结填充。gen_hyperframes 已把 agenda 版式的 opening/closing 键弹出，
+    # 库调用方仍带映射时这里也强制忽略。
+    layout = seg_layout(seg)
+    is_agenda = layout == "agenda"
+    has_image = (sid in rc.images) and not is_agenda
+    # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
+    # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
+    # _contracts._validate_layout 把守；这里只认 canvas 且必须有配图。
+    is_canvas = layout == "canvas"
+    if is_canvas and not has_image:
+        # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
+        raise ValueError(
+            f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），但没有配图"
+            "——画布版式不渲染标题层与句子流层，没有配图就什么都不剩。"
+            "请在 images.json 给该段配一张按当前画幅出的图，或去掉 layout 字段"
+            "回到槽位版式。")
+
+    title_size = _title_font_px(rc, seg, sid, is_agenda)
+    tagline_html = _tagline_html(rc, seg, sid, ac)
+    image_html = _media_html(rc, sid, s, d) if has_image else ""
+    verse_html = _verse_html(seg, sid, ac_text_attr)
+
+    # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
+    # 不推导盒几何。
+    card_open = (
+        f'  <div id="{sid}" class="clip seg-card'
+        + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
+        + f'" data-start="{s:.2f}" data-duration="{d:.2f}" data-accent="{ac_attr}" '
+        f'data-track-index="1" style="opacity:0;--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
+    )
+    progress_html = (
+        f'    <div class="seg-progress" id="prog-{sid}" '
+        f'style="background:{ac_attr};width:0"></div>\n'
+    )
+    title_wrap = (
+        f'    <div class="seg-title-wrap">\n'
+        f'      <div class="seg-title" id="title-{sid}" '
+        f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
+        f'{esc(seg.get("title") or "")}</div>\n'
+        f'      {tagline_html}\n'
+        f'    </div>'
+    )
+    return SimpleNamespace(
+        seg=seg, sid=sid, s=s, d=d, ac=ac, ac_attr=ac_attr,
+        ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
+        has_image=has_image, is_canvas=is_canvas, title_size=title_size,
+        tagline_html=tagline_html, image_html=image_html,
+        verse_html=verse_html, card_open=card_open,
+        progress_html=progress_html, title_wrap=title_wrap)
+
+
+def _assemble_card(rc, card, clips, manifest):
+    """按版式把部件拼成卡片 DOM：四种形态只差部件取舍与顺序。"""
+    if card.is_agenda:
+        # agenda 卡：head+列表在 .agenda-col 内，verse 收在列尾（锚底），
+        # 进度条留在卡底部（col 之外，贴屏底）。
+        return (card.card_open
+                + _agenda_col_html(card.seg, clips, manifest, rc.ag, rc.dark,
+                                   card.ac, card.ac_attr, card.title_size, rc.bgs)
+                + f'    {card.verse_html}\n    </div>\n'
+                + card.progress_html
+                + '  </div>')
+    if card.is_canvas:
+        # 整页画布：只有画布 + 进度条。标题层/句子流层连 DOM 都不生成
+        # （不是 display:none）：留着的空盒子会给 Layout/Contrast 门禁添一
+        # 笔不存在的账，标题补间也会指向一个永远看不见的元素。
+        return (card.card_open
+                + f'{card.image_html}\n'
+                + card.progress_html
+                + '  </div>')
+    if rc.aspect == "landscape":
+        # 横屏内容段：左栏（标题组+句子流）垂直居中成一块，媒体卡居右。
+        return (card.card_open
+                + '    <div class="text-col">\n'
+                + card.title_wrap
+                + f'\n    {card.verse_html}\n'
+                + '    </div>'
+                + f'{card.image_html}\n'
+                + card.progress_html
+                + '  </div>')
+    return (card.card_open
+            + card.title_wrap
+            + f'{card.image_html}\n'
+            + card.progress_html
+            + f'    {card.verse_html}\n'
+            + '  </div>')
+
+
+def _card_timeline_lines(rc, card, i, next_start):
+    """本卡的 GSAP 时间线：淡入淡出、标题/配图入场、进度条。"""
+    sid, s, d = card.sid, card.s, card.d
+    # 动画参数快捷引用
+    a_ = rc.anim
+    lines = []
+
+    # GSAP animations — first clip fades in; later clips cross-fade.
+    is_first = (i == 0)
+    a_first = a_["firstSegmentFadeIn"]
+    a_fadein = a_["segmentFadeIn"]
+    a_fadeout = a_["segmentFadeOut"]
+    _fadein_dur = a_fadein["duration"]
+    if is_first:
+        lines.append(
+            f'tl.fromTo("#{sid}",{{opacity:0}},{{opacity:1,'
+            f'duration:{a_first["duration"]}}},{s:.2f})'
+        )
+    else:
+        lines.append(
+            f'tl.fromTo("#{sid}",{{opacity:0}},'
+            f'{{opacity:1,duration:{_fadein_dur},'
+            f'ease:"{a_fadein["ease"]}"}},{s:.2f})'
+        )
+    # 淡出 + 硬清。段落之间天然隔着一句静音（gap = 下一段 start − 本段 end）：
+    # 淡出只按配置时长从本段结束起算时，默认 gap 更长，上一段已淡干净、下一段
+    # 还没开始淡入，边界留下只剩背景的空帧（24fps 实测 2~3 帧）。淡出因此跨过
+    # 整段间隔、铺到下一段淡入结束，两张卡真正交叠成 cross-fade。
+    # （"静音期保持全显、再与淡入对称淡出"试过：gap 一大仍露约 0.15s 空档。）
+    _fadeout_dur = a_fadeout["duration"]
+    if next_start is not None:
+        _fadeout_dur = max(_fadeout_dur,
+                           max(0.0, next_start - (s + d)) + _fadein_dur)
+    lines.append(
+        f'tl.to("#{sid}",{{opacity:0,duration:{_fadeout_dur:.2f},'
+        f'ease:"{a_fadeout["ease"]}"}},{s + d:.2f})'
+    )
+    lines.append(
+        f'tl.set("#{sid}",{{opacity:0}},{s + d + _fadeout_dur:.2f})'
+    )
+    # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
+    _eb = a_["entranceBudget"]
+    _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
+    # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
+    if not card.is_canvas:
+        a_title = a_["titleEntrance"]
+        lines.append(
+            f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
+            f'duration:{a_title["duration"] * _k:.2f},'
+            f'ease:"{a_title["ease"]}"}},{s:.2f})'
+        )
+    if card.has_image:
+        a_img = a_["imageEntrance"]
+        # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
+        # 整页画布例外：满幅媒体再位移 40px 就在页底露出一条 40px 页面底
+        # （实测 t=48.6s 帧），只剩淡入。
+        _img_ent = "" if card.is_canvas else f',y:{a_img["vert_y"]}'
+        lines.append(
+            f'tl.from("#img-{sid}",{{opacity:0{_img_ent},'
+            f'duration:{a_img["duration"] * _k:.2f},'
+            f'ease:"{a_img["ease"]}"}},'
+            f'{s + a_img["startDelay"] * _k:.2f})'
+        )
+    lines.append(
+        f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
+    )
+    return lines
+
+
+def generate_html(manifest, audio_src, images=None,
+                  width=None, height=None,
+                  gsap_src=_DEFAULT_GSAP_SRC,
+                  aspect="portrait", theme="dark", fps=24):
+    """Generate complete Hyperframes HTML composition string.
+
+    Args:
+        images: {段落 id: 媒体对象}，形态与 images.json 一致（裸字符串路径由
+            `_contracts.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
+        aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
+            画布尺寸都按它取，归一化在函数体内完成。
+        theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
+            可选值见 _theme 的主题注册表。
+        gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
+        fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
+            20% 帧、出片更快。
+
+        字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
+    """
+    # 先归一化画幅，再按对应画幅取默认画布。否则库调用方省略
+    # width/height 时，即使传入 landscape 也会拿到竖屏尺寸。
+    if aspect == "portrait":
+        aspect = "vertical"
+    elif aspect not in ("vertical", "landscape"):
+        raise ValueError(f"[renderer] 未知画幅 {aspect!r}（可用: portrait/vertical、landscape）")
+    tpl = load_template()
+    if width is None or height is None:
+        width, height = get_canvas(aspect)
+
+    # ── 配图/视频归一化（只做一次）─────────────────────────────────
+    # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
+    images = _normalize_images(images or {})
+    total_dur = manifest["total_duration"]
+    sentences = manifest["sentences"]
+    # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插
+    # 会破坏 head 结构（媒体路径都走了 quote/转义；这里不能 URL 编码——
+    # CDN 地址的 :/? 会被 quote 破坏）
+    # None 安全：调用方可能显式传 None，回落默认路径。
+    gsap_src_attr = (gsap_src or _DEFAULT_GSAP_SRC).replace("&", "&amp;").replace('"', "&quot;")
+
+    rc = _build_render_context(tpl, aspect, width, height, theme, images)
 
     # 段落分组只有一份：manifest["segments"]（_contracts 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
@@ -511,294 +848,11 @@ def generate_html(manifest, audio_src, images=None,
 
     seg_cards = []
     gsap_lines = []
-
     for i, clip in enumerate(clips):
-        seg = clip["seg"]
-        # 用 .get + 默认 id，避免缺 id 字段时 KeyError 让整个渲染崩溃。
-        # 上游 pipeline.py 已保证有 id，但 gen_hyperframes 也要能独立处理
-        # 用户手写/外部工具产出的 manifest，做防御性兜底。
-        sid = seg.get("id") or f"seg{i+1}"
-        # sid 会拼进 id="..." 属性与 GSAP "#..." 选择器。CLI 路径由
-        # validate_timing_manifest 的 _validate_sid 把守；库调用方直接传
-        # manifest 时这里与 _normalize_images 同口径补一道，不让坏 sid
-        # 变成"动画静默丢失/内联脚本 SyntaxError"。
-        if not is_valid_sid(sid):
-            raise ValueError(
-                f"timing_manifest 的段落 id 必须是合法段 id"
-                f"（{SID_RULE}；实际: {sid!r}）")
-        s = clip["start"]
-        d = clip["duration"]
-        # normalize_accent：accent 统一归一化成 6 位 hex——alpha 后缀
-        # （{ac}40/{ac}15）只有拼在 #rrggbb 后才合法，3 位 hex 或 CSS 色名拼出的
-        # 非法值会被浏览器整条声明静默丢弃。accent 来自稿件、属不可信数据，会拼进
-        # data-accent 与 style 两处 HTML 上下文——解析不了的一律回落默认色，
-        # 绝不让引号/分号/括号进入 HTML。
-        ac = normalize_accent(seg.get("accent", DEFAULT_ACCENT), DEFAULT_ACCENT)
-        # HTML 属性上下文用 esc 后的副本（纵深防御：即使将来白名单放宽，
-        # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
-        # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
-        ac_attr = esc(ac)
-        # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
-        # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
-        # 都过 ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
-        # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
-        ac_text = ensure_text_contrast(ac if _dark_theme else darken(ac), _bgs)
-        ac_text_attr = esc(ac_text)
-        # 版式一律由 _contracts.seg_layout 分派（layout 字段优先，结构性页按 id 兜
-        # 档），不再各处写 sid 字面量。agenda = 纯文字投影卡：不配图，用章节罗列/
-        # 要点总结填充。gen_hyperframes 已把 agenda 版式的 opening/closing 键弹出，
-        # 库调用方仍带映射时这里也强制忽略。
-        _layout = seg_layout(seg)
-        is_agenda = _layout == "agenda"
-        has_image = (sid in images) and not is_agenda
-        # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
-        # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
-        # _contracts._validate_layout 把守；这里只认 canvas 且必须有配图。
-        is_canvas = _layout == "canvas"
-        if is_canvas and not has_image:
-            # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
-            raise ValueError(
-                f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），但没有配图"
-                "——画布版式不渲染标题层与句子流层，没有配图就什么都不剩。"
-                "请在 images.json 给该段配一张按当前画幅出的图，或去掉 layout 字段"
-                "回到槽位版式。")
-
-        # 动画参数快捷引用
-        a_ = tpl_anim
-
-        # 标题字号（内联，唯一不被 CSS 覆盖的标题数值），阈值/字号一律取模板：
-        # - agenda 页带长度守卫：agenda 头豁免了行数钳制（见 composition.css），
-        #   长标题会无限折行挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数
-        #   内放得下为止；横屏的行预算被 maxRows 吃满，标题只锁 1 行，竖屏允许
-        #   压进 2 行；
-        # - 横屏内容段超阈值按 guardSize 降档，配合 text-wrap:balance 折行，避免
-        #   长标题把左栏撑出孤字；竖屏内容段一律取 fontSize。
-        if is_agenda:
-            _title_font_px = _ag["titleSize"]
-            _tlen = len(str(seg.get("title") or "").strip())
-            _ag_avail = width - 2 * _ag["insetX"]
-            _ag_lines = 1 if aspect == "landscape" else 2
-            # 折行按整行离散打包（每行放 floor(宽/字号) 个 CJK 字），
-            # 面积估算会在边界处差一个字挤成下一行；降字号到
-            # 每行至少 ceil(字数/目标行数) 个字为止。
-            _cap = _ag_avail // _title_font_px
-            if _tlen > _ag_lines * _cap:
-                _fit = _ag_avail // -(-_tlen // _ag_lines)
-                print(f"[warn] agenda 标题长 {_tlen} 字（{sid}，单行容量 "
-                      f"{_cap} 字），降字号压进 {_ag_lines} 行：{_title_font_px}→{_fit}px"
-                      "——建议写稿时压到短句", file=sys.stderr)
-                _title_font_px = _fit
-        elif aspect == "landscape":
-            _title_font_px = _tl["fontSize"]
-            _tlen = len(seg.get("title") or "")
-            if _tlen > _tl["guardChars2"]:
-                _title_font_px = _tl["guardSize2"]
-            elif _tlen > _tl["guardChars1"]:
-                _title_font_px = _tl["guardSize1"]
-            if _tlen > _tl["guardChars1"]:
-                print(f"[warn] 横屏标题长 {_tlen} 字（>{_tl['guardChars1']}），"
-                      f"字号降为 {_title_font_px}px：{seg.get('title')!r}"
-                      "——建议写稿时压到短句", file=sys.stderr)
-        else:
-            _title_font_px = _tl["fontSize"]
-        title_size = f"{_title_font_px}px"
-
-        # Tagline
-        tagline_html = ""
-        if seg.get("tagline"):
-            # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
-            # WCAG AA）；浅色主题压暗一档后仍由 ensure_text_contrast 兜到门禁最
-            # 严档。缩进与对齐归 CSS（--ctv-v-tagline-indent）。
-            _tag_color = ensure_text_contrast(
-                mix(ac, "#ffffff", 0.62) if _dark_theme else darken(ac), _bgs)
-            tagline_html = (
-                f'<div class="tagline" id="tag-{sid}" '
-                f'style="color:{_tag_color}">{esc(seg["tagline"])}</div>'
-            )
-
-        # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
-        # 不推导盒几何。
-        # Image / video container (right side, vertically centered).
-        image_html = ""
-        if has_image:
-            media_info = images[sid]
-            media_path = media_info["src"]
-            media_type = media_info["media_type"]
-            media_opts = media_info["opts"]
-            if media_type == "video":
-                # 视频配图：<video> 自动循环静音播放
-                loop = "loop" if media_opts.get("loop", True) else ""
-                muted = "muted" if media_opts.get("muted", True) else ""
-                playsinline = "playsinline" if media_opts.get("playsinline", True) else ""
-                # autoplay 同样读 images.json 选项（与其余 video 选项一致）
-                autoplay = "autoplay" if media_opts.get("autoplay", True) else ""
-                poster = media_opts.get("poster", "")
-                poster_attr = f'poster="{quote(poster)}"' if poster else ""
-                image_html = (
-                    f'\n    <div class="seg-image" id="img-{sid}">\n'
-                    f'      <video id="vid-{sid}" src="{quote(media_path)}" '
-                    f'data-start="{s}" data-duration="{d}" '
-                    f'{loop} {muted} {autoplay} {playsinline} '
-                    f'{poster_attr}>\n'
-                    f'      </video>\n'
-                    f'    </div>'
-                )
-            else:
-                # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
-                # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
-                _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
-                image_html = (
-                    f'\n    <div class="seg-image{_bare}" id="img-{sid}">\n'
-                    f'      <img src="{quote(media_path)}" alt="">\n'
-                    f'    </div>'
-                )
-
-        # 字幕 DOM 只有 verse（歌词式句子流）一种形态、两画幅共用：该段全部句子
-        # 按序渲染成静态行（完整句子，CSS 自动换行），运行时由 cue 的 si 高亮当前
-        # 句、已播句淡出、窗口随播报滚动。DOM 在 seg-card 尾部，竖屏绝对定位钉底、
-        # 横屏在左文字栏文档流里垂直居中（定位细节见 composition.css 的 verse 块）。
-        _vlines = [
-            # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
-            # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
-            # 永久失灵或错行——宁可都不高亮，也不错误高亮
-            f'<div class="verse-line" data-i="{_s2.get("index", -1)}">'
-            f'{esc(_s2["text"])}</div>'
-            for _s2 in seg["sentences"]
-        ]
-        verse_html = (
-            # 三个 layout 豁免属性源于同一误报机制：滚出窗口的行视觉上被
-            # overflow:hidden 裁掉，但静态 DOM rect 仍在原位——上越标题区
-            # （allow-overlap）、下碰底部元素如进度条（allow-occlusion）、
-            # 整体越出卡片（allow-overflow）。活动行锚定在窗口内 clipPad
-            # 处，真实重叠不可能发生。
-            f'\n    <div class="verse" id="verse-{sid}" '
-            f'data-layout-allow-overflow data-layout-allow-overlap '
-            f'data-layout-allow-occlusion>'
-            f'<div class="verse-clip" data-accent="{ac_text_attr}">'
-            f'{"".join(_vlines)}</div></div>'
-        )
-        _cls_extra = (" agenda-card" if is_agenda
-                      else " seg-canvas" if is_canvas else "")
-        card_open = (
-            f'  <div id="{sid}" class="clip seg-card{_cls_extra}" '
-            f'data-start="{s:.2f}" data-duration="{d:.2f}" data-accent="{ac_attr}" '
-            f'data-track-index="1" style="opacity:0;--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
-        )
-        progress_html = (
-            f'    <div class="seg-progress" id="prog-{sid}" '
-            f'style="background:{ac_attr};width:0"></div>\n'
-        )
-        title_wrap = (
-            f'    <div class="seg-title-wrap">\n'
-            f'      <div class="seg-title" id="title-{sid}" '
-            f'style="font-size:{title_size};text-shadow:0 0 {_tl["glow"]}px {ac_attr}40">'
-            f'{esc(seg.get("title") or "")}</div>\n'
-            f'      {tagline_html}\n'
-            f'    </div>'
-        )
-        if is_agenda:
-            # agenda 卡：head+列表在 .agenda-col 内，verse 收在列尾（锚底），
-            # 进度条留在卡底部（col 之外，贴屏底）。
-            seg_cards.append(
-                card_open
-                + _agenda_col_html(seg, clips, manifest, _ag, _dark_theme,
-                                   ac, ac_attr, title_size, _bgs)
-                + f'    {verse_html}\n    </div>\n'
-                + progress_html
-                + '  </div>'
-            )
-        elif is_canvas:
-            # 整页画布：只有画布 + 进度条。标题层/句子流层连 DOM 都不生成
-            # （不是 display:none）：留着的空盒子会给 Layout/Contrast 门禁添一
-            # 笔不存在的账，标题补间也会指向一个永远看不见的元素。
-            seg_cards.append(
-                card_open
-                + f'{image_html}\n'
-                + progress_html
-                + '  </div>'
-            )
-        elif aspect == "landscape":
-            # 横屏内容段：左栏（标题组+句子流）垂直居中成一块，媒体卡居右。
-            seg_cards.append(
-                card_open
-                + '    <div class="text-col">\n'
-                + title_wrap
-                + f'\n    {verse_html}\n'
-                + '    </div>'
-                + f'{image_html}\n'
-                + progress_html
-                + '  </div>'
-            )
-        else:
-            seg_cards.append(
-                card_open
-                + title_wrap
-                + f'{image_html}\n'
-                + progress_html
-                + f'    {verse_html}\n'
-                + '  </div>'
-            )
-
-        # GSAP animations — first clip fades in; later clips cross-fade.
-        is_first = (i == 0)
-        a_first = a_["firstSegmentFadeIn"]
-        a_fadein = a_["segmentFadeIn"]
-        a_fadeout = a_["segmentFadeOut"]
-        _fadein_dur = a_fadein["duration"]
-        if is_first:
-            gsap_lines.append(
-                f'tl.fromTo("#{sid}",{{opacity:0}},{{opacity:1,'
-                f'duration:{a_first["duration"]}}},{s:.2f})'
-            )
-        else:
-            gsap_lines.append(
-                f'tl.fromTo("#{sid}",{{opacity:0}},'
-                f'{{opacity:1,duration:{_fadein_dur},'
-                f'ease:"{a_fadein["ease"]}"}},{s:.2f})'
-            )
-        # 淡出 + 硬清。段落之间天然隔着一句静音（gap = 下一段 start − 本段 end）：
-        # 淡出只按配置时长从本段结束起算时，默认 gap 更长，上一段已淡干净、下一段
-        # 还没开始淡入，边界留下只剩背景的空帧（24fps 实测 2~3 帧）。淡出因此跨过
-        # 整段间隔、铺到下一段淡入结束，两张卡真正交叠成 cross-fade。
-        # （"静音期保持全显、再与淡入对称淡出"试过：gap 一大仍露约 0.15s 空档。）
-        _next_start = clips[i + 1]["start"] if i + 1 < len(clips) else None
-        _fadeout_dur = a_fadeout["duration"]
-        if _next_start is not None:
-            _fadeout_dur = max(_fadeout_dur,
-                               max(0.0, _next_start - (s + d)) + _fadein_dur)
-        gsap_lines.append(
-            f'tl.to("#{sid}",{{opacity:0,duration:{_fadeout_dur:.2f},'
-            f'ease:"{a_fadeout["ease"]}"}},{s + d:.2f})'
-        )
-        gsap_lines.append(
-            f'tl.set("#{sid}",{{opacity:0}},{s + d + _fadeout_dur:.2f})'
-        )
-        # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
-        _eb = a_["entranceBudget"]
-        _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
-        # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
-        if not is_canvas:
-            a_title = a_["titleEntrance"]
-            gsap_lines.append(
-                f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
-                f'duration:{a_title["duration"] * _k:.2f},'
-                f'ease:"{a_title["ease"]}"}},{s:.2f})'
-            )
-        if has_image:
-            a_img = a_["imageEntrance"]
-            # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
-            # 整页画布例外：满幅媒体再位移 40px 就在页底露出一条 40px 页面底
-            # （实测 t=48.6s 帧），只剩淡入。
-            _img_ent = "" if is_canvas else f',y:{a_img["vert_y"]}'
-            gsap_lines.append(
-                f'tl.from("#img-{sid}",{{opacity:0{_img_ent},'
-                f'duration:{a_img["duration"] * _k:.2f},'
-                f'ease:"{a_img["ease"]}"}},'
-                f'{s + a_img["startDelay"] * _k:.2f})'
-            )
-        gsap_lines.append(
-            f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
-        )
+        card = _prepare_card(rc, clip, i)
+        seg_cards.append(_assemble_card(rc, card, clips, manifest))
+        next_start = clips[i + 1]["start"] if i + 1 < len(clips) else None
+        gsap_lines.extend(_card_timeline_lines(rc, card, i, next_start))
 
     # ── Subtitle cues ──────────────────────────────────────────────
     sub_cues_js = _build_subtitle_cues(sentences)
@@ -810,12 +864,12 @@ def generate_html(manifest, audio_src, images=None,
     # CSS 走 <style> 内联（无头浏览器首帧不能等外链 CSS，否则白屏错版），
     # GSAP 是脚本、可以外链（vendor/ 相对路径）。
     style = _fill(_load_asset("composition.css"), {
-        "__CTV_ROOT_VARS__": root_vars,
+        "__CTV_ROOT_VARS__": rc.root_vars,
     }, "composition.css")
     script = _fill(_load_asset("runtime.js"), {
         "__CTV_GSAP__": gsap_code,
         "__CTV_CUES__": sub_cues_js,
-        "__CTV_VERSE_CLIP__": f"{_v_verse_clip:g}",
+        "__CTV_VERSE_CLIP__": f"{rc.verse_clip:g}",
     }, "runtime.js")
     html = _fill(_load_asset("composition.html"), {
         "__CTV_GSAP_SRC__": gsap_src_attr,
@@ -831,4 +885,3 @@ def generate_html(manifest, audio_src, images=None,
     }, "composition.html")
 
     return html
-

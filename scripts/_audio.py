@@ -13,6 +13,7 @@ import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _contracts import validate_speed, SPEED_EPS  # noqa: E402
+from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
 
 
 def _wav_duration(audio_path):
@@ -254,7 +255,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
             timeout=60)
     except subprocess.TimeoutExpired:
         # 超时异常原路径直接穿透（tmp 残留）；统一转成 False 走失败清理
-        remove_quiet(tmp)
+        remove_if_exists(tmp)
         print("  [speed-skip] atempo timeout", file=sys.stderr)
         return False
     if result.returncode == 0 and _wav_has_frames(tmp):
@@ -268,7 +269,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         except OSError as e:
             print(f"  [speed-skip] 变速产物替换失败（{e}）：{wav_path}",
                   file=sys.stderr)
-            remove_quiet(tmp)
+            remove_if_exists(tmp)
             return False
         return True
     if result.returncode == 0:
@@ -276,19 +277,10 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         # 打断或磁盘写满时的形态。当成失败，绝不让空文件顶掉原音频。
         print("  [speed-skip] atempo 产物为空，未替换原音频", file=sys.stderr)
     # atempo 失败时及时清掉半写的 tmp（多次失败堆积会留磁盘残渣）
-    remove_quiet(tmp)
+    remove_if_exists(tmp)
     print(f"  [speed-skip] atempo failed: {result.stderr[-200:]}",
           file=sys.stderr)
     return False
-
-
-def remove_quiet(path):
-    """尽力删文件（失败清理用，删不掉也不吭声）。"""
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-    except OSError:
-        pass
 
 
 def _wav_has_frames(path):
@@ -345,7 +337,7 @@ def _normalize_wav(ffmpeg_path, src, dst, target_fmt):
               file=sys.stderr)
     else:
         print(f"  [concat] 格式归一超时 {src}", file=sys.stderr)
-    remove_quiet(dst)
+    remove_if_exists(dst)
     return False
 
 
@@ -385,7 +377,7 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
             # generate_silence 现在失败时抛错（不再落 0 字节空文件）；
             # concat 的错误契约是返回 bool，这里转成 False 而不是裸栈。
             print(f"  [concat] gap 静音生成失败: {e}", file=sys.stderr)
-            remove_quiet(silence_file)
+            remove_if_exists(silence_file)
             return False
 
     # 待清理的临时产物：静音 + 归一化出来的句子副本（归一化中途失败也要收走）
@@ -396,7 +388,7 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
             dst = os.path.join(out_dir, f"_concat_norm{i}.wav")
             if not _normalize_wav(ffmpeg_path, fp, dst, target_fmt):
                 for tmp in temp_files:
-                    remove_quiet(tmp)
+                    remove_if_exists(tmp)
                 return False
             temp_files.append(dst)
             src_path = dst
@@ -444,7 +436,7 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
 
     # 清理临时文件（尽力而为，删不掉也不影响已产出的母带）
     for tmp in [list_file] + temp_files:
-        remove_quiet(tmp)
+        remove_if_exists(tmp)
 
     return result is not None and result.returncode == 0
 
@@ -479,11 +471,11 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
             timeout=300)
     except subprocess.TimeoutExpired:
         print("  [BGM mix failed] ffmpeg 混音超时", file=sys.stderr)
-        remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     if result.returncode != 0:
         print(f"  [BGM mix failed] {result.stderr[-300:]}", file=sys.stderr)
-        remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     # amix + aloop 会以 returncode=0 退出却吐出一个空/极短文件（BGM 本身不是
     # 音频流、或滤镜图被静默截断），调用方拿它当"带 BGM 的母带"，而总时长仍是
@@ -491,7 +483,7 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     # 一道口径：产物必须真有数据帧才算成功。
     if not _wav_has_frames(out_path):
         print("  [BGM mix failed] 混音产物为空，未替换人声音频", file=sys.stderr)
-        remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     return True
 
@@ -533,7 +525,7 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
     except subprocess.TimeoutExpired:
         # 不显式接住的话，ffmpeg 卡死时用户直接吃裸栈
         print("  [loudnorm] ffmpeg timeout (120s)", file=sys.stderr)
-        remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     # 产物必须真有数据帧（_wav_has_frames）：44 字节的"纯头"尺寸线会被
     # ffmpeg 的 LIST/INFO 元数据块越过，0 帧文件量出来 0 秒，调用方只会
@@ -543,7 +535,7 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
     if result.returncode == 0 and _wav_has_frames(out_path):
         return True
     print(f"  [loudnorm] failed: {result.stderr[-200:]}", file=sys.stderr)
-    remove_quiet(out_path)
+    remove_if_exists(out_path)
     return False
 
 # ── FFmpeg runtime helpers ─────────────────────────────────────────

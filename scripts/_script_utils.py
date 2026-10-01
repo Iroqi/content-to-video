@@ -4,6 +4,7 @@
   `sha256_file`。
 - 进程与路径：`setup_stdio`（Windows 重定向强制 UTF-8）、`guard_not_in_skill_dir`、
   `is_inside`、`SKILL_DIR`。
+- 文件清理：`remove_if_exists`（尽力删，删不掉也不吭声）。
 
 文本切分（TTS 断句）不在这里——那是带领域规则的 `_text.py`，两者消费者
 与改动时机都不同。
@@ -65,6 +66,15 @@ def sha256_file(path):
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def remove_if_exists(path):
+    """尽力删文件（失败清理用，删不掉也不吭声）。"""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 
 def setup_stdio():

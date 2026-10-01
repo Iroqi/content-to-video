@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Content-to-Video — 一键编排（可选，薄组合层）。
 
-把 TTS → 配图 → HTML → 渲染串成一条命令，内部按依赖顺序调用各子脚本；
+把 TTS → 配图 → HTML → 渲染串成一条命令，内部按依赖顺序调用各步骤；
 不改变任何子脚本的独立性，只做组合与默认值。
+
+TTS / 生成 HTML 两步是**进程内直调**子脚本的 main(argv)（参数校验只在
+子脚本自己那一份 parser 里做一次，错误以 SystemExit 传回、语义与旧的
+子进程退出码一致）；全文件唯一的子进程是 `npx hyperframes render`，
+由 _render_backend 负责进程树与成片完整性。
 
   python scripts/run.py --source segments_source.json -o audio_output --until html
   # ↑ 迭代用：跑到 HTML 为止，在 hf-project/ 打开 index.html 或 preview 看版式和配图。
@@ -11,330 +16,25 @@
 """
 import argparse
 import datetime
-import json
 import math
 import os
-import shutil
-import signal
-import subprocess
 import sys
 import time
-from pathlib import Path
-from typing import List, Optional
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _contracts import (DEFAULT_SPEED, list_voice_ids, needs_image,  # noqa: E402
+from _contracts import (DEFAULT_SPEED, list_voice_ids, sids_needing_image,  # noqa: E402
                         validate_speed, load_timing_manifest, load_images_json)
-from _audio import remove_quiet  # noqa: E402
+from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
+from _render_backend import (hyperframes_command,  # noqa: E402
+                             build_render_command, render_wait)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
-
-# ── Hyperframes / render runtime：只服务 run.py，直接内聚。 ──
-def hyperframes_spec() -> str:
-    return os.environ.get("CTV_HYPERFRAMES_PACKAGE", "hyperframes").strip() or "hyperframes"
-
-
-def _resolve_local_hyperframes(project: Optional[str]) -> Optional[str]:
-    local = str((Path(project or os.getcwd()).resolve() / "node_modules" / ".bin" / "hyperframes"))
-    # Windows 的 npm shim 是 .cmd，优先它；POSIX 下 .bin/hyperframes 本身可执行。
-    candidates = [local + ".cmd", local, "hyperframes.cmd", "hyperframes"] if os.name == "nt" \
-        else [local, "hyperframes"]
-    for candidate in candidates:
-        resolved = shutil.which(candidate) if not os.path.isabs(candidate) else candidate
-        if resolved and (os.path.isfile(resolved) or shutil.which(resolved)):
-            return resolved
-    return None
-
-
-def hyperframes_command(project: Optional[str] = None) -> list[str]:
-    local = _resolve_local_hyperframes(project)
-    if local:
-        return [local]
-    npx = shutil.which("npx")
-    return [npx or "npx", "--yes", hyperframes_spec()]
-
-
-def _resolve_npx_shim(shim_path):
-    shim_dir = os.path.dirname(os.path.abspath(shim_path))
-    node_exe = os.path.join(shim_dir, "node.exe")
-    npx_cli = os.path.join(shim_dir, "node_modules", "npm", "bin", "npx-cli.js")
-    if os.path.isfile(node_exe) and os.path.isfile(npx_cli):
-        return [node_exe, npx_cli]
-    return None
-
-
-def _cmdline_for_batch(exe, args):
-    """给 .cmd/.bat 手工拼一条 cmd.exe /c 命令行（字符串形式）。
-
-    不能返回 [cmd.exe, /c] + args 列表：cmd 会把整条命令行**再解析一遍**，
-    而 list2cmdline 只给含空格的参数加引号——不含空格却含 `&`/`|` 的路径
-    （`-o "x&y"` 目录名）会被拆成第二条命令，实测可注入。
-    双引号内的 cmd 元字符是字面量，因此每个参数都包引号、再整体包一层
-    外层引号（cmd /c 的既定规则：引号数 >2 时剥掉首尾引号再执行）。
-    Popen 收到字符串时按原样写命令行、不再二次转义，正好绕开 list2cmdline。
-    残留面：%% 展开在 cmd 引号内仍会发生——这只影响路径里恰好含现有环境变量
-    名的写法，不构成命令拆分注入。含双引号的参数不被本函数支持（`""` 的
-    转义语义在 cmd 与 MSVCRT 之间不一致）：NTFS 本就禁止文件名含 `"`，
-    本函数只用于传路径，无需处理该形态。
-    """
-    def q(a):
-        return '"' + str(a).replace('"', '""') + '"'
-    body = " ".join([q(exe)] + [q(a) for a in args])
-    comspec = os.environ.get("COMSPEC", "cmd.exe")
-    return f'{comspec} /c "{body}"'
-
-
-def _fmt_cmd(resolved):
-    """打印用：resolve_command 的返回值现在可能是列表或命令行字符串。"""
-    return resolved if isinstance(resolved, str) else " ".join(resolved)
-
-
-def resolve_command(cmd):
-    if not cmd:
-        return cmd
-    if isinstance(cmd, str):
-        return cmd  # 已解析成命令行字符串（_cmdline_for_batch），幂等直返
-    exe = shutil.which(cmd[0])
-    if not exe:
-        return cmd
-    if os.name == "nt" and not exe.lower().endswith((".exe", ".cmd", ".bat")):
-        for ext in (".exe", ".cmd", ".bat"):
-            alt = shutil.which(cmd[0] + ext)
-            if alt:
-                exe = alt
-                break
-    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
-        if exe.lower().endswith(".cmd"):
-            direct = _resolve_npx_shim(exe)
-            if direct is not None:
-                return direct + cmd[1:]
-        return _cmdline_for_batch(exe, cmd[1:])
-    return [exe] + cmd[1:]
-
-
-def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         command: List[str],
-                         gpu: bool = False) -> List[str]:
-    base = list(command)
-    cmd = base + ["render", "-o", output, "--quality", quality,
-                  "--fps", str(fps), "--workers", str(workers)]
-    if gpu:
-        cmd.append("--gpu")
-    # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve
-    # 再加参数会把参数丢在字符串外面（等于丢进 cmd 的重解析）。
-    return resolve_command(cmd)
-
-
-_EXIT_GRACE_SECONDS = 12.0
-_GRACE_PER_MB = 0.15
-_GRACE_CAP_SECONDS = 90.0
-_POLL_INTERVAL_SECONDS = 2.0
-_STABLE_SIZE_CHECKS = 2
-
-
-def _adaptive_grace(size_bytes):
-    return max(_EXIT_GRACE_SECONDS, min(_GRACE_CAP_SECONDS,
-                              size_bytes / (1024.0 * 1024.0) * _GRACE_PER_MB))
-
-
-def _print_render_log_tail(log_path, max_lines=25):
-    if not log_path or not os.path.isfile(log_path):
-        return
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
-        return
-    print(f"[run] 渲染日志末尾（完整日志: {log_path}）:", file=sys.stderr)
-    for line in lines[-max_lines:]:
-        print("    " + line.rstrip(), file=sys.stderr)
-
-
-def try_kill_process_tree(proc):
-    """尽力杀掉渲染进程树。失败必须出声：孤儿 Chrome/Node 在后台继续吃
-    CPU/内存，下一次渲染会更快崩，而用户看不到任何线索。"""
-    if os.name == "nt":
-        try:
-            r = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                               capture_output=True, timeout=10)
-            if r.returncode != 0:
-                err = (r.stderr or b"").decode("utf-8", "replace").strip()
-                print(f"[run][warn] taskkill 清理渲染进程树失败"
-                      f"（exit {r.returncode}）：{err[:200]}", file=sys.stderr)
-        except Exception as e:
-            print(f"[run][warn] taskkill 不可用（{e}），渲染子进程可能残留",
-                  file=sys.stderr)
-        try:
-            proc.wait(timeout=5)  # 回收，避免僵尸句柄
-        except Exception:
-            pass
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=5)
-    except Exception:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait(timeout=5)
-        except Exception as e:
-            print(f"[run][warn] 进程组清理失败（{e}），渲染子进程可能残留",
-                  file=sys.stderr)
-
-
-def _discard_partial_render(out_path):
-    """失败/超时路径清掉半截 out.mp4：残片大小 >0，下次有人直接取走
-    out.mp4 或只看"文件存在且非空"就会把废片当交付物。"""
-    remove_quiet(out_path)
-
-
-def _probe_file_size(path):
-    """轮询用文件大小：不存在或被并发删改（Windows 上杀毒扫描会短暂
-    锁文件，exists→getsize 之间有竞态窗口）时返回 None，绝不让
-    OSError 冒进轮询循环——那会跳过 try_kill_process_tree，留下
-    孤儿 Node/Chrome 进程树。"""
-    try:
-        return os.path.getsize(path)
-    except OSError:
-        return None
-
-
-def _verify_killed_render(out_path):
-    """抢在渲染进程自然退出前 kill 掉进程树换来的"完成"，必须过一遍
-    ffmpeg 全解码探测。MP4 的 moov 箱常在收尾才写，编码器被中途杀掉会留下
-    大小可观却放不开的废片——同仓 WAV 有 wav_data_consistent、配图有 ffmpeg
-    probe 自证，成片不该是例外。ffmpeg 不可用时退回旧行为（只 warn），
-    与 gen_hyperframes 的媒体探测降级口径一致。"""
-    try:
-        from _audio import get_ffmpeg
-        ff = get_ffmpeg()
-        r = subprocess.run([ff, "-v", "error", "-i", out_path,
-                            "-f", "null", "-"],
-                           capture_output=True, timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        print(f"[run][warn] 成片完整性无法验证（ffmpeg 不可用：{e}）",
-              file=sys.stderr)
-        return
-    if r.returncode != 0:
-        err = (r.stderr or b"").decode("utf-8", "replace").strip()
-        _discard_partial_render(out_path)
-        raise SystemExit(
-            f"[run] 渲染进程被提前结束时成片不完整（容器未正常收尾）：{err[-200:]}\n"
-            "已丢弃废片，请重跑渲染。")
-
-
-def _render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
-    """启动 Hyperframes render；输出文件稳定后不再死等 Node/Chrome 退出。"""
-    log_path = os.path.splitext(os.path.abspath(out_path))[0] + ".render.log"
-    log_dir = os.path.dirname(log_path)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    if os.path.exists(out_path):
-        try:
-            os.remove(out_path)
-        except OSError as e:
-            raise SystemExit(f"[run] 无法删除旧成片 {out_path}：{e}")
-    if os.path.exists(log_path):
-        try:
-            os.remove(log_path)
-        except OSError:
-            pass
-
-    # cmd 已由 build_render_command 在参数拼齐后 resolve 过，这里不再二次解析
-    print(f"\n>>> {_fmt_cmd(cmd)}", flush=True)
-    print(f"[run] 渲染日志: {log_path}", file=sys.stderr)
-    log_fh = None
-    proc = None
-    try:
-        log_fh = open(log_path, "wb")
-    except OSError as e:
-        raise SystemExit(f"[run] 无法写渲染日志 {log_path}：{e}")
-    try:
-        # start_new_session 仅 POSIX 可用；Windows 上会裸抛 ValueError。
-        # Windows 的进程树清理交给 try_kill_process_tree 的 taskkill /T /F。
-        popen_kwargs = {}
-        if os.name == "posix":
-            popen_kwargs["start_new_session"] = True
-        proc = subprocess.Popen(cmd, cwd=cwd,
-                                stdout=log_fh, stderr=log_fh,
-                                **popen_kwargs)
-    except (FileNotFoundError, OSError) as e:
-        # resolve_command 找不到可执行文件时会把原命令（如 "npx"）直接透传，
-        # Popen 在这里裸抛 FileNotFoundError；与 _run 同一口径报人话并退出。
-        raise SystemExit(f"[run] 无法启动渲染命令 {_fmt_cmd(cmd)}：{e}\n"
-                         "请确认 Node.js 已安装且 npx 在 PATH 上"
-                         "（或在项目目录 npm install hyperframes 使用本地 CLI）。")
-    try:
-        _render_poll_loop(proc, out_path, log_path, max_wait)
-    except BaseException:
-        # Ctrl-C（及任何异常退出）也必须先收进程树再抛：POSIX 上渲染进程
-        # 在独立会话（start_new_session），SIGINT 不会传导给它，留下就是
-        # 孤儿 Node/Chrome 继续吃 CPU；被提前掐断的半截 mp4 更不能当交付物
-        # 留在盘上。poll() 已退出（渲染自身失败的路径）就不再 taskkill——
-        # 对一个不存在的 PID 报"清理失败"是纯噪音。
-        if proc.poll() is None:
-            try_kill_process_tree(proc)
-        _discard_partial_render(out_path)
-        raise
-    finally:
-        if log_fh is not None:
-            try:
-                log_fh.close()
-            except OSError:
-                pass
-
-
-def _render_poll_loop(proc, out_path, log_path, max_wait):
-    """轮询成片直到"完成或必须停止等待"；清理与 discard 由调用方兜底。"""
-    t_start = time.time()
-    last_size = -1
-    last_mtime = -1.0
-    stable_count = 0
-    grace_deadline = None
-    while True:
-        elapsed = time.time() - t_start
-        if elapsed > max_wait:
-            _print_render_log_tail(log_path)
-            raise SystemExit(f"[run] 渲染超过 {max_wait:.0f}s，已停止等待。")
-
-        ret = proc.poll()
-        if ret is not None:
-            if ret != 0:
-                _print_render_log_tail(log_path)
-                raise SystemExit(f"[run] Hyperframes 渲染失败，退出码 {ret}")
-            size = _probe_file_size(out_path)
-            if size is not None and size > 0:
-                return
-            _print_render_log_tail(log_path)
-            raise SystemExit("[run] Hyperframes 退出成功，但未生成有效成片")
-
-        size = _probe_file_size(out_path)
-        if size is not None:
-            try:
-                mtime = os.path.getmtime(out_path)
-            except OSError:
-                mtime = -1.0
-            if size > 0 and size == last_size and mtime == last_mtime:
-                stable_count += 1
-            else:
-                stable_count = 0
-                grace_deadline = None
-            last_size, last_mtime = size, mtime
-            if stable_count >= _STABLE_SIZE_CHECKS:
-                if grace_deadline is None:
-                    grace_deadline = time.time() + _adaptive_grace(size)
-                elif time.time() >= grace_deadline:
-                    try_kill_process_tree(proc)
-                    _verify_killed_render(out_path)
-                    return
-        else:
-            stable_count = 0
-            last_size, last_mtime = -1, -1.0
-        time.sleep(_POLL_INTERVAL_SECONDS)
-
+import pipeline  # noqa: E402  进程内直调 TTS 步骤
+import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 
 # ── 制作报告：一次 run.py 跑完后，各步骤耗时/配图情况/跳过了什么散落在各步骤
 # 自己的 stdout 里，人工翻起来很累。这里不改任何步骤的行为，只在旁路记一份轻量
@@ -393,117 +93,36 @@ def _print_report_summary():
     print("=" * 44)
 
 
-# ── 交付级降级的唯一一份清单 ─────────────────────────────────────
-# timing_manifest 的 degraded 里每一项都意味着"交付的不是用户要的那一版"。闸门
-# 条件、production_report 的机器可读条目、以及给用户看的那句人话，全部从
-# degraded_items() 这一次遍历派生：以前同一组键在同一个函数里被枚举两遍，加一
-# 种降级就得同步改两处，漏一处的后果是"报告里没有、但照样拦人"或反过来。
-#
-# 每个 reader 返回 (计数, 人话说明) 或 None（None = 这一项没发生）。读法各家
-# 不同是 manifest 的历史事实，不是这里的设计：计数可能是 bool 旗标、可能是
-# sid 列表、也可能是被写坏的字符串，所以逐键保留原有的容错语义。
-def _read_synth_failed(_tm, deg):
-    # 计数从 sentences 现场数，不读 degraded 里的汇总键：万一汇总键被写坏或
-    # 没写，逐句的 synth_failed 边车状态仍然成立。
-    n = sum(1 for s in _tm.get("sentences", []) if s.get("synth_failed"))
-    return (n, f"{n} 句 TTS 失败并使用静音兜底") if n else None
+def _run_step(fn, argv, step_name):
+    """进程内直调子脚本入口 fn(argv)，退出语义与旧子进程调用一致。
 
-
-def _read_lost(_tm, deg):
-    # 兜底也没兜住的句子压根不在 sentences 里（--on-fail silence 下 TTS 与
-    # 静音双双失败），只看 synth_failed 会让"少了几句配音和字幕"的产物按正常
-    # 成片放行。
-    try:
-        n = int(deg.get("tts_lost_sentence_count") or 0)
-    except (TypeError, ValueError):
-        n = 0
-    return (n, f"{n} 句完全丢失（连静音占位都没生成）") if n else None
-
-
-def _read_flag(key, label):
-    def reader(_tm, deg):
-        return (1, label) if deg.get(key) else None
-    return reader
-
-
-def _read_dropped(_tm, deg):
-    # segments_dropped 是 pipeline 写下的被剔除 sid 列表（不是计数）
-    ids = deg.get("segments_dropped") or []
-    if isinstance(ids, list) and ids:
-        return (len(ids), f"{len(ids)} 个段落因没有任何可用音频被剔除"
-                          f"（{', '.join(str(s) for s in ids)}）")
-    return None
-
-
-def _read_audio_short(_tm, deg):
-    # 音频比时间轴短：末尾那几秒画面有字幕没声音，是交付级差异
-    v = deg.get("audio_shorter_than_timeline")
-    if isinstance(v, (int, float)) and v > 0:
-        return (round(v, 2), f"音频比时间轴终点短 {v:.2f}s（片尾无配音）")
-    return None
-
-
-# 顺序即 production_report.degraded 的顺序，也是人话说明的拼接顺序。
-_DEGRADED_READERS = (
-    ("tts_silence_fallback", _read_synth_failed),
-    ("tts_lost_sentences", _read_lost),
-    # BGM/响度不影响"内容在不在"，但 --bgm 传了却没混进、--loudness 传了却没
-    # 过响度，都属于必须让人先看见的差异。
-    ("bgm_mix_failed", _read_flag("bgm_mix_failed", "BGM 混音失败（成片为纯人声）")),
-    ("bgm_missing_file", _read_flag("bgm_missing_file", "--bgm 文件不存在，成片未混 BGM")),
-    ("loudness_norm_failed", _read_flag("loudness_norm_failed", "响度归一化失败（响度未达标）")),
-    ("segments_dropped", _read_dropped),
-    ("audio_shorter_than_timeline", _read_audio_short),
-)
-
-
-def degraded_items(_tm):
-    """读 timing_manifest，返回 [(报告 type, 计数, 人话说明), ...]。"""
-    deg = _tm.get("degraded") or {}
-    items = []
-    for _type, reader in _DEGRADED_READERS:
-        got = reader(_tm, deg)
-        if got:
-            items.append((_type, got[0], got[1]))
-    return items
-
-
-def _script(name):
-    return os.path.join(SCRIPTS_DIR, name)
-
-
-def _run(cmd, step_name=None):
-    """跑一条子命令，失败即记报告并退出。
-
-    子进程与 run.py 保持同一进程组，Ctrl-C 直接传给它；渲染步骤另有
-    _render_wait 负责在成片写完后收掉残留的 Node/Chrome 进程树。
+    子脚本自己 parse_args——参数校验只有那一份，run.py 不再复制；
+    失败以 SystemExit 传回：非 0 记失败步骤、落制作报告、以同码退出。
+    sys.exit("消息") 这种字符串码在子进程里由解释器代打并归一为 1，
+    进程内没人代打，这里补打。
     """
-    resolved = resolve_command(cmd)
-    print(f"\n>>> {_fmt_cmd(resolved)}", flush=True)
+    print(f"\n>>> {step_name} [in-process]: {' '.join(argv)}", flush=True)
     t0 = time.time()
+    code = 0
     try:
-        ret = subprocess.run(resolved).returncode
-    except (FileNotFoundError, OSError) as e:
-        # 命令本身起不来（可执行文件不存在/无权限等）：按步骤失败处理并
-        # 报对人，不再裸抛 traceback
-        if step_name:
-            _REPORT["steps"].append(
-                {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": False})
-            _write_report(_report_path())
-        print(f"[run] 步骤失败（无法启动命令 {_fmt_cmd(cmd)}）：{e}",
-              file=sys.stderr)
-        sys.exit(1)
-    if ret != 0:
-        if step_name:
-            _REPORT["steps"].append(
-                {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": False})
-            _write_report(_report_path())
-        print(f"[run] 步骤失败（退出码 {ret}）：{_fmt_cmd(resolved)}",
-              file=sys.stderr)
-        sys.exit(ret)
-    if step_name:
+        fn(argv)
+    except SystemExit as e:
+        if e.code is None:
+            code = 0
+        elif isinstance(e.code, int):
+            code = e.code
+        else:
+            code = 1
+            print(str(e.code), file=sys.stderr, flush=True)
+    if code != 0:
         _REPORT["steps"].append(
-            {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": True})
+            {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": False})
+        _write_report(_report_path())
+        print(f"[run] 步骤失败（退出码 {code}）：{step_name} {' '.join(argv)}",
+              file=sys.stderr)
+        sys.exit(code)
+    _REPORT["steps"].append(
+        {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": True})
 
 
 def _report_path():
@@ -540,8 +159,9 @@ def _image_coverage(manifest_path, images_json):
             "文件可能被上次中断的写入截断或结构不合法；"
             "请重跑 TTS 步骤重新生成后再来。")
     # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
-    # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。
-    sids = [seg.get("id", "") for seg in manifest["segments"] if needs_image(seg)]
+    # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。口径走
+    # _contracts.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
+    sids = sids_needing_image(manifest)
     if not sids:
         return [], [], []
     if not os.path.isfile(images_json):
@@ -687,35 +307,34 @@ def main():
     }
 
     # ── 第 3 步：TTS ──────────────────────────────────────────────
-    tts_cmd = [sys.executable, _script("pipeline.py"),
-               "--source", args.source, "-o", out]
+    tts_args = ["--source", args.source, "-o", out]
     if not args.no_resume:
-        tts_cmd.append("--resume")
-    # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子进程命令，
+        tts_args.append("--resume")
+    # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子步骤参数，
     # 让 pipeline 的 resume 指纹与本次参数一致，不依赖两边默认值恰好相同。
-    tts_cmd += ["--speed", str(args.speed), "--voice-id", args.voice_id]
+    tts_args += ["--speed", str(args.speed), "--voice-id", args.voice_id]
     if args.voice_style:
-        tts_cmd += ["--voice-style", args.voice_style]
+        tts_args += ["--voice-style", args.voice_style]
     if args.gap is not None:
-        tts_cmd += ["--gap", str(args.gap)]
+        tts_args += ["--gap", str(args.gap)]
     if args.bgm:
-        tts_cmd += ["--bgm", args.bgm]
+        tts_args += ["--bgm", args.bgm]
         if args.bgm_volume is not None:
-            tts_cmd += ["--bgm-volume", str(args.bgm_volume)]
+            tts_args += ["--bgm-volume", str(args.bgm_volume)]
     elif args.bgm_volume is not None:
         parser.error("--bgm-volume 只在给了 --bgm 时才有意义")
     if args.loudness is not None:
         # 响度归一化在 pipeline 末端对拼接后的人声轨执行（可选混入 BGM 之后），
         # 归一化后的音频由 manifest 的 combined_audio 指路，下游 HTML/检查
         # 都从 manifest 取，不在这里硬编码文件名。
-        tts_cmd += ["--loudness", str(args.loudness)]
+        tts_args += ["--loudness", str(args.loudness)]
     # 单句 TTS 失败的降级策略同样永远透传（同上一条规则）。silence 会把失败句
     # 降级为静音占位并让 manifest 进入 degraded 状态——那是 SKILL.md
     # 「降级显式化」规则与下方 degraded 拦截真正能触达的入口。
-    tts_cmd += ["--on-fail", args.on_fail]
+    tts_args += ["--on-fail", args.on_fail]
     if args.dry_run:
-        tts_cmd.append("--dry-run")
-    _run(tts_cmd, step_name="TTS")
+        tts_args.append("--dry-run")
+    _run_step(pipeline.main, tts_args, "TTS")
 
     # ── 第 4 步：配图 ─────────────────────────────────────────────
     # 配图不由本脚本产出：agent 在第 4 步用 ImageGen 生图（方式 B）、
@@ -825,14 +444,13 @@ def main():
                   "最终渲染必须显式加 --allow-degraded。", file=sys.stderr)
 
     # ── 第 5 步 a：生成 composition HTML ──────────────────────────
-    html_cmd = [sys.executable, _script("gen_hyperframes.py"),
-                "-m", manifest, "-o", os.path.join(project, "index.html"),
-                "--theme", args.theme,
-                "--aspect", args.aspect,
-                "--fps", str(args.fps)]
+    html_args = ["-m", manifest, "-o", os.path.join(project, "index.html"),
+                 "--theme", args.theme,
+                 "--aspect", args.aspect,
+                 "--fps", str(args.fps)]
     if has_images:
-        html_cmd += ["--images", images_json]
-    _run(html_cmd, step_name="生成 HTML")
+        html_args += ["--images", images_json]
+    _run_step(gen_hyperframes.main, html_args, "生成 HTML")
 
     # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s
     # 就能给出的信息（--until html 就是给人工预览收口的）。
@@ -862,7 +480,7 @@ def main():
     _render_cap = max(1800.0, float(_tm.get("total_duration") or 0) * 10 + 600)
     t0_render = time.time()
     try:
-        _render_wait(hf_render, out_mp4, cwd=project, max_wait=_render_cap)
+        render_wait(hf_render, out_mp4, cwd=project, max_wait=_render_cap)
     except SystemExit:
         _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": False})
         _write_report(_report_path())

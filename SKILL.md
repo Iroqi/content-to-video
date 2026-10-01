@@ -138,4 +138,4 @@ hf-project/
 - `references/image_options.md`：配图路线与 provenance
 - `references/rendering.md`：主题、动画、预览与渲染
 
-维护者改动后跑 `python -m unittest discover -s tests`（108 条，标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python scripts/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。对外发布时用 `python scripts/package_skill.py` 生成剥离 tests/、维护者工具与制作残渣的分发 zip。
+维护者改动后跑 `python -m unittest discover -s tests`（117 条，标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python scripts/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。对外发布时用 `python scripts/package_skill.py` 生成剥离 tests/、维护者工具与制作残渣的分发 zip。

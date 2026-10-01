@@ -6,17 +6,13 @@ timing_manifest.json（字幕时间轴的唯一来源）。
 完整参数列表见 ``--help``。
 """
 import argparse
-import base64
 import concurrent.futures
 import hashlib
-import json
 import math
 import os
 import random
 import sys
 import time
-import urllib.error
-import urllib.request
 
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
@@ -37,13 +33,13 @@ import _degraded as D  # noqa: E402  降级键常量（拼错即 NameError）
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                            write_json_atomic, remove_if_exists)
 from build_from_structured import build_parts  # noqa: E402
+# TTS 网络层收在 provider 协议模块（契约见 _tts.py 文件头）；管线只拿
+# 默认模型/base URL、client 构造和重试裁决四样
+from _tts import (DEFAULT_MODEL, DEFAULT_BASE_URL, MimoTtsClient,  # noqa: E402
+                 is_non_retryable)
 
-# 密钥/模型的两级查找路径：CLI > os.environ > 这份用户级 .env
+# 密钥的两级查找路径：CLI > os.environ > 这份用户级 .env
 _USER_ENV_PATH = os.path.join(os.path.expanduser("~"), ".config", "ai-video", ".env")
-# 默认模型名/base URL 只在这里写一次：--help 文案、"没配 key"的报错和实际请求
-# 用的必须是同一个值，否则改了默认还在告诉用户旧的。
-DEFAULT_MODEL = "mimo-v2.5-tts"
-DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 
 def _parse_env_file(path):
@@ -185,98 +181,8 @@ def resolve_model_config(cli_model, cli_base_url):
 
 
 # ===================================================================
-# MiMo TTS 单句合成（原 _tts.py：仅本文件使用，归位回管线本体）
+# 单句合成（网络请求经 _tts.py 的 provider 协议，本函数只管落盘/重试/变速）
 # ===================================================================
-
-class BadAudioResponseError(Exception):
-    """TTS 响应里没有音频（chat.completions 返回了纯文本）。
-
-    几乎总是 --base-url/--model 指向了不支持 audio 参数的网关或模型，换一句
-    再试也是同样的响应，因此按确定性失败处理（判定见 _is_non_retryable）。
-    """
-
-
-class TtsHttpError(Exception):
-    """TTS 端点返回非 2xx。status_code 让 _is_non_retryable 区分
-    "重试也不会好"（400/401/…）与限流、网络抖动（仍走重试）。"""
-
-    def __init__(self, status_code, detail):
-        super().__init__(f"Error code: {status_code} - {detail}")
-        self.status_code = status_code
-
-
-class TtsClient:
-    """MiMo TTS 端点：一次 OpenAI 兼容的 chat/completions 调用，取回音频字节。
-
-    全管线唯一的外部网络接口，用标准库实现（urllib），让第 3 步与其余步骤一样
-    零第三方依赖。请求体与 openai SDK 的 `chat.completions.create(model=,
-    messages=, audio=)` 逐字段一致：POST {base_url}/chat/completions，
-    Authorization: Bearer <key>，body {model, messages, audio}。
-    """
-
-    def __init__(self, api_key, base_url):
-        self.api_key = api_key
-        self.url = base_url.rstrip("/") + "/chat/completions"
-
-    def audio_bytes(self, model, messages, audio_params, timeout):
-        """发起一次合成请求，返回 WAV 字节。timeout 是 socket 级读超时。"""
-        body = json.dumps({"model": model, "messages": messages,
-                           "audio": audio_params}).encode("utf-8")
-        req = urllib.request.Request(
-            self.url, data=body, method="POST",
-            headers={"Authorization": f"Bearer {self.api_key}",
-                     "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            raise TtsHttpError(e.code, e.read().decode("utf-8", "replace")[:300]) \
-                from None
-        except ValueError as e:
-            # 200 但 body 不是 JSON（网关返回了 HTML 错误页之类）：
-            # 端点配错，重试同一次请求不会变好，按确定性失败处理。
-            raise BadAudioResponseError(
-                f"TTS 响应不是合法 JSON（{e}）——检查 --base-url 是否指向 "
-                "OpenAI 兼容的 chat/completions 端点") from None
-        return _audio_from_response(payload)
-
-
-def _audio_from_response(payload):
-    """从 chat/completions 响应里取出 base64 音频并解码。
-
-    显式检查结构而不是直接下钻 data：端点/模型配错时 message.audio 不存在，
-    裸 KeyError 不带 status_code 会被归为可重试——每句白烧满 3 次 billable
-    调用才放弃。这里转成确定性失败（见 BadAudioResponseError），首次即整句放弃。
-    """
-    choices = payload.get("choices") or []
-    message = choices[0].get("message") if choices else None
-    audio = message.get("audio") if isinstance(message, dict) else None
-    data = audio.get("data") if isinstance(audio, dict) else None
-    if not data:
-        raise BadAudioResponseError(
-            "TTS 响应不含音频（chat.completions 返回了纯文本）——"
-            "检查 --model/--base-url 是否指向支持 audio 参数的"
-            f" TTS 模型（默认 {DEFAULT_MODEL}），不要指向普通对话模型")
-    return base64.b64decode(data)
-
-
-def _is_non_retryable(exc):
-    """判断异常是否属于"重试也不会好"的确定性失败。
-
-    带 status_code 的 TtsHttpError：400（参数/内容审核拒绝）、401/403（密钥
-    错误/无权限）、404（模型不存在）、422（请求不合法）这类错误重试 N 次结果
-    完全一样——每句烧满 3 次重试只会浪费额度和时间（100 句 × 无效 key = 300
-    次无效调用 + 每句多等 6s），直接放弃。响应不含音频（BadAudioResponseError）
-    同理：端点/模型配错了，换一句再试也是同样的纯文本响应。连接/超时/429 限流
-    类不带 status_code 或带可重试码，仍走重试。
-    """
-    if isinstance(exc, BadAudioResponseError):
-        return True
-    status = getattr(exc, "status_code", None)
-    if isinstance(status, int):
-        return status in (400, 401, 403, 404, 422)
-    return False
-
 
 # 每句音频 (sNNN.wav) 的伴生文件后缀集合：.orig.wav 是变速前的原速备份，
 # .spd/.spd.tmp.wav 是语速状态，.failed 是"本句放弃"标记。凡动一句的音频，
@@ -331,7 +237,8 @@ def _log_label(text, sentence_label=None):
 def synth_sentence(client, text, voice_id, voice_style, out_path,
                    ffmpeg_path, speed, model, api_timeout,
                    max_retries=3, sentence_label=""):
-    """Call MiMo TTS API for a single sentence. Returns (ok, speed_applied).
+    """Synthesize one sentence through the provider protocol (_tts.py).
+    Returns (ok, speed_applied).
 
     ok：TTS 音频是否成功落盘；speed_applied：atempo 变速是否落上
     （ok=True 而 speed_applied=False 时音频有效但仍是原速——调用方据此
@@ -340,22 +247,13 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
 
     语速在合成后用 ffmpeg atempo 精确变速，与 TTS 模型的自然语速无关。
     """
-    messages = []
-    if voice_style:
-        messages.append({"role": "user", "content": voice_style})
-    messages.append({"role": "assistant", "content": text})
-
-    audio_params = {"format": "wav"}
-    if voice_id:
-        audio_params["voice"] = voice_id
-
     for attempt in range(max_retries):
         try:
-            audio_bytes = client.audio_bytes(model, messages, audio_params,
-                                             api_timeout)
+            audio_bytes = client.synthesize(text, voice_id, voice_style,
+                                            model, api_timeout)
         except Exception as e:
             label = _log_label(text, sentence_label)
-            if _is_non_retryable(e):
+            if is_non_retryable(e):
                 print(f"    [{label}][fatal] {e}（确定性失败，不重试）",
                       flush=True)
                 # 失败即清掉 out_path：磁盘写满等异常可能留下半截 WAV，
@@ -1167,7 +1065,7 @@ def main(argv=None):
         sys.exit(1)
 
     # ── Initialize TTS client ──────────────────────────────────────
-    client = TtsClient(api_key, base_url)
+    client = MimoTtsClient(api_key, base_url)
     print(f"[api] model={model} base_url={base_url}", flush=True)
 
     # ── Build per-sentence speed / voice mapping ────────────────────

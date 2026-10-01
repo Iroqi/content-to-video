@@ -3,8 +3,8 @@
 维护辅助：只记对使用者/维护者有意义的变化，叙述细节以 `git log` 为准。
 
 ## 2026-10-01 — 架构 review 收官
-- 新增 `tests/`（108 例，标准库 unittest）：golden HTML 字节快照、三份产物契约、
-  降级注册表、resume 状态机、渲染后端、run.py 编排各成套件；维护者工具
+- 新增 `tests/`（117 例，标准库 unittest）：golden HTML 字节快照、三份产物契约、
+  降级注册表、resume 状态机、渲染后端、run.py 编排、TTS provider 协议各成套件；维护者工具
   `check_docs.py`（文档章节引用防悬空）与 `check_svg.py`（手绘 SVG 静态自查）同批落地
 - P1 重构（零行为改动）：`generate_html`（561 行）拆为渲染上下文+卡片函数；
   `_finalize_audio_and_manifest`（300 行）拆为 7 个阶段函数；修复渲染日志句柄泄漏
@@ -18,6 +18,10 @@
   `_meta` 归位到 `templates/composition.css`
 - 新增维护者工具 `scripts/package_skill.py`：生成剥离开发物
   （tests/、check_*.py、制作残渣）的技能分发 zip
+- TTS provider 协议化：网络层从 pipeline.py 抽出为 `scripts/_tts.py`，边界为
+  `synthesize(text, voice_id, voice_style, model, timeout) → WAV 字节` +
+  异常分类 `is_non_retryable`；OpenAI chat/completions 请求体构造收进
+  MiMo 实现，接入第二个提供方不再动 `synth_sentence`
 
 ## 2026-09-30 — 结构性页可换整页画布
 - 版式一律由段落 `layout` 经 `_segments.seg_layout()` 分派（slot/canvas/agenda 三档），

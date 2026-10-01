@@ -58,7 +58,7 @@ def make_manifest(source=None, dur=2.0, gap=0.4):
 
 def sample_images(manifest):
     """给每个需要配图的段落一个占位映射（生成 HTML 只读路径，不读文件）。"""
-    from _contracts import sids_needing_image
+    from _segments import sids_needing_image
     return {sid: {"src": f"images/{sid}.svg"} for sid in sids_needing_image(manifest)}
 
 

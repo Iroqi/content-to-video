@@ -127,7 +127,7 @@ hf-project/
 
 - 产物（音频、HTML、配图、成片）不得落进技能目录，脚本有 `guard_not_in_skill_dir` 拦截。
 - 进入 HTML 的文本必须走现有转义路径，不要新增未转义的 f-string 插值。
-- `accent`、媒体路径继续使用 `_contracts.py` 的白名单/路径约束，相对路径不得逃出项目根。
+- `accent` 与媒体路径的白名单/路径约束在 `_validate.py` 与 `_images_schema.py`，相对路径不得逃出项目根。
 - 音频缺失直接失败，不生成无声成片。
 - 密钥只从 CLI / 环境 / 用户 `.env` 读取，不写入 manifest、HTML、images.json 或技能目录。
 

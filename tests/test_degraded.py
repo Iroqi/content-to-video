@@ -4,13 +4,13 @@ import unittest
 
 import _helpers as H  # noqa: F401
 import _degraded as D
-import _contracts as C
+import _manifest_schema as MAN
 
 
 class RegistryConsistency(unittest.TestCase):
     def test_keys_derive_from_kinds(self):
         self.assertEqual(D.KEYS, tuple(k.key for k in D.KINDS))
-        self.assertEqual(C.DEGRADED_KEYS, D.KEYS)
+        self.assertEqual(MAN.DEGRADED_KEYS, D.KEYS)
 
     def test_no_duplicate_keys_or_types(self):
         self.assertEqual(len(set(D.KEYS)), len(D.KEYS))
@@ -81,14 +81,14 @@ class ManifestRejectsUnknownKey(unittest.TestCase):
         m["status"] = "degraded"
         m["degraded"] = {"bgm_mix_faild": True}  # 拼错
         with self.assertRaises(Exception) as cm:
-            C.validate_timing_manifest(m)
+            MAN.validate_timing_manifest(m)
         self.assertIn("bgm_mix_faild", str(cm.exception))
 
     def test_known_degraded_key_accepted(self):
         m = H.make_manifest()
         m["status"] = "degraded"
         m["degraded"] = {D.BGM_MIX_FAILED: True}
-        C.validate_timing_manifest(m)
+        MAN.validate_timing_manifest(m)
 
 
 if __name__ == "__main__":

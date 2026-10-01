@@ -61,7 +61,7 @@ class Harness:
 
     def make_images_complete(self):
         """按 manifest 需要配图的段 id 落齐映射与文件。"""
-        from _contracts import sids_needing_image
+        from _segments import sids_needing_image
         sids = sids_needing_image(self.manifest)
         os.makedirs(os.path.join(self.project, "images"), exist_ok=True)
         mapping = {}

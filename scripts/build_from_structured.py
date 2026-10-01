@@ -5,7 +5,7 @@ pipeline.py --source 直接调用本模块的 build_parts()：逐段独立分句
 短句合并结构上不可能发生，不需要任何跨段校验。
 
 segments_source.json 的字段规范与完整示例见 `references/writing.md`；
-本模块只负责按 _contracts 校验过的结构分组。
+本模块只负责按 _source_schema 校验过的结构分组。
 """
 import os
 import sys
@@ -16,7 +16,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
 from _theme import get_accent_palette, get_default_accent  # noqa: E402
-from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
+from _timeline import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
 ACCENT_PALETTE = get_accent_palette()
 DEFAULT_ACCENT = get_default_accent()
@@ -72,7 +72,7 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     turns 记录每一轮在本段内的局部句子区间 + 说话人信息（voice_id/voice_style
     在这里就近解析好，pipeline.py 不需要再反查 speakers 字典）。
 
-    turn 的 speaker/text 非空由 _contracts.validate_segments_source 把关，这里
+    turn 的 speaker/text 非空由 _source_schema.validate_segments_source 把关，这里
     不再重复拦；只留契约管不到的"分句后为空"——纯标点文案能过非空检查却分不出句。
     """
     sents = []
@@ -132,17 +132,17 @@ def _collect_blocks(source):
                    or OPENING_CLOSING_DEFAULT_SPEED,
                    # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
                    # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
-                   # 自描述的（见 _contracts.seg_layout）。
+                   # 自描述的（见 _segments.seg_layout）。
                    "layout": source.get("opening_layout") or "agenda"},
             turns=[],
         ))
 
-    # segments 非空由 _contracts.validate_segments_source 把关（build_parts
+    # segments 非空由 _source_schema.validate_segments_source 把关（build_parts
     # 唯一入口 pipeline --source 先过它），这里不再重复拦。
     raw_segments = source.get("segments", [])
 
     # 段落 id：可选的显式 "id" 让配图键（images.json）与配图文件名在改稿/
-    # 重排后仍然稳定；缺省退回按序号的 seg{n}。_contracts 已校验显式 id 的
+    # 重排后仍然稳定；缺省退回按序号的 seg{n}。_source_schema 已校验显式 id 的
     # 字符集与唯一性，这里只需处理"部分段有 id、部分没有"时的命名冲突。
     explicit_ids = {(s.get("id") or "").strip()
                     for s in raw_segments} - {""}
@@ -153,7 +153,7 @@ def _collect_blocks(source):
         if dialogue:
             sents, turns_local = _collect_dialogue_sentences(dialogue, speakers, i, title)
         else:
-            # 'text' 非空同样由 _contracts 把关（与 dialogue 分支同一口径）
+            # 'text' 非空同样由 _source_schema 把关（与 dialogue 分支同一口径）
             text = (seg.get("text") or "").strip()
             sents = _sentences_of(text)
             if not sents:
@@ -163,7 +163,7 @@ def _collect_blocks(source):
         extra = {}
         if seg.get("speed") is not None:
             extra["speed"] = seg["speed"]
-        # 段落级音色覆盖（可选字段，规范见 references/writing.md）：_contracts
+        # 段落级音色覆盖（可选字段，规范见 references/writing.md）：_source_schema
         # 校验之后由这里透传给下游，pipeline.py 读 seg_config 后即可生效。
         if seg.get("voice_id") is not None:
             extra["voice_id"] = seg["voice_id"]
@@ -172,7 +172,7 @@ def _collect_blocks(source):
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
             extra["takeaway"] = str(seg["takeaway"]).strip()
-        # 整页画布开关（取值由 _contracts._validate_layout 把守，这里只透传）：
+        # 整页画布开关（取值由 _segments._validate_layout 把守，这里只透传）：
         # 不写就不进 extra，下游按槽位版式渲染。
         if seg.get("layout") is not None:
             extra["layout"] = seg["layout"]

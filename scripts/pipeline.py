@@ -25,13 +25,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
                     mix_bgm, wav_data_consistent)
-# 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从 _contracts 取
-from _contracts import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
-                        is_content_sid,
-                        list_voice_ids, load_segments_source,
-                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
-                        needs_speed_change, speed_marker_value,
-                        validate_speed, validate_timing_manifest)
+# 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从契约模块取
+from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
+                       DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
+                       needs_speed_change, speed_marker_value, validate_speed)
+from _segments import is_content_sid  # noqa: E402
+from _voices import list_voice_ids  # noqa: E402
+from _source_schema import load_segments_source  # noqa: E402
+from _manifest_schema import validate_timing_manifest  # noqa: E402
 import _degraded as D  # noqa: E402  降级键常量（拼错即 NameError）
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                            write_json_atomic, remove_if_exists)
@@ -658,7 +659,7 @@ def _build_parser():
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
                         help="Speech speed multiplier via ffmpeg atempo "
                              "(1.0=normal, 1.5=faster). Default follows "
-                             "_contracts.DEFAULT_SPEED (single source).")
+                             "_timeline.DEFAULT_SPEED (single source).")
     parser.add_argument("--loudness", type=float, default=None,
                         help="响度归一化目标（LUFS，如 -16）。默认不做归一化；"
                              "设置后对最终音频做单遍 loudnorm")
@@ -770,7 +771,7 @@ def _concat_voice_audio(args, ffmpeg_path, sentence_data, degraded):
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
-    # 容差与下游契约用的是 _contracts 里的同一个 TIMELINE_TOLERANCE：这一步放行、
+    # 容差与下游契约用的是 _timeline 里的同一个 TIMELINE_TOLERANCE：这一步放行、
     # 下游却拒收，等于 TTS 额度烧完才告诉用户产物不能用。真正的截断量级是秒到
     # 几十秒，这点裕量足够吸收逐句 round(x,3) 的累计舍入与 concat 边界误差。
     if drift > TIMELINE_TOLERANCE:
@@ -905,7 +906,7 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
 
 def _group_segments(seg_config, manifest_sentences, degraded):
     """段落分组：manifest 的 segments 逐段构造；没有任何可用音频的段剔除并记降级。"""
-    # seg_config 由 build_parts 生成，_contracts 保证至少一段、每段都能分句
+    # seg_config 由 build_parts 生成，_source_schema 保证至少一段、每段都能分句
     # 出内容，所以这里无条件执行（少一段是下面 dropped 的事）。
     grouped = []
     dropped = []
@@ -919,7 +920,7 @@ def _group_segments(seg_config, manifest_sentences, degraded):
         _seg_id = seg["id"]
         if not seg_sentences:
             # 该段所有句子都没产出音频（TTS 连续失败 + --on-fail abort，
-            # 或段落本身被上游丢空）。空段落进 manifest 会被 _contracts
+            # 或段落本身被上游丢空）。空段落进 manifest 会被 _manifest_schema
             # 的校验直接拒收（"缺少非空 sentences 列表"），
             # gen_hyperframes 随之退出——一次失败就让整条视频出不来。
             # 剔除并报对人，而不是写出一份下游必然拒收的 manifest。
@@ -1200,7 +1201,7 @@ def main(argv=None):
             t_voice_id = turn.get("voice_id")
             t_voice_style = turn.get("voice_style")
             # label 由 build_from_structured 写成 "speakers 里的 label 或说话人
-            # 名"，_contracts 保证 speaker 非空，所以这里必然拿到非空标签。
+            # 名"，_source_schema 保证 speaker 非空，所以这里必然拿到非空标签。
             t_label = turn["label"]
             for si in range(t_start, min(t_end, len(sentences))):
                 if t_voice_id or t_voice_style:

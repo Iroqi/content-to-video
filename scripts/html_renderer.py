@@ -17,9 +17,9 @@ from _theme import (
     ensure_text_contrast,
 )
 from _template import load_template, get_canvas
-from _contracts import (classify_media_path, is_content_sid, is_valid_sid,
-                        seg_layout, unknown_media_keys, MEDIA_ENTRY_KEYS,
-                        SID_RULE)
+from _images_schema import (classify_media_path, unknown_media_keys,
+                            MEDIA_ENTRY_KEYS)
+from _segments import (is_content_sid, is_valid_sid, seg_layout, SID_RULE)
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -215,7 +215,7 @@ def _normalize_images(images):
         if isinstance(media, dict):
             # 清单外的键在下面两条分支里都会跟着进 opts 而无人读。静默丢会让
             # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
-            # 所以点名叫出它们——清单定义在 _contracts。
+            # 所以点名叫出它们——清单定义在 _images_schema。
             unknown = unknown_media_keys(media)
             if unknown:
                 print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
@@ -617,7 +617,7 @@ def _prepare_card(rc, clip, i):
     s = clip["start"]
     d = clip["duration"]
     ac, ac_attr, ac_text_attr = _card_colors(rc, seg)
-    # 版式一律由 _contracts.seg_layout 分派（layout 字段优先，结构性页按 id 兜
+    # 版式一律由 _segments.seg_layout 分派（layout 字段优先，结构性页按 id 兜
     # 档），不再各处写 sid 字面量。agenda = 纯文字投影卡：不配图，用章节罗列/
     # 要点总结填充。gen_hyperframes 已把 agenda 版式的 opening/closing 键弹出，
     # 库调用方仍带映射时这里也强制忽略。
@@ -626,7 +626,7 @@ def _prepare_card(rc, clip, i):
     has_image = (sid in rc.images) and not is_agenda
     # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
-    # _contracts._validate_layout 把守；这里只认 canvas 且必须有配图。
+    # _segments._validate_layout 把守；这里只认 canvas 且必须有配图。
     is_canvas = layout == "canvas"
     if is_canvas and not has_image:
         # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
@@ -784,7 +784,7 @@ def generate_html(manifest, audio_src, images=None,
 
     Args:
         images: {段落 id: 媒体对象}，形态与 images.json 一致（裸字符串路径由
-            `_contracts.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
+            `_images_schema.validate_images_json` 在上游拒收）；None/缺键 = 该段纯文字。
         aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
             画布尺寸都按它取，归一化在函数体内完成。
         theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
@@ -818,7 +818,7 @@ def generate_html(manifest, audio_src, images=None,
 
     rc = _build_render_context(tpl, aspect, width, height, theme, images)
 
-    # 段落分组只有一份：manifest["segments"]（_contracts 已保证非空、每段自带
+    # 段落分组只有一份：manifest["segments"]（_manifest_schema 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
     # 在这里另推一套 id 就会和画面实际用的段 id 漂移。
     segments = manifest["segments"]

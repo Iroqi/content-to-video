@@ -12,7 +12,7 @@ import sys
 import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _contracts import validate_speed, SPEED_EPS  # noqa: E402
+from _timeline import validate_speed, SPEED_EPS  # noqa: E402
 from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
 
 

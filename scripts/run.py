@@ -26,8 +26,11 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, SCRIPTS_DIR)
 from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _contracts import (DEFAULT_SPEED, list_voice_ids, sids_needing_image,  # noqa: E402
-                        validate_speed, load_timing_manifest, load_images_json)
+from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
+from _voices import list_voice_ids  # noqa: E402
+from _segments import sids_needing_image  # noqa: E402
+from _manifest_schema import load_timing_manifest  # noqa: E402
+from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, render_wait)
@@ -142,11 +145,11 @@ def _image_coverage(manifest_path, images_json):
     fail-fast——把它混进"只警告"里等于承诺一个根本兑现不了的继续（实测
     先打印"继续生成 HTML"、下一步整体 exit 1）。
 
-    口径收口在 _contracts.needs_image：内容段一律需要配图；开屏/结尾默认是纯文字
+    口径收口在 _segments.needs_image：内容段一律需要配图；开屏/结尾默认是纯文字
     agenda 卡（章节罗列/要点总结），两画幅都不配图，但那一页换成整页画布
     （opening_layout / closing_layout: "canvas"）后，配图就是它唯一的画面，同样计入。
     """
-    # 走 _contracts 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
+    # 走 _manifest_schema 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
     # 的半途，文件是截断的 JSON，裸 load 会抛 JSONDecodeError traceback，
     # 用户看到的堆栈跟"TTS 产物坏了、该重跑"这个真实原因毫无关系。
     # load_timing_manifest 把缺字段/坏结构报成一句人话（ValueError），这里
@@ -160,7 +163,7 @@ def _image_coverage(manifest_path, images_json):
             "请重跑 TTS 步骤重新生成后再来。")
     # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
     # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。口径走
-    # _contracts.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
+    # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
     sids = sids_needing_image(manifest)
     if not sids:
         return [], [], []
@@ -412,7 +415,7 @@ def main():
 
     # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
     # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
-    # degraded 标记。manifest 同样走 _contracts 加载器（理由见 _image_coverage）：
+    # degraded 标记。manifest 同样走 _manifest_schema 加载器（理由见 _image_coverage）：
     # 把读坏的文件静默按"无降级"放行，等于没有降级检测。
     try:
         _tm = load_timing_manifest(manifest)

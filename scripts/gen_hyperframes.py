@@ -155,9 +155,10 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
 from _template import get_canvas  # noqa: E402
-from _contracts import (load_timing_manifest, load_images_json,  # noqa: E402
-                        classify_media_path, sids_needing_image, seg_layout,
-                        STRUCTURAL_SIDS)
+from _manifest_schema import load_timing_manifest  # noqa: E402
+from _images_schema import load_images_json, classify_media_path  # noqa: E402
+from _segments import (sids_needing_image, seg_layout,  # noqa: E402
+                       STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            guard_not_in_skill_dir, is_inside)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
@@ -254,9 +255,9 @@ def _warn_if_local_vendor_missing(src, out_dir):
 def _uncovered_image_sids(manifest, images):
     """manifest 中没有配图映射的『需要配图的段落』sid 列表。
 
-    口径收口在 _contracts.needs_image：内容段一律算，结构性页只在换成整页画布时
+    口径收口在 _segments.needs_image：内容段一律算，结构性页只在换成整页画布时
     算（agenda 卡纯文字，那一页的 images 键上面就被弹掉了）。遍历封装同样收口在
-    _contracts.sids_needing_image，与 run.py _image_coverage 共用一条口径。
+    _segments.sids_needing_image，与 run.py _image_coverage 共用一条口径。
     gen_hyperframes 对缺图只提示不拦截（run.py 一键编排有缺图拦截，分步执行保留
     显式 warn，避免把"漏配/没找到合适的图"误当"不需要图"）。
     画布段这里会多报一条 warn，权威判据是下面 canvas_layout_errors 的 error。

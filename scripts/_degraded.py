@@ -89,7 +89,7 @@ KINDS = (
     Kind("audio_shorter_than_timeline", AUDIO_SHORTER_THAN_TIMELINE, _read_audio_short),
 )
 
-# 封闭词汇表：_contracts.validate_timing_manifest 用它拦未知键
+# 封闭词汇表：_manifest_schema.validate_timing_manifest 用它拦未知键
 KEYS = tuple(k.key for k in KINDS)
 
 

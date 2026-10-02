@@ -96,6 +96,7 @@ agent 才做最后一步渲染，交给你 MP4，并附一份生产报告——�
 
 给 agent 看的说明书是 [SKILL.md](SKILL.md)，四份深度参考在 `references/`（写稿、配音、配图、渲染）。**人不必读**——你只管和 agent 说话。
 
+
 ## 授权
 
 MIT，见 [LICENSE](LICENSE)。

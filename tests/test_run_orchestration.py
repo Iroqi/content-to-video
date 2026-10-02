@@ -238,6 +238,19 @@ class FailurePropagation(unittest.TestCase):
         # 子进程时代由解释器代打的 sys.exit("消息")，进程内由 _run_step 补打
         self.assertIn("人话报错", self.h.last_err)
 
+    def test_broken_manifest_reported_once_in_human_words(self):
+        # manifest 只在覆盖率统计那一处加载：坏文件在那里就报成人话，
+        # 不再往下走。曾经这里 load+全量校验两遍，第二遍的错误分支已删。
+        def write_broken(argv):
+            os.makedirs(self.h.out, exist_ok=True)
+            with open(os.path.join(self.h.out, "timing_manifest.json"), "w",
+                      encoding="utf-8") as f:
+                f.write('{"segments": [')     # 上次中断写入留下的截断 JSON
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"], pipeline_main=write_broken)
+        # 进程内 code 就是那句人话（解释器代打时才映射成退出码 1）
+        self.assertIn("timing_manifest.json 无法读取", str(cm.exception.code))
+
 
 class HappyPath(unittest.TestCase):
     def setUp(self):

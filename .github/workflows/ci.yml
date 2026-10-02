@@ -11,7 +11,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.9", "3.11", "3.12", "3.13"]
+        # 采样而非全矩阵：下限（SKILL.md 声明的 3.9+）、一个中位、本机开发用的两档
+        python: ["3.9", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     env:
       # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError

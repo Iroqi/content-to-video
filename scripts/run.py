@@ -134,8 +134,9 @@ def _report_path():
 
 
 def _image_coverage(manifest_path, images_json):
-    """返回 (all_sids, missing_keys, missing_files)：manifest 中需要配图的
-    段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
+    """返回 (tm, all_sids, missing_keys, missing_files)：已校验的 manifest 对象
+    （主流程的降级检测直接复用，同一份文件不在一次 run 里 load+全量校验两遍），
+    manifest 中需要配图的段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
     有键但媒体文件不在盘上的（missing_files）。
 
     两类必须分开：missing_keys 只是"图还没画完"，--until html 可以警告放行；
@@ -164,9 +165,9 @@ def _image_coverage(manifest_path, images_json):
     # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
     sids = sids_needing_image(manifest)
     if not sids:
-        return [], [], []
+        return manifest, [], [], []
     if not os.path.isfile(images_json):
-        return sids, sids, []
+        return manifest, sids, sids, []
     # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 load_images_json 统一
     # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
     # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
@@ -183,7 +184,7 @@ def _image_coverage(manifest_path, images_json):
     missing_files = [s for s in sids
                      if s in mapping and not os.path.isfile(
                          os.path.join(proj_dir, mapping[s]["src"]))]
-    return sids, missing_keys, missing_files
+    return manifest, sids, missing_keys, missing_files
 
 
 def _build_parser():
@@ -356,7 +357,7 @@ def main():
     # 会把全部内容段落都报成缺图（不能因为文件不存在就跳过统计——那样
     # missing 恒空、缺图拦截形同虚设，会静默渲染出无图成片）。
     # dry-run / --until tts 已在上方提前 return，走到这里必然要统计。
-    all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
+    _tm, all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
     _missing_union = sorted(set(missing_keys) | set(missing_files))
     _REPORT["images"] = {
         "total": len(all_sids), "matched": len(all_sids) - len(_missing_union),
@@ -409,16 +410,8 @@ def main():
 
     # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
     # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
-    # degraded 标记。manifest 同样走 _manifest_schema 加载器（理由见 _image_coverage）：
-    # 把读坏的文件静默按"无降级"放行，等于没有降级检测。
-    try:
-        _tm = load_timing_manifest(manifest)
-    except ValueError as e:
-        _write_report(_report_path())
-        print(f"[run] timing_manifest.json 无法读取：{e}\n"
-              "文件可能被上次中断的写入截断或结构不合法；"
-              "请重跑 TTS 步骤重新生成后再来。", file=sys.stderr)
-        sys.exit(1)
+    # degraded 标记。manifest 复用 _image_coverage 那次已校验的加载——同一次 run
+    # 里文件不会被别人改写，再 load+全量校验一遍只是把坏文件报错推晚一步。
     _deg_items = degraded_items(_tm)
     # status 是 pipeline 写下的总旗标：明细一条都没读出来（键被写坏或整个漏写）
     # 时照样拦，"以 manifest 的 status 为准"这条兜底不依赖下面的逐项计数。

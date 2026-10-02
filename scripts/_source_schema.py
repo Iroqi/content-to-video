@@ -95,7 +95,7 @@ def validate_segments_source(data):
             _reject_unknown_keys(spk_cfg, SPEAKER_KEYS,
                                  f"segments_source.json 的 speakers['{spk}']")
             vid = spk_cfg.get("voice_id")
-            if vid is None or not isinstance(vid, str) or not is_valid_voice_id(vid):
+            if not isinstance(vid, str) or not is_valid_voice_id(vid):
                 raise ValueError(
                     f"segments_source.json 的 speakers['{spk}'].voice_id={vid!r} "
                                      f"不在预置音色里（可用：{', '.join(list_voice_ids())}）")

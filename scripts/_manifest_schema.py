@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""timing_manifest.json 的契约：加载 + 校验（原 _contracts 的 manifest 层）。
+"""timing_manifest.json 的契约：加载 + 校验。
 
 manifest 是"确需手写可按格式提供"的接口，所以三层字段集封闭（顶层 /
 segments[i] / 句子对象）：读侧全是 .get()，拼错的键不报错也不生效——
@@ -116,11 +116,11 @@ def validate_timing_manifest(data):
                                  "（pipeline.py 产出格式）")
         if not isinstance(s["text"], str) or not s["text"].strip():
             raise ValueError(f"{where}.text 必须是非空字符串")
-        idx = s.get("index")
+        idx = s["index"]
         if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
             raise ValueError(f"{where}.index 必须是非负整数")
-        start = s.get("start_time")
-        duration = s.get("duration")
+        start = s["start_time"]
+        duration = s["duration"]
         if (isinstance(start, bool) or not isinstance(start, (int, float))
                 or not math.isfinite(float(start)) or float(start) < 0):
             raise ValueError(f"{where}.start_time 必须是非负有限数值")
@@ -233,7 +233,6 @@ def validate_timing_manifest(data):
                     f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
         ss = sg.get("sentences")
         if not isinstance(ss, list) or not ss:
-            sid = sg.get("id", f"segments[{i}]")
             raise ValueError(
                 f"timing_manifest.json 的段落 '{sid}' 缺少非空 "
                 f"'sentences' 列表（segments 分组渲染的数据源，"

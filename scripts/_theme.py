@@ -131,15 +131,7 @@ def is_safe_css_color(color):
     拒绝，而不是渲染完才发现颜色不对却无从下手。需要 `rgb(...)`/`var(...)`
     等函数式写法时请直接给 6 位 hex（括号会打开注入面）。
     """
-    if not isinstance(color, str):
-        return False
-    c = color.strip()
-    if not c:
-        return False
-    if c.startswith("#"):
-        h = c[1:]
-        return len(h) in (3, 6) and all(ch in "0123456789abcdefABCDEF" for ch in h)
-    return c.lower() in _css_name_table()
+    return css_color_to_hex(color) is not None
 
 
 _CSS3_NAMES = None

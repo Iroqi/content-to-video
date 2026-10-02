@@ -1,10 +1,8 @@
 """交付级降级的唯一注册表（只依赖标准库，不 import 任何同目录模块）。
 
 timing_manifest 的 `degraded` 里每一项都意味着"交付的不是用户要的那一版"。
-以前这份知识散在三处：`_contracts.DEGRADED_KEYS`（词汇）、`pipeline.py`（写键）、
-`run.py`（念人话），新增一档降级要同步改三处。现在：
+词汇表 `KEYS` 从 `KINDS` 派生——登记一行 Kind 就同时有了校验词汇与人话文案：
 
-  - 词汇表 `KEYS` 从 `KINDS` 派生——登记一行 Kind 就同时有了校验词汇与人话文案；
   - `pipeline.py` 写键时用本模块的常量，拼错是 NameError，而不是一条静默丢失的降级；
   - `run.py` 只调用 `items()`。
 

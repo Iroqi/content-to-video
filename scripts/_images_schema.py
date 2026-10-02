@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""images.json 与媒体路径的契约（原 _contracts 的 images/media 层）。
+"""images.json 与媒体路径的契约。
 
 配图由 agent/人工产出、渲染端按这份映射消费；坏路径会让 HTML 静默产出
 空白裂图，所以引用完整性在 load_images_json / validate_images_json

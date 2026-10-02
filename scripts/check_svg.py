@@ -28,11 +28,12 @@
   - 整页画布：字面 x 坐标落进安全边距（竖屏 50px / 横屏 96px）           [warn]
 """
 import argparse
-import math
 import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+
+from _theme import contrast_ratio, css_color_to_hex  # WCAG 数学与 hex 归一化不在这里重抄
 
 SLOT_W, SLOT_H = 980, 735
 CANVAS = {"portrait": (1080, 1440), "landscape": (1920, 1080)}
@@ -49,27 +50,6 @@ _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$")
 
 def _local(tag):
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
-
-
-def _hex_to_rgb(h):
-    h = h.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def _lum(rgb):
-    def ch(c):
-        c /= 255.0
-        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-    r, g, b = (ch(c) for c in rgb)
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def contrast(fg_hex, bg_hex):
-    a, b = _lum(_hex_to_rgb(fg_hex)), _lum(_hex_to_rgb(bg_hex))
-    hi, lo = max(a, b), min(a, b)
-    return (hi + 0.05) / (lo + 0.05)
 
 
 def _style_map(el):
@@ -213,20 +193,17 @@ def check_file(path, layout, aspect, theme):
 
             # 颜色与对比度（槽位版式才有确定的页面底色）
             fill = inherited(el, "fill")
-            if fill and _HEX.match(fill.strip()):
-                fh = fill.strip().lower()
-                if len(fh) == 4:
-                    fh = "#" + "".join(c * 2 for c in fh[1:])
-                if layout == "slot":
-                    if fh in BG_FAMILY:
-                        errors.append(f"文字 {content.strip()[:12]!r} 用了背景色族 {fh} 当填充色（瞎字）")
-                    else:
-                        c = contrast(fh, PAGE_BG[theme])
-                        if c < 3:
-                            errors.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度仅 {c:.1f}:1（<3:1）")
-                        elif c < 4.5:
-                            warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度 {c:.1f}:1（<4.5:1），"
-                                         f"还会被 accent 辉光再吃一档")
+            fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
+            if fh and layout == "slot":
+                if fh in BG_FAMILY:
+                    errors.append(f"文字 {content.strip()[:12]!r} 用了背景色族 {fh} 当填充色（瞎字）")
+                else:
+                    c = contrast_ratio(fh, PAGE_BG[theme])
+                    if c < 3:
+                        errors.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度仅 {c:.1f}:1（<3:1）")
+                    elif c < 4.5:
+                        warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度 {c:.1f}:1（<4.5:1），"
+                                     f"还会被 accent 辉光再吃一档")
             op = inherited(el, "opacity")
             fop = inherited(el, "fill-opacity")
             for name, val in (("opacity", op), ("fill-opacity", fop)):

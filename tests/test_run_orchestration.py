@@ -118,7 +118,8 @@ class FlagPassthrough(unittest.TestCase):
         self.assertIn("--voice-id", self.h.tts_argv)
         self.assertIn("--on-fail", self.h.tts_argv)
         # 显式给出才透传：不给由 pipeline 用自己的默认值
-        for opt in ("--gap", "--bgm", "--bgm-volume", "--voice-style", "--loudness"):
+        for opt in ("--gap", "--bgm", "--bgm-volume", "--voice-style",
+                    "--loudness"):
             self.assertNotIn(opt, self.h.tts_argv)
 
     def test_no_resume_omits_flag(self):

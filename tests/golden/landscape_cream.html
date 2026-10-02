@@ -52,6 +52,20 @@ body{font-family:var(--ctv-font-family)}
    选择器会被误报成"祖先没有层叠上下文"。 */
 [data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
 .seg-card{position:absolute;inset:0;isolation:isolate}
+/* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
+   页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
+   只露出揭示边以下的部分（GSAP 补间 y，自身不得声明 transform）；颜色走卡上
+   已有的 --seg-accent，所以看起来是"下一页的颜色从进度条里渗出来"；两端渐隐、
+   中心提亮成一枚"笔尖"，是硬条读不出笔触、必须有亮头才有"书写"感；辉光下偏
+   （y 偏移）让光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。 */
+.reveal-line{position:absolute;left:0;right:0;top:0;background:linear-gradient(90deg,transparent 0%,var(--seg-accent) 16%,color-mix(in srgb,var(--seg-accent) 55%,#fff) 50%,var(--seg-accent) 84%,transparent 100%);box-shadow:0 12px 30px 5px color-mix(in srgb,var(--seg-accent) 55%,transparent);pointer-events:none}
+/* 被揭旧页的底缘暗边（style:"line" 且该页会被下一页犁起才生成）：绕底边轴
+   掀起的纸在折页线附近最暗；opacity 由 peel 同窗补间拉起（_peel_shade_html）。 */
+.peel-shade{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.5),transparent);opacity:0;pointer-events:none}
+/* 卡内自带 .bg/.grid 背景层（几何沿用 root 那两条规则，逐像素对齐）：卡片由此
+   成为不透明图层，clip-path 擦除换页时新旧内容不会叠影。z-index:-2 压在氛围光
+   (::after,-1) 之下；负 z 的安全性与上面 isolation 的 lint 口径同判。 */
+.seg-card>.bg,.seg-card>.grid{z-index:-2}
 .seg-title-wrap{position:absolute}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}
@@ -267,7 +281,9 @@ body{font-family:var(--ctv-font-family)}
   <div class="bg"></div>
   <div class="grid"></div>
 
-  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.00" data-accent="#2dd4bf" data-track-index="1" style="opacity:0;--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+    <div class="bg"></div>
+    <div class="grid"></div>
     <div class="agenda-col">
       <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
@@ -275,8 +291,12 @@ body{font-family:var(--ctv-font-family)}
     <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="0">大家好，今天聊两件事。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
-  </div>
-  <div id="seg-a" class="clip seg-card" data-start="2.40" data-duration="4.40" data-accent="#ffd54f" data-track-index="1" style="opacity:0;--seg-accent:#ffd54f;--seg-accent-text:#735f23">
+      <div class="reveal-line" id="line-opening" style="height:6px"></div>
+    <div class="peel-shade" id="shade-opening" style="height:86px"></div>
+</div>
+  <div id="seg-a" class="clip seg-card" data-start="2.00" data-duration="5.20" data-accent="#ffd54f" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#ffd54f;--seg-accent-text:#735f23">
+    <div class="bg"></div>
+    <div class="grid"></div>
     <div class="text-col">
     <div class="seg-title-wrap">
       <div class="seg-title" id="title-seg-a" style="font-size:62px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
@@ -289,15 +309,23 @@ body{font-family:var(--ctv-font-family)}
       <img src="images/seg-a.svg" alt="">
     </div>
     <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
-  </div>
-  <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.40" data-accent="#f59e0b" data-track-index="1" style="opacity:0;--seg-accent:#f59e0b;--seg-accent-text:#845505">
+      <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
+    <div class="peel-shade" id="shade-seg-a" style="height:86px"></div>
+</div>
+  <div id="seg-b" class="clip seg-card seg-canvas" data-start="6.80" data-duration="5.20" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#845505">
+    <div class="bg"></div>
+    <div class="grid"></div>
 
     <div class="seg-image bare-media" id="img-seg-b">
       <img src="images/seg-b.svg" alt="">
     </div>
     <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
-  </div>
-  <div id="closing" class="clip seg-card agenda-card" data-start="12.00" data-duration="2.00" data-accent="#2dd4bf" data-track-index="1" style="opacity:0;--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+      <div class="reveal-line" id="line-seg-b" style="height:6px"></div>
+    <div class="peel-shade" id="shade-seg-b" style="height:86px"></div>
+</div>
+  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+    <div class="bg"></div>
+    <div class="grid"></div>
     <div class="agenda-col">
       <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
@@ -305,7 +333,8 @@ body{font-family:var(--ctv-font-family)}
     <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="5">谢谢观看，下期再见。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
-  </div>
+      <div class="reveal-line" id="line-closing" style="height:6px"></div>
+</div>
 
 
   <audio id="main-audio" data-start="0" data-duration="14.00" data-track-index="10" src="audio/combined.wav"></audio>
@@ -321,25 +350,26 @@ body{font-family:var(--ctv-font-family)}
    时钟只有一个：GSAP 时间线。渲染器逐帧 seek 触发 onUpdate。 */
 window.__timelines = window.__timelines || {};
 const tl = gsap.timeline({paused:true});
-tl.fromTo("#opening",{opacity:0},{opacity:1,duration:0.4},0.00)
-  tl.to("#opening",{opacity:0,duration:1.00,ease:"power2.in"},2.00)
-  tl.set("#opening",{opacity:0},3.00)
+tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},0.00)
+  tl.fromTo("#line-opening",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},0.00)
   tl.from("#title-opening",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},0.00)
   tl.to("#prog-opening",{width:"100%",duration:2.00,ease:"none"},0.00)
-  tl.fromTo("#seg-a",{opacity:0},{opacity:1,duration:0.6,ease:"power2.out"},2.40)
-  tl.to("#seg-a",{opacity:0,duration:1.00,ease:"power2.in"},6.80)
-  tl.set("#seg-a",{opacity:0},7.80)
+  tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},2.00)
+  tl.fromTo("#line-seg-a",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},2.00)
+  tl.to("#opening",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},2.00)
+  tl.to("#shade-opening",{opacity:1,duration:0.40,ease:"power2.in"},2.00)
   tl.from("#title-seg-a",{scale:0.5,duration:0.50,ease:"back.out(1.7)"},2.40)
   tl.from("#img-seg-a",{opacity:0,y:40,duration:0.80,ease:"power2.out"},2.60)
   tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
-  tl.fromTo("#seg-b",{opacity:0},{opacity:1,duration:0.6,ease:"power2.out"},7.20)
-  tl.to("#seg-b",{opacity:0,duration:1.00,ease:"power2.in"},11.60)
-  tl.set("#seg-b",{opacity:0},12.60)
-  tl.from("#img-seg-b",{opacity:0,duration:0.80,ease:"power2.out"},7.40)
+  tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},6.80)
+  tl.fromTo("#line-seg-b",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},6.80)
+  tl.to("#seg-a",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},6.80)
+  tl.to("#shade-seg-a",{opacity:1,duration:0.40,ease:"power2.in"},6.80)
   tl.to("#prog-seg-b",{width:"100%",duration:4.40,ease:"none"},7.20)
-  tl.fromTo("#closing",{opacity:0},{opacity:1,duration:0.6,ease:"power2.out"},12.00)
-  tl.to("#closing",{opacity:0,duration:0.30,ease:"power2.in"},14.00)
-  tl.set("#closing",{opacity:0},14.30)
+  tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},11.60)
+  tl.fromTo("#line-closing",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},11.60)
+  tl.to("#seg-b",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},11.60)
+  tl.to("#shade-seg-b",{opacity:1,duration:0.40,ease:"power2.in"},11.60)
   tl.from("#title-closing",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},12.00)
   tl.to("#prog-closing",{width:"100%",duration:2.00,ease:"none"},12.00)
 

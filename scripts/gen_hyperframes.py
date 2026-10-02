@@ -6,7 +6,6 @@ images.json 字段见 references/image_options.md；完整参数列表见 ``--he
 """
 import argparse
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -15,8 +14,7 @@ import tempfile
 import urllib.request
 
 
-# GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产；它的获取与安装
-# 逻辑直接归属本模块，不再套一层中间抽象。
+# GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产。
 GSAP_VERSION = "3.14.2"
 GSAP_CDN_URL = f"https://cdn.jsdelivr.net/npm/gsap@{GSAP_VERSION}/dist/gsap.min.js"
 # 供应链钉固：这个 JS 会被引擎内的浏览器真实执行，CDN 版本又是不可变的，
@@ -149,8 +147,6 @@ def ensure_local_gsap(project_dir):
                           _validate_gsap_payload, "GSAP")
 
 
-# 主题配色 / 视觉模板 / HTML 组装已拆到独立模块（_theme / _template /
-# html_renderer），本文件只留 CLI 与资产、媒体文件的落地校验。
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names  # noqa: E402
@@ -206,9 +202,7 @@ def _stage_audio_file(audio_path, out_dir):
     dst = os.path.join(audio_dir, os.path.basename(audio_path))
     # 目标若是指向项目外的软链接，不能把它当成"同一文件"跳过复制；
     # 用临时文件 + replace 替换链接本身，避免写穿链接目标。
-    if (os.path.islink(dst)
-            or (os.path.abspath(audio_path) != os.path.abspath(dst)
-                and not _file_identical(audio_path, dst))):
+    if os.path.islink(dst) or not _file_identical(audio_path, dst):
         # 临时名用 mkstemp 而非固定的 dst+".tmp"：两个 run 并跑同一项目目录
         # （如双画幅）时固定名会互相踩掉对方的中转文件。
         fd, tmp = tempfile.mkstemp(dir=audio_dir, prefix=".stage-", suffix=".tmp")
@@ -250,19 +244,6 @@ def _warn_if_local_vendor_missing(src, out_dir):
           "整条时间线建不起来，每个段落卡都停在内联 opacity:0——成片为全黑无声空片。"
           "请补上该文件，或去掉这个参数走 vendor/ 默认路径。",
           file=sys.stderr)
-
-
-def _uncovered_image_sids(manifest, images):
-    """manifest 中没有配图映射的『需要配图的段落』sid 列表。
-
-    口径收口在 _segments.needs_image：内容段一律算，结构性页只在换成整页画布时
-    算（agenda 卡纯文字，那一页的 images 键上面就被弹掉了）。遍历封装同样收口在
-    _segments.sids_needing_image，与 run.py _image_coverage 共用一条口径。
-    gen_hyperframes 对缺图只提示不拦截（run.py 一键编排有缺图拦截，分步执行保留
-    显式 warn，避免把"漏配/没找到合适的图"误当"不需要图"）。
-    画布段这里会多报一条 warn，权威判据是下面 canvas_layout_errors 的 error。
-    """
-    return [sid for sid in sids_needing_image(manifest) if sid not in images]
 
 
 def validate_images_files(images, out_dir, seg_durs=None):
@@ -502,6 +483,17 @@ def _svg_text_metrics(path):
     return (min(sizes) if sizes else None), len(re.findall(r"<text\b", body))
 
 
+def _audio_candidates(path, out_dir, manifest_dir=None):
+    """音频查找候选：绝对路径原样；相对路径依次试 项目根 → 当前工作目录 →
+    manifest 所在目录（第三档只在读 manifest 的 combined_audio 时加入）。"""
+    if os.path.isabs(path):
+        return [path]
+    cands = [os.path.join(out_dir, path), os.path.abspath(path)]
+    if manifest_dir:
+        cands.append(os.path.join(manifest_dir, path))
+    return cands
+
+
 def main(argv=None):
     """argv=None 走 sys.argv；run.py 进程内直调时传入参数列表，
     参数校验只有本文件这一份 parser，run.py 不再复制。"""
@@ -635,7 +627,7 @@ def main(argv=None):
     # 时提示。静默无图会让 agent 把"漏配/没找到合适的图"误当"不需要图"——
     # run.py 一键编排会在交付前拦截；分步执行保留显式 warn，提醒调用方补图
     # 或确认纯文字兜底。
-    _uncovered = _uncovered_image_sids(manifest, images)
+    _uncovered = [sid for sid in sids_needing_image(manifest) if sid not in images]
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"
@@ -674,27 +666,21 @@ def main(argv=None):
         sys.exit(1)
 
     if args.audio:
-        requested_audio = args.audio
-        audio_candidates = ([requested_audio] if os.path.isabs(requested_audio)
-                            else [os.path.join(out_dir, requested_audio),
-                                  os.path.abspath(requested_audio)])
+        audio_candidates = _audio_candidates(args.audio, out_dir)
         audio_path = next((p for p in audio_candidates if os.path.isfile(p)), None)
         if audio_path is None:
             raise SystemExit(
-                f"[error] --audio 指定的音频不存在: {requested_audio}\n"
+                f"[error] --audio 指定的音频不存在: {args.audio}\n"
                 f"已检查: {', '.join(os.path.abspath(p) for p in audio_candidates)}")
         audio_src = _stage_audio_file(audio_path, out_dir)
     else:
         audio_abs = manifest.get("combined_audio", "")
         if audio_abs:
-            audio_candidates = ([audio_abs] if os.path.isabs(audio_abs)
-                                else [os.path.join(out_dir, audio_abs),
-                                      os.path.abspath(audio_abs),
-                                      os.path.join(
-                                          os.path.dirname(
-                                              os.path.abspath(args.manifest)),
-                                          audio_abs)])
-            audio_path = next((p for p in audio_candidates if os.path.isfile(p)), None)
+            audio_candidates = _audio_candidates(
+                audio_abs, out_dir,
+                os.path.dirname(os.path.abspath(args.manifest)))
+            audio_path = next((p for p in audio_candidates
+                               if os.path.isfile(p)), None)
         else:
             audio_path = None
         fell_back = audio_path is None

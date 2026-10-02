@@ -1,6 +1,6 @@
 """Hyperframes 渲染后端：命令解析、进程管理、成片完整性。
 
-从 run.py 拆出（run.py 只剩编排）。本模块的全部职责：
+本模块的全部职责：
   - 找到 hyperframes CLI（项目本地 node_modules → npx），并把命令解析成当前平台
     能直接执行的形态（含 Windows .cmd/.bat shim 的注入安全处理）；
   - 启动渲染、轮询成片、在成片稳定后不再死等 Node/Chrome 退出、

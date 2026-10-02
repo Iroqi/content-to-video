@@ -189,16 +189,21 @@ _TEMPLATE_JSON = r'''
       "duration": 0.5,
       "ease": "back.out(1.7)"
     },
-    "segmentFadeIn": {
-      "duration": 0.6,
-      "ease": "power2.out"
+    "segmentWipe": {
+      "style": "line",
+      "duration": 0.28,
+      "ease": "expo.out"
     },
-    "segmentFadeOut": {
-      "duration": 0.3,
-      "ease": "power2.in"
-    },
-    "firstSegmentFadeIn": {
-      "duration": 0.4
+    "propLine": {
+      "thickness": 6,
+      "duration": 0.40,
+      "ease": "power2.inOut",
+      "peelFrac": 0.30,
+      "peelRotation": -4,
+      "peelTilt": 12,
+      "peelPerspective": 1000,
+      "peelShadeFrac": 0.08,
+      "peelEase": "power2.in"
     },
     "entranceBudget": {
       "minFactor": 0.45,

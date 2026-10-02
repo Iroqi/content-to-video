@@ -5,6 +5,7 @@ This module owns the presentation compiler: normalized composition inputs, HTML/
 and GSAP timeline generation. CLI orchestration, file validation and rendering
 remain outside this module.
 """
+import html
 import re
 import sys
 from pathlib import Path
@@ -72,21 +73,14 @@ def esc(text):
     赋值 color，从不把文本塞进 JS 字符串字面量（那种上下文里实体转义会渲染出
     字面量 &amp;，本模块没有这种调用点）。
     """
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;"))
+    return html.escape(text)
 
 
 def segment_duration(seg):
-    """段落时长（秒）：从 sentences 推算——末句 start_time+duration − 首句
-    start_time。与 generate_html 的 clip 计时同一口径。空 sentences 返回 0。
+    """段落时长（秒）：末句 start_time+duration − 首句 start_time。
+    与 generate_html 的 clip 计时同一口径。
     """
-    sents = seg.get("sentences") or []
-    if not sents:
-        return 0.0
+    sents = seg["sentences"]
     return ((sents[-1].get("start_time", 0) + sents[-1].get("duration", 0))
             - sents[0].get("start_time", 0))
 
@@ -195,11 +189,7 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
 
 
 def _normalize_images(images):
-    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。
-
-    幂等：已归一化（含 media_type 键）的结构原样返回——再来一遍会把
-    条目里的字段当成未知键清掉。
-    """
+    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。"""
     normalized = {}
     for sid, media in (images or {}).items():
         # sid 会拼进 HTML 属性、JS 对象键和 GSAP 选择器。CLI 路径由
@@ -209,9 +199,6 @@ def _normalize_images(images):
             raise ValueError(
                 f"images.json 的段落 key 必须是合法段 id"
                 f"（{SID_RULE}；实际: {sid!r}）")
-        if isinstance(media, dict) and "media_type" in media:
-            normalized[sid] = media
-            continue
         if isinstance(media, dict):
             # 清单外的键在下面两条分支里都会跟着进 opts 而无人读。静默丢会让
             # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
@@ -535,9 +522,7 @@ def _tagline_html(rc, seg, sid, ac):
 
 
 def _media_html(rc, sid, s, d):
-    """配图/视频容器 HTML（右栏或画布槽位）。无配图返回空串。"""
-    if sid not in rc.images:
-        return ""
+    """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。"""
     media_info = rc.images[sid]
     media_path = media_info["src"]
     media_type = media_info["media_type"]
@@ -616,6 +601,11 @@ def _prepare_card(rc, clip, i):
             f"（{SID_RULE}；实际: {sid!r}）")
     s = clip["start"]
     d = clip["duration"]
+    # 可见窗口 = [擦除起点, 被下一页盖住的时刻]（几何在 generate_html 的
+    # clips 预处理里算齐）；inline clip-path 与 fromTo 的 from 值同型，
+    # 管住 JS 加载前的整页闪现。
+    win_start = clip["win_start"]
+    vis_d = clip["vis"]
     ac, ac_attr, ac_text_attr = _card_colors(rc, seg)
     # 版式一律由 _segments.seg_layout 分派（layout 字段优先，结构性页按 id 兜
     # 档），不再各处写 sid 字面量。agenda = 纯文字投影卡：不配图，用章节罗列/
@@ -643,11 +633,17 @@ def _prepare_card(rc, clip, i):
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
     # 不推导盒几何。
+    # 卡内自带一份与 root 同名的 .bg/.grid 层：卡片原本是透明容器，两页交叠
+    # 时新旧文字直接叠影（擦除转场的前提是"每一页都是不透明图层"，对标
+    # Remotion slide）。几何与 root 那两层逐像素一致（inset:0、同网格尺寸/掩膜），
+    # 擦除时网格严丝合缝，只有内容在换。z-index:-2 排在卡内 accent 光晕(::after,-1)
+    # 之下、卡片背景色之上。
     card_open = (
         f'  <div id="{sid}" class="clip seg-card'
         + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
-        + f'" data-start="{s:.2f}" data-duration="{d:.2f}" data-accent="{ac_attr}" '
-        f'data-track-index="1" style="opacity:0;--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
+        + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
+        f'data-track-index="1" style="clip-path:{_wipe_pair(rc)[0]};--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
+        '    <div class="bg"></div>\n    <div class="grid"></div>\n'
     )
     progress_html = (
         f'    <div class="seg-progress" id="prog-{sid}" '
@@ -662,7 +658,9 @@ def _prepare_card(rc, clip, i):
         f'    </div>'
     )
     return SimpleNamespace(
-        seg=seg, sid=sid, s=s, d=d, ac=ac, ac_attr=ac_attr,
+        seg=seg, sid=sid, s=s, d=d, wipe=clip["wipe"], win_start=win_start,
+        peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
+        ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
         tagline_html=tagline_html, image_html=image_html,
@@ -707,46 +705,126 @@ def _assemble_card(rc, card, clips, manifest):
             + '  </div>')
 
 
-def _card_timeline_lines(rc, card, i, next_start):
-    """本卡的 GSAP 时间线：淡入淡出、标题/配图入场、进度条。"""
+# wipe 各档几何（对标 Codrops/GSAP 遮罩换页：同结构 clip-path 纯属性补间，
+# 逐帧 seek 确定性）。from = 全遮蔽，to = 全覆盖：
+#  - circle 的 71% 是"圆心到矩形角点"的精确值（√2/2≈70.7%，任意画幅同值）；
+#  - diagonal 顶边 30% 斜度、左角先行，是斜向擦除的常见取值。
+_WIPES = {
+    "vertical": ("inset(100% 0 0 0)", "inset(0% 0 0 0)"),
+    "diagonal": ("polygon(0% 100%, 100% 130%, 100% 230%, 0% 200%)",
+                 "polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)"),
+    "circle": ("circle(0% at 50% 50%)", "circle(71% at 50% 50%)"),
+    # line = 引导线转场（进度条立起来画下一页）：几何同 vertical 的自下而上揭屏，
+    # 但揭示边缘骑一条 accent 高亮线（_reveal_line_html），旧页被线犁过上移剥离
+    # （peel，_line_timeline_lines）。
+    "line": ("inset(100% 0 0 0)", "inset(0% 0 0 0)"),
+}
+
+
+def _wipe_pair(rc):
+    style = rc.anim["segmentWipe"]["style"]
+    if style not in _WIPES:
+        raise ValueError(
+            f'animation.segmentWipe.style 不认识 "{style}"，可选：'
+            + "、".join(f'"{k}"' for k in _WIPES))
+    return _WIPES[style]
+
+
+def _wipe_ease(rc):
+    """揭开曲线唯一口径：clip-path 与引导线必须同一条（线骑边缘的咬合靠它，
+    两处各读各的=漂移穿帮）。line 档走 propLine.ease 的书写节奏（慢起—快行—
+    慢收），几何档沿用 segmentWipe.ease。"""
+    a_ = rc.anim
+    if a_["segmentWipe"]["style"] == "line":
+        return a_["propLine"]["ease"]
+    return a_["segmentWipe"]["ease"]
+
+
+def _reveal_line_html(rc, card):
+    """引导线：进度条的续命——转场时这条 accent 高亮线从页底"脱开"向上扫，
+    新页跟着它被画出来（线的下缘 = clip-path 揭示边，同窗同曲线）。它是画面
+    本来就有的元素（每段底部都在走的进度条）的下一段生命，不是闯进来的道具。
+    作为新卡的末子注入（绘制在内容之上、随父卡 clip-path 只露出揭示边以下部分）。"""
+    if rc.anim["segmentWipe"]["style"] != "line" or card.wipe <= 0:
+        return ""
+    lh = rc.anim["propLine"]["thickness"]
+    return (f'    <div class="reveal-line" id="line-{card.sid}" '
+            f'style="height:{lh}px"></div>\n')
+
+
+def _peel_shade_html(rc, card):
+    """被揭旧页的底缘暗边：纸绕底边轴掀起，明暗集中在折页线附近（Material
+    elevation 的浮起表面边缘变暗）。用覆盖层而非 box-shadow 是两个物理坑：
+    卡的外投影会被自身 clip-path 整层裁掉；inset 内阴影又会被后画的 .bg 子层
+    盖住。opacity 随 peel 同窗补间（纯属性，seek 确定性不变）。"""
+    if not card.gets_peeled or rc.anim["segmentWipe"]["style"] != "line":
+        return ""
+    sh = round(rc.height * rc.anim["propLine"]["peelShadeFrac"])
+    return (f'    <div class="peel-shade" id="shade-{card.sid}" '
+            f'style="height:{sh}px"></div>\n')
+
+
+def _attach_card_tail(card_html, tail_html):
+    """把 tail 插进卡片最内层闭合 div 之前（卡片 DOM 的末尾 = 绘制在最上）。"""
+    if not tail_html:
+        return card_html
+    j = card_html.rfind("</div>")
+    return card_html[:j] + tail_html + card_html[j:]
+
+
+def _line_timeline_lines(rc, card):
+    """line 档的两条补间：① 引导线骑揭示边从页底扫到页顶（与 clip-path 揭开
+    同窗同曲线 _wipe_ease，线的终位 -thickness 让它扫到顶时恰好缩没进边沿）；
+    ② 旧页被线犁过之后整层上移剥离（power2.in 加速 + peelRotation 平面逆旋 +
+    peelTilt 绕底边的透视后倒，纸真正"揭"起来而不是图层平移）。"""
+    if rc.anim["segmentWipe"]["style"] != "line" or card.wipe <= 0:
+        return []
+    a_ = rc.anim
+    h = rc.height
+    lines = [
+        f'tl.fromTo("#line-{card.sid}",{{y:{h:.1f}}},{{y:'
+        f'{-a_["propLine"]["thickness"]:.1f},duration:{card.wipe:.2f},'
+        f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})',
+    ]
+    if card.peel:
+        psid, pwd = card.peel
+        pl = a_["propLine"]
+        # rotationX 正值 + 底边轴 = 上缘向屏幕里倒（右手定则），纸被"揭"起
+        # 而非平移；clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。
+        lines.append(
+            f'tl.to("#{psid}",{{y:{-pl["peelFrac"] * h:.1f},'
+            f'rotation:{pl["peelRotation"]},'
+            f'rotationX:{pl["peelTilt"]},transformOrigin:"50% 100%",'
+            f'transformPerspective:{pl["peelPerspective"]},'
+            f'duration:{pwd:.2f},ease:"{pl["peelEase"]}"}},{card.win_start:.2f})'
+        )
+        lines.append(
+            f'tl.to("#shade-{psid}",{{opacity:1,duration:{pwd:.2f},'
+            f'ease:"{pl["peelEase"]}"}},{card.win_start:.2f})'
+        )
+    return lines
+
+
+def _card_timeline_lines(rc, card):
+    """本卡的 GSAP 时间线：遮罩擦除入场、标题/配图入场、进度条。"""
     sid, s, d = card.sid, card.s, card.d
     # 动画参数快捷引用
     a_ = rc.anim
     lines = []
 
-    # GSAP animations — first clip fades in; later clips cross-fade.
-    is_first = (i == 0)
-    a_first = a_["firstSegmentFadeIn"]
-    a_fadein = a_["segmentFadeIn"]
-    a_fadeout = a_["segmentFadeOut"]
-    _fadein_dur = a_fadein["duration"]
-    if is_first:
-        lines.append(
-            f'tl.fromTo("#{sid}",{{opacity:0}},{{opacity:1,'
-            f'duration:{a_first["duration"]}}},{s:.2f})'
-        )
-    else:
-        lines.append(
-            f'tl.fromTo("#{sid}",{{opacity:0}},'
-            f'{{opacity:1,duration:{_fadein_dur},'
-            f'ease:"{a_fadein["ease"]}"}},{s:.2f})'
-        )
-    # 淡出 + 硬清。段落之间天然隔着一句静音（gap = 下一段 start − 本段 end）：
-    # 淡出只按配置时长从本段结束起算时，默认 gap 更长，上一段已淡干净、下一段
-    # 还没开始淡入，边界留下只剩背景的空帧（24fps 实测 2~3 帧）。淡出因此跨过
-    # 整段间隔、铺到下一段淡入结束，两张卡真正交叠成 cross-fade。
-    # （"静音期保持全显、再与淡入对称淡出"试过：gap 一大仍露约 0.15s 空档。）
-    _fadeout_dur = a_fadeout["duration"]
-    if next_start is not None:
-        _fadeout_dur = max(_fadeout_dur,
-                           max(0.0, next_start - (s + d)) + _fadein_dur)
+    # 换页 = 方向性遮罩擦除（对标 Remotion slide 的 clip-path 等效实现）：本页
+    # 整层自下而上从 inset(100% 0 0 0) 揭开，恰在本句音频起点完成；上一页不淡出、
+    # 被揭开"盖"掉后随引擎窗口切走。不选 cross-fade（两页互相透明度溶解=凭空
+    # 消失再出现，PPT 观感的来源），不选容器位移（clip-path 只裁切，满幅海报
+    # 不露页底），纯属性补间逐帧 seek 确定性。
+    # 擦除时长被 gap 钳住：字幕活在卡片里，侵入上一页说话期=字幕跟着页被擦走。
+    w_from, w_to = _wipe_pair(rc)
     lines.append(
-        f'tl.to("#{sid}",{{opacity:0,duration:{_fadeout_dur:.2f},'
-        f'ease:"{a_fadeout["ease"]}"}},{s + d:.2f})'
+        f'tl.fromTo("#{sid}",{{clipPath:"{w_from}"}},'
+        f'{{clipPath:"{w_to}",duration:{card.wipe:.2f},'
+        f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
     )
-    lines.append(
-        f'tl.set("#{sid}",{{opacity:0}},{s + d + _fadeout_dur:.2f})'
-    )
+    lines.extend(_line_timeline_lines(rc, card))
     # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
     _eb = a_["entranceBudget"]
     _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
@@ -758,14 +836,13 @@ def _card_timeline_lines(rc, card, i, next_start):
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
-    if card.has_image:
+    if card.has_image and not card.is_canvas:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
-        # 整页画布例外：满幅媒体再位移 40px 就在页底露出一条 40px 页面底
-        # （实测 t=48.6s 帧），只剩淡入。
-        _img_ent = "" if card.is_canvas else f',y:{a_img["vert_y"]}'
+        # 整页画布连这条补间也不生成：wipe 揭开即要求画面到位，配图再自带
+        # 0.2s 延迟淡入会演成"先擦出空页、再浮出海报"的两段式（实测 15.9s 帧）。
         lines.append(
-            f'tl.from("#img-{sid}",{{opacity:0{_img_ent},'
+            f'tl.from("#img-{sid}",{{opacity:0,y:{a_img["vert_y"]},'
             f'duration:{a_img["duration"] * _k:.2f},'
             f'ease:"{a_img["ease"]}"}},'
             f'{s + a_img["startDelay"] * _k:.2f})'
@@ -813,8 +890,7 @@ def generate_html(manifest, audio_src, images=None,
     # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插
     # 会破坏 head 结构（媒体路径都走了 quote/转义；这里不能 URL 编码——
     # CDN 地址的 :/? 会被 quote 破坏）
-    # None 安全：调用方可能显式传 None，回落默认路径。
-    gsap_src_attr = (gsap_src or _DEFAULT_GSAP_SRC).replace("&", "&amp;").replace('"', "&quot;")
+    gsap_src_attr = gsap_src.replace("&", "&amp;").replace('"', "&quot;")
 
     rc = _build_render_context(tpl, aspect, width, height, theme, images)
 
@@ -831,7 +907,33 @@ def generate_html(manifest, audio_src, images=None,
             "seg": seg,
             "start": round(start, 2),
             "duration": round(segment_duration(seg), 2),
+            "gets_peeled": False,
         })
+    # 擦除转场几何一次算齐（_prepare_card 与 timeline 共用）。引擎按
+    # data-start/data-duration 硬切 clip 可见性（实测补间排在窗口外等于没写，
+    # 边界全黑帧），所以元素窗口必须精确覆盖"这张页在屏幕上"的全程：从自己的
+    # 擦除起点（本句音频起点 − 擦除时长）到下一页擦除完成把它盖住的时刻。
+    _is_line = rc.anim["segmentWipe"]["style"] == "line"
+    # line 档自带时长档（0.40 > 几何档 0.28）：书写感需要更多笔程，gap 钳制兜底。
+    _wd = (rc.anim["propLine"]["duration"] if _is_line
+           else rc.anim["segmentWipe"]["duration"])
+    for i, clip in enumerate(clips):
+        s_i, d_i = clip["start"], clip["duration"]
+        prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
+        clip["wipe"] = _wd if prev_end is None else round(
+            min(_wd, max(0.0, s_i - prev_end)), 2)
+        clip["win_start"] = round(max(0.0, s_i - clip["wipe"]), 2)
+        win_end = clips[i + 1]["start"] if i + 1 < len(clips) else round(total_dur, 2)
+        clip["vis"] = round(win_end - clip["win_start"], 2)
+        # line 档的剥离挂在被犁走的旧卡上：本卡揭开窗口 [win_start, +wipe]
+        # 就是上一页的"被推走"窗口（旧卡窗口恰铺到本段音频起点，补间在窗内）。
+        # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
+        clip["peel"] = None
+        if _is_line and i and clip["wipe"] > 0:
+            prev_sid = (clips[i - 1]["seg"].get("id")
+                        or f"seg{i}")  # 与 _prepare_card 的缺 id 兜底同式
+            clip["peel"] = (prev_sid, clip["wipe"])
+            clips[i - 1]["gets_peeled"] = True  # 旧卡要挂底缘暗边（_peel_shade_html）
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
     # closing_cta 只有结尾 agenda 卡这一个消费者：没有 closing 段、或那一页被作者
@@ -850,9 +952,12 @@ def generate_html(manifest, audio_src, images=None,
     gsap_lines = []
     for i, clip in enumerate(clips):
         card = _prepare_card(rc, clip, i)
-        seg_cards.append(_assemble_card(rc, card, clips, manifest))
-        next_start = clips[i + 1]["start"] if i + 1 < len(clips) else None
-        gsap_lines.extend(_card_timeline_lines(rc, card, i, next_start))
+        # 引导线/底缘暗边注入卡 DOM 末尾（绘制在内容之上；线随父卡 clip-path
+        # 裁切，shade 挂在被揭的那张旧卡上）
+        seg_cards.append(_attach_card_tail(
+            _assemble_card(rc, card, clips, manifest),
+            _reveal_line_html(rc, card) + _peel_shade_html(rc, card)))
+        gsap_lines.extend(_card_timeline_lines(rc, card))
 
     # ── Subtitle cues ──────────────────────────────────────────────
     sub_cues_js = _build_subtitle_cues(sentences)

@@ -51,14 +51,13 @@ _REPORT_DIR = None
 _DRY_RUN = False
 # 整个 run 的起始时刻：total_seconds 用真实墙钟，而不是把各步骤耗时直接
 # 相加（TTS 与配图并行时两步各记各的全程，相加会大于真实墙钟）。
+# main() 第二时间无条件赋值。
 _RUN_T0 = None
 
 
 def _total_seconds():
-    """本次 run 的真实墙钟时长；_RUN_T0 未赋值时退回各步骤耗时之和。"""
-    if _RUN_T0:
-        return round(time.time() - _RUN_T0, 1)
-    return round(sum(s["seconds"] for s in _REPORT["steps"]), 1)
+    """本次 run 的真实墙钟时长。"""
+    return round(time.time() - _RUN_T0, 1)
 
 
 def _write_report(path):
@@ -129,10 +128,9 @@ def _run_step(fn, argv, step_name):
 
 
 def _report_path():
-    """制作报告写到哪：优先 out 目录（跟 timing_manifest.json 放一起），
-    -o/--output 还没解析出来（极早期失败）时退回当前目录。"""
-    return os.path.join(_REPORT_DIR, "production_report.json") if _REPORT_DIR \
-        else "production_report.json"
+    """制作报告写到哪：out 目录（跟 timing_manifest.json 放一起），
+    main() 在首个写报告点之前无条件赋 _REPORT_DIR。"""
+    return os.path.join(_REPORT_DIR, "production_report.json")
 
 
 def _image_coverage(manifest_path, images_json):
@@ -237,8 +235,8 @@ def _build_parser():
                         help="自然语言风格描述（透传给 pipeline，控制语气情绪）；"
                              "默认沿用 pipeline 的播报风格文案")
     parser.add_argument("--gap", type=float, default=None,
-                        help="句间静音秒数（透传给 pipeline，同时影响时间轴与"
-                             "段落淡入淡出的交叠时长）；默认 0.4")
+                        help="句间静音秒数（透传给 pipeline，时间轴与段落擦除时长的"
+                             "钳制上限都依赖它）；默认 0.4")
     parser.add_argument("--bgm", default=None,
                         help="背景音乐文件（透传给 pipeline，自动循环混音）")
     parser.add_argument("--bgm-volume", type=float, default=None,
@@ -376,12 +374,12 @@ def main():
         _print_report_summary()
         return
 
+    images_dir = os.path.join(project, "images")
     if missing_files:
         # images.json 有键但媒体文件不在盘上（图被删过/路径写错）：
         # gen_hyperframes 对这类坏路径无条件 fail-fast，"只警告继续"在这里
         # 兑现不了——与其先打一句"继续生成 HTML"再让 HTML 步骤 exit 1，
         # 不如就地报清病因，并把还没映射的段一并列出来让人一次修完。
-        images_dir = os.path.join(project, "images")
         print("[run] images.json 引用了不存在的媒体文件："
               + ", ".join(missing_files) + "。\n"
               f"请补齐 {images_dir} 下的文件，或修正/删除对应映射条目。",
@@ -396,7 +394,6 @@ def main():
     if missing_keys:
         # 只有真要出片才拦：--until html 是"图没画完先看版式"的迭代路径，
         # 同一份缺图清单在那里只降级成警告。missing 的口径见 _image_coverage。
-        images_dir = os.path.join(project, "images")
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
               "请按第 4 步补图：ImageGen 生图（方式 B）、手绘 SVG 矢量示意图"
@@ -480,7 +477,7 @@ def main():
     # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟
     # 打底给出充足余量；默认 1800s 硬上限会把长片或 60fps/high quality
     # 的正常渲染误杀成"超时"。
-    _render_cap = max(1800.0, float(_tm.get("total_duration") or 0) * 10 + 600)
+    _render_cap = max(1800.0, float(_tm["total_duration"]) * 10 + 600)
     t0_render = time.time()
     try:
         render_wait(hf_render, out_mp4, cwd=project, max_wait=_render_cap)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""段 id 与版式的唯一口径（原 _contracts 的这一段收口到这里）。
+"""段 id 与版式的唯一口径。
 
 id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP 选择器字符串，
 版式决定渲染器分派到哪套 DOM——两者的判定只在这里写一份：

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""语速、句间停顿与时间轴容差：跨脚本唯一的一份假设（原 _contracts 收口）。
+"""语速、句间停顿与时间轴容差：跨脚本唯一的一份假设。
 
 pipeline 的 --speed 入口、_audio 的 atempo 守卫、resume 状态机、
 build_from_structured 的段落默认值共用这里的常量与判定；

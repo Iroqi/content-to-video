@@ -7,6 +7,7 @@ timing_manifest.json（字幕时间轴的唯一来源）。
 """
 import argparse
 import concurrent.futures
+from dataclasses import dataclass
 import hashlib
 import math
 import os
@@ -149,22 +150,13 @@ def load_env():
 
 
 def get_key(name, cli_value=None):
-    """
-    获取单个密钥值。
+    """获取单个密钥值：优先级 cli_value > os.environ > ~/.config/ai-video/.env。
 
-    优先级：cli_value > os.environ > ~/.config/ai-video/.env > None
     查找链复用 load_env（同一份优先级只实现一遍）。
-
-    参数：
-        name: 环境变量名（如 MIMO_API_KEY）
-        cli_value: 命令行参数传入的值（最高优先）
-
-    返回：
-        密钥字符串，或 None（未找到）
     """
     if cli_value:
         return cli_value
-    return load_env().get(name) or None
+    return load_env().get(name)
 
 
 def resolve_model_config(cli_model, cli_base_url):
@@ -193,15 +185,11 @@ _SIDECAR_SUFFIXES = (".orig.wav", ".spd", ".spd.tmp.wav", ".failed")
 def _clear_stale_sidecars(out_path):
     """新合成前清掉上一轮残留的变速/兜底 sidecar。
 
-    这些文件属于上一次运行的稿件/参数：.orig.wav 是旧音频的原速备份，
-    .spd/.spd.tmp.wav/.failed 是旧状态标记。新音频落盘后若不清理，
-    apply_speed 会把旧 .orig.wav 当作原速源做变速，新音频被整体丢弃
-    （改稿后不带 --resume 重跑即触发，成片念旧稿配新字幕）。
-
-    返回是否全部清理干净（或本来就没有残留）。删除失败（Windows 下
-    杀毒扫描/播放器占用文件）时先尝试改名隔离（加 .stale 后缀，隔离后
-    不会再被任何流程按原名读到）；改名也失败才返回 False——调用方必须
-    据此跳过变速，否则残留的旧 .orig.wav 会顶掉新合成的音频。
+    这些文件属于上一次运行的稿件/参数。返回是否全部清理干净（或本来就没有
+    残留）。删除失败（Windows 下杀毒扫描/播放器占用文件）时先尝试改名隔离
+    （加 .stale 后缀，隔离后不会再被任何流程按原名读到）；改名也失败才返回
+    False——调用方必须据此跳过变速，否则残留的旧 .orig.wav 会顶掉新合成的
+    音频（改稿后不带 --resume 重跑即触发，成片念旧稿配新字幕）。
     """
     ok = True
     for suffix in _SIDECAR_SUFFIXES:
@@ -399,45 +387,33 @@ def _drop_stale_cache(out_path):
 # 副作用留在 main 执行层——读盘与写盘的错误处理因此只有一处）
 # ===================================================================
 
+@dataclass
 class ResumeDecision:
-    __slots__ = ("action", "apply_speed_to", "prev_speed", "write_spd",
-                 "restore_first", "synth_failed", "reason")
-
-    def __init__(self, action, apply_speed_to=None, prev_speed=None,
-                 write_spd=None, restore_first=False, synth_failed=False,
-                 reason=None):
-        self.action = action
-        self.apply_speed_to = apply_speed_to
-        self.prev_speed = prev_speed
-        self.write_spd = write_spd
-        self.restore_first = restore_first
-        self.synth_failed = synth_failed
-        # 为什么判定缓存失效。regen 有六种成因（无指纹 / 指纹变了 / 文件没了
-        # / 量不出时长 / 文件被截断 / 语速状态无法证明），对写稿人来说是完全
-        # 不同的三件事（改稿？坏文件？换参数？）。不报出来就只能靠猜。
-        self.reason = reason
+    action: str
+    apply_speed_to: float = None
+    prev_speed: float = None
+    write_spd: str = None
+    restore_first: bool = False
+    synth_failed: bool = False
+    # 为什么判定缓存失效。regen 有六种成因（无指纹 / 指纹变了 / 文件没了
+    # / 量不出时长 / 文件被截断 / 语速状态无法证明），对写稿人来说是完全
+    # 不同的三件事（改稿？坏文件？换参数？）。不报出来就只能靠猜。
+    reason: str = None
 
 
+@dataclass
 class ResumeFacts:
-    __slots__ = ("sha_exists", "sha_matches", "audio_exists", "audio_duration_ok",
-                 "audio_duration", "audio_intact", "spd_exists", "spd_readable",
-                 "spd_applied", "orig_wav_exists", "failed_marker_exists")
-
-    def __init__(self, sha_exists=False, sha_matches=False, audio_exists=False,
-                 audio_duration_ok=False, audio_duration=0.0, audio_intact=True,
-                 spd_exists=False, spd_readable=False, spd_applied=None,
-                 orig_wav_exists=False, failed_marker_exists=False):
-        self.sha_exists = sha_exists
-        self.sha_matches = sha_matches
-        self.audio_exists = audio_exists
-        self.audio_duration_ok = audio_duration_ok
-        self.audio_duration = audio_duration
-        self.audio_intact = audio_intact
-        self.spd_exists = spd_exists
-        self.spd_readable = spd_readable
-        self.spd_applied = spd_applied
-        self.orig_wav_exists = orig_wav_exists
-        self.failed_marker_exists = failed_marker_exists
+    sha_exists: bool = False
+    sha_matches: bool = False
+    audio_exists: bool = False
+    audio_duration_ok: bool = False
+    audio_duration: float = 0.0
+    audio_intact: bool = True
+    spd_exists: bool = False
+    spd_readable: bool = False
+    spd_applied: str = None
+    orig_wav_exists: bool = False
+    failed_marker_exists: bool = False
 
 
 def resolve_resume_state(facts, requested_speed):
@@ -637,7 +613,7 @@ def _validate_args(parser, args):
         args.bgm = None
 
 
-def _concat_voice_audio(args, ffmpeg_path, sentence_data, degraded):
+def _concat_voice_audio(args, ffmpeg_path, sentence_data):
     """拼接句音频成母带并做时长对账，返回 (combined_path, total_dur)。
 
     拼接失败 / 测量失败 / 与逐句预期对不上都是硬失败——缺音频 = 字幕从
@@ -662,10 +638,9 @@ def _concat_voice_audio(args, ffmpeg_path, sentence_data, degraded):
         print("[error] combined.wav 时长测量失败（0.0s）——ffmpeg 无法读取"
               "拼接产物？检查磁盘空间与 ffmpeg 可用性", file=sys.stderr)
         sys.exit(1)
-    # 实测总时长必须跟"逐句时长之和 + 句间静音"对得上：ffmpeg 的 concat
-    # demuxer 在输入格式不一致时会**返回 0** 却吐出错采样率、被截断的音频
-    # （实测数字记在 _audio.concat_audio 的注释里），只看 returncode 检不出
-    # 这类静默损坏。
+    # 实测总时长必须跟"逐句时长之和 + 句间静音"对得上：拼接本体已是标准库
+    # wave 逐帧串接（不会再截断），这道对账改抓的是上游单句产物被写坏/截断
+    # 那一类（实测这种文件 ffmpeg 仍量得出"正常"时长，只看头部检不出）。
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
@@ -921,7 +896,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     degraded = {}
 
     combined_path, total_dur = _concat_voice_audio(
-        args, ffmpeg_path, sentence_data, degraded)
+        args, ffmpeg_path, sentence_data)
 
     # ── Calculate start times ──────────────────────────────────────
     # 提前到 BGM 混音之前算，因为混音后的 manifest 需要每句的 start_time。
@@ -951,7 +926,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         degraded[D.SILENCE_FALLBACK_COUNT] = silence_fallback_count
     if lost_count:
         degraded[D.LOST_SENTENCE_COUNT] = lost_count
-    _voices = sorted(voices_used or {args.voice_id})
+    _voices = sorted(voices_used)
     manifest = {
         "schema_version": 2,
         # status 在写盘前按 degraded 明细统一复核（段落剔除发生在下面）。
@@ -1080,12 +1055,12 @@ def main(argv=None):
         end_idx = seg["end"]
         seg_speed = seg.get("speed")
         if seg_speed is not None:
-            for si in range(start_idx, min(end_idx, len(sentences))):
+            for si in range(start_idx, end_idx):
                 sentence_speeds[si] = seg_speed
         seg_voice_id = seg.get("voice_id")
         seg_voice_style = seg.get("voice_style")
         if seg_voice_id or seg_voice_style:
-            for si in range(start_idx, min(end_idx, len(sentences))):
+            for si in range(start_idx, end_idx):
                 sentence_voices[si] = (
                     seg_voice_id or args.voice_id,
                     seg_voice_style if seg_voice_style is not None else args.voice_style,
@@ -1101,7 +1076,7 @@ def main(argv=None):
             # label 由 build_from_structured 写成 "speakers 里的 label 或说话人
             # 名"，_source_schema 保证 speaker 非空，所以这里必然拿到非空标签。
             t_label = turn["label"]
-            for si in range(t_start, min(t_end, len(sentences))):
+            for si in range(t_start, t_end):
                 if t_voice_id or t_voice_style:
                     base_id, base_style = sentence_voices.get(
                         si, (args.voice_id, args.voice_style))
@@ -1136,9 +1111,8 @@ def main(argv=None):
                                           sent_voice_id, sent_voice_style, model)
             decision = resolve_resume_state(facts, sent_speed)
             if decision.action == "regen":
-                # 六种失效成因（无指纹 / 指纹变了 / 文件没了 / 量不出时长 /
-                # 被截断 / 语速状态无法证明）对写稿人是不同的三件事：改稿、
-                # 坏文件、换参数。不报出来只能靠猜；同时无条件清掉整份
+                # 失效成因由 decision.reason 报（regen 的六种成因与为什么不报
+                # 只能靠猜，见 ResumeDecision.reason）。同时无条件清掉整份
                 # sidecar，别把 .failed / 旧 .orig.wav 带进这次重合成。
                 print(f"  [{label}] 缓存失效（{decision.reason}），重新合成",
                       flush=True)

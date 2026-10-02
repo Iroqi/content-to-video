@@ -259,7 +259,7 @@ def build_parts(source):
     Returns:
         sentences: list[str]，按段落顺序排列的全部句子
         segments: 段落分组（id/title/tagline/accent/start/end/
-                  可选 speed/voice_id/voice_style/turns）
+                  可选 takeaway/layout/speed/voice_id/voice_style/turns）
     """
     blocks = _collect_blocks(source)
     sentences = []

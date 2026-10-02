@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""segments_source.json 的契约：封闭字段集 + 取值校验（原 _contracts 的 source 层）。
+"""segments_source.json 的契约：封闭字段集 + 取值校验。
 
 用户写稿、pipeline 读取的唯一入口。四层（顶层 / 段落 / speakers / dialogue 轮次）
 字段集各自封闭，多一个键就报错——读侧全是 .get()，拼错的字段不生效也不出声，

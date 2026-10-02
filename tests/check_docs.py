@@ -5,7 +5,7 @@
 必须有一个标题（# 开头的行）包含该章节名；另外扫描 scripts/*.py 里的同类引用。
 改标题、瘦身 SKILL.md 之后跑一次，能抓住"引用了已经不存在的章节"。
 
-用法：python scripts/check_docs.py          # 有悬空引用时退出码 1
+用法：python tests/check_docs.py          # 有悬空引用时退出码 1
 """
 import glob
 import os

@@ -22,8 +22,8 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | 依赖 | 用途 | 缺了会怎样 |
 | --- | --- | --- |
 | Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
-| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败；命中 `--resume` 缓存或 `--dry-run` 时不需要 |
-| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量、变速、拼接、响度、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
+| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（即使全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
+| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一（拼接本体是标准库 `wave`）、响度/BGM、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
 | Node.js + `npx hyperframes`，及其驱动的 headless Chrome | 仅第 5 步渲染 | 出不了 MP4，前四步照常 |
 
 其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（默认 `hyperframes`）。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
@@ -42,8 +42,7 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 写稿要点：
 
-- 整期全是槽位卡片会疲劳，按 `references/image_options.md`「整页画布」的判据主动给几段换 `layout: "canvas"`。
-- `layout: "canvas"` 的段落**没有 HTML 字幕**：静音或听障观看时观众只剩画面，关键句必须画进图里；别连着两段都用，旁白最密的一段不要用。
+- 整期全是槽位卡片会疲劳，按 `references/image_options.md`「整页画布」的判据（含穿插节奏与字幕代价）主动给几段换 `layout: "canvas"`，别连着两段都用。
 - 内容段最多 7 段（≤6 段才放得下 `cta`），agenda 卡总行数上限 7。
 - **字段集封闭**：顶层 / 段落 / 对话轮次 / `speakers` 各层只认 `references/writing.md`「字段规范」列出的键，写错直接报错。
 
@@ -86,7 +85,7 @@ npx -y hyperframes snapshot hf-project --at 1.0,4.0,8.0 -o snap
 
 `check` 的已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。
 
-迭代节奏：改文案、换配图、调结构一律 `--until html`；只在定稿时跑完整渲染（每次渲染约 8.5s 固定开销，竖屏 5 段片约 190s）。配图是最花时间的一环，不在 `run.py` 计时里。
+迭代节奏：改文案、换配图、调结构一律 `--until html`；只在定稿时跑完整渲染（固定开销与实测耗时见 `references/rendering.md`「性能参数」）。配图是最花时间的一环，不在 `run.py` 计时里。
 
 ## 常用参数
 
@@ -97,7 +96,7 @@ npx -y hyperframes snapshot hf-project --at 1.0,4.0,8.0 -o snap
 --project DIR                    项目目录
 --fps 12|24|30|60                12 仅用于低规格快速看画面
 --quality draft|standard|high    编码质量
---workers N                      渲染并行度（默认 4，8 之后饱和）
+--workers N                      渲染并行度（默认 4；饱和点见 references/rendering.md）
 --speed / --voice-id / --voice-style   TTS 语速、音色、语气
 --gap SECONDS                    句间静音
 --bgm FILE / --bgm-volume 0.15   背景音乐
@@ -138,4 +137,4 @@ hf-project/
 - `references/image_options.md`：配图路线与 provenance
 - `references/rendering.md`：主题、动画、预览与渲染
 
-维护者改动后跑 `python -m unittest discover -s tests`（117 条，标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python scripts/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。对外发布时用 `python scripts/package_skill.py` 生成剥离 tests/、维护者工具与制作残渣的分发 zip。
+维护者改动后跑 `python -m unittest discover -s tests`（121 条，标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python tests/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。发布时手动压缩技能目录、剔掉 `tests/`、`.env`（含密钥，漏进包就是泄密）、`.git/.venv/__pycache__` 与制作残渣（`audio_output/`、`hf-project/`、`out/`、`snapshots/`、`candidates.json`、`segments_source.json`、`timing_manifest.json`）；`scripts/check_svg.py` 要留着——它是第 4 步引用的生产工具，不是维护物。

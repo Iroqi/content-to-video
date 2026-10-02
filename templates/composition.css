@@ -45,6 +45,20 @@ body{font-family:var(--ctv-font-family)}
    选择器会被误报成"祖先没有层叠上下文"。 */
 [data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
 .seg-card{position:absolute;inset:0;isolation:isolate}
+/* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
+   页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
+   只露出揭示边以下的部分（GSAP 补间 y，自身不得声明 transform）；颜色走卡上
+   已有的 --seg-accent，所以看起来是"下一页的颜色从进度条里渗出来"；两端渐隐、
+   中心提亮成一枚"笔尖"，是硬条读不出笔触、必须有亮头才有"书写"感；辉光下偏
+   （y 偏移）让光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。 */
+.reveal-line{position:absolute;left:0;right:0;top:0;background:linear-gradient(90deg,transparent 0%,var(--seg-accent) 16%,color-mix(in srgb,var(--seg-accent) 55%,#fff) 50%,var(--seg-accent) 84%,transparent 100%);box-shadow:0 12px 30px 5px color-mix(in srgb,var(--seg-accent) 55%,transparent);pointer-events:none}
+/* 被揭旧页的底缘暗边（style:"line" 且该页会被下一页犁起才生成）：绕底边轴
+   掀起的纸在折页线附近最暗；opacity 由 peel 同窗补间拉起（_peel_shade_html）。 */
+.peel-shade{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.5),transparent);opacity:0;pointer-events:none}
+/* 卡内自带 .bg/.grid 背景层（几何沿用 root 那两条规则，逐像素对齐）：卡片由此
+   成为不透明图层，clip-path 擦除换页时新旧内容不会叠影。z-index:-2 压在氛围光
+   (::after,-1) 之下；负 z 的安全性与上面 isolation 的 lint 口径同判。 */
+.seg-card>.bg,.seg-card>.grid{z-index:-2}
 .seg-title-wrap{position:absolute}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}

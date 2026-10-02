@@ -1,11 +1,10 @@
 /* ── Composition 运行时：GSAP 时间线 + cue 数据 + verse 滚动 ──────────────
-   动态片段由 html_renderer.py 填进本文件的占位符：图表引导脚本（无图表时为
-   空串）、逐段补间（数据驱动，由 Python 生成）、逐句字幕 cue 数组（唯一
-   时间轴来源）、verse 滚动锚点（= 当前画幅的 verse.clipPad）。
+   动态片段由 html_renderer.py 填进本文件的占位符：逐段补间（数据驱动，由
+   Python 生成）、逐句字幕 cue 数组（唯一时间轴来源）、verse 滚动锚点（= 当前
+   画幅的 verse.clipPad）。
    注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
    字符串也会被替换（会把整段代码塞进注释，甚至因早闭注释破坏语法）。
    时钟只有一个：GSAP 时间线。渲染器逐帧 seek 触发 onUpdate。 */
-__CTV_CHART_BOOT__
 window.__timelines = window.__timelines || {};
 const tl = gsap.timeline({paused:true});
 __CTV_GSAP__
@@ -78,7 +77,7 @@ tl.eventCallback("onUpdate", function() {
   if (found >= 0) {
     // 用命中的 cue 下标做键，而非 t|d：相邻句的 start 各自 round(,2)
     // 可能坍缩成同一 t，若 d 也相同则键值碰撞，第二条 cue 的高亮永不刷新。
-    // 下标天然唯一，且 si 相同的相邻 cue 重复调用 verseUpdate 幂等。
+    // 下标天然唯一；verseUpdate 按 si 重设整批 class，重复执行结果一致。
     if (found !== curCueIdx) {
       curCueIdx = found;
       const c = cues[found];

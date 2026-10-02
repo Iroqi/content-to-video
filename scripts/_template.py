@@ -1,6 +1,6 @@
 """视觉模板。模板数据直接内联为模块常量，支持竖屏 3:4（1080×1440）与
 横屏 16:9（1920×1080）两种画幅，布局参数分别挂在 layout.vertical /
-layout.landscape 下（canvas、subtitle 同理）。
+layout.landscape 下（顶层只有 canvas 与 layout 按画幅分块）。
 
 注意：_TEMPLATE_JSON 是**严格 JSON**（json.loads 直解），内部一律不能写
 `#` / `//` 注释——写了整份模板在模块加载时就崩。要给某个数值留说明，
@@ -25,19 +25,20 @@ def load_template():
     return copy.deepcopy(_TEMPLATE_PARSED)
 
 
-def get_canvas(aspect="vertical"):
-    """按画幅返回画布尺寸 (width, height)。"portrait" 归一化为 vertical。"""
+def normalize_aspect(aspect):
+    """画幅归一化的唯一口径："portrait" 是面向 CLI/调用方的别名，模板键名是
+    vertical。未知画幅直接报错——静默兜到竖屏会让横屏稿件出竖屏尺寸。"""
     if aspect == "portrait":
         aspect = "vertical"
     if aspect not in ("vertical", "landscape"):
-        raise ValueError(f"[template] 未知画幅 {aspect!r}（可用: vertical/landscape）")
-    canvas = load_template()["canvas"].get(aspect)
-    if not isinstance(canvas, dict) or "width" not in canvas or "height" not in canvas:
-        raise ValueError(f"[template] canvas.{aspect} 缺少 width/height")
-    width = int(canvas["width"]); height = int(canvas["height"])
-    if width <= 0 or height <= 0:
-        raise ValueError(f"[template] canvas.{aspect} 必须为正整数")
-    return width, height
+        raise ValueError(f"[template] 未知画幅 {aspect!r}（可用: portrait/vertical、landscape）")
+    return aspect
+
+
+def get_canvas(aspect):
+    """按画幅返回画布尺寸 (width, height)。"""
+    canvas = load_template()["canvas"][normalize_aspect(aspect)]
+    return int(canvas["width"]), int(canvas["height"])
 
 
 _TEMPLATE_JSON = r'''
@@ -96,7 +97,6 @@ _TEMPLATE_JSON = r'''
         "size": 60
       },
       "agenda": {
-        "_meta": "开屏/结尾纯文字 agenda（竖屏）：全高 flex 列（题头在顶、agenda 紧跟题头、句子流锚底），上限 7 行。",
         "insetX": 72,
         "insetTop": 88,
         "insetBottom": 96,
@@ -163,7 +163,6 @@ _TEMPLATE_JSON = r'''
         "size": 60
       },
       "agenda": {
-        "_meta": "开屏/结尾纯文字 agenda（横屏）：全幅 flex 列，题头在顶、agenda 紧跟题头、句子流锚底 max-width 900，上限 7 行（与竖屏一致）——标题锁 1 行不预留第二行 + 紧行距（rowPad 8 / titleMarginTop 12）换出第 6/7 行预算，实测 kicker+单行标题+7 行+定高句子流不挤。insetX 96 / insetBottom 72（句子流下移），insetTop 单独收到 80：列顶比两侧再高 16px，整块空白让给下方行列表，行数吃满时行距仍有余量（代价是 agenda 卡顶不再与左右 96 对齐；内容段走 --ctv-l-margin，不受影响）。",
         "insetX": 96,
         "insetTop": 80,
         "insetBottom": 72,
@@ -191,19 +190,23 @@ _TEMPLATE_JSON = r'''
       "duration": 0.5,
       "ease": "back.out(1.7)"
     },
-    "segmentFadeIn": {
-      "duration": 0.6,
-      "ease": "power2.out"
+    "segmentWipe": {
+      "style": "line",
+      "duration": 0.28,
+      "ease": "expo.out"
     },
-    "segmentFadeOut": {
-      "duration": 0.3,
-      "ease": "power2.in"
-    },
-    "firstSegmentFadeIn": {
-      "duration": 0.4
+    "propLine": {
+      "thickness": 6,
+      "duration": 0.40,
+      "ease": "power2.inOut",
+      "peelFrac": 0.30,
+      "peelRotation": -4,
+      "peelTilt": 12,
+      "peelPerspective": 1000,
+      "peelShadeFrac": 0.08,
+      "peelEase": "power2.in"
     },
     "entranceBudget": {
-      "_meta": "入场动效时长的段长归一化：factor = clamp(d / normSeconds, minFactor, 1.0)，短段压缩、长段维持原速（html_renderer 消费）。",
       "minFactor": 0.45,
       "normSeconds": 4.0
     },
@@ -221,40 +224,6 @@ _TEMPLATE_JSON = r'''
     "taglineWeight": 600,
     "titleLineHeight": 1.32,
     "titleTracking": "-0.02em"
-  },
-  "subtitle": {
-    "_meta": "字幕切分参数（_script_utils.subtitle_params_for 消费）。maxChars=单行目标宽度（字符，竖屏物理容量 980px/40px≈24.5 字、保守取 22，横屏按左栏 613px/33px≈18 字）；cueMaxLines=整句渲染故 99。",
-    "vertical": {
-      "maxChars": 22,
-      "cueMaxLines": 99
-    },
-    "landscape": {
-      "maxChars": 18,
-      "cueMaxLines": 99
-    }
-  },
-  "formulaCard": {
-    "_meta": "C2 公式文本卡（chart type=formula，html_renderer 消费）。标题/公式字号与卡片内边距统一由模板控制。",
-    "padding": 48,
-    "titleSize": 30,
-    "titleOpacity": 0.82,
-    "titleMarginBottom": 28,
-    "valueSize": 52
-  },
-  "chart": {
-    "_meta": "Chart.js 视觉参数（html_renderer._build_chart_boot 编译成 options）。刻意没有 animation 项：图表在页面 load 时创建，自身补间走浏览器墙钟，与口播时间轴无关——渲染器逐帧 seek 时同一秒可能抓到半张图，所以一律关掉，入场观感交给段卡的 cross-fade。",
-    "titleFontSize": 40,
-    "legendFontSize": 30,
-    "tickFontSize": 34,
-    "axisTitleFontSize": 30,
-    "axisTitlePaddingFactor": 0.7,
-    "layoutPadding": 24,
-    "curvePointRadius": 0,
-    "curveBorderWidth": 5,
-    "curveTension": 0.2,
-    "scatterPointRadius": 8,
-    "datasetBorderWidth": 3,
-    "datasetTension": 0.25
   }
 }
 '''

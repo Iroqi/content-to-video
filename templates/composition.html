@@ -4,14 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=__CTV_WIDTH__,height=__CTV_HEIGHT__">
 <script src="__CTV_GSAP_SRC__"></script>
-__CTV_CHARTJS_TAG__
 <style>
 __CTV_STYLE__
 </style>
 </head>
 <body>
-<!-- 预览逻辑在独立的 scripts/preview.js（生成 HTML 时复制到输出目录），
-     这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
+<!-- 预览逻辑在独立的 templates/preview.js（生成 HTML 时原样复制到输出目录，
+     不走占位符装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
      尖括号"字面量（会被当作脚本结束标签），否则 hyperframes 打包单文件
      HTML 内联脚本时会在此处截断，导致页面报错。 -->
 <div id="root" data-composition-id="main" data-aspect="__CTV_ASPECT__" data-start="0" data-duration="__CTV_DURATION__" data-width="__CTV_WIDTH__" data-height="__CTV_HEIGHT__" data-fps="__CTV_FPS__">

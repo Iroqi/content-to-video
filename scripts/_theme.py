@@ -15,15 +15,14 @@ _THEMES = {
         "bg_gradient": "linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%)",
         "grid_color": "rgba(58,92,140,0.07)",
         "text_color": "#22262b",
-        "media_bg": "rgba(34,38,43,0.045)",
     },
     "dark": {
         "bg_gradient": "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
         "grid_color": "rgba(0,220,150,0.055)",
         "text_color": "#eef2ee",
-        "media_bg": "rgba(255,255,255,0.05)",
     },
 }
+DEFAULT_THEME = "dark"
 _DEFAULT_ACCENT = "#2dd4bf"
 _ACCENT_PALETTE = [
     "#ffd54f", "#4fc3f7", "#81c784", "#ffb74d",
@@ -34,13 +33,13 @@ _ACCENT_PALETTE = [
 def get_theme_colors(theme):
     """根据主题名返回主题配色字典。
 
-    影响背景渐变、网格线、文字颜色与配图底板色；每段 accent 彩色不受影响。
+    影响背景渐变、网格线与文字颜色；每段 accent 彩色不受影响。
 
     Args:
         theme: 主题名，取值见 list_theme_names()（当前为 cream/dark）
 
     Returns:
-        dict: 包含 bg_gradient, grid_color, text_color, media_bg 四个键。
+        dict: 包含 bg_gradient, grid_color, text_color 三个键。
     """
     if theme not in _THEMES:
         # 不做静默回退：未知主题名直接报错并列出可用主题。
@@ -78,50 +77,50 @@ def get_default_accent():
 # 纯函数、无注册表依赖：用于运行时的明暗适配与颜色数学。
 
 
+def _hex_rgb_bytes(hex_color):
+    """'#rrggbb'/'#rgb' → (r,g,b) 整数 0–255；解析不了返回 None。
+
+    3 位缩写（#fff）先展开成 6 位——is_safe_css_color 放行用户传入的
+    "#rgb" 缩写色，不展开会解析失败返回 None，深浅主题判断
+    静默失效（dark 被当浅色，tagline 走压暗分支，对比度掉到 ~2.1）。
+    全模块的 hex 解析只有这一份：darken / hex_to_rgb01 / css_color_to_hex
+    各自再写一遍 3 位展开与 int(h,16) 迟早漂移。
+    """
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6 or not all(c in "0123456789abcdef" for c in h.lower()):
+        return None
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
 def darken(hex_color, factor=0.6):
     """把 accent 十六进制色压暗一档，用于浅色主题下的小字（如 tagline）。
 
     保持色相不变、只降低亮度，让文字在米白/浅色背景上达到可读对比度，
     同时不改变该段落 accent 色在大元素（竖条/glow/进度条）上的视觉效果。
     """
-    try:
-        h = hex_color.lstrip("#")
-        if len(h) != 6:
-            return hex_color
-        r = int(h[0:2], 16)
-        g = int(h[2:4], 16)
-        b = int(h[4:6], 16)
-        return f"#{int(r * factor):02x}{int(g * factor):02x}{int(b * factor):02x}"
-    except ValueError:
+    rgb = _hex_rgb_bytes(hex_color)
+    if rgb is None:
         return hex_color
+    return "#" + "".join(f"{int(v * factor):02x}" for v in rgb)
 
 
 def hex_to_rgb01(hex_color):
-    """'#rrggbb'/'#rgb' → (r,g,b) 归一化到 0-1；解析不了返回 None。
-
-    3 位缩写（#fff）先展开成 6 位——is_safe_css_color 放行用户传入的
-    "#rgb" 缩写色，不展开会解析失败返回 None，深浅主题判断
-    静默失效（dark 被当浅色，tagline 走压暗分支，对比度掉到 ~2.1）。
-    "#rgb" 能过是因为 hex 位（0-9a-f）天然是字母子集，色名表查的是
-    去掉 # 后的整个串，永远命中不了。
-    """
-    h = hex_color.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
+    """'#rrggbb'/'#rgb' → (r,g,b) 归一化到 0-1；解析不了返回 None。"""
+    rgb = _hex_rgb_bytes(hex_color)
+    if rgb is None:
         return None
-    try:
-        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
-    except ValueError:
-        return None
+    return tuple(v / 255 for v in rgb)
 
 
 def is_safe_css_color(color):
     """颜色值是否是浏览器真正认得的 hex / CSS 颜色名（且可安全嵌入 HTML 属性）。
 
     accent 来自稿件（信源内容经模型写入），本项目把它当**不可信数据**：
-    它会被拼进 `data-accent="..."`、`style="background:..."` 与 GSAP 的
-    `backgroundColor:"..."` 三处上下文。只放行两种形态——`#rgb`/`#rrggbb`
+    它会被拼进 `data-accent="..."` 与 `style="background:..."` 两处 HTML
+    上下文（GSAP 补间只写 opacity/scale/width，颜色经 CSS 变量派生，不进 JS
+    字面量）。只放行两种形态——`#rgb`/`#rrggbb`
     十六进制，或 CSS 标准颜色名（`red` / `tomato`）——从而排除引号、
     分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片 HTML 会被
     preview.js 打开、被 headless Chrome 渲染，所以
@@ -132,15 +131,7 @@ def is_safe_css_color(color):
     拒绝，而不是渲染完才发现颜色不对却无从下手。需要 `rgb(...)`/`var(...)`
     等函数式写法时请直接给 6 位 hex（括号会打开注入面）。
     """
-    if not isinstance(color, str):
-        return False
-    c = color.strip()
-    if not c:
-        return False
-    if c.startswith("#"):
-        h = c[1:]
-        return len(h) in (3, 6) and all(ch in "0123456789abcdefABCDEF" for ch in h)
-    return c.lower() in _css_name_table()
+    return css_color_to_hex(color) is not None
 
 
 _CSS3_NAMES = None
@@ -213,12 +204,8 @@ def css_color_to_hex(color):
     if not c:
         return None
     if c.startswith("#"):
-        h = c[1:]
-        if len(h) == 3 and all(ch in "0123456789abcdef" for ch in h):
-            return "#" + "".join(ch * 2 for ch in h)
-        if len(h) == 6 and all(ch in "0123456789abcdef" for ch in h):
-            return "#" + h
-        return None
+        rgb = _hex_rgb_bytes(c)
+        return None if rgb is None else "#{:02x}{:02x}{:02x}".format(*rgb)
     if c.isalpha():
         hex_digits = _css_name_table().get(c)
         return "#" + hex_digits if hex_digits else None

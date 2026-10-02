@@ -12,7 +12,24 @@ import sys
 import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _contracts import validate_speed, SPEED_EPS  # noqa: E402
+from _timeline import validate_speed, needs_speed_change  # noqa: E402
+from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
+
+
+def _run_ff(args, timeout):
+    """ffmpeg 子进程统一入口：捕获输出、超时返回 None。
+
+    encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
+    ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
+    不是走兜底。其余异常（ffmpeg 不存在等 OSError）照原样上抛，由各调用点
+    决定收敛还是穿透。
+    """
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def _wav_duration(audio_path):
@@ -83,54 +100,42 @@ def measure_duration(ffmpeg_path, audio_path):
     if wav_dur is not None:
         return wav_dur
     try:
-        result = subprocess.run(
-            [ffmpeg_path, "-i", audio_path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30
-        )
-        stderr = result.stderr or ""
-        dur = parse_duration(stderr)
-        if dur is not None:
-            return dur
+        # _run_ff 超时返回 None：与"读不出 Duration 行"同判（返回 0.0），
+        # 调用方本就按 0.0 = 无效处理
+        result = _run_ff([ffmpeg_path, "-i", audio_path], 30)
+        dur = parse_duration(result.stderr if result else "")
     except Exception as e:
         print(f"  [duration] error measuring {audio_path}: {e}",
               file=sys.stderr)
-    return 0.0
+        return 0.0
+    return dur if dur is not None else 0.0
 
 
-def generate_silence(ffmpeg_path, duration, out_path, sample_rate=24000,
-                     channels=1):
+def generate_silence(ffmpeg_path, duration, out_path):
     """Generate a silent WAV file of given duration.
 
     Primary path: ffmpeg lavfi (anullsrc). Fallback: Python wave module —
     used when the resolved ffmpeg is a minimal build (e.g. system PATH
     ffmpeg with `--disable-everything`) that does not support the lavfi
-    demuxer, which would otherwise crash concat_audio and abort the whole
-    pipeline. The Python fallback produces a standards-compliant 16-bit
-    PCM at the requested rate/channels, matching what ffmpeg -ar/-ac emits.
+    demuxer. The Python fallback produces a standards-compliant 16-bit
+    PCM at 24kHz/mono, matching what ffmpeg -ar/-ac emits.
 
     两条路都失败时抛 RuntimeError 而不是落一个 0 字节空文件——空文件混进
     concat 要么整链失败要么被静默丢弃，而调用方（pipeline 的静音兜底分支）
     已经按"异常=兜底失败"处理，能正确走 skip 路径，不会带着坏文件错位时间轴。
 
-    `sample_rate`/`channels` 要由调用方传"和语音句一致的格式"：静音固定 24k
-    单声道会把原生 44.1k 的稿件拼成混合采样率，后果与实测数字见 concat_audio。
+    固定 24k 单声道：与语音句格式不同的稿件（如原生 44.1k）会在 concat 前
+    由 _normalize_wav 统一重采样成多数派，静音不例外。
     """
-    # encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
-    # ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
-    # 不是走兜底。TimeoutExpired 同样落入 wave 兜底（lavfi 卡死 30s 的
-    # ffmpeg 写不出比 Python wave 更好的静音）。
-    layout = "mono" if channels <= 1 else "stereo"
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-f", "lavfi",
-            "-i", "anullsrc=r={0}:cl={1}".format(sample_rate, layout),
-            "-t", str(duration), "-ar", str(sample_rate), "-ac", str(channels),
-            out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30)
-    except subprocess.TimeoutExpired:
-        result = None
+    sample_rate = 24000
+    # lavfi 卡死 30s（_run_ff 超时返回 None）的 ffmpeg 写不出比 Python wave
+    # 更好的静音——超时与失败一并落 wave 兜底。
+    result = _run_ff([
+        ffmpeg_path, "-y", "-f", "lavfi",
+        "-i", "anullsrc=r={0}:cl=mono".format(sample_rate),
+        "-t", str(duration), "-ar", str(sample_rate), "-ac", "1",
+        out_path
+    ], 30)
     if (result is not None and result.returncode == 0
             # 必须确有数据帧：0 帧 WAV 若算成功，这句会以 0 样本混进 concat，
             # 整条时间轴悄悄前移，要靠拼接对账才兜得住。不能用尺寸 >44 判
@@ -138,15 +143,14 @@ def generate_silence(ffmpeg_path, duration, out_path, sample_rate=24000,
             and _wav_has_frames(out_path)):
         return
     # Fallback: write silent WAV via Python wave module (no ffmpeg lavfi needed)
-    # 模块顶部已 import wave，这里直接复用，不再本地重复 import。
     try:
         n_frames = int(duration * sample_rate)
         with wave.open(out_path, "wb") as w:
-            w.setnchannels(channels)
+            w.setnchannels(1)
             w.setsampwidth(2)  # 16-bit
             w.setframerate(sample_rate)
             # Silent frames = all zeros（bytes 直乘，比 struct.pack 巨型参数列表便宜得多）
-            w.writeframes(b"\x00\x00" * (channels * n_frames))
+            w.writeframes(b"\x00\x00" * n_frames)
         return
     except Exception as e:
         raise RuntimeError(
@@ -165,7 +169,7 @@ def build_atempo_filter(speed):
     这里改为立即抛 ValueError，而不是挂死。
     """
     validate_speed(speed)
-    if abs(speed - 1.0) < SPEED_EPS:
+    if not needs_speed_change(speed):
         return None
     factors = []
     remaining = speed
@@ -205,7 +209,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 且不能再把当前（已变速的）文件备份成 .orig.wav——那会让下一次
     # 换速继续在错误的基础上叠加。
     compensate = (prev_speed is not None
-                  and abs(prev_speed - 1.0) > SPEED_EPS
+                  and needs_speed_change(prev_speed)
                   and not os.path.exists(orig_path))
     if compensate:
         comp_filt = build_atempo_filter(speed / prev_speed)
@@ -233,7 +237,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         # 旧 .orig.wav（删不掉也改不了名），不刷新就拿旧稿音频做变速源——新字幕配
         # 旧配音复活（见 pipeline._clear_stale_sidecars）。
         refresh_backup = (prev_speed is not None
-                          and abs(prev_speed - 1.0) <= SPEED_EPS)
+                          and not needs_speed_change(prev_speed))
         if refresh_backup or not os.path.exists(orig_path):
             try:
                 shutil.copy2(wav_path, orig_path)
@@ -245,16 +249,14 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 补偿变速必须以当前文件为源（它就是最新状态）；常规路径优先用原速备份
     src = wav_path if compensate else (
         orig_path if os.path.exists(orig_path) and orig_path != wav_path else wav_path)
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", src,
-            "-filter:a", filt,
-            "-ar", "24000", "-ac", "1", tmp
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60)
-    except subprocess.TimeoutExpired:
-        # 超时异常原路径直接穿透（tmp 残留）；统一转成 False 走失败清理
-        _remove_quiet(tmp)
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", src,
+        "-filter:a", filt,
+        "-ar", "24000", "-ac", "1", tmp
+    ], 60)
+    if result is None:
+        # 超时 = 拿不到 returncode，tmp 可能留残骸；统一转成 False 走失败清理
+        remove_if_exists(tmp)
         print("  [speed-skip] atempo timeout", file=sys.stderr)
         return False
     if result.returncode == 0 and _wav_has_frames(tmp):
@@ -268,7 +270,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         except OSError as e:
             print(f"  [speed-skip] 变速产物替换失败（{e}）：{wav_path}",
                   file=sys.stderr)
-            _remove_quiet(tmp)
+            remove_if_exists(tmp)
             return False
         return True
     if result.returncode == 0:
@@ -276,19 +278,10 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         # 打断或磁盘写满时的形态。当成失败，绝不让空文件顶掉原音频。
         print("  [speed-skip] atempo 产物为空，未替换原音频", file=sys.stderr)
     # atempo 失败时及时清掉半写的 tmp（多次失败堆积会留磁盘残渣）
-    _remove_quiet(tmp)
+    remove_if_exists(tmp)
     print(f"  [speed-skip] atempo failed: {result.stderr[-200:]}",
           file=sys.stderr)
     return False
-
-
-def _remove_quiet(path):
-    """尽力删文件（失败清理用，删不掉也不吭声）。"""
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-    except OSError:
-        pass
 
 
 def _wav_has_frames(path):
@@ -329,14 +322,10 @@ def _normalize_wav(ffmpeg_path, src, dst, target_fmt):
     只在 concat 前被调用到"格式与多数派不符"的那几个文件上，不是全量重编码。
     """
     rate, channels, _width = target_fmt
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", src,
-            "-ar", str(rate), "-ac", str(channels), "-c:a", "pcm_s16le", dst
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60)
-    except subprocess.TimeoutExpired:
-        result = None
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", src,
+        "-ar", str(rate), "-ac", str(channels), "-c:a", "pcm_s16le", dst
+    ], 60)
     if (result is not None and result.returncode == 0
             and _wav_has_frames(dst)):
         return True
@@ -345,26 +334,30 @@ def _normalize_wav(ffmpeg_path, src, dst, target_fmt):
               file=sys.stderr)
     else:
         print(f"  [concat] 格式归一超时 {src}", file=sys.stderr)
-    _remove_quiet(dst)
+    remove_if_exists(dst)
     return False
 
 
 def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
-    """Concatenate audio files with silence gaps. Uses absolute paths (Windows safe)."""
+    """Concatenate audio files with silence gaps. Uses absolute paths (Windows safe).
+
+    格式归一仍走 ffmpeg（标准库不会重采样），但**拼接本体用标准库 wave
+    逐帧串接**，不再经 ffmpeg concat demuxer：demuxer 对混格式会"返回 0
+    却产出截断音频"，copy 路径还要求经列表文件（Windows 绝对路径与路径中
+    单引号的转义两处历史坑）。wave 逐帧拷贝两类都不存在，gap 还拿到整帧
+    精度（round(gap×rate) 帧，不再受 lavfi `-t` 的量化影响）。
+    """
     out_dir = os.path.dirname(os.path.abspath(out_path))
-    list_file = os.path.join(out_dir, "_concat_list.txt")
-    silence_file = os.path.join(out_dir, "_silence.wav")
 
     if not file_list:
         print("  [concat] 输入列表为空", file=sys.stderr)
         return False
 
-    # 混合采样率必须在这里挡掉：concat demuxer 直接串流、不改写头部，实测把
-    # 44100Hz 与 24000Hz 各 0.3s 的两个 WAV（中间隔一段静音）用 -c copy 拼起来，
-    # ffmpeg **返回 0**，产物却是 44100Hz、27630 帧 = 0.627s——后一段按错误采样
-    # 率播放（音调偏高）、整条比 manifest 短，调用方看到的是成功；同一列表改走
-    # `-ar 24000` 重编码也不对（Non-monotonic DTS，实测只剩 0.681s）。所以兜底
-    # 不能靠 returncode，只能保证喂给 demuxer 的输入本身同格式。
+    # 混合采样率必须在这里挡掉：串接只写一个目标格式头、按字节拷帧，
+    # 少数派若不先重采样成目标格式，就会被按错误的采样率播放（音调偏移、
+    # 总时长与 manifest 错位，且没有任何报错信号——demuxer 时代实测：
+    # 44100Hz 与 24000Hz 各 0.3s 拼出"返回 0 却只剩 0.627s"的产物，规则
+    # 沿用至今：喂给串接的输入必须同格式）。
     # 目标格式取语音句里的多数派，位深一律 16-bit（apply_speed 产物与静音文件
     # 都是 16-bit）。不写死 24000：--speed 1.0 时句子保持 TTS 原生格式（如 44.1k）。
     counts = {}
@@ -376,77 +369,46 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
                   if counts else (24000, 1, 2))
 
     expanded = []
-    # 静音按目标格式生成，避免它成为唯一的少数派（那样每句之间都得重编码）
-    if gap_sec > 0:
-        try:
-            generate_silence(ffmpeg_path, gap_sec, silence_file,
-                             sample_rate=target_fmt[0], channels=target_fmt[1])
-        except RuntimeError as e:
-            # generate_silence 现在失败时抛错（不再落 0 字节空文件）；
-            # concat 的错误契约是返回 bool，这里转成 False 而不是裸栈。
-            print(f"  [concat] gap 静音生成失败: {e}", file=sys.stderr)
-            _remove_quiet(silence_file)
-            return False
-
-    # 待清理的临时产物：静音 + 归一化出来的句子副本（归一化中途失败也要收走）
-    temp_files = [silence_file] if gap_sec > 0 else []
+    # 归一化出来的句子副本（归一化中途失败也要收走）
+    temp_files = []
     for i, fp in enumerate(file_list):
         src_path = fp
         if _wav_format(fp) != target_fmt:
             dst = os.path.join(out_dir, f"_concat_norm{i}.wav")
             if not _normalize_wav(ffmpeg_path, fp, dst, target_fmt):
                 for tmp in temp_files:
-                    _remove_quiet(tmp)
+                    remove_if_exists(tmp)
                 return False
             temp_files.append(dst)
             src_path = dst
         expanded.append(src_path)
-        if i < len(file_list) - 1 and gap_sec > 0:
-            expanded.append(silence_file)
 
-    with open(list_file, 'w', encoding='utf-8') as f:
-        for path in expanded:
-            # Always use absolute paths — relative paths fail silently on Windows
-            abs_fp = os.path.abspath(path).replace("\\", "/")
-            # 路径含单引号时按 ffmpeg concat demuxer 规则转义（'\'' =
-            # 关引号-转义引号-重开引号），英文用户名 O'Brien 这类会炸
-            _esc = abs_fp.replace("'", "'\\''")
-            f.write(f"file '{_esc}'\n")
-
-    # encoding/errors 显式指定（理由同 generate_silence）；TimeoutExpired
-    # 单独接住——原路径直接穿透，跳过下方临时文件清理且裸栈到 main。
-    result = None
+    rate, channels = target_fmt[0], target_fmt[1]
+    gap_frames = round(gap_sec * rate) if gap_sec > 0 else 0
+    gap_bytes = b"\x00" * (gap_frames * channels * 2)
     try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
-            "-i", list_file, "-c", "copy", out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120)
-    except subprocess.TimeoutExpired:
-        print("  [concat] ffmpeg concat 超时（copy 路径），尝试重编码",
-              file=sys.stderr)
+        with wave.open(out_path, "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)  # 16-bit（归一循环已保证全部输入同格式同位深）
+            w.setframerate(rate)
+            for i, p in enumerate(expanded):
+                with wave.open(p, "rb") as r:
+                    w.writeframes(r.readframes(r.getnframes()))
+                if i < len(expanded) - 1 and gap_frames:
+                    w.writeframes(gap_bytes)
+    except Exception as e:
+        # 读不出来的文件（归一后仍非标准 PCM16 WAV）在这里唯一正确的行为
+        # 是大声失败：宁可 [error] Audio concat failed 停住，也不让某一句
+        # 被静默跳过后整条时间轴悄悄前移。
+        print(f"  [concat] 标准库拼接失败: {e}", file=sys.stderr)
+        remove_if_exists(out_path)
+        return False
+    finally:
+        # 尽力回收归一化副本（删不掉也不影响已产出的母带）
+        for tmp in temp_files:
+            remove_if_exists(tmp)
 
-    if result is None or result.returncode != 0:
-        # Fallback: re-encode。到这里输入已经同格式，demuxer 不会再错位时间戳
-        # （混合采样率下它同样会"成功"但产出截断音频，所以绝不能当兜底用）。
-        try:
-            result = subprocess.run([
-                ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
-                "-i", list_file, "-ar", str(target_fmt[0]),
-                "-ac", str(target_fmt[1]), "-c:a", "pcm_s16le", out_path
-            ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=120)
-        except subprocess.TimeoutExpired:
-            print("  [concat] ffmpeg concat 超时（重编码路径）", file=sys.stderr)
-            result = None
-        if result is not None and result.returncode != 0:
-            print(f"  [concat stderr] {result.stderr[-500:]}", file=sys.stderr)
-
-    # 清理临时文件（尽力而为，删不掉也不影响已产出的母带）
-    for tmp in [list_file] + temp_files:
-        _remove_quiet(tmp)
-
-    return result is not None and result.returncode == 0
+    return True
 
 
 def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
@@ -462,28 +424,26 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     # normalize=0：amix 默认把每路输入各乘 1/inputs（两路即人声 -6dB），
     # 带 BGM 的成片会系统性比不带的一半响度；关掉 normalize 后音量
     # 关系完全交给 volume_filter 控制
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y",
-            "-i", voice_path,
-            "-i", bgm_path,
-            "-filter_complex",
-            # aloop size expects an integer; 2e+09 (Python float literal) would
-            # be passed verbatim into the ffmpeg filter string and may fail to
-            # parse on some ffmpeg builds, causing BGM loop to silently break.
-            f"[1:a]{volume_filter},aloop=loop=-1:size=2000000000[bgm];"
-            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
-            "-ar", str(rate), "-ac", str(channels),
-            "-c:a", "pcm_s16le", out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=300)
-    except subprocess.TimeoutExpired:
+    result = _run_ff([
+        ffmpeg_path, "-y",
+        "-i", voice_path,
+        "-i", bgm_path,
+        "-filter_complex",
+        # aloop size expects an integer; 2e+09 (Python float literal) would
+        # be passed verbatim into the ffmpeg filter string and may fail to
+        # parse on some ffmpeg builds, causing BGM loop to silently break.
+        f"[1:a]{volume_filter},aloop=loop=-1:size=2000000000[bgm];"
+        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
+        "-ar", str(rate), "-ac", str(channels),
+        "-c:a", "pcm_s16le", out_path
+    ], 300)
+    if result is None:
         print("  [BGM mix failed] ffmpeg 混音超时", file=sys.stderr)
-        _remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     if result.returncode != 0:
         print(f"  [BGM mix failed] {result.stderr[-300:]}", file=sys.stderr)
-        _remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     # amix + aloop 会以 returncode=0 退出却吐出一个空/极短文件（BGM 本身不是
     # 音频流、或滤镜图被静默截断），调用方拿它当"带 BGM 的母带"，而总时长仍是
@@ -491,27 +451,20 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     # 一道口径：产物必须真有数据帧才算成功。
     if not _wav_has_frames(out_path):
         print("  [BGM mix failed] 混音产物为空，未替换人声音频", file=sys.stderr)
-        _remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     return True
 
 
-def build_loudnorm_filter(target_lufs):
-    """构建 ffmpeg loudnorm 滤镜串（单遍，目标整体响度 target_lufs LUFS）。
-
-    目标 -16 LUFS 是网络视频/播客常见响度；TP/LRA 用固定值即可。
-    """
-    return f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
-
-
-def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
+def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs):
     """对整条音频做响度归一化，输出到 out_path。返回是否成功。
 
     用于把逐句 TTS 拼出来的音频统一到目标响度（跨句/跨视频音量一致）。在 concat
     之后、对 combined 整段做，loudnorm 只做增益、不做变速，不改变句子间相对时序，
     字幕时间轴仍按 timing_manifest.json 的实测值对齐。
     """
-    filt = build_loudnorm_filter(target_lufs)
+    # 单遍 loudnorm：-16 LUFS 是网络视频/播客常见响度；TP/LRA 用固定值即可。
+    filt = f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
     # 输出格式跟着输入走，而不是写死 24000/mono：loudnorm 内部按 192kHz 处理，
     # 完全不写 -ar 会把母带上采样到 192k（实测 44.1k 输入 → 192k 输出，体积
     # 翻 4 倍），写死 24000 又会把 --speed 1.0 保生的原生 44.1k 母带悄悄降一档
@@ -522,18 +475,16 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
     # 也不能让 loudnorm 的 192kHz 内部律漏进母带。
     rate, channels = (in_fmt[0], in_fmt[1]) if in_fmt else (24000, 1)
     fmt_args = ["-ar", str(rate), "-ac", str(channels)]
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", in_path,
-            "-af", filt,
-            *fmt_args,
-            "-c:a", "pcm_s16le", out_path,
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120)
-    except subprocess.TimeoutExpired:
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", in_path,
+        "-af", filt,
+        *fmt_args,
+        "-c:a", "pcm_s16le", out_path,
+    ], 120)
+    if result is None:
         # 不显式接住的话，ffmpeg 卡死时用户直接吃裸栈
         print("  [loudnorm] ffmpeg timeout (120s)", file=sys.stderr)
-        _remove_quiet(out_path)
+        remove_if_exists(out_path)
         return False
     # 产物必须真有数据帧（_wav_has_frames）：44 字节的"纯头"尺寸线会被
     # ffmpeg 的 LIST/INFO 元数据块越过，0 帧文件量出来 0 秒，调用方只会
@@ -543,35 +494,25 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
     if result.returncode == 0 and _wav_has_frames(out_path):
         return True
     print(f"  [loudnorm] failed: {result.stderr[-200:]}", file=sys.stderr)
-    _remove_quiet(out_path)
+    remove_if_exists(out_path)
     return False
 
 # ── FFmpeg runtime helpers ─────────────────────────────────────────
-def _system_ffmpeg():
-    """检测系统 PATH 上是否有能正常运行的 ffmpeg，返回路径或 None。"""
-    path = shutil.which("ffmpeg")
-    if not path:
-        return None
-    try:
-        r = subprocess.run([path, "-version"], capture_output=True, timeout=10)
-        if r.returncode == 0 and r.stdout:
-            return path
-    except Exception:
-        pass
-    return None
-
-
 def ffmpeg_usable(ffmpeg_path):
     """探测已解析出的 ffmpeg 是否真的可执行（`-version`）。
 
     get_ffmpeg() 在系统 ffmpeg 与 imageio-ffmpeg 都不可用时会回退成字面量
     "ffmpeg"（通常不可执行）；调用方须在开工前用本函数预检，否则会一路
     烧完 TTS 额度才在拼接/测时长阶段报出误导性错误。
+
+    除了 returncode 还要求有输出：Windows 上"应用执行别名"的 AppInstallerCLI
+    stub 打开微软商店页面也返回 0 且静默，只查 returncode 会把它当成可用的
+    ffmpeg 放行。
     """
     try:
         r = subprocess.run([ffmpeg_path, "-version"],
                            capture_output=True, timeout=10)
-        return r.returncode == 0
+        return r.returncode == 0 and bool(r.stdout or r.stderr)
     except Exception:
         return False
 
@@ -579,8 +520,9 @@ def ffmpeg_usable(ffmpeg_path):
 def get_ffmpeg():
     """Get ffmpeg executable path.
 
-    优先用系统自带且能运行的 ffmpeg（多数 Windows 机器已通过 winget/官网安装），
-    没有才回退到 imageio-ffmpeg 打包的完整版二进制。
+    优先用系统自带且能运行的 ffmpeg（PATH 探测与可用性判定共用
+    ffmpeg_usable，多数 Windows 机器已通过 winget/官网安装），没有才回退到
+    imageio-ffmpeg 打包的完整版二进制。
     返回值不保证可执行（末位回退是字面量 "ffmpeg"），调用方用 ffmpeg_usable 预检。
 
     兜底只接 ImportError 是不够的：imageio-ffmpeg 的 `get_ffmpeg_exe()` 在本机
@@ -589,8 +531,8 @@ def get_ffmpeg():
     用户看不出这跟"没装 ffmpeg"是同一件事）。这里统一降级成字面量 "ffmpeg"，
     让 ffmpeg_usable 预检给出那条可执行的诊断信息。
     """
-    sys_ff = _system_ffmpeg()
-    if sys_ff:
+    sys_ff = shutil.which("ffmpeg")
+    if sys_ff and ffmpeg_usable(sys_ff):
         return sys_ff
     try:
         from imageio_ffmpeg import get_ffmpeg_exe

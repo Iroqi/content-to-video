@@ -5,7 +5,7 @@ pipeline.py --source 直接调用本模块的 build_parts()：逐段独立分句
 短句合并结构上不可能发生，不需要任何跨段校验。
 
 segments_source.json 的字段规范与完整示例见 `references/writing.md`；
-本模块只负责按 _contracts 校验过的结构分组。
+本模块只负责按 _source_schema 校验过的结构分组。
 """
 import os
 import sys
@@ -14,15 +14,15 @@ from typing import Dict, List
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _script_utils import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
+from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
 from _theme import get_accent_palette, get_default_accent  # noqa: E402
-from _contracts import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
+from _timeline import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
 ACCENT_PALETTE = get_accent_palette()
 DEFAULT_ACCENT = get_default_accent()
 
-# 超长句提醒阈值：字幕二次切行（split_subtitle_lines）是显示层兜底，
-# 念稿节奏的根治方式还是写稿时控制在一句一口气能念完的长度。
+# 超长句提醒阈值：一句念完要憋一口气，字幕也会折成好几行占掉句子流窗口；
+# 根治方式是写稿时控制在一句一口气能念完的长度。
 LONG_SENTENCE_CHARS = 45
 
 
@@ -48,6 +48,23 @@ def _sentences_of(text):
     return split_sentences(text.strip())
 
 
+def _warn_orphan_structural(source, page, text):
+    """该页没有口播正文时，同族字段会跟着整页一起静默失效——报一行。
+
+    判据按 `{page}_` 前缀认，不列白名单：键名写错（把结尾正文写成
+    `closing_text`）正好落进这一族，多写的无关键又不会误报；而前缀只依赖
+    opening/closing 这两个本模块本来就写死的名字，不会和 writing.md 漂移。
+    """
+    if text:
+        return
+    orphans = sorted(k for k in source if k.startswith(page + "_"))
+    if orphans:
+        print(f"[warn] 稿件没有 '{page}' 口播正文，这一页不会生成；"
+              f"{'、'.join(orphans)} 也跟着不上画面"
+              f"（该页口播正文的键名是 '{page}'，见 references/writing.md）",
+              file=sys.stderr, flush=True)
+
+
 def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     """把一个段落的 'dialogue'（多轮对话）拆成扁平句子列表 + 局部 turns。
 
@@ -55,7 +72,7 @@ def _collect_dialogue_sentences(dialogue, speakers, seg_index, seg_title):
     turns 记录每一轮在本段内的局部句子区间 + 说话人信息（voice_id/voice_style
     在这里就近解析好，pipeline.py 不需要再反查 speakers 字典）。
 
-    turn 的 speaker/text 非空由 _contracts.validate_segments_source 把关，这里
+    turn 的 speaker/text 非空由 _source_schema.validate_segments_source 把关，这里
     不再重复拦；只留契约管不到的"分句后为空"——纯标点文案能过非空检查却分不出句。
     """
     sents = []
@@ -96,6 +113,7 @@ def _collect_blocks(source):
     # 契约把显式 null 视同缺省（_validate_text 对 None 直接放行），这里
     # 用 `or ""` 兜底，否则 get 的默认值不生效、None.strip() 抛裸 AttributeError
     opening_text = (source.get("opening") or "").strip()
+    _warn_orphan_structural(source, "opening", opening_text)
     if opening_text:
         sents = _sentences_of(opening_text)
         if not sents:
@@ -111,16 +129,20 @@ def _collect_blocks(source):
             # text/validate_speed 对 None 不报错），get(key, default) 会把
             # null 原样取出来让 None 一路流进 seg speed。
             extra={"speed": source.get("opening_speed")
-                   or OPENING_CLOSING_DEFAULT_SPEED},
+                   or OPENING_CLOSING_DEFAULT_SPEED,
+                   # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
+                   # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
+                   # 自描述的（见 _segments.seg_layout）。
+                   "layout": source.get("opening_layout") or "agenda"},
             turns=[],
         ))
 
-    # segments 非空由 _contracts.validate_segments_source 把关（build_parts
+    # segments 非空由 _source_schema.validate_segments_source 把关（build_parts
     # 唯一入口 pipeline --source 先过它），这里不再重复拦。
     raw_segments = source.get("segments", [])
 
     # 段落 id：可选的显式 "id" 让配图键（images.json）与配图文件名在改稿/
-    # 重排后仍然稳定；缺省退回按序号的 seg{n}。_contracts 已校验显式 id 的
+    # 重排后仍然稳定；缺省退回按序号的 seg{n}。_source_schema 已校验显式 id 的
     # 字符集与唯一性，这里只需处理"部分段有 id、部分没有"时的命名冲突。
     explicit_ids = {(s.get("id") or "").strip()
                     for s in raw_segments} - {""}
@@ -131,7 +153,7 @@ def _collect_blocks(source):
         if dialogue:
             sents, turns_local = _collect_dialogue_sentences(dialogue, speakers, i, title)
         else:
-            # 'text' 非空同样由 _contracts 把关（与 dialogue 分支同一口径）
+            # 'text' 非空同样由 _source_schema 把关（与 dialogue 分支同一口径）
             text = (seg.get("text") or "").strip()
             sents = _sentences_of(text)
             if not sents:
@@ -141,7 +163,7 @@ def _collect_blocks(source):
         extra = {}
         if seg.get("speed") is not None:
             extra["speed"] = seg["speed"]
-        # 段落级音色覆盖（可选字段，规范见 references/writing.md）：_contracts
+        # 段落级音色覆盖（可选字段，规范见 references/writing.md）：_source_schema
         # 校验之后由这里透传给下游，pipeline.py 读 seg_config 后即可生效。
         if seg.get("voice_id") is not None:
             extra["voice_id"] = seg["voice_id"]
@@ -150,6 +172,10 @@ def _collect_blocks(source):
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
             extra["takeaway"] = str(seg["takeaway"]).strip()
+        # 整页画布开关（取值由 _segments._validate_layout 把守，这里只透传）：
+        # 不写就不进 extra，下游按槽位版式渲染。
+        if seg.get("layout") is not None:
+            extra["layout"] = seg["layout"]
         # 缺省段落 id 用中性前缀 seg（配图键与文件名同源）。
         sid = (seg.get("id") or "").strip()
         if not sid:
@@ -168,6 +194,7 @@ def _collect_blocks(source):
         ))
 
     closing_text = (source.get("closing") or "").strip()
+    _warn_orphan_structural(source, "closing", closing_text)
     if closing_text:
         sents = _sentences_of(closing_text)
         if not sents:
@@ -180,7 +207,8 @@ def _collect_blocks(source):
             accent=DEFAULT_ACCENT,
             sentences=sents,
             extra={"speed": source.get("closing_speed")
-                   or OPENING_CLOSING_DEFAULT_SPEED},
+                   or OPENING_CLOSING_DEFAULT_SPEED,
+                   "layout": source.get("closing_layout") or "agenda"},
             turns=[],
         ))
     return blocks
@@ -224,15 +252,14 @@ def build_parts(source):
     segments；全局 --speed 由 pipeline 侧 `sentence_speeds.get(i, args.speed)`
     唯一兜底，这里不再复读一份。
 
-    超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：显示层会做次要
-    标点切行兜底（_script_utils 的 split_subtitle_lines），但 45+ 字的
-    一句话念出来也偏喘不过气，根治方式是写稿时拆成两句——warn 就是提醒
-    agent 这么做。
+    超长句（> LONG_SENTENCE_CHARS 字）只打 [warn] 不拦截：句子会整句写进一行
+    字幕、由 CSS 折行数行，念出来也偏喘不过气，根治方式是写稿时拆成两句
+    ——warn 就是提醒 agent 这么做。
 
     Returns:
         sentences: list[str]，按段落顺序排列的全部句子
         segments: 段落分组（id/title/tagline/accent/start/end/
-                  可选 speed/voice_id/voice_style/turns）
+                  可选 takeaway/layout/speed/voice_id/voice_style/turns）
     """
     blocks = _collect_blocks(source)
     sentences = []

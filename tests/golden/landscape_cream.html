@@ -1,3 +1,10 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920,height=1080">
+<script src="vendor/gsap.min.js"></script>
+<style>
 /* ── Content-to-Video composition stylesheet ──────────────────────────────
    本文件是版式的**静态骨架**：结构与选择器写死，数值一律走 var(--ctv-*)。
    变量由 html_renderer.py 从 _template.py 内联的版式数据派生后注入本文件末尾的
@@ -228,4 +235,233 @@ body{font-family:var(--ctv-font-family)}
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
-__CTV_ROOT_VARS__
+:root{
+  --ctv-w:1920px;--ctv-h:1080px;
+  --ctv-bg-gradient:linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%);
+  --ctv-font-family:"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif;
+  --ctv-font-mono:ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
+  --ctv-grid-size:60px;--ctv-grid-color:rgba(58,92,140,0.07);
+  --ctv-text-color:#22262b;
+  --ctv-img-glow:40px;
+  --ctv-title-weight:900;
+  --ctv-title-lh:1.32;--ctv-title-tracking:-0.02em;
+  --ctv-tagline-font:28px;--ctv-tagline-mt:16px;
+  --ctv-tagline-lh:1.3;--ctv-tagline-weight:600;
+  --ctv-tagline-indent:22px;--ctv-tagline-tick:8px;
+  --ctv-prog-height:5px;
+  --ctv-sub-font:33px;
+  --ctv-verse-h:260px;--ctv-verse-clip:40px;
+  --ctv-verse-line:5px;--ctv-verse-lh:1.45;
+  --ctv-verse-rule:0.12em;
+  --ctv-ag-x:96px;--ctv-ag-t:80px;--ctv-ag-b:72px;
+  --ctv-ag-title-lh:1.12;--ctv-ag-title-mt:12px;
+  --ctv-ag-kicker:26px;--ctv-ag-idx:34px;
+  --ctv-ag-idx-min:60px;--ctv-ag-name:40px;
+  --ctv-ag-dur:24px;--ctv-ag-gap:6px;
+  --ctv-ag-row-pad:8px;--ctv-ag-verse-w:900px;--ctv-ag-list-mt:16px;
+  --ctv-l-margin:96px;
+  --ctv-l-text-w:613px;--ctv-l-text-gap:56px;
+  --ctv-l-title-lh:1.15;
+  --ctv-l-img-w:1067px;--ctv-l-img-h:800px;
+  --ctv-l-img-radius:12px;
+}
+
+</style>
+</head>
+<body>
+<!-- 预览逻辑在独立的 templates/preview.js（生成 HTML 时原样复制到输出目录，
+     不走占位符装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
+     尖括号"字面量（会被当作脚本结束标签），否则 hyperframes 打包单文件
+     HTML 内联脚本时会在此处截断，导致页面报错。 -->
+<div id="root" data-composition-id="main" data-aspect="landscape" data-start="0" data-duration="14.00" data-width="1920" data-height="1080" data-fps="24">
+  <div class="bg"></div>
+  <div class="grid"></div>
+
+  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="agenda-col">
+      <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
+      <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
+    
+    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="0">大家好，今天聊两件事。</div></div></div>
+    </div>
+    <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
+      <div class="reveal-line" id="line-opening" style="height:6px"></div>
+    <div class="peel-shade" id="shade-opening" style="height:86px"></div>
+</div>
+  <div id="seg-a" class="clip seg-card" data-start="2.00" data-duration="5.20" data-accent="#ffd54f" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#ffd54f;--seg-accent-text:#735f23">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="text-col">
+    <div class="seg-title-wrap">
+      <div class="seg-title" id="title-seg-a" style="font-size:62px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
+      <div class="tagline" id="tag-seg-a" style="color:#735f23">背景</div>
+    </div>
+    
+    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#735f23"><div class="verse-line" data-i="1">这是第一段的第一句。</div><div class="verse-line" data-i="2">这是第一段的第二句，稍微长一点点。</div></div></div>
+    </div>
+    <div class="seg-image bare-media" id="img-seg-a">
+      <img src="images/seg-a.svg" alt="">
+    </div>
+    <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
+      <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
+    <div class="peel-shade" id="shade-seg-a" style="height:86px"></div>
+</div>
+  <div id="seg-b" class="clip seg-card seg-canvas" data-start="6.80" data-duration="5.20" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#845505">
+    <div class="bg"></div>
+    <div class="grid"></div>
+
+    <div class="seg-image bare-media" id="img-seg-b">
+      <img src="images/seg-b.svg" alt="">
+    </div>
+    <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
+      <div class="reveal-line" id="line-seg-b" style="height:6px"></div>
+    <div class="peel-shade" id="shade-seg-b" style="height:86px"></div>
+</div>
+  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="agenda-col">
+      <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
+      <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
+    
+    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="5">谢谢观看，下期再见。</div></div></div>
+    </div>
+    <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
+      <div class="reveal-line" id="line-closing" style="height:6px"></div>
+</div>
+
+
+  <audio id="main-audio" data-start="0" data-duration="14.00" data-track-index="10" src="audio/combined.wav"></audio>
+</div>
+
+<script>
+/* ── Composition 运行时：GSAP 时间线 + cue 数据 + verse 滚动 ──────────────
+   动态片段由 html_renderer.py 填进本文件的占位符：逐段补间（数据驱动，由
+   Python 生成）、逐句字幕 cue 数组（唯一时间轴来源）、verse 滚动锚点（= 当前
+   画幅的 verse.clipPad）。
+   注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
+   字符串也会被替换（会把整段代码塞进注释，甚至因早闭注释破坏语法）。
+   时钟只有一个：GSAP 时间线。渲染器逐帧 seek 触发 onUpdate。 */
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({paused:true});
+tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},0.00)
+  tl.fromTo("#line-opening",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},0.00)
+  tl.from("#title-opening",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},0.00)
+  tl.to("#prog-opening",{width:"100%",duration:2.00,ease:"none"},0.00)
+  tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},2.00)
+  tl.fromTo("#line-seg-a",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},2.00)
+  tl.to("#opening",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},2.00)
+  tl.to("#shade-opening",{opacity:1,duration:0.40,ease:"power2.in"},2.00)
+  tl.from("#title-seg-a",{scale:0.5,duration:0.50,ease:"back.out(1.7)"},2.40)
+  tl.from("#img-seg-a",{opacity:0,y:40,duration:0.80,ease:"power2.out"},2.60)
+  tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
+  tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},6.80)
+  tl.fromTo("#line-seg-b",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},6.80)
+  tl.to("#seg-a",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},6.80)
+  tl.to("#shade-seg-a",{opacity:1,duration:0.40,ease:"power2.in"},6.80)
+  tl.to("#prog-seg-b",{width:"100%",duration:4.40,ease:"none"},7.20)
+  tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},11.60)
+  tl.fromTo("#line-closing",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},11.60)
+  tl.to("#seg-b",{y:-324.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},11.60)
+  tl.to("#shade-seg-b",{opacity:1,duration:0.40,ease:"power2.in"},11.60)
+  tl.from("#title-closing",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},12.00)
+  tl.to("#prog-closing",{width:"100%",duration:2.00,ease:"none"},12.00)
+
+// Sentence-flow sync via onUpdate
+const cues = [
+{t:0.00,d:2.40,si:0},
+    {t:2.40,d:2.40,si:1},
+    {t:4.80,d:2.40,si:2},
+    {t:7.20,d:2.40,si:3},
+    {t:9.60,d:2.40,si:4},
+    {t:12.00,d:2.00,si:5}
+];
+
+// verse 句子流：静态行集合（两画幅内容段统一渲染 .verse，滚动/高亮
+// 机制两画幅共用同一份 cue 驱动；横屏 clipPad 与窗口高取各自模板值）。
+// 渲染器逐帧 seek 触发 onUpdate（非线性顺序），测量做懒缓存——布局值
+// （offsetTop/clientHeight/scrollHeight）不受 transform 与 seek 顺序影响、
+// 字体就绪后恒定，首帧测量一次即可；transform 赋绝对值幂等，乱序 seek
+// 重复执行结果一致（seek-safe）。
+const verses = Array.from(document.querySelectorAll(".verse"));
+const verseCache = new Map();
+// 字体异步加载会改变行高：就绪后清缓存，下次触发时用最终字形重测
+// （期间已设的 transform 按旧测量算，偏差在下一次 cue 切换即修正）
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => verseCache.clear());
+}
+const verseUpdate = (si) => {
+  for (const v of verses) {
+    let c = verseCache.get(v);
+    if (!c) {
+      const clip = v.querySelector(".verse-clip");
+      c = {clip: clip, accent: clip.getAttribute("data-accent") || "", winH: v.clientHeight, clipH: clip.scrollHeight, lines: []};
+      for (const ln of v.querySelectorAll(".verse-line")) {
+        c.lines.push({el: ln, top: ln.offsetTop});
+      }
+      verseCache.set(v, c);
+    }
+    let act = null;
+    for (const L of c.lines) {
+      if (parseInt(L.el.getAttribute("data-i"), 10) === si) { act = L; break; }
+    }
+    for (const L of c.lines) {
+      const di = parseInt(L.el.getAttribute("data-i"), 10);
+      L.el.classList.toggle("active", L === act);
+      // 当前句用段落 accent 着色（字重恒定，避免 500/700 切换时字形宽度
+      // 跳变）；非活动行恢复主题色。换色/换透明度在这里是**瞬时**的：
+      // 淡入淡出过渡只在人工预览里由 preview.js 注入，成片逐帧 seek 时
+      // 每一帧都必须等于时间线时刻（理由见 composition.css 的 verse 块注释）
+      L.el.style.color = (L === act && c.accent) ? c.accent : "";
+      // past 只在同一 verse（同段落）内比较，跨段句序无先后语义
+      L.el.classList.toggle("past", !!act && di < si);
+    }
+    if (act) {
+      // 歌词式滚动：active 行滚到窗口顶部往下 clipPad px（= clip 顶部内边距，
+      // 与 .verse-clip 的 padding 保持一致——首句/尾句完整落在 mask 渐隐区
+      // 之外，不被边缘虚化）；首行不滚出顶、末行不露底白（clip 比窗口矮时
+      // 整体不滚）
+      const y = c.clipH <= c.winH ? 0
+        : Math.max(c.winH - c.clipH, Math.min(0, 40 - act.top));
+      c.clip.style.transform = "translateY(" + y + "px)";
+    }
+  }
+};
+// ── verse 句子流驱动（挂在同一个 timeline 的 onUpdate）──────────────────
+// 必须留在 verseUpdate 定义之后、时间线注册之前：hyperframes 的 lint 规则按
+// 源码位置判定"注册是否早于异步构建"，注册线挪到前面会触发误报（见文件末尾）。
+let curCueIdx = -1; // 当前已处理的 cue 下标，避免每帧重复触发
+tl.eventCallback("onUpdate", function() {
+  const t = tl.time();
+  let found = -1;
+  for (let i = 0; i < cues.length; i++) {
+    if (t >= cues[i].t && t < cues[i].t + Math.max(cues[i].d, 0.01)) { found = i; break; }
+  }
+  if (found >= 0) {
+    // 用命中的 cue 下标做键，而非 t|d：相邻句的 start 各自 round(,2)
+    // 可能坍缩成同一 t，若 d 也相同则键值碰撞，第二条 cue 的高亮永不刷新。
+    // 下标天然唯一；verseUpdate 按 si 重设整批 class，重复执行结果一致。
+    if (found !== curCueIdx) {
+      curCueIdx = found;
+      const c = cues[found];
+      if (c.si !== undefined && c.si >= 0) verseUpdate(c.si);
+    }
+  } else {
+    // 句间 gap：保持最后一行的状态（高亮停在末句，窗口不回滚）
+    curCueIdx = -1;
+  }
+  if (window.__pvUpdate) window.__pvUpdate(); // 预览刷新钩子（无预览时为空）
+});
+// 注册放脚本末尾（同步执行流内，行为与紧跟构建后注册等价）：hyperframes 的
+// lint 规则按源码位置判定"注册是否早于 document.fonts.ready 异步构建"
+// （window.__timelines[ 出现点必须在 fonts.ready 之后）；字幕 JS 里
+// Array.from 的 ".from(" 会被规则的 GSAP 补间正则误判，注册线在 fonts.ready
+// 之前就会触发 gsap_timeline_registered_before_async_build 误报。
+window.__timelines["main"] = tl;
+
+</script>
+<script src="preview.js"></script>
+</body>
+</html>

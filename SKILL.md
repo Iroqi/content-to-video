@@ -98,7 +98,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 --no-resume / --dry-run
 ```
 
-缺图处理：段落在 images.json 里没有映射时，只在真要渲染时拦截（exit 2），`--until html` 只警告；映射的 `src` 文件不存在则在覆盖率统计阶段直接 exit 2。
+缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告；映射的 `src` 文件不存在则连 `--until html` 也拦（同 exit 2），`--until images` 只看覆盖率、不拦。
 
 ## 输出契约
 

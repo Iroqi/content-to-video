@@ -14,8 +14,8 @@ import re
 # 括号的 sid 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段
 # SyntaxError、字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
 _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-# 同一条规则的对外说法。报错文案在 4 个调用点（source/manifest 的
-# _validate_sid、images.json key、html_renderer 的两道兜底）各写一份汉字副本时
+# 同一条规则的对外说法。报错文案在 3 个调用点（source/manifest 的
+# _validate_sid、images.json key）各写一份汉字副本时
 # 已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64
 # 字符"）。规则本身仍以 _SID_RE 为准，这里只是给人看的那一句的唯一副本，
 # 改正则必须同步这句。
@@ -34,8 +34,8 @@ def is_valid_sid(sid):
     """sid 是否是合法段 id（规则见 SID_RULE）。
 
     这些 id 会拼进 HTML 属性、JS 对象键与 GSAP 选择器（见 _SID_RE 注释）。
-    CLI 路径由 _validate_sid/validate_images_json 强制；库调用方直接传 dict
-    给 html_renderer 时也用它兜底，避免"单点依赖 CLI 校验"。
+    校验收口在契约层（_validate_sid / validate_images_json，即"契约先校验"
+    的入口），html_renderer 直接信任已校验的数据，不再各处补一道。
     """
     return isinstance(sid, str) and bool(_SID_RE.match(sid))
 

@@ -49,6 +49,11 @@ class SvgChecker(unittest.TestCase):
         errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"))
         self.assertTrue(any("背景色族" in e for e in errs))
 
+    def test_background_family_not_checked_on_light_page(self):
+        # cream 页底下深蓝族恰是推荐正文色系，家族判定只剩假阳性
+        errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"), theme="cream")
+        self.assertFalse(any("背景色族" in e for e in errs))
+
     def test_theme_mixup_caught(self):
         errs, _ = self.run_check(GOOD, theme="cream")
         self.assertTrue(any("对比度" in e for e in errs))
@@ -72,6 +77,13 @@ class SvgChecker(unittest.TestCase):
 class DocRefChecker(unittest.TestCase):
     def test_skill_docs_have_no_dangling_section_refs(self):
         self.assertEqual(check_docs.main(), 0)
+
+    def test_target_path_resolves_bare_and_prefixed_forms(self):
+        # 裸文件名按 references/ → 根目录解析；带前缀照用；反引号不参与路径
+        self.assertTrue(os.path.isfile(check_docs._target_path("image_options.md")))
+        self.assertTrue(os.path.isfile(check_docs._target_path("SKILL.md`")))
+        self.assertTrue(os.path.isfile(check_docs._target_path("references/writing.md")))
+        self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
 
 
 if __name__ == "__main__":

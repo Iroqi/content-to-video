@@ -20,7 +20,7 @@ from _theme import (
 from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import (classify_media_path, unknown_media_keys,
                             MEDIA_ENTRY_KEYS)
-from _segments import (is_content_sid, is_valid_sid, seg_layout, SID_RULE)
+from _segments import (is_content_sid, seg_layout)
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -189,43 +189,28 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
 
 
 def _normalize_images(images):
-    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。"""
+    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。
+
+    入参必须是过 _images_schema.validate_images_json 的数据（契约先校验是本
+    技能的入口规则：gen_hyperframes 经 load_images_json 进来，键合法性、
+    媒体对象形状、src 非空都在那里拦下），这里只做归一与丢键提醒。
+    """
     normalized = {}
     for sid, media in (images or {}).items():
-        # sid 会拼进 HTML 属性、JS 对象键和 GSAP 选择器。CLI 路径由
-        # validate_images_json 把守；库调用方直接传 dict 时这里是唯一防线，
-        # 与 CLI 同一口径（_SID_RE），不让"单点依赖 CLI 校验"成为转义豁免。
-        if not is_valid_sid(sid):
-            raise ValueError(
-                f"images.json 的段落 key 必须是合法段 id"
-                f"（{SID_RULE}；实际: {sid!r}）")
-        if isinstance(media, dict):
-            # 清单外的键在下面两条分支里都会跟着进 opts 而无人读。静默丢会让
-            # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
-            # 所以点名叫出它们——清单定义在 _images_schema。
-            unknown = unknown_media_keys(media)
-            if unknown:
-                print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
-                      f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
-                      f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
-                      "写错了就删掉。"
-                      "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
-                      file=sys.stderr)
-            media_path = media.get("src")
-            if not isinstance(media_path, str) or not media_path.strip():
-                # 契约层已要求 src；作为库直接调用时给出行号级病因，
-                # 而不是 KeyError 裸栈或渲染出一个空白槽位。
-                raise ValueError(f"images.json 条目 {sid!r} 缺少非空字符串 src")
-            media_type = classify_media_path(media_path, media.get("type", "auto"))
-            media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
-        else:
-            # 与 src 缺失同一条口径：裸字符串/None 一律说清是哪一键，
-            # 不静默丢弃（静默丢会让"图没了"看起来像渲染 bug）。
-            # 契约层 validate_images_json 已在命令行路径拦下这种输入，
-            # 这里只兜住直接把 dict 传进来的库调用方。
-            raise ValueError(f"images.json 条目 {sid!r} 必须是媒体对象"
-                             f'（如 {{"src": "images/{sid}.png"}}），'
-                             f"收到 {type(media).__name__}")
+        # 清单外的键会跟着进 opts 而无人读。静默丢会让
+        # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
+        # 所以点名叫出它们——清单定义在 _images_schema。
+        unknown = unknown_media_keys(media)
+        if unknown:
+            print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
+                  f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
+                  f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
+                  "写错了就删掉。"
+                  "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
+                  file=sys.stderr)
+        media_path = media["src"]
+        media_type = classify_media_path(media_path, media.get("type", "auto"))
+        media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
         normalized[sid] = {
             "src": media_path,
             "media_type": media_type,
@@ -584,18 +569,9 @@ def _prepare_card(rc, clip, i):
     _assemble_card。
     """
     seg = clip["seg"]
-    # 用 .get + 默认 id，避免缺 id 字段时 KeyError 让整个渲染崩溃。
-    # 上游 pipeline.py 已保证有 id，但 gen_hyperframes 也要能独立处理
-    # 用户手写/外部工具产出的 manifest，做防御性兜底。
-    sid = seg.get("id") or f"seg{i+1}"
-    # sid 会拼进 id="..." 属性与 GSAP "#..." 选择器。CLI 路径由
-    # validate_timing_manifest 的 _validate_sid 把守；库调用方直接传
-    # manifest 时这里与 _normalize_images 同口径补一道，不让坏 sid
-    # 变成"动画静默丢失/内联脚本 SyntaxError"。
-    if not is_valid_sid(sid):
-        raise ValueError(
-            f"timing_manifest 的段落 id 必须是合法段 id"
-            f"（{SID_RULE}；实际: {sid!r}）")
+    # sid 由 validate_timing_manifest 把守（存在、合法、唯一，见 _manifest_schema
+    # 的 _validate_sid），契约先校验是入口规则，这里直接下标取值。
+    sid = seg["id"]
     s = clip["start"]
     d = clip["duration"]
     # 可见窗口 = [擦除起点, 被下一页盖住的时刻]（几何在 generate_html 的

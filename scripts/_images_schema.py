@@ -95,13 +95,11 @@ def validate_images_json(data):
                        if _t in ("chart", "formula") else ""))
             if "src" not in value:
                 raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
-            if not value["src"]:
-                raise ValueError(f"images.json 的 '{key}' 的 'src' 不能为空")
         else:
             raise ValueError(
                 f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
-        # 上面 dict 分支已拦缺键与空值，这里只剩"非字符串但非空"一档（数字、
-        # 列表这类手写 manifest 才会给出）。
+        # 上面 dict 分支已拦缺键；非字符串（数字、列表这类手写 manifest 才会给）
+        # 在这里点名，空串交给 validate_relative_project_path 的统一判定。
         if not isinstance(src, str):
             raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
         # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端

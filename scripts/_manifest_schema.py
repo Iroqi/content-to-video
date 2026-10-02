@@ -6,7 +6,6 @@ segments[i] / 句子对象）：读侧全是 .get()，拼错的键不报错也�
 takeaway 拼成 take_away 时结尾 agenda 那行悄悄退回标题、layout 拼错时段
 默默回到槽位版式。pipeline 写盘前自校验走这里，坏产物出不了 TTS 步骤。
 """
-import math
 import os
 import sys
 
@@ -100,11 +99,9 @@ def validate_timing_manifest(data):
     if not isinstance(sentences, list) or not sentences:
         raise ValueError("timing_manifest.json 需要非空的 'sentences' 列表")
     total_duration = data.get("total_duration")
-    if isinstance(total_duration, bool) or not isinstance(total_duration, (int, float)):
-        raise ValueError("timing_manifest.json 缺少数值字段 'total_duration'"
-                         "（应为 ffmpeg 实测总时长）")
-    if not math.isfinite(float(total_duration)) or float(total_duration) <= 0:
-        raise ValueError("timing_manifest.json 的 total_duration 必须是正有限数值")
+    _validate_finite_number(total_duration,
+                            "timing_manifest.json 的 total_duration"
+                            "（应为 ffmpeg 实测总时长）", positive=True)
 
     def _check_sentence_fields(s, where):
         if not isinstance(s, dict):
@@ -121,12 +118,8 @@ def validate_timing_manifest(data):
             raise ValueError(f"{where}.index 必须是非负整数")
         start = s["start_time"]
         duration = s["duration"]
-        if (isinstance(start, bool) or not isinstance(start, (int, float))
-                or not math.isfinite(float(start)) or float(start) < 0):
-            raise ValueError(f"{where}.start_time 必须是非负有限数值")
-        if (isinstance(duration, bool) or not isinstance(duration, (int, float))
-                or not math.isfinite(float(duration)) or float(duration) <= 0):
-            raise ValueError(f"{where}.duration 必须是正有限数值")
+        _validate_finite_number(start, f"{where}.start_time", nonnegative=True)
+        _validate_finite_number(duration, f"{where}.duration", positive=True)
         if ("speaker" in s and s["speaker"] is not None
                 and (not isinstance(s["speaker"], str) or not s["speaker"].strip())):
             raise ValueError(f"{where}.speaker 必须是非空字符串")

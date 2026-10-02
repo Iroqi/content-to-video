@@ -35,7 +35,7 @@ def _validate_text(value, where, *, required=False):
         raise ValueError(f"{where} 不能为空字符串")
 
 
-def _validate_finite_number(value, where, *, nonnegative=False):
+def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where} 必须是数值（实际: {value!r}）")
@@ -43,6 +43,8 @@ def _validate_finite_number(value, where, *, nonnegative=False):
         raise ValueError(f"{where} 必须是有限数值（实际: {value!r}）")
     if nonnegative and float(value) < 0:
         raise ValueError(f"{where} 必须大于等于 0（实际: {value!r}）")
+    if positive and float(value) <= 0:
+        raise ValueError(f"{where} 必须是正有限数值（实际: {value!r}）")
 
 
 # accent 的合法形态见 _theme.is_safe_css_color（hex 或 CSS 标准颜色名），

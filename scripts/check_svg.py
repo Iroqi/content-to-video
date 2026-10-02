@@ -34,7 +34,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
-                    theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
+                    relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 
 SLOT_W, SLOT_H = 980, 735
 CANVAS = {"portrait": (1080, 1440), "landscape": (1920, 1080)}
@@ -46,6 +46,20 @@ BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
 # 派生而不是抄一份字面量——上一版手抄的 dark 底色是旧主题遗留，与真实页底
 # 已漂移，对比度门禁一直在拿不存在的颜色当基准。
 PAGE_BG = {t: theme_bg_stops(t)[1] for t in list_theme_names()}
+# BG_FAMILY 抓的失败模式是"深蓝文字待在浅色局部底板上"——对页底对比度正常、
+# 只有家族判定能抓；浅色页底（cream）下深蓝族恰是推荐正文色系（#27405f 同族），
+# 检查只剩假阳性，故只在深色页底主题下启用。家族集合并入当前主题渐变 stop：
+# 手抄族会与注册表漂移（上一版 PAGE_BG 的注释记的就是这类漂移）。
+_BG_BY_THEME = {}
+
+
+def _bg_family(theme):
+    """该主题下判"背景/底板专属色"的集合（小写 hex）。"""
+    if theme not in _BG_BY_THEME:
+        dark = (relative_luminance(PAGE_BG[theme]) or 0) < 0.2
+        fam = BG_FAMILY | {s.lower() for s in theme_bg_stops(theme)}
+        _BG_BY_THEME[theme] = fam if dark else set()
+    return _BG_BY_THEME[theme]
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
@@ -199,7 +213,7 @@ def check_file(path, layout, aspect, theme):
             fill = inherited(el, "fill")
             fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
             if fh and layout == "slot":
-                if fh in BG_FAMILY:
+                if fh in _bg_family(theme):
                     errors.append(f"文字 {content.strip()[:12]!r} 用了背景色族 {fh} 当填充色（瞎字）")
                 else:
                     c = contrast_ratio(fh, PAGE_BG[theme])

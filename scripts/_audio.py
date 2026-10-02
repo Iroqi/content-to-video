@@ -16,6 +16,22 @@ from _timeline import validate_speed, needs_speed_change  # noqa: E402
 from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
 
 
+def _run_ff(args, timeout):
+    """ffmpeg 子进程统一入口：捕获输出、超时返回 None。
+
+    encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
+    ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
+    不是走兜底。其余异常（ffmpeg 不存在等 OSError）照原样上抛，由各调用点
+    决定收敛还是穿透。
+    """
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def _wav_duration(audio_path):
     """WAV 样本精确时长（秒）：帧数 / 帧率。零子进程、无量化误差。
 
@@ -84,19 +100,15 @@ def measure_duration(ffmpeg_path, audio_path):
     if wav_dur is not None:
         return wav_dur
     try:
-        result = subprocess.run(
-            [ffmpeg_path, "-i", audio_path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30
-        )
-        stderr = result.stderr or ""
-        dur = parse_duration(stderr)
-        if dur is not None:
-            return dur
+        # _run_ff 超时返回 None：与"读不出 Duration 行"同判（返回 0.0），
+        # 调用方本就按 0.0 = 无效处理
+        result = _run_ff([ffmpeg_path, "-i", audio_path], 30)
+        dur = parse_duration(result.stderr if result else "")
     except Exception as e:
         print(f"  [duration] error measuring {audio_path}: {e}",
               file=sys.stderr)
-    return 0.0
+        return 0.0
+    return dur if dur is not None else 0.0
 
 
 def generate_silence(ffmpeg_path, duration, out_path):
@@ -116,20 +128,14 @@ def generate_silence(ffmpeg_path, duration, out_path):
     由 _normalize_wav 统一重采样成多数派，静音不例外。
     """
     sample_rate = 24000
-    # encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
-    # ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
-    # 不是走兜底。TimeoutExpired 同样落入 wave 兜底（lavfi 卡死 30s 的
-    # ffmpeg 写不出比 Python wave 更好的静音）。
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-f", "lavfi",
-            "-i", "anullsrc=r={0}:cl=mono".format(sample_rate),
-            "-t", str(duration), "-ar", str(sample_rate), "-ac", "1",
-            out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30)
-    except subprocess.TimeoutExpired:
-        result = None
+    # lavfi 卡死 30s（_run_ff 超时返回 None）的 ffmpeg 写不出比 Python wave
+    # 更好的静音——超时与失败一并落 wave 兜底。
+    result = _run_ff([
+        ffmpeg_path, "-y", "-f", "lavfi",
+        "-i", "anullsrc=r={0}:cl=mono".format(sample_rate),
+        "-t", str(duration), "-ar", str(sample_rate), "-ac", "1",
+        out_path
+    ], 30)
     if (result is not None and result.returncode == 0
             # 必须确有数据帧：0 帧 WAV 若算成功，这句会以 0 样本混进 concat，
             # 整条时间轴悄悄前移，要靠拼接对账才兜得住。不能用尺寸 >44 判
@@ -243,15 +249,13 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 补偿变速必须以当前文件为源（它就是最新状态）；常规路径优先用原速备份
     src = wav_path if compensate else (
         orig_path if os.path.exists(orig_path) and orig_path != wav_path else wav_path)
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", src,
-            "-filter:a", filt,
-            "-ar", "24000", "-ac", "1", tmp
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60)
-    except subprocess.TimeoutExpired:
-        # 超时异常原路径直接穿透（tmp 残留）；统一转成 False 走失败清理
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", src,
+        "-filter:a", filt,
+        "-ar", "24000", "-ac", "1", tmp
+    ], 60)
+    if result is None:
+        # 超时 = 拿不到 returncode，tmp 可能留残骸；统一转成 False 走失败清理
         remove_if_exists(tmp)
         print("  [speed-skip] atempo timeout", file=sys.stderr)
         return False
@@ -318,14 +322,10 @@ def _normalize_wav(ffmpeg_path, src, dst, target_fmt):
     只在 concat 前被调用到"格式与多数派不符"的那几个文件上，不是全量重编码。
     """
     rate, channels, _width = target_fmt
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", src,
-            "-ar", str(rate), "-ac", str(channels), "-c:a", "pcm_s16le", dst
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60)
-    except subprocess.TimeoutExpired:
-        result = None
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", src,
+        "-ar", str(rate), "-ac", str(channels), "-c:a", "pcm_s16le", dst
+    ], 60)
     if (result is not None and result.returncode == 0
             and _wav_has_frames(dst)):
         return True
@@ -424,22 +424,20 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     # normalize=0：amix 默认把每路输入各乘 1/inputs（两路即人声 -6dB），
     # 带 BGM 的成片会系统性比不带的一半响度；关掉 normalize 后音量
     # 关系完全交给 volume_filter 控制
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y",
-            "-i", voice_path,
-            "-i", bgm_path,
-            "-filter_complex",
-            # aloop size expects an integer; 2e+09 (Python float literal) would
-            # be passed verbatim into the ffmpeg filter string and may fail to
-            # parse on some ffmpeg builds, causing BGM loop to silently break.
-            f"[1:a]{volume_filter},aloop=loop=-1:size=2000000000[bgm];"
-            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
-            "-ar", str(rate), "-ac", str(channels),
-            "-c:a", "pcm_s16le", out_path
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=300)
-    except subprocess.TimeoutExpired:
+    result = _run_ff([
+        ffmpeg_path, "-y",
+        "-i", voice_path,
+        "-i", bgm_path,
+        "-filter_complex",
+        # aloop size expects an integer; 2e+09 (Python float literal) would
+        # be passed verbatim into the ffmpeg filter string and may fail to
+        # parse on some ffmpeg builds, causing BGM loop to silently break.
+        f"[1:a]{volume_filter},aloop=loop=-1:size=2000000000[bgm];"
+        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
+        "-ar", str(rate), "-ac", str(channels),
+        "-c:a", "pcm_s16le", out_path
+    ], 300)
+    if result is None:
         print("  [BGM mix failed] ffmpeg 混音超时", file=sys.stderr)
         remove_if_exists(out_path)
         return False
@@ -477,15 +475,13 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs):
     # 也不能让 loudnorm 的 192kHz 内部律漏进母带。
     rate, channels = (in_fmt[0], in_fmt[1]) if in_fmt else (24000, 1)
     fmt_args = ["-ar", str(rate), "-ac", str(channels)]
-    try:
-        result = subprocess.run([
-            ffmpeg_path, "-y", "-i", in_path,
-            "-af", filt,
-            *fmt_args,
-            "-c:a", "pcm_s16le", out_path,
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120)
-    except subprocess.TimeoutExpired:
+    result = _run_ff([
+        ffmpeg_path, "-y", "-i", in_path,
+        "-af", filt,
+        *fmt_args,
+        "-c:a", "pcm_s16le", out_path,
+    ], 120)
+    if result is None:
         # 不显式接住的话，ffmpeg 卡死时用户直接吃裸栈
         print("  [loudnorm] ffmpeg timeout (120s)", file=sys.stderr)
         remove_if_exists(out_path)
@@ -502,31 +498,21 @@ def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs):
     return False
 
 # ── FFmpeg runtime helpers ─────────────────────────────────────────
-def _system_ffmpeg():
-    """检测系统 PATH 上是否有能正常运行的 ffmpeg，返回路径或 None。"""
-    path = shutil.which("ffmpeg")
-    if not path:
-        return None
-    try:
-        r = subprocess.run([path, "-version"], capture_output=True, timeout=10)
-        if r.returncode == 0 and r.stdout:
-            return path
-    except Exception:
-        pass
-    return None
-
-
 def ffmpeg_usable(ffmpeg_path):
     """探测已解析出的 ffmpeg 是否真的可执行（`-version`）。
 
     get_ffmpeg() 在系统 ffmpeg 与 imageio-ffmpeg 都不可用时会回退成字面量
     "ffmpeg"（通常不可执行）；调用方须在开工前用本函数预检，否则会一路
     烧完 TTS 额度才在拼接/测时长阶段报出误导性错误。
+
+    除了 returncode 还要求有输出：Windows 上"应用执行别名"的 AppInstallerCLI
+    stub 打开微软商店页面也返回 0 且静默，只查 returncode 会把它当成可用的
+    ffmpeg 放行。
     """
     try:
         r = subprocess.run([ffmpeg_path, "-version"],
                            capture_output=True, timeout=10)
-        return r.returncode == 0
+        return r.returncode == 0 and bool(r.stdout or r.stderr)
     except Exception:
         return False
 
@@ -534,8 +520,9 @@ def ffmpeg_usable(ffmpeg_path):
 def get_ffmpeg():
     """Get ffmpeg executable path.
 
-    优先用系统自带且能运行的 ffmpeg（多数 Windows 机器已通过 winget/官网安装），
-    没有才回退到 imageio-ffmpeg 打包的完整版二进制。
+    优先用系统自带且能运行的 ffmpeg（PATH 探测与可用性判定共用
+    ffmpeg_usable，多数 Windows 机器已通过 winget/官网安装），没有才回退到
+    imageio-ffmpeg 打包的完整版二进制。
     返回值不保证可执行（末位回退是字面量 "ffmpeg"），调用方用 ffmpeg_usable 预检。
 
     兜底只接 ImportError 是不够的：imageio-ffmpeg 的 `get_ffmpeg_exe()` 在本机
@@ -544,8 +531,8 @@ def get_ffmpeg():
     用户看不出这跟"没装 ffmpeg"是同一件事）。这里统一降级成字面量 "ffmpeg"，
     让 ffmpeg_usable 预检给出那条可执行的诊断信息。
     """
-    sys_ff = _system_ffmpeg()
-    if sys_ff:
+    sys_ff = shutil.which("ffmpeg")
+    if sys_ff and ffmpeg_usable(sys_ff):
         return sys_ff
     try:
         from imageio_ffmpeg import get_ffmpeg_exe

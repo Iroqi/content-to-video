@@ -125,7 +125,7 @@ def ensure_local_gsap(project_dir):
     直接写进 HTML 引用（可信度自负，见 --help），本模块从未有过"下载任意
     URL"的入口。
     """
-    dest_rel = "vendor/gsap.min.js"
+    dest_rel = _DEFAULT_GSAP_SRC  # 引用名与 html_renderer 的默认 src 同一份
     dest_path = os.path.join(os.path.abspath(project_dir), "vendor", "gsap.min.js")
     if _valid_trusted_gsap(dest_path):
         return dest_rel
@@ -153,7 +153,7 @@ from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa:
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
 
 from html_renderer import (  # noqa: E402
-    segment_duration, TEMPLATES_DIR, generate_html,
+    segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
 )
 
 
@@ -364,7 +364,9 @@ def _svg_intrinsic_size(path):
     tag = tag.group(0)
 
     def _px(name):
-        m = re.search(rf'\b{name}="\s*([\d.]+)\s*"', tag)
+        # 允许 "980" 与 "980px" 两种写法：check_svg._parse_num 同样接受 px 后缀，
+        # 两边口径一致，手绘 SVG 才不会一边过检一边被这里判"读不出尺寸"。
+        m = re.search(rf'\b{name}="\s*([\d.]+)(?:\s*px)?\s*"', tag)
         return float(m.group(1)) if m else None
 
     sw, sh = _px("width"), _px("height")

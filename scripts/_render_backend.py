@@ -10,9 +10,10 @@
 只依赖标准库与 `_script_utils` / `_audio`（后者仅在探测成片时懒加载）。
 不认识稿件、manifest、制作报告——想换渲染后端，替换本模块即可。
 
-对外接口：hyperframes_spec / hyperframes_command / resolve_command / fmt_cmd /
-build_render_command / render_wait。进程树清理（_try_kill_process_tree）只在
-本模块的失败/超时/中断路径里用，不对外。
+对外接口（run.py 实际消费）：hyperframes_command / build_render_command /
+render_wait。hyperframes_spec / resolve_command / fmt_cmd 是模块内部的命令解析
+链（Windows shim 处理与日志），由 tests/test_render_backend.py 直接覆盖，不对外。
+进程树清理（_try_kill_process_tree）只在本模块的失败/超时/中断路径里用，不对外。
 """
 import os
 import shutil

@@ -5,6 +5,7 @@
 images.json 字段见 references/image_options.md；完整参数列表见 ``--help``。
 """
 import argparse
+import filecmp
 import hashlib
 import os
 import re
@@ -110,9 +111,8 @@ def _install_vendor(src, dest_path, verify, label):
     return True
 
 
-def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
-                   validate, label):
-    """把钉固字节的第三方脚本装进输出项目，返回项目内相对路径（失败 None）。
+def ensure_local_gsap(project_dir):
+    """把钉固字节的 GSAP dist 装进输出项目，返回项目内相对路径（失败 None）。
 
     取用链与 SKILL.md「环境」GSAP 一段同一条：**输出项目 vendor/ → 用户
     缓存 → 钉固 CDN**，每一级都重算哈希——缓存或项目里被污染、截断的历史副本
@@ -125,31 +125,24 @@ def _ensure_vendor(project_dir, dest_rel, cache_path, cdn_url, verify,
     直接写进 HTML 引用（可信度自负，见 --help），本模块从未有过"下载任意
     URL"的入口。
     """
-    project_dir = os.path.abspath(project_dir)
-    dest_path = os.path.join(project_dir, *dest_rel.split("/"))
-    if verify(dest_path):
+    dest_rel = "vendor/gsap.min.js"
+    dest_path = os.path.join(os.path.abspath(project_dir), "vendor", "gsap.min.js")
+    if _valid_trusted_gsap(dest_path):
         return dest_rel
-    if verify(cache_path) and _install_vendor(cache_path, dest_path, verify,
-                                              label):
+    if _valid_trusted_gsap(_CACHE_PATH) and _install_vendor(
+            _CACHE_PATH, dest_path, _valid_trusted_gsap, "GSAP"):
         return dest_rel
-    if not _download_to_cache(cache_path, cdn_url, asset=label,
-                              validate=validate):
+    if not _download_to_cache(_CACHE_PATH, GSAP_CDN_URL, asset="GSAP",
+                              validate=_validate_gsap_payload):
         return None
-    if not _install_vendor(cache_path, dest_path, verify, label):
+    if not _install_vendor(_CACHE_PATH, dest_path, _valid_trusted_gsap, "GSAP"):
         return None
     return dest_rel
 
 
-def ensure_local_gsap(project_dir):
-    """Ensure ``project_dir/vendor/gsap.min.js`` exists and return its relative path."""
-    return _ensure_vendor(project_dir, "vendor/gsap.min.js", _CACHE_PATH,
-                          GSAP_CDN_URL, _valid_trusted_gsap,
-                          _validate_gsap_payload, "GSAP")
-
-
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _theme import list_theme_names  # noqa: E402
+from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402
 from _template import get_canvas  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json, classify_media_path  # noqa: E402
@@ -165,18 +158,15 @@ from html_renderer import (  # noqa: E402
 
 
 def _file_identical(path_a, path_b):
-    """两文件内容是否一致（大小不同直接 False，否则按 1MB 分块哈希比较）。
+    """两文件内容是否一致；目标缺失/不可读按不一致处理（触发重新搬运）。
 
     音频自动拷贝的去重判定：只比大小会把"同大小不同内容"的旧拷贝误当
     最新音频复用（换稿后 combined.wav 同名同大小是可能的）。
     """
     if not os.path.exists(path_b):
         return False
-    if os.path.getsize(path_a) != os.path.getsize(path_b):
-        return False
-    # 统一使用 _script_utils 的 sha256 内容指纹。
     try:
-        return sha256_file(path_a) == sha256_file(path_b)
+        return filecmp.cmp(path_a, path_b, shallow=False)
     except OSError:
         return False
 
@@ -509,12 +499,10 @@ def main(argv=None):
                         help="Audio src path in HTML (default: auto-detect from manifest)")
     parser.add_argument("--images", default=None,
                         help="Path to images.json (maps segment ID -> image path relative to HTML)")
-    parser.add_argument("--theme", default="dark",
+    parser.add_argument("--theme", default=DEFAULT_THEME,
                         choices=list_theme_names(),
-                        help="主题配色 (背景/网格/文字/配图底板)，默认 dark（深色科技风："
-                             "近黑渐变背景 + 绿色网格线 + 近白字）。可选主题见 "
-                             "`_theme.py` 内嵌的主题注册表；如何按内容基调选主题见 "
-                             "references/rendering.md「主题」一节")
+                        help=f"主题配色（背景/网格/文字/配图底板），默认 {DEFAULT_THEME}；"
+                             "主题注册表在 _theme.py，选型见 references/rendering.md「主题」")
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏 3:4）或 "

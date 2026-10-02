@@ -12,7 +12,7 @@ import sys
 import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _timeline import validate_speed, needs_speed_change, SPEED_EPS  # noqa: E402
+from _timeline import validate_speed, needs_speed_change  # noqa: E402
 from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
 
 
@@ -99,33 +99,32 @@ def measure_duration(ffmpeg_path, audio_path):
     return 0.0
 
 
-def generate_silence(ffmpeg_path, duration, out_path, sample_rate=24000,
-                     channels=1):
+def generate_silence(ffmpeg_path, duration, out_path):
     """Generate a silent WAV file of given duration.
 
     Primary path: ffmpeg lavfi (anullsrc). Fallback: Python wave module —
     used when the resolved ffmpeg is a minimal build (e.g. system PATH
     ffmpeg with `--disable-everything`) that does not support the lavfi
     demuxer. The Python fallback produces a standards-compliant 16-bit
-    PCM at the requested rate/channels, matching what ffmpeg -ar/-ac emits.
+    PCM at 24kHz/mono, matching what ffmpeg -ar/-ac emits.
 
     两条路都失败时抛 RuntimeError 而不是落一个 0 字节空文件——空文件混进
     concat 要么整链失败要么被静默丢弃，而调用方（pipeline 的静音兜底分支）
     已经按"异常=兜底失败"处理，能正确走 skip 路径，不会带着坏文件错位时间轴。
 
-    `sample_rate`/`channels` 要由调用方传"和语音句一致的格式"：静音固定 24k
-    单声道会把原生 44.1k 的稿件拼成混合采样率，后果与实测数字见 concat_audio。
+    固定 24k 单声道：与语音句格式不同的稿件（如原生 44.1k）会在 concat 前
+    由 _normalize_wav 统一重采样成多数派，静音不例外。
     """
+    sample_rate = 24000
     # encoding/errors 显式指定：中文 Windows 下 text=True 默认按 cp936 解码
     # ffmpeg stderr（UTF-8），输出路径含中文时会先抛 UnicodeDecodeError 而
     # 不是走兜底。TimeoutExpired 同样落入 wave 兜底（lavfi 卡死 30s 的
     # ffmpeg 写不出比 Python wave 更好的静音）。
-    layout = "mono" if channels <= 1 else "stereo"
     try:
         result = subprocess.run([
             ffmpeg_path, "-y", "-f", "lavfi",
-            "-i", "anullsrc=r={0}:cl={1}".format(sample_rate, layout),
-            "-t", str(duration), "-ar", str(sample_rate), "-ac", str(channels),
+            "-i", "anullsrc=r={0}:cl=mono".format(sample_rate),
+            "-t", str(duration), "-ar", str(sample_rate), "-ac", "1",
             out_path
         ], capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30)
@@ -141,11 +140,11 @@ def generate_silence(ffmpeg_path, duration, out_path, sample_rate=24000,
     try:
         n_frames = int(duration * sample_rate)
         with wave.open(out_path, "wb") as w:
-            w.setnchannels(channels)
+            w.setnchannels(1)
             w.setsampwidth(2)  # 16-bit
             w.setframerate(sample_rate)
             # Silent frames = all zeros（bytes 直乘，比 struct.pack 巨型参数列表便宜得多）
-            w.writeframes(b"\x00\x00" * (channels * n_frames))
+            w.writeframes(b"\x00\x00" * n_frames)
         return
     except Exception as e:
         raise RuntimeError(
@@ -164,7 +163,7 @@ def build_atempo_filter(speed):
     这里改为立即抛 ValueError，而不是挂死。
     """
     validate_speed(speed)
-    if abs(speed - 1.0) < SPEED_EPS:
+    if not needs_speed_change(speed):
         return None
     factors = []
     remaining = speed
@@ -459,7 +458,7 @@ def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
     return True
 
 
-def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs=-16.0):
+def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs):
     """对整条音频做响度归一化，输出到 out_path。返回是否成功。
 
     用于把逐句 TTS 拼出来的音频统一到目标响度（跨句/跨视频音量一致）。在 concat

@@ -6,11 +6,7 @@ id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP 选择
 is_valid_sid / seg_layout / needs_image / sids_needing_image，
 以及契约层的字段校验 _validate_sid / _validate_layout。
 """
-import os
 import re
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 段落 id 的合法形态见 _SID_RE / SID_RULE。之所以要收口成一条正则而不是各处
 # 宽松判断：id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP

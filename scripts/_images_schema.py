@@ -16,7 +16,7 @@ from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 
 
-def validate_relative_project_path(src, where="media path"):
+def validate_relative_project_path(src, where):
     """Reject absolute/traversal paths and normalize separator semantics."""
     if not isinstance(src, str) or not src.strip():
         raise ValueError(f"{where} 必须是非空字符串")
@@ -100,9 +100,10 @@ def validate_images_json(data):
         else:
             raise ValueError(
                 f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
-        # 走到这里 src 必然存在且非空（上面 dict 分支已拦缺键与空值）。
-        if not isinstance(src, str) or not src:
-            raise ValueError(f"images.json 的 '{key}' 的 src 必须是非空字符串")
+        # 上面 dict 分支已拦缺键与空值，这里只剩"非字符串但非空"一档（数字、
+        # 列表这类手写 manifest 才会给出）。
+        if not isinstance(src, str):
+            raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
         # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
         # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
         value["src"] = validate_relative_project_path(

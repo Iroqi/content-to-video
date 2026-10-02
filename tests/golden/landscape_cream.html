@@ -18,10 +18,8 @@
    JSON 变成两份。
 
    双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
-   layout.vertical / layout.landscape 块）。竖屏 = 固定标题区 + 4:3 画布 +
-   钉底句子流；横屏 = 左栏垂直居中文本块 + 右侧媒体卡（垂直居中）。
-   开屏/结尾两画幅均为纯文字 agenda 卡（题头 + 章节罗列/要点总结 +
-   句子流锚底），不再配图；内容段强制配图。
+   layout.vertical / layout.landscape 块）。画面结构与三档版式行为以
+   references/rendering.md「画面结构」为准，这里不复述。
    ────────────────────────────────────────────────────────────────────── */
 
 *{margin:0;padding:0;box-sizing:border-box}
@@ -68,7 +66,11 @@ body{font-family:var(--ctv-font-family)}
 .seg-card>.bg,.seg-card>.grid{z-index:-2}
 .seg-title-wrap{position:absolute}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
-.tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em}
+.tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em;padding-left:var(--ctv-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+/* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）：
+   两画幅同款故无属性限定，宽度走 --ctv-tagline-tick。开屏/结尾已是纯文字
+   agenda 卡，不再出现 tagline。 */
+.tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
 .seg-progress{position:absolute;bottom:0;left:0;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
 /* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
    不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。
@@ -111,10 +113,6 @@ body{font-family:var(--ctv-font-family)}
 [data-aspect="vertical"] .seg-card{inset:0;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)}
 [data-aspect="vertical"] .seg-title-wrap{left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);top:var(--ctv-v-title-top);height:var(--ctv-v-title-area);padding:0;overflow:hidden;text-align:left}
 [data-aspect="vertical"] .seg-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-v-title-lines);overflow:hidden;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)}
-[data-aspect="vertical"] .tagline{margin-top:var(--ctv-v-tagline-mt);padding-left:var(--ctv-v-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
-/* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）。
-   开屏/结尾已是纯文字 agenda 卡，不再出现 tagline。 */
-[data-aspect="vertical"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-v-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-v-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
 /* 横向居中走绝对定位的左右 auto 外边距，**不走 transform:translateX(-50%)**：
    GSAP 的入场补间往同一个元素写 inline transform，CSS 的 transform 与它互斥，
    写了就得靠 !important 压住补间、连带把 y 滑入整条吃掉（竖屏配图只剩淡入，
@@ -172,8 +170,6 @@ body{font-family:var(--ctv-font-family)}
    降字号（62→54→48）。因此 _template.py 的 landscape.title 里没有 maxLines，
    竖屏那份才有——给横屏补一个没人读的行数键，只会骗下一个改版式的人。 */
 [data-aspect="landscape"] .seg-title{line-height:var(--ctv-l-title-lh);text-wrap:balance}
-[data-aspect="landscape"] .tagline{padding-left:var(--ctv-l-tag-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
-[data-aspect="landscape"] .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-l-tag-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-l-tag-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
 /* 媒体卡四周留 96 白、垂直居中。内描边与进度条轨道走两画幅共用的无属性限定
    规则（.seg-image::after / .seg-card::before），此处不再各写一份。 */
 [data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
@@ -251,6 +247,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-title-lh:1.32;--ctv-title-tracking:-0.02em;
   --ctv-tagline-font:28px;--ctv-tagline-mt:16px;
   --ctv-tagline-lh:1.3;--ctv-tagline-weight:600;
+  --ctv-tagline-indent:22px;--ctv-tagline-tick:8px;
   --ctv-prog-height:5px;
   --ctv-sub-font:33px;
   --ctv-verse-h:260px;--ctv-verse-clip:40px;
@@ -265,7 +262,6 @@ body{font-family:var(--ctv-font-family)}
   --ctv-l-margin:96px;
   --ctv-l-text-w:613px;--ctv-l-text-gap:56px;
   --ctv-l-title-lh:1.15;
-  --ctv-l-tag-indent:22px;--ctv-l-tag-tick:8px;
   --ctv-l-img-w:1067px;--ctv-l-img-h:800px;
   --ctv-l-img-radius:12px;
 }

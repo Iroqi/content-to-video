@@ -22,6 +22,7 @@ _THEMES = {
         "text_color": "#eef2ee",
     },
 }
+DEFAULT_THEME = "dark"
 _DEFAULT_ACCENT = "#2dd4bf"
 _ACCENT_PALETTE = [
     "#ffd54f", "#4fc3f7", "#81c784", "#ffb74d",

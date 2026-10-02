@@ -33,7 +33,8 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-from _theme import contrast_ratio, css_color_to_hex  # WCAG 数学与 hex 归一化不在这里重抄
+from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
+                    theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 
 SLOT_W, SLOT_H = 980, 735
 CANVAS = {"portrait": (1080, 1440), "landscape": (1920, 1080)}
@@ -41,7 +42,10 @@ SAFE_MARGIN = {"portrait": 50, "landscape": 96}
 MIN_PX = 26
 RATIO_TOL = 0.01
 BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
-PAGE_BG = {"dark": "#0c1320", "cream": "#eee7d6"}
+# 整页画布的文字真正落在主题背景渐变的中段（45% 位），底色从 _theme 注册表
+# 派生而不是抄一份字面量——上一版手抄的 dark 底色是旧主题遗留，与真实页底
+# 已漂移，对比度门禁一直在拿不存在的颜色当基准。
+PAGE_BG = {t: theme_bg_stops(t)[1] for t in list_theme_names()}
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
@@ -269,8 +273,8 @@ def main():
                     help="slot = 4:3 槽位配图（默认）；canvas = 整页画布")
     ap.add_argument("--aspect", choices=list(CANVAS), default="portrait",
                     help="画幅（仅 --layout canvas 用到，默认 portrait）")
-    ap.add_argument("--theme", choices=list(PAGE_BG), default="dark",
-                    help="按哪个主题的页底色算对比度（默认 dark）")
+    ap.add_argument("--theme", choices=list(PAGE_BG), default=DEFAULT_THEME,
+                    help=f"按哪个主题的页底色算对比度（默认 {DEFAULT_THEME}）")
     args = ap.parse_args()
 
     files = collect(args.paths)

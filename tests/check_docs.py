@@ -13,7 +13,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REF = re.compile(r"(SKILL\.md|references/[\w.]+\.md)`?\s*[（(]?\s*「([^」]+)」")
+REF = re.compile(r"(SKILL\.md|references/[\w.]+\.md)`?\s*的?\s*[（(]?\s*「([^」]+)」")
 
 
 def headings(path):

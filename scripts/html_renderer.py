@@ -15,9 +15,9 @@ from urllib.parse import quote
 from _theme import (
     get_theme_colors, get_default_accent, darken,
     relative_luminance, mix, normalize_accent, theme_bg_stops,
-    ensure_text_contrast,
+    ensure_text_contrast, DEFAULT_THEME,
 )
-from _template import load_template, get_canvas
+from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import (classify_media_path, unknown_media_keys,
                             MEDIA_ENTRY_KEYS)
 from _segments import (is_content_sid, is_valid_sid, seg_layout, SID_RULE)
@@ -397,6 +397,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images):
   --ctv-title-lh:{css_title_lh};--ctv-title-tracking:{css_title_tracking};
   --ctv-tagline-font:{css_tagline_font};--ctv-tagline-mt:{css_tagline_mt}px;
   --ctv-tagline-lh:{css_tagline_lh};--ctv-tagline-weight:{css_tagline_weight};
+  --ctv-tagline-indent:{_tgl["indent"]}px;--ctv-tagline-tick:{_tgl["tickWidth"]}px;
   --ctv-prog-height:{css_prog_height}px;
   --ctv-sub-font:{css_sub_font};
   --ctv-verse-h:{_vv["windowHeight"]}px;--ctv-verse-clip:{_vv["clipPad"]}px;
@@ -427,12 +428,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images):
         root_aspect = f"""  --ctv-v-pad-left:{_v_pad_left:g}px;
   --ctv-v-title-top:{_tl["top"]}px;
   --ctv-v-title-area:{_v_title_area:.2f}px;--ctv-v-title-lines:{_tl["maxLines"]};
-  --ctv-v-tagline-mt:{_tgl["marginTop"]}px;
-  --ctv-v-tagline-indent:{_tgl["indent"]}px;
   --ctv-v-img-w:{int(_il["width"])}px;--ctv-v-img-ms:{_v_img_ms}px;
   --ctv-v-img-top:{_v_img_top}px;--ctv-v-img-height:{int(_il["height"])}px;--ctv-v-img-radius:{_v_img_radius}px;
-  --ctv-v-verse-bottom:{_v_verse_bottom}px;
-  --ctv-v-tagline-tick:{_tgl["tickWidth"]}px;"""
+  --ctv-v-verse-bottom:{_v_verse_bottom}px;"""
     else:
         # 刻意不注入 --ctv-l-gap：左右两栏都是绝对定位，栏间距由 margin/textW/imgW
         # 的算术决定，注入一个没人读的空格令牌只会让人以为改它能挪版式
@@ -440,7 +438,6 @@ def _build_render_context(tpl, aspect, width, height, theme, images):
         root_aspect = f"""  --ctv-l-margin:{_lm}px;
   --ctv-l-text-w:{int(_ltext["width"])}px;--ctv-l-text-gap:{int(_ltext["gap"])}px;
   --ctv-l-title-lh:{_tl["lineHeight"]};
-  --ctv-l-tag-indent:{_tgl["indent"]}px;--ctv-l-tag-tick:{_tgl["tickWidth"]}px;
   --ctv-l-img-w:{int(_il["width"])}px;--ctv-l-img-h:{_l_img_h}px;
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
     rc.root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
@@ -509,7 +506,7 @@ def _title_font_px(rc, seg, sid, is_agenda):
 
 
 def _tagline_html(rc, seg, sid, ac):
-    """段落 tagline 行（可空）。缩进与对齐归 CSS（--ctv-v-tagline-indent）。"""
+    """段落 tagline 行（可空）。缩进与对齐归 CSS（--ctv-tagline-indent）。"""
     if not seg.get("tagline"):
         return ""
     # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
@@ -856,7 +853,7 @@ def _card_timeline_lines(rc, card):
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme="dark", fps=24):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=24):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -874,10 +871,7 @@ def generate_html(manifest, audio_src, images=None,
     """
     # 先归一化画幅，再按对应画幅取默认画布。否则库调用方省略
     # width/height 时，即使传入 landscape 也会拿到竖屏尺寸。
-    if aspect == "portrait":
-        aspect = "vertical"
-    elif aspect not in ("vertical", "landscape"):
-        raise ValueError(f"[renderer] 未知画幅 {aspect!r}（可用: portrait/vertical、landscape）")
+    aspect = normalize_aspect(aspect)
     tpl = load_template()
     if width is None or height is None:
         width, height = get_canvas(aspect)

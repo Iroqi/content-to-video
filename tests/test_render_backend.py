@@ -11,16 +11,10 @@ import _render_backend as RB
 
 class Commands(unittest.TestCase):
     def test_build_render_command_shape(self):
-        cmd = RB.build_render_command("o.mp4", "draft", 12, 4, [sys.executable, "hf"], gpu=False)
+        cmd = RB.build_render_command("o.mp4", "draft", 12, 4, [sys.executable, "hf"])
         self.assertIsInstance(cmd, list)
-        tail = cmd[-8:]
-        self.assertEqual(tail, ["render", "-o", "o.mp4", "--quality", "draft",
-                                "--fps", "12", "--workers", "4"][-8:])
-        self.assertNotIn("--gpu", cmd)
-
-    def test_gpu_flag(self):
-        cmd = RB.build_render_command("o.mp4", "draft", 12, 4, [sys.executable, "hf"], gpu=True)
-        self.assertEqual(cmd[-1], "--gpu")
+        self.assertEqual(cmd[-9:], ["render", "-o", "o.mp4", "--quality", "draft",
+                                    "--fps", "12", "--workers", "4"])
 
     def test_resolve_command_is_idempotent_for_strings(self):
         self.assertEqual(RB.resolve_command("cmd /c x"), "cmd /c x")

@@ -25,19 +25,20 @@ def load_template():
     return copy.deepcopy(_TEMPLATE_PARSED)
 
 
-def get_canvas(aspect="vertical"):
-    """按画幅返回画布尺寸 (width, height)。"portrait" 归一化为 vertical。"""
+def normalize_aspect(aspect):
+    """画幅归一化的唯一口径："portrait" 是面向 CLI/调用方的别名，模板键名是
+    vertical。未知画幅直接报错——静默兜到竖屏会让横屏稿件出竖屏尺寸。"""
     if aspect == "portrait":
         aspect = "vertical"
     if aspect not in ("vertical", "landscape"):
-        raise ValueError(f"[template] 未知画幅 {aspect!r}（可用: vertical/landscape）")
-    canvas = load_template()["canvas"].get(aspect)
-    if not isinstance(canvas, dict) or "width" not in canvas or "height" not in canvas:
-        raise ValueError(f"[template] canvas.{aspect} 缺少 width/height")
-    width = int(canvas["width"]); height = int(canvas["height"])
-    if width <= 0 or height <= 0:
-        raise ValueError(f"[template] canvas.{aspect} 必须为正整数")
-    return width, height
+        raise ValueError(f"[template] 未知画幅 {aspect!r}（可用: portrait/vertical、landscape）")
+    return aspect
+
+
+def get_canvas(aspect):
+    """按画幅返回画布尺寸 (width, height)。"""
+    canvas = load_template()["canvas"][normalize_aspect(aspect)]
+    return int(canvas["width"]), int(canvas["height"])
 
 
 _TEMPLATE_JSON = r'''

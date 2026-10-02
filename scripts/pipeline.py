@@ -54,8 +54,8 @@ def _parse_env_file(path):
        "utf-8 解码成功"不代表内容正确）——改试 utf-16-le/be；
     ④ utf-8 彻底失败 → gb18030（记事本 ANSI/GBK 保存的中文注释）。
     UnicodeDecodeError 是 ValueError 子类，不在这里接住就会从
-    load_env()/get_key() 裸栈穿透；且报错必须指向"编码问题"——爆炸点
-    若在 get_key() 内部，连 --dry-run 都会瘫痪，提示信息却是
+    load_env() 裸栈穿透；且报错必须指向"编码问题"——爆炸点
+    若在 main() 读配置那一步，连 --dry-run 都会瘫痪，提示信息却是
     "没有 API key"，完全无法定位。
     """
     result = {}
@@ -147,29 +147,6 @@ def load_env():
             merged[k] = v
 
     return merged
-
-
-def get_key(name, cli_value=None):
-    """获取单个密钥值：优先级 cli_value > os.environ > ~/.config/ai-video/.env。
-
-    查找链复用 load_env（同一份优先级只实现一遍）。
-    """
-    if cli_value:
-        return cli_value
-    return load_env().get(name)
-
-
-def resolve_model_config(cli_model, cli_base_url):
-    """按 CLI > 环境变量/配置文件 > 默认值 解析模型名与 API base URL。
-
-    与密钥一样走"环境变量 > ~/.config/ai-video/.env"两级查找：
-      - model: cli_model > env["MIMO_TTS_MODEL"] > DEFAULT_MODEL
-      - base_url: cli_base_url > env["MIMO_BASE_URL"] > DEFAULT_BASE_URL
-    """
-    env = load_env()
-    model = cli_model or env.get("MIMO_TTS_MODEL") or DEFAULT_MODEL
-    base_url = cli_base_url or env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL
-    return model, base_url
 
 
 # ===================================================================
@@ -982,15 +959,15 @@ def main(argv=None):
     if not args.dry_run:
         guard_not_in_skill_dir(("-o/--output", os.path.abspath(args.output)))
 
-    # ── Resolve API key ────────────────────────────────────────────
-    api_key = get_key("MIMO_API_KEY", args.api_key)
+    # ── Resolve config (CLI > 环境变量/~/.config/ai-video/.env > 默认值) ──
+    env = load_env()
+    api_key = args.api_key or env.get("MIMO_API_KEY")
     if not api_key and not args.dry_run:
         print("[error] No API key. Use --api-key or set MIMO_API_KEY in .env",
               file=sys.stderr)
         sys.exit(1)
-
-    # ── Resolve model + base_url (CLI > env/config > default) ──────
-    model, base_url = resolve_model_config(args.model, args.base_url)
+    model = args.model or env.get("MIMO_TTS_MODEL") or DEFAULT_MODEL
+    base_url = args.base_url or env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL
 
     # ── Read script（--source 结构化输入，逐段独立分句）───────────────
     try:

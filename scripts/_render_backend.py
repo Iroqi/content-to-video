@@ -11,7 +11,8 @@
 不认识稿件、manifest、制作报告——想换渲染后端，替换本模块即可。
 
 对外接口：hyperframes_spec / hyperframes_command / resolve_command / fmt_cmd /
-build_render_command / render_wait / try_kill_process_tree。
+build_render_command / render_wait。进程树清理（_try_kill_process_tree）只在
+本模块的失败/超时/中断路径里用，不对外。
 """
 import os
 import shutil
@@ -109,13 +110,10 @@ def resolve_command(cmd):
 
 
 def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         command: List[str],
-                         gpu: bool = False) -> List[str]:
+                         command: List[str]) -> List[str]:
     base = list(command)
     cmd = base + ["render", "-o", output, "--quality", quality,
                   "--fps", str(fps), "--workers", str(workers)]
-    if gpu:
-        cmd.append("--gpu")
     # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve
     # 再加参数会把参数丢在字符串外面（等于丢进 cmd 的重解析）。
     return resolve_command(cmd)
@@ -133,7 +131,7 @@ def _adaptive_grace(size_bytes):
                               size_bytes / (1024.0 * 1024.0) * _GRACE_PER_MB))
 
 
-def _print_render_log_tail(log_path, max_lines=25):
+def _print_render_log_tail(log_path):
     if not log_path or not os.path.isfile(log_path):
         return
     try:
@@ -142,11 +140,11 @@ def _print_render_log_tail(log_path, max_lines=25):
     except OSError:
         return
     print(f"[run] 渲染日志末尾（完整日志: {log_path}）:", file=sys.stderr)
-    for line in lines[-max_lines:]:
+    for line in lines[-25:]:
         print("    " + line.rstrip(), file=sys.stderr)
 
 
-def try_kill_process_tree(proc):
+def _try_kill_process_tree(proc):
     """尽力杀掉渲染进程树。失败必须出声：孤儿 Chrome/Node 在后台继续吃
     CPU/内存，下一次渲染会更快崩，而用户看不到任何线索。"""
     if os.name == "nt":
@@ -186,7 +184,7 @@ def _discard_partial_render(out_path):
 def _probe_file_size(path):
     """轮询用文件大小：不存在或被并发删改（Windows 上杀毒扫描会短暂
     锁文件，exists→getsize 之间有竞态窗口）时返回 None，绝不让
-    OSError 冒进轮询循环——那会跳过 try_kill_process_tree，留下
+    OSError 冒进轮询循环——那会跳过 _try_kill_process_tree，留下
     孤儿 Node/Chrome 进程树。"""
     try:
         return os.path.getsize(path)
@@ -249,7 +247,7 @@ def render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
         raise SystemExit(f"[run] 无法写渲染日志 {log_path}：{e}")
     try:
         # start_new_session 仅 POSIX 可用；Windows 上会裸抛 ValueError。
-        # Windows 的进程树清理交给 try_kill_process_tree 的 taskkill /T /F。
+        # Windows 的进程树清理交给 _try_kill_process_tree 的 taskkill /T /F。
         popen_kwargs = {}
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
@@ -269,7 +267,7 @@ def render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
             # 留在盘上。poll() 已退出（渲染自身失败的路径）就不再 taskkill——
             # 对一个不存在的 PID 报"清理失败"是纯噪音。
             if proc.poll() is None:
-                try_kill_process_tree(proc)
+                _try_kill_process_tree(proc)
             _discard_partial_render(out_path)
             raise
     except (FileNotFoundError, OSError) as e:
@@ -324,7 +322,7 @@ def _render_poll_loop(proc, out_path, log_path, max_wait):
                 if grace_deadline is None:
                     grace_deadline = time.time() + _adaptive_grace(size)
                 elif time.time() >= grace_deadline:
-                    try_kill_process_tree(proc)
+                    _try_kill_process_tree(proc)
                     _verify_killed_render(out_path)
                     return
         else:

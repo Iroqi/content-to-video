@@ -23,10 +23,10 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | --- | --- | --- |
 | Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
 | **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（即使全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
-| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一（拼接本体是标准库 `wave`）、响度/BGM、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
+| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、响度/BGM、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
 | Node.js + `npx hyperframes`，及其驱动的 headless Chrome | 仅第 5 步渲染 | 出不了 MP4，前四步照常 |
 
-其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（默认 `hyperframes`）。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
+其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖 Hyperframes 包名/版本钉固，默认 `hyperframes`）。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
 
 GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用，新机器第一次生成需联网，之后离线。GSAP 的 sha256 已钉固，每一级取用都重算哈希，不一致则拒绝落盘。HTML 只引用本地 `vendor/`。取不到 CDN 时可用 `gen_hyperframes.py --gsap-src` 指定本地文件。
 
@@ -42,8 +42,8 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 写稿要点：
 
-- 整期全是槽位卡片会疲劳，按 `references/image_options.md`「整页画布」的判据（含穿插节奏与字幕代价）主动给几段换 `layout: "canvas"`，别连着两段都用。
-- 内容段最多 7 段（≤6 段才放得下 `cta`），agenda 卡总行数上限 7。
+- 整期全是槽位卡片会疲劳，按 `references/image_options.md`「整页画布」的判据（含穿插节奏与字幕代价）主动给几段换 `layout: "canvas"`。
+- 内容段最多 7 段（≤6 段才放得下 `cta`）；agenda 行数上限与截断行为见 `references/writing.md`「开场/结尾专用顶层字段」。
 - **字段集封闭**：顶层 / 段落 / 对话轮次 / `speakers` 各层只认 `references/writing.md`「字段规范」列出的键，写错直接报错。
 
 字段全集、行数与字数预算、agenda 行为都在 `references/writing.md`。
@@ -58,14 +58,14 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 ### 4. 配图
 
-素材写入 HTML 项目目录（`--project`，默认 `<output 同级>/hf-project`）的 `images/`，并通过同目录 `images.json` 映射到 segment（`src` 写相对项目根的路径，如 `images/seg1.png`）。配图按 4:3 出图（整页画布按当前画幅出图）。保留 `provider / source_url / license / attribution / query` 等 provenance，二次整理时不要覆盖。
+素材写入 HTML 项目目录（`--project`，默认 `<output 同级>/hf-project`）的 `images/`，并通过同目录 `images.json` 映射到 segment（`src` 写相对项目根的路径，如 `images/seg1.png`）。配图按 4:3 出图（整页画布按当前画幅出图）。provenance 字段（来源记账）按 `references/image_options.md`「images.json」的清单保留，二次整理时不要覆盖。
 
 四条路线：A 真实照片检索、B ImageGen、C SVG 矢量示意（数据图、公式、示意图）、D VideoGen 视频/动图。选型、规格与质量标准见 `references/image_options.md`。
 
 要点：
 
 - 默认 agenda 版式的开屏/结尾不配图，`images.json` 里的 `opening` / `closing` 键会被忽略并打 `[warn]`。
-- **画 SVG 前先读** `references/image_options.md` 的「画布几何」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」四节，第一版就按约束画。三条没有门禁替你查的硬约束：① 根节点写死 4:3；② 图内文字对比度与溢出自己盯；③ 数据图的刻度与长度/角度比例自己算，画错不会有任何报错。画完可跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`），它静态抓根节点比例、字号下限、脚本/外链、字面色对比度等明显的错；文字溢出与数据比例它查不到，仍要自己盯。
+- **画 SVG 前先读** `references/image_options.md` 的「画布几何」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」四节，第一版就按约束画——管线与 `hyperframes check` 都看不见图里画得对不对，画错不会有任何报错。画完可跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`，`--theme cream|dark` 设定对比度核算的页底基准色）；它查什么、查不到什么，写在「画布几何」一节末尾。
 
 ### 5. 生成 HTML、预览、检查、渲染
 
@@ -76,14 +76,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 用浏览器打开 `hf-project/index.html` 预览：默认停在首帧，点播放后时间线与音频一起走。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致、agenda 有没有行被截掉。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号）都要回头处理。
 
-**渲染前跑官方门禁**（渲染阶段本身没有自动版式检查）：
-
-```bash
-npx -y hyperframes check hf-project     # lint + layout + motion + contrast
-npx -y hyperframes snapshot hf-project --at 1.0,4.0,8.0 -o snap
-```
-
-`check` 的已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。
+**渲染前跑官方门禁**（渲染阶段本身没有自动版式检查）：`hyperframes check` + `snapshot` 两条命令、`check` 的已知噪声与必须当真的条目，都在 `references/rendering.md`「官方校验命令」。
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`；只在定稿时跑完整渲染（固定开销与实测耗时见 `references/rendering.md`「性能参数」）。配图是最花时间的一环，不在 `run.py` 计时里。
 
@@ -96,13 +89,13 @@ npx -y hyperframes snapshot hf-project --at 1.0,4.0,8.0 -o snap
 --project DIR                    项目目录
 --fps 12|24|30|60                12 仅用于低规格快速看画面
 --quality draft|standard|high    编码质量
---workers N                      渲染并行度（默认 4；饱和点见 references/rendering.md）
+--workers N                      渲染抓帧并行度（默认 4；pipeline.py 同名参数是 TTS 并发，两回事）
 --speed / --voice-id / --voice-style   TTS 语速、音色、语气
 --gap SECONDS                    句间静音
 --bgm FILE / --bgm-volume 0.15   背景音乐
 --loudness LUFS                  响度归一化
 --on-fail abort|silence, --allow-degraded   TTS 降级策略
---no-resume / --dry-run / --gpu
+--no-resume / --dry-run
 ```
 
 缺图处理：段落在 images.json 里没有映射时，只在真要渲染时拦截（exit 2），`--until html` 只警告；映射的 `src` 文件不存在则在覆盖率统计阶段直接 exit 2。
@@ -137,4 +130,4 @@ hf-project/
 - `references/image_options.md`：配图路线与 provenance
 - `references/rendering.md`：主题、动画、预览与渲染
 
-维护者改动后跑 `python -m unittest discover -s tests`（121 条，标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python tests/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。发布时手动压缩技能目录、剔掉 `tests/`、`.env`（含密钥，漏进包就是泄密）、`.git/.venv/__pycache__` 与制作残渣（`audio_output/`、`hf-project/`、`out/`、`snapshots/`、`candidates.json`、`segments_source.json`、`timing_manifest.json`）；`scripts/check_svg.py` 要留着——它是第 4 步引用的生产工具，不是维护物。
+维护者改动后跑 `python -m unittest discover -s tests`（标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python tests/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。发布时手动压缩技能目录、剔掉 `tests/`、`.env`（含密钥，漏进包就是泄密）、`.git/.venv/__pycache__` 与制作残渣（`audio_output/`、`hf-project/`、`out/`、`snapshots/`、`candidates.json`、`segments_source.json`、`timing_manifest.json`）；`scripts/check_svg.py` 要留着——它是第 4 步引用的生产工具，不是维护物。

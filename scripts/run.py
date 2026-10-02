@@ -24,7 +24,7 @@ import time
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
-from _theme import list_theme_names  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
+from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402  --theme choices 与 _theme 内嵌注册表同步
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
@@ -198,7 +198,7 @@ def _build_parser():
                         help="跑到该步骤为止（默认 render；迭代时用 html："
                              "生成 HTML 即停，先看版式和配图再渲染）")
     parser.add_argument("--no-resume", action="store_true", help="TTS 不用 --resume")
-    parser.add_argument("--theme", default="dark", choices=list_theme_names())
+    parser.add_argument("--theme", default=DEFAULT_THEME, choices=list_theme_names())
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏）或 "
@@ -214,9 +214,6 @@ def _build_parser():
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
                              "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
                              "低配机器遇 V8 堆崩溃或含视频配图时建议降到 2")
-    parser.add_argument("--gpu", action="store_true",
-                        help="透传 --gpu 给 Hyperframes 渲染（实测增益来自抓帧光栅化"
-                             "而非硬件编码，且成片体积明显变大；见 rendering.md）")
     parser.add_argument("--allow-degraded", action="store_true",
                         help="允许 TTS 静音兜底等降级产物继续渲染；默认把 degraded artifact 作为交付阻断")
     parser.add_argument("--on-fail", default="abort", choices=["abort", "silence"],
@@ -470,8 +467,7 @@ def main():
     # ── 第 5 步 b：渲染 ───────────────────────────────────────────
     out_mp4 = os.path.join(project, "out.mp4")
     hf_render = build_render_command(
-        out_mp4, args.quality, args.fps, args.workers,
-        gpu=args.gpu, command=_HF_COMMAND,
+        out_mp4, args.quality, args.fps, args.workers, command=_HF_COMMAND,
     )
     # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
     # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟

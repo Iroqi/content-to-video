@@ -89,6 +89,38 @@ class SourceValidation(unittest.TestCase):
         s["segments"][1]["id"] = s["segments"][0]["id"]
         bad(SRC.validate_segments_source, s)
 
+    # ── 上墙文字 vs 口播稿：分号只对上墙的一行报错 ─────────────────
+    def test_top_level_on_screen_keys_reject_semicolon(self):
+        for key in SRC.ON_SCREEN_TOP_KEYS:
+            for semi in ("；", ";"):
+                s = H.sample_source()
+                s[key] = "半句话" + semi + "另外半句"
+                bad(SRC.validate_segments_source, s, contains=key)
+
+    def test_segment_on_screen_keys_reject_semicolon(self):
+        for key in SRC.ON_SCREEN_SEGMENT_KEYS:
+            s = H.sample_source()
+            s["segments"][0][key] = "半句话；另外半句"
+            bad(SRC.validate_segments_source, s, contains="分号")
+
+    def test_cta_rejects_semicolon(self):
+        s = H.sample_source()
+        s["cta"] = "关注我们；下期见"
+        bad(SRC.validate_segments_source, s, contains="cta")
+
+    def test_narration_may_contain_semicolon(self):
+        # 口播稿里分号是终止标点（见 _text.split_sentences），念出来两次停顿，
+        # 不是"两件事挤一行"，所以门禁必须放它过去。
+        s = H.sample_source()
+        s["opening"] = "大家好；今天聊两件事。"
+        s["closing"] = "谢谢观看;下期再见。"
+        s["segments"][0]["text"] = "先讲背景；再讲进展。"
+        SRC.validate_segments_source(s)
+        s["segments"][0].pop("text")
+        s["speakers"] = {"host": {"voice_id": "茉莉"}}
+        s["segments"][0]["dialogue"] = [{"speaker": "host", "text": "是这样；你同意吗。"}]
+        SRC.validate_segments_source(s)
+
 
 class LayoutDispatch(unittest.TestCase):
     def test_seg_layout(self):

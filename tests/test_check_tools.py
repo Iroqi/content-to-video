@@ -203,6 +203,29 @@ class SvgIntrinsicSize(unittest.TestCase):
                          (980.0, 735.0))
 
 
+class SvgIntrinsicSize(unittest.TestCase):
+    """gen_hyperframes 读 SVG 根尺寸：门禁端要与 check_svg 同一口径。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "a.svg")
+
+    def size(self, attrs):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" ' + attrs + "></svg>")
+        return gen_hyperframes._svg_intrinsic_size(self.path)
+
+    def test_px_suffix_accepted_like_check_svg(self):
+        self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0))
+
+    def test_other_unit_and_prefixed_attr_not_misread(self):
+        self.assertIsNone(self.size('width="50%" height="50%"'))
+        # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
+        self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
+                         (980.0, 735.0))
+
+
 class DocRefChecker(unittest.TestCase):
     def test_skill_docs_have_no_dangling_section_refs(self):
         self.assertEqual(check_docs.main(), 0)

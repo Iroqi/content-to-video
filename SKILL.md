@@ -82,38 +82,17 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 ## 常用参数
 
-```text
---until tts|images|html|render   跑到哪一步为止（默认 render）
---theme cream|dark               主题（默认 dark）
---aspect portrait|landscape      画幅（默认 portrait）
---project DIR                    项目目录
---fps 12|24|30|60                12 仅用于低规格快速看画面
---quality draft|standard|high    编码质量
---workers N                      渲染抓帧并行度（默认 4；pipeline.py 同名参数是 TTS 并发，两回事）
---speed / --voice-id / --voice-style   TTS 语速、音色、语气
---gap SECONDS                    句间静音
---bgm FILE / --bgm-volume 0.15   背景音乐
---loudness LUFS                  响度归一化
---on-fail abort|silence, --allow-degraded   TTS 降级策略
---no-resume / --dry-run
-```
+参数只认一处真源：`python scripts/run.py --help`（取值、默认值、用途都在那里，改代码同步更新）。这里只留两条 `--help` 看不出来的：
 
-缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告；映射的 `src` 文件不存在则连 `--until html` 也拦（同 exit 2），`--until images` 只看覆盖率、不拦。
+- `--workers` 同名不同义：`run.py` 的是**渲染抓帧**并行度，`pipeline.py` 的是 **TTS 并发**数。
+- `--until html` 是迭代档（出 HTML 即停、人工预览），`--until render`（默认）才出成片。
+
+缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告——**整页画布段除外**，那一页没有标题层与句子流层，缺图连预览 HTML 都生成不出来，一律 exit 2。映射的 `src` 文件不存在则连 `--until html` 也拦（同 exit 2），`--until images` 只看覆盖率、不拦。
 
 ## 输出契约
 
-```text
-OUTPUT/
-├── timing_manifest.json
-├── sentences/            逐句 WAV（--resume 缓存单位）
-├── combined.wav
-└── production_report.json   各步耗时、配图覆盖率、降级句数
-
-hf-project/
-├── index.html / preview.js / out.mp4
-├── images.json           段 sid → 素材映射
-└── vendor/ audio/ images/
-```
+- `OUTPUT/`：`timing_manifest.json`（时间轴）+ `production_report.json`（各步耗时、配图覆盖率、降级项）；逐句 WAV 与 `combined.wav` 同目录，是 `--resume` 的缓存，不用手改。
+- `hf-project/`（默认 `<output 同级>`）：`images.json`（段 sid → 素材）、素材目录 `images/`、`index.html`（预览入口）、`out.mp4`（成片）。
 
 ## 安全边界
 
@@ -129,5 +108,3 @@ hf-project/
 - `references/tts_pipeline.md`：TTS、manifest、降级
 - `references/image_options.md`：配图路线与 provenance
 - `references/rendering.md`：主题、动画、预览与渲染
-
-维护者改动后跑 `python -m unittest discover -s tests`（标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python tests/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。发布时手动压缩技能目录、剔掉 `tests/`、`.env`（含密钥，漏进包就是泄密）、`.git/.venv/__pycache__` 与制作残渣（`audio_output/`、`hf-project/`、`out/`、`snapshots/`、`candidates.json`、`segments_source.json`、`timing_manifest.json`）；`scripts/check_svg.py` 要留着——它是第 4 步引用的生产工具，不是维护物。

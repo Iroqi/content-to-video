@@ -171,7 +171,7 @@ def _collect_blocks(source):
             extra["voice_style"] = seg["voice_style"]
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
-            extra["takeaway"] = str(seg["takeaway"]).strip()
+            extra["takeaway"] = seg["takeaway"].strip()
         # 整页画布开关（取值由 _segments._validate_layout 把守，这里只透传）：
         # 不写就不进 extra，下游按槽位版式渲染。
         if seg.get("layout") is not None:

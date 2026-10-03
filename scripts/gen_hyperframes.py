@@ -287,9 +287,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
         return True, "", parse_duration(err_text)
 
     for sid, entry in images.items():
-        # 上游 validate_images_json 已保证每条都是媒体对象
+        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空
         media_type = entry.get("type", "auto")
-        media_path = entry.get("src", "")
+        media_path = entry["src"]
         # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
         if media_type == "auto":
             media_type = classify_media_path(media_path)
@@ -366,7 +366,9 @@ def _svg_intrinsic_size(path):
     def _px(name):
         # 允许 "980" 与 "980px" 两种写法：check_svg._parse_num 同样接受 px 后缀，
         # 两边口径一致，手绘 SVG 才不会一边过检一边被这里判"读不出尺寸"。
-        m = re.search(rf'\b{name}="\s*([\d.]+)(?:\s*px)?\s*"', tag)
+        # (?<![\w-]) 限定属性名左边界，否则 min-width/max-height 也会被当成
+        # width/height 命中（check_svg 用 root.get("width") 天然不会）。
+        m = re.search(rf'(?<![\w-]){name}="\s*([\d.]+)(?:\s*px)?\s*"', tag)
         return float(m.group(1)) if m else None
 
     sw, sh = _px("width"), _px("height")
@@ -407,16 +409,18 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
     for seg in segments:
         if seg_layout(seg) != "canvas":
             continue
-        sid = seg.get("id", "?")
+        # id/src/sentences 都由契约把守（validate_timing_manifest、
+        # validate_images_json），消费端直接下标，不再留永不可达的兜底
+        sid = seg["id"]
         entry = images.get(sid)
         if not entry:
             errs.append(f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），"
                         f"images.json 里却没有它的配图——画布版式不画标题层和"
                         f"句子流层，没有配图就什么都不剩")
             continue
-        src = entry.get("src", "")
+        src = entry["src"]
         path = os.path.join(out_dir, src)
-        n_sent = len(seg.get("sentences") or [])
+        n_sent = len(seg["sentences"])
         if os.path.splitext(src.lower())[1] != ".svg":
             warns.append(f"段落 '{sid}' 的整页画布配图是 {src}（不是 SVG）——"
                          f"画布版式不生成标题层与句子流层，照片/视频里也没有"
@@ -557,7 +561,7 @@ def main(argv=None):
             # [warn]"的文档口径矛盾。声明 layout:"canvas" 的结构性页是例外：整页
             # 画布只有那张图，弹出它就等于把这一页渲染成一帧空背景。
             _segs = manifest["segments"]
-            _seg_by_id = {seg.get("id", ""): seg for seg in _segs}
+            _seg_by_id = {seg["id"]: seg for seg in _segs}
             _agenda_keys = [k for k in STRUCTURAL_SIDS
                             if k in images and k in _seg_by_id
                             and seg_layout(_seg_by_id[k]) == "agenda"]
@@ -588,7 +592,7 @@ def main(argv=None):
             # 要在这里就给出提示而不是等成片后才发现。
             # 复用上方 _segs（契约已保证 manifest["segments"] 非空）：段 id 的
             # 唯一来源，与渲染器读的是同一份分组。
-            _seg_durs = {seg.get("id", ""): segment_duration(seg)
+            _seg_durs = {seg["id"]: segment_duration(seg)
                          for seg in _segs}
             missing_imgs, corrupt_imgs = validate_images_files(
                 images, out_dir, _seg_durs)

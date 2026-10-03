@@ -20,8 +20,10 @@
   - 字号：按"画布宽 ÷ SVG 宽"折算后的最终 px 低于 26px                   [warn]
     写成 em/%/class 读不出绝对值的文字数量                              [warn]
   - 对比度：文字用字面 hex 填充时，对页面底色算 WCAG 对比度；低于 3:1 为
-    error，低于 4.5:1 为 warn；背景深蓝族（#0c1320/#16233a/#1a2536）当文字
-    色为 error。槽位版式才查（整页画布常自带底板，底色未知，只提示）
+    error，低于 4.5:1 为 warn；背景族（深蓝 #0c1320/#16233a/#1a2536 加上当前
+    主题渐变的各档 stop）当文字色为 error——只在深色页底主题（默认 dark）下查，
+    cream 页底下深蓝恰是推荐正文色系。槽位版式才查（整页画布常自带底板，底色
+    未知，只提示）
   - 透明度：文字带 opacity / fill-opacity < 0.8                          [warn]
   - 槽位版式铺满 viewBox 的背景 <rect>（应不铺满幅底）                   [warn]
   - 含中文却没有任何 font-family（<img> 载入读不到页面字体）             [warn]
@@ -35,10 +37,29 @@ import xml.etree.ElementTree as ET
 
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
+from _template import load_template
 
-SLOT_W, SLOT_H = 980, 735
-CANVAS = {"portrait": (1080, 1440), "landscape": (1920, 1080)}
-SAFE_MARGIN = {"portrait": 50, "landscape": 96}
+# 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
+# 手抄数值——上一版手抄的页底色就漂过一次（见 PAGE_BG 注释）。
+_TPL = load_template()
+CANVAS = {"portrait": (_TPL["canvas"]["vertical"]["width"],
+                       _TPL["canvas"]["vertical"]["height"]),
+          "landscape": (_TPL["canvas"]["landscape"]["width"],
+                        _TPL["canvas"]["landscape"]["height"])}
+_IMG = _TPL["layout"]["vertical"]["image"]
+SLOT_W, SLOT_H = _IMG["width"], _IMG["height"]
+
+
+def _safe_margins():
+    """画布页四周留白：竖屏 = segCard 左右内边距（CSS 简写取横向值，与
+    html_renderer 读同一键同一口径），横屏 = layout.landscape.margin。"""
+    _v = _TPL["layout"]["vertical"]["segCard"]["padding"].split()
+    _h = _v[1] if len(_v) >= 2 else _v[0]
+    return {"portrait": int(float(_h.replace("px", ""))),
+            "landscape": _TPL["layout"]["landscape"]["margin"]}
+
+
+SAFE_MARGIN = _safe_margins()
 MIN_PX = 26
 RATIO_TOL = 0.01
 BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}

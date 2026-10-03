@@ -28,7 +28,7 @@ from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402  --theme choice
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
-from _segments import sids_needing_image  # noqa: E402
+from _segments import sids_needing_image, seg_layout  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
@@ -134,8 +134,9 @@ def _report_path():
 
 
 def _image_coverage(manifest_path, images_json):
-    """返回 (all_sids, missing_keys, missing_files)：manifest 中需要配图的
-    段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
+    """返回 (tm, all_sids, missing_keys, missing_files)：已校验的 manifest 对象
+    （主流程的降级检测直接复用，同一份文件不在一次 run 里 load+全量校验两遍），
+    manifest 中需要配图的段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
     有键但媒体文件不在盘上的（missing_files）。
 
     两类必须分开：missing_keys 只是"图还没画完"，--until html 可以警告放行；
@@ -164,9 +165,9 @@ def _image_coverage(manifest_path, images_json):
     # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
     sids = sids_needing_image(manifest)
     if not sids:
-        return [], [], []
+        return manifest, [], [], []
     if not os.path.isfile(images_json):
-        return sids, sids, []
+        return manifest, sids, sids, []
     # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 load_images_json 统一
     # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
     # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
@@ -183,7 +184,7 @@ def _image_coverage(manifest_path, images_json):
     missing_files = [s for s in sids
                      if s in mapping and not os.path.isfile(
                          os.path.join(proj_dir, mapping[s]["src"]))]
-    return sids, missing_keys, missing_files
+    return manifest, sids, missing_keys, missing_files
 
 
 def _build_parser():
@@ -356,7 +357,7 @@ def main():
     # 会把全部内容段落都报成缺图（不能因为文件不存在就跳过统计——那样
     # missing 恒空、缺图拦截形同虚设，会静默渲染出无图成片）。
     # dry-run / --until tts 已在上方提前 return，走到这里必然要统计。
-    all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
+    _tm, all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
     _missing_union = sorted(set(missing_keys) | set(missing_files))
     _REPORT["images"] = {
         "total": len(all_sids), "matched": len(all_sids) - len(_missing_union),
@@ -391,6 +392,15 @@ def main():
     if missing_keys:
         # 只有真要出片才拦：--until html 是"图没画完先看版式"的迭代路径，
         # 同一份缺图清单在那里只降级成警告。missing 的口径见 _image_coverage。
+        #
+        # 唯一例外是整页画布：那一页没有标题层也没有句子流层，配图就是整个
+        # 画面，gen_hyperframes 在生成期必然 exit 1（canvas_layout_errors）。
+        # 对它承诺"继续生成 HTML 供预览"是兑现不了的承诺——打印完这句紧接着
+        # 就是一条 [error]，两条信息自相矛盾。所以画布段缺图不分 --until，
+        # 与 missing_files 同样就地拦下并点名病因。
+        _layout_by_sid = {s["id"]: seg_layout(s) for s in _tm["segments"]}
+        _canvas_missing = [s for s in missing_keys
+                           if _layout_by_sid.get(s) == "canvas"]
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
               "请按第 4 步补图：ImageGen 生图（方式 B）、手绘 SVG 矢量示意图"
@@ -399,6 +409,15 @@ def main():
               f"{images_dir}。\n"
               f"然后在 {images_json} 写好各段映射后重跑本命令。",
               file=sys.stderr)
+        if _canvas_missing:
+            print("[run] 其中 " + ", ".join(_canvas_missing)
+                  + " 是整页画布（layout: \"canvas\"）：该页不生成标题层与句子流层，"
+                    "配图就是它唯一的画面，缺图时连预览 HTML 都生成不出来"
+                    "（不是「渲染前补齐即可」那一档），请先按当前画幅补图。",
+                  file=sys.stderr)
+            _write_report(_report_path())
+            _print_report_summary()
+            sys.exit(2)
         if args.until != "render":
             print("[run] 继续生成 HTML 供预览（渲染前必须补齐上面这些段）。",
                   file=sys.stderr)
@@ -409,16 +428,8 @@ def main():
 
     # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
     # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
-    # degraded 标记。manifest 同样走 _manifest_schema 加载器（理由见 _image_coverage）：
-    # 把读坏的文件静默按"无降级"放行，等于没有降级检测。
-    try:
-        _tm = load_timing_manifest(manifest)
-    except ValueError as e:
-        _write_report(_report_path())
-        print(f"[run] timing_manifest.json 无法读取：{e}\n"
-              "文件可能被上次中断的写入截断或结构不合法；"
-              "请重跑 TTS 步骤重新生成后再来。", file=sys.stderr)
-        sys.exit(1)
+    # degraded 标记。manifest 复用 _image_coverage 那次已校验的加载——同一次 run
+    # 里文件不会被别人改写，再 load+全量校验一遍只是把坏文件报错推晚一步。
     _deg_items = degraded_items(_tm)
     # status 是 pipeline 写下的总旗标：明细一条都没读出来（键被写坏或整个漏写）
     # 时照样拦，"以 manifest 的 status 为准"这条兜底不依赖下面的逐项计数。

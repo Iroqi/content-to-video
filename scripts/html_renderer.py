@@ -103,7 +103,7 @@ def _agenda_rows(seg_id, clips, manifest, ag):
       [warn] 报给写稿人。
     """
     trim = int(ag["nameTrim"])
-    content_clips = [c for c in clips if is_content_sid(c["seg"].get("id") or "")]
+    content_clips = [c for c in clips if is_content_sid(c["seg"]["id"])]
 
     def _cell(raw, sid):
         """agenda 单元格文本：按 nameTrim 硬截断，截掉字数要报出来。
@@ -122,13 +122,13 @@ def _agenda_rows(seg_id, clips, manifest, ag):
 
     tail_rows = []
     if seg_id == "opening":
-        rows = [(f"{n:02d}", _cell(c["seg"].get("title"), c["seg"].get("id")),
+        rows = [(f"{n:02d}", _cell(c["seg"]["title"], c["seg"]["id"]),
                  _fmt_mmss(c["duration"]))
                 for n, c in enumerate(content_clips, 1)]
     else:
         rows = [(f"{n:02d}",
-                 _cell(c["seg"].get("takeaway") or c["seg"].get("title"),
-                       c["seg"].get("id")), "")
+                 _cell(c["seg"].get("takeaway") or c["seg"]["title"],
+                       c["seg"]["id"]), "")
                 for n, c in enumerate(content_clips, 1)]
         cta = str(manifest.get("closing_cta") or "").strip()
         if cta:
@@ -166,7 +166,7 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
     agenda 垂直居中、句子流锚底"两画幅共用同一套 DOM，几何差异全在 CSS。
     kicker 取 opening/closing 的 tagline 字段（可选的一行小标题）。
     """
-    sid = seg.get("id")
+    sid = seg["id"]
     kicker_html = ""
     if seg.get("tagline"):
         # 深浅底的起手色与内容段 tagline 同方向（深底提亮、浅底压暗），
@@ -184,7 +184,7 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
             f'      <div class="agenda-head">{kicker_html}'
             f'<div class="seg-title" id="title-{sid}" '
             f'style="font-size:{title_size};text-shadow:0 0 {ag["titleGlow"]}px {ac_attr}40">'
-            f'{esc(seg.get("title") or "")}</div></div>\n'
+            f'{esc(seg["title"])}</div></div>\n'
             f'      {agenda_html}{tail_html}\n')
 
 
@@ -461,7 +461,7 @@ def _title_font_px(rc, seg, sid, is_agenda):
     _tl, _ag, aspect, width = rc.tl, rc.ag, rc.aspect, rc.width
     if is_agenda:
         _title_font_px = _ag["titleSize"]
-        _tlen = len(str(seg.get("title") or "").strip())
+        _tlen = len(seg["title"].strip())
         _ag_avail = width - 2 * _ag["insetX"]
         _ag_lines = 1 if aspect == "landscape" else 2
         # 折行按整行离散打包（每行放 floor(宽/字号) 个 CJK 字），
@@ -476,7 +476,7 @@ def _title_font_px(rc, seg, sid, is_agenda):
             _title_font_px = _fit
     elif aspect == "landscape":
         _title_font_px = _tl["fontSize"]
-        _tlen = len(seg.get("title") or "")
+        _tlen = len(seg["title"])
         if _tlen > _tl["guardChars2"]:
             _title_font_px = _tl["guardSize2"]
         elif _tlen > _tl["guardChars1"]:
@@ -561,7 +561,7 @@ def _verse_html(seg, sid, ac_text_attr):
     )
 
 
-def _prepare_card(rc, clip, i):
+def _prepare_card(rc, clip):
     """把一段归一成渲染消费的全部形状：id/颜色/版式判定 + 标题字号 +
     各部件 HTML（题头组、配图、句子流、卡壳、进度条）。
 
@@ -626,7 +626,7 @@ def _prepare_card(rc, clip, i):
         f'    <div class="seg-title-wrap">\n'
         f'      <div class="seg-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
-        f'{esc(seg.get("title") or "")}</div>\n'
+        f'{esc(seg["title"])}</div>\n'
         f'      {tagline_html}\n'
         f'    </div>'
     )
@@ -900,8 +900,7 @@ def generate_html(manifest, audio_src, images=None,
         # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
         clip["peel"] = None
         if _is_line and i and clip["wipe"] > 0:
-            prev_sid = (clips[i - 1]["seg"].get("id")
-                        or f"seg{i}")  # 与 _prepare_card 的缺 id 兜底同式
+            prev_sid = clips[i - 1]["seg"]["id"]  # sid 由契约把守，见 _prepare_card
             clip["peel"] = (prev_sid, clip["wipe"])
             clips[i - 1]["gets_peeled"] = True  # 旧卡要挂底缘暗边（_peel_shade_html）
 
@@ -911,7 +910,7 @@ def generate_html(manifest, audio_src, images=None,
     # "稿子里写了行动号召，画面上什么都没有"，与 writing.md 承诺的"丢弃都只向
     # stderr 打 [warn]"口径矛盾。
     if (str(manifest.get("closing_cta") or "").strip()
-            and not any(c["seg"].get("id") == "closing"
+            and not any(c["seg"]["id"] == "closing"
                         and seg_layout(c["seg"]) == "agenda" for c in clips)):
         print("[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它——"
               "行动号召只画在结尾 agenda 卡上，这条尾行不会出现在画面里"
@@ -920,8 +919,8 @@ def generate_html(manifest, audio_src, images=None,
 
     seg_cards = []
     gsap_lines = []
-    for i, clip in enumerate(clips):
-        card = _prepare_card(rc, clip, i)
+    for clip in clips:
+        card = _prepare_card(rc, clip)
         # 引导线/底缘暗边注入卡 DOM 末尾（绘制在内容之上；线随父卡 clip-path
         # 裁切，shade 挂在被揭的那张旧卡上）
         seg_cards.append(_attach_card_tail(

@@ -30,7 +30,7 @@ from _segments import is_content_sid  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
 from _source_schema import load_segments_source  # noqa: E402
 from _manifest_schema import validate_timing_manifest  # noqa: E402
-import _degraded as D  # noqa: E402  降级键常量（拼错即 NameError）
+import _degraded as D  # noqa: E402  降级键常量（拼错即 AttributeError）
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                            write_json_atomic, remove_if_exists)
 from build_from_structured import build_parts  # noqa: E402

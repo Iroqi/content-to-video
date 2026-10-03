@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # 采样而非全矩阵：下限（SKILL.md 声明的 3.9+）、一个中位、本机开发用的两档
+        python: ["3.9", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    env:
+      # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 技能脚本与测试只用标准库：装依赖这一步都不需要，两步命令就是本地维护者的跑法
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+        timeout-minutes: 5
+
+      - name: Doc cross-reference check
+        run: python tests/check_docs.py

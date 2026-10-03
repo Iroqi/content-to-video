@@ -29,7 +29,9 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 - **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
 - **整页画布（段落 `layout: "canvas"`，两画幅同一份规则）**：上面那三层塌成一层——配图拉满整个画面（1080×1440 / 1920×1080，圆角、外发光、1px 内描边全撤），标题层与句子流层由渲染器**不生成**（不是 `display:none`：不留死 DOM、不留死补间目标，`check` 的文本普查也如实少两项）。配图**不再生成任何入场补间**——wipe 揭开即要求画面到位，海报再自带淡入会演成"先擦出空页、再浮出画面"的两段式；整页就是画面，滑一下/淡一下都是穿帮。
 
-  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，照 `references/image_options.md`「图内文字的对比度」的内联副本 + `check` 程序办（"交付 HTML 必须保持 `<img>`"的安全理由也写在那份里）。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
+  画布页**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光 `::after`（画布上换成近全屏的宽带柔光，见 `templates/composition.css` 画布块），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张、以及对比度门禁怎么跟着 `--theme` 变，见 `references/image_options.md`「不铺满幅底」。
+
+  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，照 `references/image_options.md`「图内文字的对比度」的内联副本 + `check` 程序办（"交付 HTML 必须保持 `<img>`"的安全理由也写在那份里）。`check_svg.py --layout canvas` 现在会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度（画布档只 warn 不 error：压在作者自画的浅色局部底板上的字，按页底算出来的数对它不成立），但渐变底、`class` 里的色、局部底板上的字它都管不着，那一次真测仍然要做。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
 
 opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。这一页自己就是一个版式值 `layout: "agenda"`，由 pipeline 盖章（它不是这一段自己的文字，而是对全片其它段的投影）；作者要把它换成整页海报，用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页就退化成内容段画布那条路：只剩一张满幅配图 + 进度条，标题层、句子流、章节行、`cta` 尾行连 DOM 都不生成——而 `check` 只数 HTML 文本，看不见这种丢失，画面上该有什么、读不读得清，全由那张图自己负责。渲染器只按 `layout` 分派三档版式（`_segments.seg_layout()`），不再按 id 猜。漏盖 `layout` 不会报错也不会塌成槽位页：`seg_layout()` 按 id 兜回 agenda。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
@@ -39,22 +41,23 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 
 动画参数全部来自 `_template.py` 的 `animation` 数据：
 
-- 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页（几何档时长与缓动取模板 `animation.segmentWipe`）；`style` 全片统一一档——`line`（**默认**，引导线：见下）、`vertical`（自下而上 inset 揭屏）、`diagonal`（顶边 30% 斜度、左角先行的斜向擦除）、`circle`（中心向外，71% = 圆心到角点的精确半径，任意画幅同值）；写错档生成期直接报错。wipe 三档旧卡**不淡出**，被新卡盖住后随引擎窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。
+- 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页（几何档时长与缓动取模板 `animation.segmentWipe`）；`style` 全片统一一档——`line`（**默认**，引导线：见下）、`vertical`（自下而上 inset 揭屏）、`diagonal`（顶边 30% 斜度、左角先行的斜向擦除）、`circle`（中心向外，71% = 圆心到角点的精确半径，任意画幅同值）；写错档生成期直接报错。wipe 三档旧卡**不淡出**，被新卡盖住后随引擎窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布段除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布段」条）。
 - **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径，两处各读各的=漂移穿帮），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴（`transformOrigin:"50% 100%"`）的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法；不用 box-shadow 是因为外投影会被卡自身 clip-path 整层裁掉、inset 内阴影又会被后画的 `.bg` 子层盖住）；线的辉光下偏（`box-shadow` y 偏移），光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修（首版沿用几何档被裁"闪现不是引导"）：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变（硬条读不出笔触）；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`（基准：几何档 `segmentWipe.duration`，line 档 `propLine.duration`），入场提前铺到 `win_start = s − wipe`，恰好在本段音频起点完成揭屏（line 档的线与剥离同窗同值）。字幕住在卡里，转场早于上一句念完就开始，等于下一段文字压着还在讲的话。
 - **揭屏能成立的前提是卡元素的 `data-duration` 覆盖整个入场窗口**：hyperframes 引擎按 `data-start`/`data-duration`
   硬切 clip 可见性，补间排在窗口外等于没写（这正是旧 cross-fade 版查出的 bug：边界帧全黑、那一刻 GSAP opacity 仍是 0.999）。窗口 `[win_start, next_start]` 与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐；末卡窗口铺到成片结束。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`，压在氛围光 `::after` 与内容之下）。透明卡做 wipe 时上一段文字会从新页底下透出，画面出现双影叠字（逐帧实拍复现）。
+- **整页画布段（`layout: "canvas"`）不参与模板转场**：它的 `wipe` 在 clips 预处理里被强制归零，命中既有的"瞬间切"路径——引导线、旧页剥离、底缘暗边三处都以 `wipe<=0` 为闸自动不生成，画布页在自己的**音频起点**整页出现（不向后借擦除窗口，因此导演每一拍的时间锚点都与画面严格对齐），退场则被下一页直接盖住；相邻的 slot/agenda 段转场原样保留（画布页作为"上一页"时也不被剥走——把一张活 diagram 像纸一样掀起来正是"演"要取代的翻页感）。理由：擦除/剥离是**图层级**的翻页语言，与导演逐拍揭示同一页内部元素是两种叙事，叠在一起只会让第一拍落在还没揭完的页上互相抢戏；画布段是"一个连续镜头"，不需要转场道具。此规则按**版式**判定而非按擦除档，四档 `style` 下一律生效。代价是硬的：切过去的那一瞬间画布还是空的（导演从空场开始逐拍画），要消除这段空窗就得让导演的第一拍尽早落子（`at_time` 靠前的锚点、或第一拍即为整页底图/坐标轴）——见 `references/image_options.md`「SVG 动画：两档」。**同一档硬切还给了另一种页**：images.json 写 `stage: "keep"` 的跨段接续页也被强制 `wipe=0`、也不生成配图入场补间，因为它的起点是上一页演完的那幅画面，再演一次揭页就是穿帮（口径见 `references/image_options.md`「跨段场景延续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
   **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`（曾因此让竖屏配图的 y 滑入整条失效，实测过程见 `git log`）。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
-- 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：画面中央的氛围光、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
+- 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
 ## 版式真源
 
-画布尺寸、标题区、句子流、圆角、动画等版式数值都从 `scripts/_template.py` 派生 CSS 变量。新增视觉参数一律先加到 `_template.py`，再由 HTML renderer 注入 `--ctv-*` 变量。
+画布尺寸、标题区、句子流、圆角、动画等版式数值都从 `scripts/_template.py` 派生 CSS 变量，配色由 `scripts/_theme.py` 派生。新增视觉参数一律先加进这两个 py，再由 HTML renderer 注入 `--ctv-*` 变量；哪些常量允许留在 `templates/composition.css`（以及 `@font-face`、`verse.clipPad` 这两处与模板值的联动代价）写在 CSS 自己的文件头与各块注释里。
 
 模板改动后直接重新生成 HTML，在浏览器打开 `hf-project/index.html` 逐段看一遍预览（版式问题在这一步发现最便宜）。
 
@@ -63,6 +66,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 - 内容段画布：尺寸与配图规格见 `references/image_options.md`（第 4 步的配图规则以它为准）；素材一律 `cover` 铺满画布。
 - 视频素材按 `loop muted autoplay playsinline` 播放，播放进度与段落时间轴**不做逐帧同步**：段落显示多久由时间轴决定，视频只是循环填充；比段落长的视频渲染只显示前段（生成时有 warn 提示）。代价是同一秒的画面不保证可复现——`<video>` 走页面墙钟，多 worker 各自从 0 起播，抓到的帧可能不同；对"必须对上某句话"的画面改用剪好的静态poster序列或换段落，别指望视频帧同步。是否观感正确仍以预览和成片为准。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片），工具不会替代内容判断。
+- **方式 C SVG 的「导演」（时间轴同步动画）**：images.json 给该段写 `director` 时，这张 SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（见 image_options.md 方式 C「SVG 动画：两档」）。与视频那条相反——导演是**逐帧可复现的属性补间**（挂在同一条时间线上，位置 = `seg.sentences[at].start_time`），seek 到同一时刻必然同一帧，正因为如此内联时会剥掉 SMIL / CSS 动画这类墙钟运动。安全代价（内联=同源活节点）由净化兜住：`<script>`/`on*`/`<foreignObject>`/外链一律删除。要时间轴同步的状态变化用它，纯氛围循环仍走 `<img>`+墙钟。
 
 ## HTML 预览与渲染
 
@@ -97,6 +101,42 @@ hf-project/
 ### 3. 正式渲染
 
 渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
+
+### 4. 单段快渲（`--only`）
+
+改完一页想立刻看成片效果，不必重跑整条管线：`run.py --only seg3 ...` 复用上次 TTS 的 `timing_manifest.json` 与 `combined.wav`（**不重跑配音**），把这一页切成子 manifest，渲成项目目录里的 `preview_seg3.mp4`。
+
+- **产出的都是 `preview_*` 前缀**：`preview_seg3.html` / `.wav` / `.manifest.json` / `.images.json` / `.report.json` / 成片。`index.html`、`out.mp4`、`production_report.json` 一个都不碰（实测跑完再核对，正式产物仍是上一次完整管线的结果），所以预览和定稿可以并排放。
+- **窗口从下一句开口往回切**：这一页在片中的可见窗口一直铺到下一段开始说话，不是铺到本段最后一个字结束——切出来的音频和成片边界与整片一致，才看得出"下一句压上来"的实际观感。
+- **`stage: "keep"` 的接续链从链首渲**：`--only seg3` 遇到 seg3 接续 seg2，会自动把 seg2 一起装进子 manifest 并从 seg2 的音频起点切片，否则预览片里只有半截画面、接续效果根本看不见（日志会打一条"接续"说明带上了哪几页）。
+- **该拦的照拦**：没有 `timing_manifest.json`/配音 → exit 2；这一页缺配图 → exit 2（连 `--until html` 也拦，预览只服务定稿的页）。**TTS 参数直接拒绝而不是静默忽略**（`--speed`/`--voice-id`/`--bgm` 等）：这一档不重跑配音，静默吃掉参数等于让你以为预览片反映了你刚改的语速。`--dry-run` 与 `--until tts|images` 同样拒。
+- 实测：21.7s 双页链、`--fps 12 --quality draft --workers 4` → 32s 出片（其中渲染 32.0s，含上面说的约 8.5s 固定开销）。比整片重渲便宜得多，但比 `--until html` + 浏览器预览贵——**先看版式再渲这一档**，别拿它当代替预览。
+
+### 5. 透明底导出（`--alpha`，只认 mov）
+
+`run.py --alpha --format mov` 出带 alpha 通道的 ProRes 4444 成片，用来叠在别的素材上（剪映/AE/直播贴片）。`--alpha` 只做画面侧的一件事：给 `<html>` 挂 `ctv-alpha` 类，让模板那三层"底"（主题渐变 `.bg`、页缘网格 `.grid`、本段 accent 氛围光 `::after`）不画，成片只剩内容层——标题、句子流、配图/导演层、进度条。选择器写法与两处决胜代价写在 `templates/composition.css` 的 `ctv-alpha` 段。
+
+**容器只有 `mov` 认这件事**，`run.py` 在跑任何一步之前就把 `--alpha` 配 `mp4`/`webm` 的组合 exit 2：
+
+- `mp4`：容器压根没有 alpha 通道，透明处渲成黑底。
+- `webm`：**实测丢平面**。hyperframes 0.8.114 / Windows 会把透明页渲成不带 alpha 的 webm——渲染日志照样打 `"needsAlpha":true`，容器元数据照样写 `alpha_mode=1`，但成片逐帧 `pix_fmt=yuv420p`，透明处压成纯黑。**别信那两条声明，只信逐帧像素格式**。哪天渲染器修好了，判据就是下面这两条命令，实测通过再放开 `run.py` 里那条校验。
+
+判据（本项目自己的产物实测，1080×1440 / 21.7s / 261 帧）：
+
+```bash
+# ① 逐帧像素格式：透明底必须有 a 平面。同一份 HTML：
+#    mov  → 261 帧全是 yuva444p12le
+#    webm → 261 帧全是 yuv420p（这一条就是丢平面的直接证据）
+ffprobe -v error -select_streams v:0 -show_entries frame=pix_fmt -of csv=p=0 out.mov | sort | uniq -c
+
+# ② alpha 值真的分布两端：抽一帧转 rgba 数一下。实测第 200 帧
+#    alpha=0 占 83.9%（三层底）、alpha=255 占 3.7%（内容），中间是字形抗锯齿
+ffmpeg -v error -i out.mov -vf "select=eq(n\,200)" -frames:v 1 -pix_fmt rgba f.png
+```
+
+`-show_entries stream=pix_fmt` 那种流级读法不能当证据——它报的是声明，与逐帧实测可以不一致（webm 那侧就是声明带 alpha、帧里没平面）。最直观的一验是叠到纯色底上看：`ffmpeg -f lavfi -i color=magenta:s=1080x1440 -i f.png -filter_complex overlay out.png`，透明底正确时洋红只被内容层挡住，整片背景全是洋红。
+
+代价是体积：同一条 21.7s 竖屏，mp4/webm 各 1.2MB，mov **185.7MB**（约 8.5MB/s，`--fps 24` 还要翻倍）。所以透明底是**交付格式**而不是迭代格式——迭代照旧 `--fps 12 --quality draft` 渲 mp4 看，定稿要叠轨了再单独出一版 mov。`--only` 也吃这两面旗（`--only seg3 --alpha --format mov` 出 `preview_seg3.mov`），单页试叠就靠它。
 
 ## 性能参数
 

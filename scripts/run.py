@@ -29,7 +29,10 @@ from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产
 from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
-from _manifest_schema import load_timing_manifest  # noqa: E402
+from _manifest_schema import (load_timing_manifest,  # noqa: E402
+                              validate_timing_manifest)
+from _preview_slice import chain_sids, build_subset, subset_images  # noqa: E402
+from _audio import get_ffmpeg, measure_duration, trim_audio  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
@@ -46,6 +49,10 @@ import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
 # 制作报告的 out 目录：main() 一解析出 -o/--output 就赋值
 _REPORT_DIR = None
+# 制作报告的文件名。正式流程是 production_report.json；--only 预览换成
+# preview_<段id>.report.json —— 预览片不该把上一次正式跑的报告覆盖掉
+# （main() 里无条件赋值）。
+_REPORT_FILE = "production_report.json"
 # --dry-run 承诺"不写任何文件"（见参数 help），旁路制作报告也不能例外
 # ——失败路径同样只打印不落盘。main() 解析完参数就置 True。
 _DRY_RUN = False
@@ -130,7 +137,25 @@ def _run_step(fn, argv, step_name):
 def _report_path():
     """制作报告写到哪：out 目录（跟 timing_manifest.json 放一起），
     main() 在首个写报告点之前无条件赋 _REPORT_DIR。"""
-    return os.path.join(_REPORT_DIR, "production_report.json")
+    return os.path.join(_REPORT_DIR, _REPORT_FILE)
+
+
+def _load_manifest_or_exit(manifest_path):
+    """读并校验 timing_manifest.json，坏文件报成人话而不是 traceback。
+
+    走 _manifest_schema 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
+    的半途，文件是截断的 JSON，裸 load 会抛 JSONDecodeError traceback，
+    用户看到的堆栈跟"TTS 产物坏了、该重跑"这个真实原因毫无关系。
+    load_timing_manifest 把缺字段/坏结构报成一句人话（ValueError），这里转成
+    带路径的退出——正式流程与 --only 预览共用这一份口径。
+    """
+    try:
+        return load_timing_manifest(manifest_path)
+    except ValueError as e:
+        raise SystemExit(
+            f"[run] timing_manifest.json 无法读取（{manifest_path}）：{e}\n"
+            "文件可能被上次中断的写入截断或结构不合法；"
+            "请重跑 TTS 步骤重新生成后再来。")
 
 
 def _image_coverage(manifest_path, images_json):
@@ -148,18 +173,8 @@ def _image_coverage(manifest_path, images_json):
     agenda 卡（章节罗列/要点总结），两画幅都不配图，但那一页换成整页画布
     （opening_layout / closing_layout: "canvas"）后，配图就是它唯一的画面，同样计入。
     """
-    # 走 _manifest_schema 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
-    # 的半途，文件是截断的 JSON，裸 load 会抛 JSONDecodeError traceback，
-    # 用户看到的堆栈跟"TTS 产物坏了、该重跑"这个真实原因毫无关系。
-    # load_timing_manifest 把缺字段/坏结构报成一句人话（ValueError），这里
-    # 转成人话退出——与下方 images.json 及主流程降级检测同一口径。
-    try:
-        manifest = load_timing_manifest(manifest_path)
-    except ValueError as e:
-        raise SystemExit(
-            f"[run] timing_manifest.json 无法读取（{manifest_path}）：{e}\n"
-            "文件可能被上次中断的写入截断或结构不合法；"
-            "请重跑 TTS 步骤重新生成后再来。")
+    # 走 _load_manifest_or_exit：正式流程与 --only 预览对坏 manifest 的报错同源。
+    manifest = _load_manifest_or_exit(manifest_path)
     # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
     # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。口径走
     # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
@@ -187,6 +202,160 @@ def _image_coverage(manifest_path, images_json):
     return manifest, sids, missing_keys, missing_files
 
 
+# 只作用于 TTS 步骤的旗标：--only 复用上次配音产物，一个都不消费它们。
+_TTS_ONLY_FLAGS = ("speed", "voice_id", "voice_style", "gap", "bgm",
+                   "bgm_volume", "loudness", "on_fail", "no_resume")
+
+
+def _run_preview(args, out, project):
+    """``--only <段id>``：把一页（连同 stage:"keep" 的接续前缀）单独渲成预览片。
+
+    与正式流程的三条边界，都是刻意的：
+
+    1. **不跑 TTS**。读现成的 timing_manifest.json，按段窗口用 ffmpeg 切一小段
+       音频、时间轴整体重基到 0（_preview_slice）。改配音就没有"快"可言了。
+    2. **正式产物一个都不碰**：index.html / out.mp4 / production_report.json
+       原地不动，预览件全部以 ``preview_<段id>.`` 前缀落在项目目录里。用前缀而不
+       是子目录，是因为 images.json 的 src 相对 HTML 所在目录 —— 预览 HTML 必须
+       住在项目根，否则得连配图目录一起复制一份。
+    3. **缺图一律拦**，不吃正式流程"--until html 警告放行"那条例外：预览片的用途
+       就是"看这一页定稿后怎么动"，画布页缺图连 HTML 都出不来，警告只会浪费一次
+       往返。
+    """
+    global _REPORT_DIR, _REPORT_FILE
+    sid = args.only
+    manifest_path = os.path.join(out, "timing_manifest.json")
+    if not os.path.isfile(manifest_path):
+        print(f"[run] --only 复用上次 TTS 的产物，但 {manifest_path} 不存在。\n"
+              "请先不带 --only 跑一次管线（--until tts 就够）。", file=sys.stderr)
+        sys.exit(2)
+    full = _load_manifest_or_exit(manifest_path)
+    images_path = os.path.join(project, "images.json")
+    images = {}
+    if os.path.isfile(images_path):
+        try:
+            images = load_images_json(images_path)
+        except ValueError as e:
+            raise SystemExit(f"[run] --only：images.json 读不出来（{e}）——"
+                             "预览要看的就是这一页的配图与动画，请先修好该文件。")
+    try:
+        chain = chain_sids(full, images, sid)
+        subset, (t0, t1) = build_subset(full, images, sid)
+    except ValueError as e:
+        print(f"[run] --only {sid}：{e}", file=sys.stderr)
+        sys.exit(2)
+    if len(chain) > 1:
+        print(f"[run] {sid} 由 {' → '.join(chain[:-1])} 接续而来"
+              f"（stage: \"keep\"），预览片从链首 {chain[0]} 一起渲。")
+    if full.get("status") == "degraded":
+        print("[run][warn] 本次预览用的是 status=degraded 的配音产物"
+              "（正式渲染会拦住它）。", file=sys.stderr)
+
+    # 音频切片。候选顺序直接借 gen_hyperframes 那份实现：绝对路径 / 项目根 /
+    # cwd / manifest 目录，两边各写一套相对路径规则迟早漂移。
+    src_audio = full.get("combined_audio") or os.path.join("audio", "combined.wav")
+    cands = gen_hyperframes._audio_candidates(src_audio, project, out)
+    audio_abs = next((p for p in cands if os.path.isfile(p)), None)
+    if audio_abs is None:
+        print("[run] --only 要切音频，但 " + src_audio + " 找不到（找过："
+              + "、".join(os.path.abspath(p) for p in cands)
+              + "）。请先重跑 TTS 步骤。", file=sys.stderr)
+        sys.exit(2)
+    need = round(t1 - t0, 3)
+    preview_wav = os.path.join(project, f"preview_{sid}.wav")
+    try:
+        trim_audio(get_ffmpeg(), audio_abs, preview_wav, t0, need)
+    except (RuntimeError, OSError) as e:
+        print(f"[run] --only 切音频失败：{e}", file=sys.stderr)
+        sys.exit(2)
+    # total_duration 以实测为准（契约注释就写着"应为 ffmpeg 实测总时长"）；
+    # 测量失败返回 0.0，退回按窗口算的 need，不让一个量不出来的时长卡住预览。
+    got = measure_duration(get_ffmpeg(), preview_wav)
+    subset["total_duration"] = round(max(got, need), 3)
+    if got and got + 0.05 < need:
+        print(f"[run][warn] 切出的音频实测 {got:.2f}s，比这一页的时间窗口 {need:.2f}s"
+              f" 短（源音频末尾本就到不了 {t1:.2f}s）——预览片尾部会静音。",
+              file=sys.stderr)
+    subset["combined_audio"] = os.path.abspath(preview_wav)
+
+    sub_manifest = os.path.join(project, f"preview_{sid}.manifest.json")
+    sub_images = os.path.join(project, f"preview_{sid}.images.json")
+    try:
+        validate_timing_manifest(subset)
+    except ValueError as e:
+        print(f"[run] --only 切出的子集 manifest 没过自身契约：{e}\n"
+              "这是重基逻辑的 bug，请带着这行报错反馈（正式流程不受影响）。",
+              file=sys.stderr)
+        sys.exit(2)
+    write_json_atomic(sub_manifest, subset)
+    write_json_atomic(sub_images, subset_images(images, chain))
+
+    # 预览报告写进项目目录、独立文件名：--run_step 的失败落盘也走这条路，
+    # 于是上一次正式跑的生产报告绝不会被一次预览覆盖掉。
+    _REPORT_DIR = project
+    _REPORT_FILE = f"preview_{sid}.report.json"
+    _REPORT["params"] = {k: v for k, v in _REPORT["params"].items()
+                         if k not in _TTS_ONLY_FLAGS}
+    _REPORT["params"].update({"only": sid, "preview_window": [round(t0, 3),
+                             round(t0 + need, 3)], "chain": chain})
+
+    _tm, all_sids, missing_keys, missing_files = _image_coverage(sub_manifest,
+                                                                 sub_images)
+    _missing = sorted(set(missing_keys) | set(missing_files))
+    _REPORT["images"] = {"total": len(all_sids),
+                         "matched": len(all_sids) - len(_missing),
+                         "missing": len(_missing)}
+    if _missing:
+        print("[run] 预览只服务定稿的页，以下段落缺配图："
+              + "、".join(_missing)
+              + f"\n请补图并写进 {images_path} 后重跑本命令。", file=sys.stderr)
+        _write_report(_report_path())
+        _print_report_summary()
+        sys.exit(2)
+    # 降级项照常记进预览报告（可见性），但不拦：预览片不是交付物。
+    _deg = degraded_items(_tm)
+    if _deg or _tm.get("status") == "degraded":
+        _REPORT["degraded"].extend({"type": t, "count": c} for t, c, _w in _deg)
+
+    html_out = os.path.join(project, f"preview_{sid}.html")
+    html_args = ["-m", sub_manifest, "-o", html_out, "--theme", args.theme,
+                 "--aspect", args.aspect, "--fps", str(args.fps),
+                 "--images", sub_images]
+    if args.alpha:
+        html_args.append("--alpha")
+    _run_step(gen_hyperframes.main, html_args, "生成预览 HTML")
+
+    if args.until == "html":
+        _REPORT["skipped"].append("render（--only --until html）")
+        _write_report(_report_path())
+        print(f"[run] 已生成预览 {html_out}。去掉 --until html 重跑本命令即可出片。",
+              file=sys.stderr)
+        _print_report_summary()
+        return
+
+    out_preview = os.path.join(project, f"preview_{sid}.{args.fmt}")
+    hf_render = build_render_command(
+        out_preview, args.quality, args.fps, args.workers,
+        command=hyperframes_command(project),
+        composition=os.path.basename(html_out),
+        fmt=args.fmt)
+    t0_render = time.time()
+    try:
+        render_wait(hf_render, out_preview, cwd=project,
+                    max_wait=max(600.0, subset["total_duration"] * 10 + 600))
+    except SystemExit:
+        _REPORT["steps"].append({"name": "渲染预览", "seconds":
+                                 round(time.time() - t0_render, 1), "ok": False})
+        _write_report(_report_path())
+        raise
+    _REPORT["steps"].append({"name": "渲染预览", "seconds":
+                             round(time.time() - t0_render, 1), "ok": True})
+    print(f"\n[run] 预览完成：{out_preview}（段 {sid}，{need:.1f}s）\n"
+          "正式产物未受影响：index.html / out.mp4 仍是上一次完整管线的结果。")
+    _write_report(_report_path())
+    _print_report_summary()
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(description="信源转视频一键编排（薄组合层）")
     parser.add_argument("--source", required=True, help="segments_source.json 路径")
@@ -199,6 +368,12 @@ def _build_parser():
                         help="跑到该步骤为止（默认 render；迭代时用 html："
                              "生成 HTML 即停，先看版式和配图再渲染）")
     parser.add_argument("--no-resume", action="store_true", help="TTS 不用 --resume")
+    parser.add_argument("--only", default=None, metavar="SEG_ID",
+                        help="单段快渲：只把这一页（连同它 stage:\"keep\" 的接续前缀）渲成"
+                             "预览片 preview_<SEG_ID>.mp4。复用上次 TTS 的 "
+                             "timing_manifest.json 与配音，不重跑配音，也不碰 "
+                             "index.html / out.mp4 / production_report.json。"
+                             "改稿件、语速、音色或任何 TTS 参数时去掉本旗标跑完整管线")
     parser.add_argument("--theme", default=DEFAULT_THEME, choices=list_theme_names())
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
@@ -211,6 +386,17 @@ def _build_parser():
     parser.add_argument("--quality", default="standard",
                         choices=["draft", "standard", "high"],
                         help="渲染质量（默认 standard）")
+    parser.add_argument("--format", dest="fmt", default="mp4",
+                        choices=["mp4", "webm", "mov"],
+                        help="成片容器（透传 hyperframes render --format，默认 mp4）。"
+                             "要透明底只有 mov 认（ProRes 4444，实测逐帧带 alpha 平面）；"
+                             "webm 本技能实测渲出来是黑底不透明，见 references/rendering.md"
+                             "「透明底导出」。gif/hls/"
+                             "png-sequence 本编排层没接，需要就直接调 npx hyperframes render")
+    parser.add_argument("--alpha", action="store_true",
+                        help="透明底导出：生成 HTML 时挂 ctv-alpha 类，页面渐变/网格/"
+                             "段落氛围光三层不画，成片只剩内容层。"
+                             "必须配 --format mov——mp4 没有 alpha 通道，webm 实测丢平面")
     parser.add_argument("--workers", type=int, default=4,
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
                              "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
@@ -252,12 +438,13 @@ def _build_parser():
 
 def main():
     setup_stdio()
-    global _REPORT_DIR, _REPORT, _DRY_RUN, _RUN_T0
+    global _REPORT_DIR, _REPORT, _REPORT_FILE, _DRY_RUN, _RUN_T0
     # 同一进程里重复调用 main()（import run 后直接调用的测试/嵌入式用法）
     # 时，模块级 _REPORT 不能累积上一次的 steps/skipped——每次都从空白
     # 报告开始。
     _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
     _DRY_RUN = False
+    _REPORT_FILE = "production_report.json"
     _RUN_T0 = time.time()
     parser = _build_parser()
     args = parser.parse_args()
@@ -280,6 +467,41 @@ def main():
         parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
     if args.workers < 1:
         parser.error("--workers 必须是正整数")
+    # 只在显式要透明底时才当这件事：--alpha 单独出现意味着用户不知道成片会不会
+    # 真的带 alpha，报一句比给他一片黑底便宜得多。
+    # 为什么 webm 也算错的那一侧：实测（hyperframes 0.8.114 / Windows）透明页
+    # 渲成 webm 后容器里根本没有 alpha 平面——ffprobe 逐帧报 pix_fmt=yuv420p，
+    # 把透明处压成纯黑，只有那条 alpha_mode=1 元数据在说谎；同一份 HTML 渲 mov
+    # 逐帧报 yuva444p12le、透明处 alpha=0。所以只认 mov（ProRes 4444）。
+    # 哪天渲染器修好了 webm，放开这一行即可（判据就是上面那两条 ffprobe 命令）。
+    if args.alpha and args.fmt != "mov":
+        parser.error("--alpha 只有 --format mov 拿得到透明底（ProRes 4444，实测逐帧 "
+                     "yuva444p12le、透明处 alpha=0）："
+                     + ("mp4 容器不带 alpha 通道，透明处会渲成黑底"
+                        if args.fmt == "mp4" else
+                        "webm 在本机实测丢平面（容器只报 yuv420p，透明处压成纯黑，"
+                        "alpha_mode=1 那行元数据不作数）")
+                     + "。要透明底就改 --format mov；只要一个小体积的不透明容器，"
+                       "去掉 --alpha 用 webm 没问题。")
+
+    # ── --only 的入参冲突：这一档走的是独立分支（见 _run_preview），
+    # 上面三条通用校验照样适用。
+    if args.only:
+        # --only 不重跑 TTS：任何配音参数都没有落点。静默忽略等于让用户以为
+        # 预览片反映了他刚改的 --speed。判"有没有显式给出"用 argparse 默认值
+        # 比对，显式传了与默认值相同的数字会漏判——但那次漏判不改变行为。
+        _ignored = [f"--{k.replace('_', '-')}" for k in _TTS_ONLY_FLAGS
+                    if getattr(args, k) != parser.get_default(k)]
+        if _ignored:
+            parser.error("--only 复用上次 TTS 的定稿产物、不重跑配音，"
+                         + "、".join(_ignored)
+                         + " 只能落在完整管线上：要按这些参数出片请去掉 --only")
+        if args.dry_run:
+            parser.error("--only 会切音频并生成预览 HTML，与 --dry-run 的"
+                         "不写任何文件相互矛盾")
+        if args.until in ("tts", "images"):
+            parser.error(f"--only 配 --until {args.until} 没有意义："
+                         "预览的边界只有 html 与 render")
 
     out = os.path.abspath(args.output)
     project = os.path.abspath(args.project) if args.project else \
@@ -299,11 +521,18 @@ def main():
         "canvas": "{}x{}".format(*get_canvas(args.aspect)),
         "fps": args.fps,
         "quality": args.quality,
+        "format": args.fmt,
+        "alpha": bool(args.alpha),
         "speed": args.speed,
         "voice_id": args.voice_id,
         "loudness": args.loudness,
         "on_fail": args.on_fail,
     }
+
+    # ── --only：在第 3 步之前分叉出去，跑完直接收工 ─────────────────
+    if args.only:
+        _run_preview(args, out, project)
+        return
 
     # ── 第 3 步：TTS ──────────────────────────────────────────────
     tts_args = ["--source", args.source, "-o", out]
@@ -458,6 +687,8 @@ def main():
                  "--fps", str(args.fps)]
     if has_images:
         html_args += ["--images", images_json]
+    if args.alpha:
+        html_args.append("--alpha")
     _run_step(gen_hyperframes.main, html_args, "生成 HTML")
 
     # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s
@@ -476,9 +707,10 @@ def main():
         return
 
     # ── 第 5 步 b：渲染 ───────────────────────────────────────────
-    out_mp4 = os.path.join(project, "out.mp4")
+    out_video = os.path.join(project, f"out.{args.fmt}")
     hf_render = build_render_command(
-        out_mp4, args.quality, args.fps, args.workers, command=_HF_COMMAND,
+        out_video, args.quality, args.fps, args.workers, command=_HF_COMMAND,
+        fmt=args.fmt,
     )
     # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
     # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟
@@ -487,7 +719,7 @@ def main():
     _render_cap = max(1800.0, float(_tm["total_duration"]) * 10 + 600)
     t0_render = time.time()
     try:
-        render_wait(hf_render, out_mp4, cwd=project, max_wait=_render_cap)
+        render_wait(hf_render, out_video, cwd=project, max_wait=_render_cap)
     except SystemExit:
         _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": False})
         _write_report(_report_path())
@@ -497,7 +729,7 @@ def main():
     # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
     # 的整容器解码），失败路径一律 SystemExit——不再补一遍 isfile/getsize。
 
-    print(f"\n[run] 完成。成片：{out_mp4}", flush=True)
+    print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())
     _print_report_summary()
 

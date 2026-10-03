@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<!-- class 由 run.py --alpha 填成 ctv-alpha（关掉页面背景/网格/氛围光三层，
+     见 composition.css 末尾）；正常出片时是空串。 -->
+<html lang="zh-CN" class="">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1080,height=1440">
@@ -87,6 +89,11 @@ body{font-family:var(--ctv-font-family)}
    所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
    三处并存时改一处不生效。 */
 .seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 导演模式的内联 SVG（.svg-inline）：铺满槽位，和 <img>+object-fit:cover 同款。
+   cover 语义由 SVG 根节点自带的 preserveAspectRatio="xMidYMid slice" 承担（净化时
+   写入，见 _svg_sanitize），这里只负责把它撑到 100%×100%；z-index 与 img 一致，
+   让内描边 ::after 照常收边（bare-media 时又被撤掉，与 <img> SVG 同路径）。 */
+.seg-image.svg-inline>svg{position:relative;z-index:1;width:100%;height:100%;display:block}
 /* 配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边），SVG 配图
    除外（见下面 bare-media）。两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
 .seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
@@ -183,6 +190,13 @@ body{font-family:var(--ctv-font-family)}
    （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
 [data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
 [data-aspect] .seg-canvas .seg-image::after{display:none}
+/* 画布页的氛围光要比槽位那枚**大得多、软得多**：画布页不画满幅底板，主题渐变 + 网格 +
+   这团光就是它全部的景深来源。槽位那枚 58%×42% 的光斑放到整屏上只盖住中间一小块，
+   边缘仍是平的，而且它的椭圆边界在深色页底上看得出来——读作糊在主视觉后面的一块色斑而不是
+   打光。所以这里取近全屏的宽高、把中心略抬到主视觉一带、并把截止点推到 82% 让边界消失。
+   抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
+   网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
+[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(135% 85% at 50% 42%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 82%)}
 /* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
    的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
    段进度整个盖掉。 */
@@ -234,6 +248,17 @@ body{font-family:var(--ctv-font-family)}
    截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
+
+/* ── 透明底导出（run.py --alpha → <html class="ctv-alpha">）───────────────
+   页面渐变、网格、段落氛围光这三层是"底"：叠到别的素材上就是一团掀不掉的雾，
+   所以 --alpha 整层关掉它们，只留内容（标题、句子流、配图、进度条）。
+   写在全表最末尾（变量表之前）：氛围光那三条按画幅/画布各有各的选择器，其中
+   [data-aspect] .seg-card.seg-canvas::after 与本表最后这组同为 0,3,1，只能靠
+   源序决胜；变量注入点会随渲染参数变化，位置在这里是唯一稳定的"后面"。
+   :root.ctv-alpha 压过末尾注入的 :root 变量表靠的是优先级（0,2,0 > 0,1,0），
+   与源序无关 —— 光写 html{--ctv-bg-gradient:...} 是盖不住的。 */
+:root.ctv-alpha{--ctv-bg-gradient:transparent;--ctv-grid-color:transparent}
+:root.ctv-alpha .seg-card::after,:root.ctv-alpha .seg-canvas::after{background:none}
 
 :root{
   --ctv-w:1080px;--ctv-h:1440px;
@@ -305,9 +330,8 @@ body{font-family:var(--ctv-font-family)}
     
     <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f"><div class="verse-line" data-i="1">这是第一段的第一句。</div><div class="verse-line" data-i="2">这是第一段的第二句，稍微长一点点。</div></div></div>
       <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
-    <div class="peel-shade" id="shade-seg-a" style="height:115px"></div>
 </div>
-  <div id="seg-b" class="clip seg-card seg-canvas" data-start="6.80" data-duration="5.20" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
+  <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
     <div class="bg"></div>
     <div class="grid"></div>
 
@@ -315,9 +339,7 @@ body{font-family:var(--ctv-font-family)}
       <img src="images/seg-b.svg" alt="">
     </div>
     <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
-      <div class="reveal-line" id="line-seg-b" style="height:6px"></div>
-    <div class="peel-shade" id="shade-seg-b" style="height:115px"></div>
-</div>
+  </div>
   <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
     <div class="bg"></div>
     <div class="grid"></div>
@@ -356,15 +378,10 @@ tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",
   tl.from("#title-seg-a",{scale:0.5,duration:0.50,ease:"back.out(1.7)"},2.40)
   tl.from("#img-seg-a",{opacity:0,y:40,duration:0.80,ease:"power2.out"},2.60)
   tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
-  tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},6.80)
-  tl.fromTo("#line-seg-b",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},6.80)
-  tl.to("#seg-a",{y:-432.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},6.80)
-  tl.to("#shade-seg-a",{opacity:1,duration:0.40,ease:"power2.in"},6.80)
+  tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.00,ease:"power2.inOut"},7.20)
   tl.to("#prog-seg-b",{width:"100%",duration:4.40,ease:"none"},7.20)
   tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},11.60)
   tl.fromTo("#line-closing",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},11.60)
-  tl.to("#seg-b",{y:-432.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},11.60)
-  tl.to("#shade-seg-b",{opacity:1,duration:0.40,ease:"power2.in"},11.60)
   tl.from("#title-closing",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},12.00)
   tl.to("#prog-closing",{width:"100%",duration:2.00,ease:"none"},12.00)
 

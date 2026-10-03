@@ -181,11 +181,33 @@ class Gates(unittest.TestCase):
         self.assertIn("跳过的步骤", out)
         self.assertIsNone(self.h.gen_argv)
 
+    def _drop_image_key(self, sid):
+        """把某个段的配图映射从 images.json 里去掉（保留其余段）。"""
+        self.h.make_images_complete()
+        path = os.path.join(self.h.project, "images.json")
+        with open(path, encoding="utf-8") as f:
+            mapping = json.load(f)
+        mapping.pop(sid, None)
+        write_json_atomic(path, mapping)
+
     def test_until_html_warns_but_generates(self):
+        # 只缺槽位段的图：那一页少了配图但仍能出 HTML 看版式，缺图降级成警告
+        self._drop_image_key("seg-a")
         _, err = self.h.invoke(["--until", "html"])
         self.assertIn("还没有定稿配图", err)
         self.assertIn("继续生成 HTML", err)
         self.assertTrue(os.path.isfile(os.path.join(self.h.project, "index.html")))
+
+    def test_until_html_canvas_missing_blocks(self):
+        # 整页画布缺图：那一页没有标题层也没有句子流层，配图是唯一画面，
+        # gen_hyperframes 在生成期必然拦下——run.py 不该先承诺"继续生成
+        # HTML 供预览"再让下一步失败，所以这里同样 exit 2 并点名画布段。
+        self._drop_image_key("seg-b")  # seg-b 是 layout:"canvas"
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("整页画布", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv, "画布段缺图不能进 HTML 步骤")
 
     def test_missing_files_block_even_for_until_html(self):
         # images.json 有键但文件不在：映射指向坏路径，不是"图没画完"

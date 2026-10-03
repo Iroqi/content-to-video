@@ -41,7 +41,7 @@ def is_valid_sid(sid):
 
 
 def is_content_sid(sid):
-    """该 sid 是否属于"需要配图的内容段落"（排除 opening/closing）。
+    """该 sid 是否属于"内容段"（以 seg 前缀判定，排除 opening/closing）。
 
     注意这只回答"段 id 是不是内容段"，不再等于"这一页要不要配图"——结构性页
     换成整页画布后那一页的唯一画面就是配图。判配图一律走 needs_image()。
@@ -56,20 +56,23 @@ def needs_image(seg):
     （agenda 卡纯文字），但 layout:"canvas" 那一页整页就是那张图，不计入的话
     覆盖率会报"全部命中"而 HTML 步骤必然 exit 1。两边各写一份口径的代价就是
     一个拦一个放，报告数字和实际能不能出片对不上。
+
+    seg 是已过契约的 manifest 段（id 非空由 _manifest_schema 把守），直接下标；
+    留 .get 兜底等于宣称"id 可能缺失"，而那种数据根本到不了这里。
     """
-    return is_content_sid(seg.get("id")) or seg_layout(seg) == "canvas"
+    return is_content_sid(seg["id"]) or seg_layout(seg) == "canvas"
 
 
 def sids_needing_image(manifest):
-    """manifest 里"需要配图"的段 id 列表（按段落顺序，跳过空 id）。
+    """manifest 里"需要配图"的段 id 列表（按段落顺序）。
 
     这是 needs_image() 的遍历封装，存在的理由只有一个：run.py 的覆盖率统计与
     gen_hyperframes 的缺图提示原先各抄一份同样的列表推导，并在注释里互相指认
     "同一口径"——那种口径靠人维持，改一边就漏一边（报告说图齐了而出片失败）。
     要不要因缺图而拦，仍归各自决定，这里只回答"该有哪些段有图"。
     """
-    return [sid for seg in manifest.get("segments", [])
-            if (sid := seg.get("id", "")) and needs_image(seg)]
+    return [seg["id"] for seg in manifest.get("segments", [])
+            if needs_image(seg)]
 
 
 # 段落版式三档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
@@ -94,7 +97,7 @@ def seg_layout(seg):
     lay = seg.get("layout")
     if lay:
         return lay
-    return "agenda" if (seg.get("id") or "") in STRUCTURAL_SIDS else "slot"
+    return "agenda" if seg["id"] in STRUCTURAL_SIDS else "slot"
 
 
 def _validate_layout(value, where, *, content=False):

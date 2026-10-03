@@ -28,7 +28,7 @@ from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402  --theme choice
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
 from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
-from _segments import sids_needing_image  # noqa: E402
+from _segments import sids_needing_image, seg_layout  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
@@ -392,6 +392,15 @@ def main():
     if missing_keys:
         # 只有真要出片才拦：--until html 是"图没画完先看版式"的迭代路径，
         # 同一份缺图清单在那里只降级成警告。missing 的口径见 _image_coverage。
+        #
+        # 唯一例外是整页画布：那一页没有标题层也没有句子流层，配图就是整个
+        # 画面，gen_hyperframes 在生成期必然 exit 1（canvas_layout_errors）。
+        # 对它承诺"继续生成 HTML 供预览"是兑现不了的承诺——打印完这句紧接着
+        # 就是一条 [error]，两条信息自相矛盾。所以画布段缺图不分 --until，
+        # 与 missing_files 同样就地拦下并点名病因。
+        _layout_by_sid = {s["id"]: seg_layout(s) for s in _tm["segments"]}
+        _canvas_missing = [s for s in missing_keys
+                           if _layout_by_sid.get(s) == "canvas"]
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
               "请按第 4 步补图：ImageGen 生图（方式 B）、手绘 SVG 矢量示意图"
@@ -400,6 +409,15 @@ def main():
               f"{images_dir}。\n"
               f"然后在 {images_json} 写好各段映射后重跑本命令。",
               file=sys.stderr)
+        if _canvas_missing:
+            print("[run] 其中 " + ", ".join(_canvas_missing)
+                  + " 是整页画布（layout: \"canvas\"）：该页不生成标题层与句子流层，"
+                    "配图就是它唯一的画面，缺图时连预览 HTML 都生成不出来"
+                    "（不是「渲染前补齐即可」那一档），请先按当前画幅补图。",
+                  file=sys.stderr)
+            _write_report(_report_path())
+            _print_report_summary()
+            sys.exit(2)
         if args.until != "render":
             print("[run] 继续生成 HTML 供预览（渲染前必须补齐上面这些段）。",
                   file=sys.stderr)

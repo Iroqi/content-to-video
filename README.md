@@ -96,6 +96,12 @@ agent 才做最后一步渲染，交给你 MP4，并附一份生产报告——�
 
 给 agent 看的说明书是 [SKILL.md](SKILL.md)，四份深度参考在 `references/`（写稿、配音、配图、渲染）。**人不必读**——你只管和 agent 说话。
 
+## 维护者
+
+改完代码跑 `python -m unittest discover -s tests`（标准库，约 2 秒，不需要网络 / ffmpeg / Node）；改标题或瘦身文档后再跑 `python tests/check_docs.py` 检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
+
+发布时手动压缩技能目录，剔掉 `tests/`、`.env`（含密钥，漏进包就是泄密）、`.git/.venv/__pycache__` 与制作残渣（`audio_output/`、`hf-project/`、`out/`、`snapshots/`、`candidates.json`、`segments_source.json`、`timing_manifest.json`）；`scripts/check_svg.py` 要留着——它是第 4 步引用的生产工具，不是维护物。
+
 
 ## 授权
 

@@ -111,10 +111,26 @@ def resolve_command(cmd):
 
 
 def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         command: List[str]) -> List[str]:
+                         command: List[str],
+                         composition: str = None,
+                         fmt: str = None) -> List[str]:
+    """拼一条 `hyperframes render`。``composition`` 非空时渲染该项目里的
+    另一份 HTML（``--only`` 的单段预览片就走这条），``-c`` 必须紧跟 ``render``：
+    hyperframes 把第一个非选项参数当项目目录，参数顺序错了会连项目根都换掉。
+
+    ``fmt`` 只在非 mp4 时显式写 ``--format``：默认命令保持原样（渲染器本来就按
+    ``-o`` 的后缀推断容器），要 ProRes 4444 的 mov（透明底唯一认的容器）才多这一
+    面旗。
+    """
     base = list(command)
-    cmd = base + ["render", "-o", output, "--quality", quality,
-                  "--fps", str(fps), "--workers", str(workers)]
+    cmd = base + ["render"]
+    if composition:
+        cmd += ["-c", composition]
+    cmd += ["-o", output]
+    if fmt and fmt != "mp4":
+        cmd += ["--format", fmt]
+    cmd += ["--quality", quality,
+            "--fps", str(fps), "--workers", str(workers)]
     # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve
     # 再加参数会把参数丢在字符串外面（等于丢进 cmd 的重解析）。
     return resolve_command(cmd)

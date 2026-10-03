@@ -215,6 +215,10 @@ _TEMPLATE_JSON = r'''
       "ease": "power2.out",
       "startDelay": 0.2,
       "vert_y": 40
+    },
+    "director": {
+      "duration": 0.5,
+      "ease": "power2.out"
     }
   },
   "typography": {

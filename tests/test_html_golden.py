@@ -6,6 +6,7 @@
 import contextlib
 import io
 import os
+import re
 import unittest
 
 import _helpers as H
@@ -107,10 +108,12 @@ class Structure(unittest.TestCase):
         # 首卡没有上一页可剥离，但自己的揭屏同样带线（从 t=0 扫起）
         self.assertIn('tl.fromTo("#line-opening",{y:1440.0},{y:-6.0,'
                       'duration:0.40,ease:"power2.inOut"},0.00)', html)
-        self.assertEqual(html.count('rotation:-4'), 3)  # 剥离线数 = 换页次数
-        # 底缘暗边挂在被揭的旧卡上（opening/seg-a/seg-b 共 3 张，closing 不被揭；
-        # 1440×0.08=115px），opacity 与 peel 同窗同曲线拉起
-        self.assertEqual(html.count('class="peel-shade"'), 3)
+        # 剥离线数：整页画布段（fixture 的 seg-b）入场走硬切、既不自己 peel 上一页、
+        # 也不被下一页（closing）剥离——所以 4 段里只剩 opening 被 seg-a 揭走这 1 条。
+        self.assertEqual(html.count('rotation:-4'), 1)  # 剥离线数 = 换页次数（画布段除外）
+        # 底缘暗边只挂在被揭的旧卡上：现在只有 opening 被揭（seg-a/seg-b 因画布硬切
+        # 不再被 peel，closing 是末页），1440×0.08=115px，opacity 与 peel 同窗同曲线拉起
+        self.assertEqual(html.count('class="peel-shade"'), 1)
         self.assertIn('<div class="peel-shade" id="shade-opening" '
                       'style="height:115px"></div>', html)
         self.assertIn('tl.to("#shade-opening",{opacity:1,duration:0.40,'
@@ -120,6 +123,67 @@ class Structure(unittest.TestCase):
         self.assertNotIn('id="line-', plain)
         self.assertNotIn('rotation:-4', plain)
         self.assertNotIn('id="shade-', plain)
+
+    def test_canvas_card_hard_cuts_out_of_transitions(self):
+        """整页画布段（fixture 的 seg-b）去模板转场：入场交给导演逐拍"演"。
+
+        实现是把画布段的 wipe 归零，命中既有的"瞬间切"路径——引导线、旧页剥离、
+        底缘暗边三处都以 wipe<=0 为闸自动不生成。这里锁住"归零"带来的四个可观察
+        后果，以及"只作用于画布档、不动 slot/agenda"的边界。
+        """
+        html = render()  # line 档（模板默认）
+        # 挂载即音频起点（7.20 = seg-b 首句 start_time），不再向后借一个擦除窗口；
+        # 逐拍 at/at_time 的时间锚点因此与画面严格对齐（导演第一拍不会落在擦除中途）。
+        self.assertIn('<div id="seg-b" class="clip seg-card seg-canvas" '
+                      'data-start="7.20"', html)
+        # clip-path 补间时长归零 = 整页瞬间出现；运动全部由 director 时间线承担
+        self.assertIn('tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},'
+                      '{clipPath:"inset(0% 0 0 0)",duration:0.00,'
+                      'ease:"power2.inOut"},7.20)', html)
+        # 画布页自己没有引导线、不被剥走（末页 closing 直接盖住它），也不挂暗边
+        self.assertNotIn('id="line-seg-b"', html)
+        self.assertNotIn('id="shade-seg-b"', html)
+        self.assertNotIn('tl.to("#seg-b",{y:-432', html)
+        # 画布页作为"上一页"时同样不被下一页犁起剥离——掀走一张活 diagram 正是
+        # "演"要取代的 PPT 翻页感
+        self.assertNotIn('tl.to("#seg-a",{y:-432', html)
+        # 边界：非画布档（agenda/slot）的转场原样保留，remove 不是全局开关
+        self.assertIn('tl.to("#opening",{y:-432', html)
+        self.assertIn('id="line-closing"', html)
+        # 归零按版式判定而非按擦除档：几何档（vertical，自己的 0.28s + expo.out 曲线）
+        # 下画布段同样是硬切，相邻 slot 段的擦除不受影响
+        vertical = self._render_with_style("vertical")
+        self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.00,ease:"expo.out"},7.20)',
+                      vertical)
+        self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.28,ease:"expo.out"},2.12)',
+                      vertical)
+
+    def test_canvas_page_keeps_the_templates_three_background_layers(self):
+        """C1：画布页的背景交回模板，所以这三层必须真的在。
+
+        门禁现在会 warn"画布 SVG 别自铺满幅底板"，判据是模板本来就在这一页底下画好
+        了 .bg 渐变 / .grid 网格 / ::after 氛围光。哪天有人把画布卡里"用不到的层"当死
+        DOM 优化掉、或撤掉氛围光，那条 warn 就变成谎话，画面也退回一片死平。
+        """
+        html = render()
+        # 画布卡（fixture 的 seg-b）与槽位卡一样带底两层——它们不是死层
+        rest = html.split('id="seg-b"', 1)[1]
+        head = rest[rest.index(">") + 1:][:160]
+        self.assertIn('<div class="bg"></div>', head)
+        self.assertIn('<div class="grid"></div>', head)
+        # 画布专属氛围光：整页铺满时槽位那团小光撑不出景深，这里换成近全屏宽带柔光，
+        # 覆盖要明显大于两档槽位光（宽 58%/46%、高 42%/52%），且仍吃本段 accent
+        wash = re.search(r'\[data-aspect\] \.seg-card\.seg-canvas::after\{background:'
+                         r'radial-gradient\((\d+)% (\d+)% at[^,]*,color-mix\(in srgb,var\(--seg-accent\)',
+                         html)
+        self.assertIsNotNone(wash, "画布氛围光规则缺失或不再吃 --seg-accent")
+        self.assertGreater(int(wash.group(1)), 100)
+        self.assertGreater(int(wash.group(2)), 60)
+        # 补上的只是 background；content/inset/z-index:-1 由两档槽位光规则提供，
+        # 它们一撤本条就变成一条不渲染的声明
+        for aspect in ("vertical", "landscape"):
+            self.assertIn('[data-aspect="%s"] .seg-card::after{content:"";'
+                          'position:absolute;inset:0;z-index:-1' % aspect, html)
 
 
 class Injection(unittest.TestCase):
@@ -151,6 +215,57 @@ class Injection(unittest.TestCase):
         # 占位符是单遍替换：稿件里的同名文本不会被当成骨架占位符再次替换
         self.assertEqual(clean.count("<script"), evil.count("<script"))
         self.assertIn("__CTV_GSAP__", evil)
+
+
+def strip_css_comments(html):
+    """取 <style> 里的 CSS 并去掉注释：注释会复述选择器，留着正则就是在测文档。"""
+    css = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+class AlphaExport(unittest.TestCase):
+    """透明底导出（--alpha）：只关"底"，样式常驻、靠类命中。
+
+    真正证明透明的是渲染 + ffprobe（见 references/rendering.md），这里只锁住
+    两条一旦破掉就会静默出错的结构事实：改动面只有 <html> 的一个属性；撤销规则
+    绝不越界去关内容层。
+    """
+
+    def test_only_the_html_class_differs(self):
+        plain = render()
+        alpha = render(alpha=True)
+        self.assertIn('<html lang="zh-CN" class="">', plain)
+        self.assertIn('<html lang="zh-CN" class="ctv-alpha">', alpha)
+        # 关底靠的是 ctv-alpha 这个类命中末尾规则：没有类就一条都不生效，
+        # 所以两份 HTML 除了这个属性必须逐字节相同（默认出片零风险）。
+        self.assertEqual(alpha.replace('class="ctv-alpha"', 'class=""', 1), plain)
+
+    def test_alpha_block_touches_only_backdrop_layers(self):
+        css = strip_css_comments(render(alpha=True))
+        rules = re.findall(r":root\.ctv-alpha[^{]*\{[^}]*\}", css)
+        self.assertEqual(len(rules), 2, f"ctv-alpha 规则数变了：{rules}")
+        for rule in rules:
+            sel, decl = rule.split("{", 1)
+            decl = decl.rstrip("}").rstrip()
+            for prop in re.findall(r"(?:^|;)\s*(-{0,2}[A-Za-z-]+)\s*:", decl):
+                self.assertIn(prop, ("--ctv-bg-gradient", "--ctv-grid-color",
+                                     "background"), f"透明底多关了一层：{prop}")
+            # 内容层（配图、标题、句子流、进度条）一个都不许出现在选择器里。
+            # .verse 的 background 也在内容侧：文字没有它就读不出来。
+            for banned in ("seg-image", "seg-title", "verse", "seg-progress",
+                           "reveal-line"):
+                self.assertNotIn(banned, sel, rule)
+
+    def test_glow_override_uses_two_hooks_that_both_hold(self):
+        css = strip_css_comments(render())
+        # 变量：:root.ctv-alpha (0,2,0) 压过末尾注入的 :root 表 (0,1,0)——写
+        # html{...} 是盖不住的（实测踩过一次）。
+        self.assertIn(":root.ctv-alpha{--ctv-bg-gradient:transparent;"
+                      "--ctv-grid-color:transparent}", css)
+        # 氛围光：与 [data-aspect] .seg-card.seg-canvas::after 同为 (0,3,1)，
+        # 只能靠源序决胜，所以撤销规则必须排在它后面。
+        self.assertGreater(css.index(":root.ctv-alpha .seg-card::after"),
+                           css.index("[data-aspect] .seg-card.seg-canvas::after"))
 
 
 if __name__ == "__main__":

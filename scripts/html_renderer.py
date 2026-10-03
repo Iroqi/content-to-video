@@ -6,6 +6,8 @@ and GSAP timeline generation. CLI orchestration, file validation and rendering
 remain outside this module.
 """
 import html
+import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -21,6 +23,9 @@ from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import (classify_media_path, unknown_media_keys,
                             MEDIA_ENTRY_KEYS)
 from _segments import (is_content_sid, seg_layout)
+from _path_morph import make_morph, interp as _morph_interp
+from _timeline import beat_positions
+from _cam_crop import cam_default_origin
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -249,7 +254,7 @@ _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
 # 装配与动画各自成函数，版式差异只体现在装配一处。
 
 
-def _build_render_context(tpl, aspect, width, height, theme, images):
+def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
     :root 变量表。任何一条护栏发现模板配错即 raise。
 
@@ -257,7 +262,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images):
     摸模板——同一数值的第二个真相源就是漂移的开始。
     """
     rc = SimpleNamespace(aspect=aspect, width=width, height=height,
-                         images=images)
+                         images=images, fps=fps)
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
     rc.theme_colors = get_theme_colors(theme)
@@ -530,6 +535,17 @@ def _media_html(rc, sid, s, d):
     # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
     # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
     _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
+    # 导演模式（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
+    # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
+    # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
+    # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
+    inline_svg = media_opts.get("inline_svg")
+    if inline_svg:
+        return (
+            f'\n    <div class="seg-image{_bare} svg-inline" id="img-{sid}">\n'
+            f'      {inline_svg}\n'
+            f'    </div>'
+        )
     return (
         f'\n    <div class="seg-image{_bare}" id="img-{sid}">\n'
         f'      <img src="{quote(media_path)}" alt="">\n'
@@ -559,6 +575,16 @@ def _verse_html(seg, sid, ac_text_attr):
         f'<div class="verse-clip" data-accent="{ac_text_attr}">'
         f'{"".join(_vlines)}</div></div>'
     )
+
+
+def _is_keep_page(rc, sid):
+    """这一页是不是跨段接续页（images.json 的 ``stage: "keep"``）。
+
+    烘焙本身在生成期的 ``gen_hyperframes.director_prepare``（见 ``_stage_carry``），
+    渲染端只读这一个布尔：它决定"还要不要把这一页当新页再演一遍"。
+    """
+    entry = rc.images.get(sid)
+    return bool(entry) and entry["opts"].get("stage") == "keep"
 
 
 def _prepare_card(rc, clip):
@@ -636,6 +662,7 @@ def _prepare_card(rc, clip):
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
+        is_keep=_is_keep_page(rc, sid),
         tagline_html=tagline_html, image_html=image_html,
         verse_html=verse_html, card_open=card_open,
         progress_html=progress_html, title_wrap=title_wrap)
@@ -778,6 +805,210 @@ def _line_timeline_lines(rc, card):
     return lines
 
 
+def _morph_ease(name, default):
+    """morph 采样的缓动曲线：给定 GSAP 风格 ease 名，返回 f:[0,1]→[0,1]。
+
+    因为 morph 是**生成期烘焙成离散 tl.set**、GSAP 不会对 set 再缓动，所以这里的曲线
+    就是最终成片里形状随时间的变化——不追求与 GSAP 逐字节同式，只要是一条合理的
+    in/out/inOut 曲线即可（认得的档用 GSAP 的标准公式，认不出的档退回线性，绝不 raise）。
+    default 取模板 animation.director.ease，让 morph 默认和无痕补间的兄弟 tween 同手性。
+    """
+    spec = (name or default or "none").strip()
+    base, _, mod = spec.partition(".")
+    if not mod:
+        mod = "out"           # GSAP 裸名（power2）默认 .out
+    if base.startswith("back"):
+        mod = mod or "out"
+    elif base in ("none", "linear"):
+        return lambda t: t
+
+    # "in" 曲线 g(t)：单调、g(0)=0、g(1)=1（back 会轻微越界，interp 可外推）。
+    if base.startswith("power"):
+        try:
+            exp = int(base[5:] or "2") + 1   # power1=quad(t^2)…power4=quint(t^5)
+        except ValueError:
+            exp = 3
+        g = lambda t, e=exp: t ** e
+    else:
+        exp = {"quad": 2, "cubic": 3, "quart": 4, "quint": 5}.get(base)
+        if exp is not None:
+            g = lambda t, e=exp: t ** e
+        elif base == "sine":
+            g = lambda t: 1 - math.cos(t * math.pi / 2)
+        elif base == "expo":
+            g = lambda t: (2 ** (10 * (t - 1))) if t else 0.0
+        elif base == "circ":
+            g = lambda t: 1 - math.sqrt(max(0.0, 1 - t * t))
+        elif base.startswith("back"):
+            c1 = 1.70158
+            c3 = c1 + 1
+            g = lambda t: c3 * t ** 3 - c1 * t ** 2
+        else:
+            return lambda t: t        # 未知档：线性兜底
+
+    if mod == "in":
+        return g
+    if mod == "out":
+        return lambda t, g=g: 1 - g(1 - t)
+    # inOut：由 in 曲线拼标准对称型（t=.5 处连续，端点 0/1 不动）
+    return lambda t, g=g: (0.5 * g(2 * t)) if t < 0.5 else (1 - 0.5 * g(2 - 2 * t))
+
+
+def _director_timeline_lines(rc, card):
+    """方式 C SVG「导演」补间：把 images.json 的 director.steps 展开成挂在同一条
+    时间线上的 GSAP 补间，位置取自该段旁白的句子（可为句内小数偏移）——于是图内
+    元素的状态变化、描边生长、运镜都和口播对齐，且因为是时间线属性补间（非墙钟），
+    逐帧 seek 完全可复现。
+
+    - `at` / `at_time` 两套锚点怎么落成绝对秒，见 `_timeline.beat_positions`（生成期
+      门禁与对轴报告调的是同一个函数）。要点：`at` 跟着 manifest 的句子走，重配音自动
+      对得上；`at_time` 是手算绝对秒，**与语音无绑定**，换了配音就会整体错位且不报错，
+      所以给旁白服务的节拍优先用 `at`（`at_time` 留给真不跟旁白的镜头，如相机推镜）。
+    - `target`：图内单个 id 选择器，作用域收到 `#img-{sid}` 之下，避免多段内联
+      SVG 之间 id 撞车。运镜就是对一个包住场景的 `<g id="cam">` 补间 scale/x/y/
+      svgOrigin（GSAP 写 SVG transform，逐帧确定）——不需要额外原语。作者整页没写
+      原点时，这里替相机步注入 `_cam_crop.cam_default_origin` 算出的内容中心：GSAP
+      自己的缺省原点是 `#cam` bbox 的左上角、还跟着别的步的 `from` 瞬态飘，不钉死的话
+      出画 warn 与跨段烘焙算的取景就不是成片里那一幅。
+    - `draw:true`：自绘。用 `pathLength=1` 把任意 path 长度归一，免运行时测量：
+      段起点先 `stroke-dasharray:1; stroke-dashoffset:1`（描边收起、视觉上无形），
+      念到 pos 时把 `strokeDashoffset` 补到 0（线自己长出来）。目标须是有描边的形状。
+    - `morph:{from,to}`：同拓扑 path 形变（命令序列一致、只换坐标）。生成期按 fps×2
+      采样成一段 `tl.set(attr:{d})` 关键帧；时间均匀推进、形状进度按该步 `ease`（缺省
+      模板 `power2.out`）取样，逐帧 seek 可复现、无运行时依赖。
+    - `set` 瞬时赋值；`from`+`to` = fromTo；单独 `to`/`from` 各走一路。缺省
+      duration/ease 取模板 animation.director（视觉真源单一数据源）。
+    - `count:{to,...}` 数字滚动、`type:{}` 打字机逐字揭示：都展开成"渲染端生成的代理
+      补间 + onUpdate 写 textContent"（读的是校验过的标量/元素自身文本，非信源回调）。
+      二者与 morph 一样各负责整段、忽略 stagger，且块以 `(function…)()` 起头，故发射时
+      一律前导 `;` 断掉上一条无分号的补间行（否则 ASI 会把 `tl.x(…)(function…)()` 黏成
+      把 timeline 当函数调，主时间轴建到此处崩）。
+    - 补间变量经 json.dumps 序列化：schema 已挡掉 on* 回调与非标量，这里只把它
+      变成合法 JS 对象字面量，字符串引号/特殊字符由 JSON 转义兜住。
+    """
+    if not card.has_image:
+        return []
+    entry = rc.images.get(card.sid)
+    opts = (entry or {}).get("opts", {})
+    director = opts.get("director")
+    if not director:
+        return []
+    sentences = card.seg["sentences"]
+    dflt = rc.anim["director"]
+    sid = card.sid
+    # 节拍→绝对秒的解析在 _timeline.beat_positions，与生成期门禁/对轴报告共用一份
+    # （两处各写一套，门禁就会对着渲染器不会用的时刻报错）。
+    try:
+        beats = beat_positions(director["steps"], sentences, card.s, dflt["duration"])
+    except ValueError as e:
+        raise ValueError(f"段落 '{sid}' 的 director.steps 有一步 {e}")
+    # 相机缺省原点的钉值：作者整页没写 svgOrigin/transformOrigin 且真的推了近，就把
+    # 生成期算的那个内容中心写成显式 svgOrigin 注入。不钉的话 GSAP 绕的是 `#cam` 自身
+    # bbox 的左上角（实测，见 _cam_crop.cam_default_origin 的 docstring），那个角还跟着
+    # 别的步的 from 瞬态飘 —— 出画 warn 与跨段烘焙算的取景就和成片不是一幅画。
+    pin = cam_default_origin(opts.get("inline_svg"), director["steps"])
+
+    lines = []
+    for step, (pos, dur) in zip(director["steps"], beats):
+        sel = f"#img-{sid} {step['target']}"
+        sel_js = json.dumps(sel)
+        ease = step.get("ease", dflt["ease"])
+        stagger = step.get("stagger")   # 命中一组元素时逐个错峰（GSAP 原生 stagger）
+        cam_step = pin is not None and step["target"] == "#cam"
+
+        def _pin(v):
+            return v if not cam_step else dict(v, svgOrigin=pin)
+
+        def _with_timing(v):
+            out = dict(v)
+            out.setdefault("duration", dur)
+            out["ease"] = ease
+            if stagger is not None:
+                out["stagger"] = stagger
+            return _pin(out)
+
+        if "morph" in step:
+            # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
+            # 时间均匀推进（t=pos+u·dur），形状进度 k=ease(u)——因为 GSAP 不会对 set 再
+            # 缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与兄弟 tween 同手性）。
+            # 逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是时间的确定函数、跨平台
+            # 可复现，不需要任何运行时 morph 库。拓扑相符性在契约层已校验。
+            pf, pt = make_morph(step["morph"]["from"], step["morph"]["to"])
+            ease_fn = _morph_ease(step.get("ease"), dflt["ease"])
+            n = max(2, min(240, round(dur * rc.fps * 2)))
+            for i in range(n + 1):
+                u = i / n
+                d = _morph_interp(pf, pt, ease_fn(u))
+                t = round(pos + u * dur, 2)
+                lines.append(
+                    f"tl.set({sel_js}, {json.dumps({'attr': {'d': d}})}, {t:.2f})")
+            continue
+
+        if "count" in step:
+            # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>
+            # 的 textContent。这是**渲染端生成**的回调（只读上面校验过的标量），不是
+            # 信源塞的 on* ——GSAP 逐帧 seek 时会重算 p.v 并调 onUpdate，故 seek 可复现。
+            cnt = step["count"]
+            from_v = float(cnt.get("from", 0))
+            to_v = float(cnt["to"])
+            dec = int(cnt.get("decimals", 0))
+            pre = json.dumps(cnt.get("prefix", ""))
+            suf = json.dumps(cnt.get("suffix", ""))
+            lines.append(
+                # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
+                # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
+                # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
+                # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
+                ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+                "var p={v:" + json.dumps(from_v) + "};"
+                "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
+                "f();"
+                "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
+                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+            continue
+
+        if "type" in step:
+            # 打字机逐字揭示：运行时读该 <text> 现有整段文本 s，代理 p.k 从 0 补到
+            # s.length，onUpdate 把 s.slice(0, round(p.k)) 写回——和 count 复用同一条
+            # onUpdate 代理补间路：零 DOM 改写、零新净化面，逐帧 seek 可复现（依赖渲染
+            # harness 触发 onUpdate，与字幕高亮/count 同一前提）。build 期 f() 先把文本
+            # 收成空串（未打出），seek 越过 pos 才逐字长回。前导 `;` 同 count 的 ASI 护栏。
+            lines.append(
+                ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+                "var s=e.textContent||'';"
+                "var p={k:0};"
+                "var f=function(){e.textContent=s.slice(0,Math.round(p.k));};"
+                "f();tl.to(p,{k:s.length,duration:" + json.dumps(dur)
+                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+            continue
+
+        if step.get("draw"):
+            lines.append(
+                f"tl.set({sel_js}, "
+                f"{json.dumps({'attr': {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
+                f"{card.s:.2f})")
+            lines.append(
+                f"tl.to({sel_js}, "
+                f"{json.dumps({'strokeDashoffset': 0, 'duration': dur, 'ease': ease})}, "
+                f"{pos:.2f})")
+        if "set" in step:
+            set_vars = _pin(dict(step["set"]))
+            if stagger is not None:
+                set_vars["stagger"] = stagger
+            lines.append(f"tl.set({sel_js}, {json.dumps(set_vars)}, {pos:.2f})")
+        if "from" in step and "to" in step:
+            lines.append(
+                f"tl.fromTo({sel_js}, {json.dumps(_pin(step['from']))}, "
+                f"{json.dumps(_with_timing(step['to']))}, {pos:.2f})")
+        elif "to" in step:
+            lines.append(
+                f"tl.to({sel_js}, {json.dumps(_with_timing(step['to']))}, {pos:.2f})")
+        elif "from" in step:
+            lines.append(
+                f"tl.from({sel_js}, {json.dumps(_with_timing(step['from']))}, {pos:.2f})")
+    return lines
+
+
 def _card_timeline_lines(rc, card):
     """本卡的 GSAP 时间线：遮罩擦除入场、标题/配图入场、进度条。"""
     sid, s, d = card.sid, card.s, card.d
@@ -809,11 +1040,13 @@ def _card_timeline_lines(rc, card):
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
-    if card.has_image and not card.is_canvas:
+    if card.has_image and not card.is_canvas and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
         # 整页画布连这条补间也不生成：wipe 揭开即要求画面到位，配图再自带
         # 0.2s 延迟淡入会演成"先擦出空页、再浮出海报"的两段式（实测 15.9s 帧）。
+        # 接续页（stage:"keep"）同样跳过：这一页的画面是上一页演完的样子，
+        # 再淡入+上移 40px 就是 _stage_carry 要消灭的那种"页界回弹"。
         lines.append(
             f'tl.from("#img-{sid}",{{opacity:0,y:{a_img["vert_y"]},'
             f'duration:{a_img["duration"] * _k:.2f},'
@@ -823,13 +1056,16 @@ def _card_timeline_lines(rc, card):
     lines.append(
         f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
     )
+    # 导演补间挂在本卡时间线末尾：位置各自取句子起点，与上面的入场/进度条互不干扰。
+    lines.extend(_director_timeline_lines(rc, card))
     return lines
 
 
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme=DEFAULT_THEME, fps=24):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=24,
+                  alpha=False):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -842,6 +1078,11 @@ def generate_html(manifest, audio_src, images=None,
         gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
         fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
             20% 帧、出片更快。
+        alpha: 透明底导出。只做一件事——往 <html> 挂 ctv-alpha 类；被关掉的三层
+            （页面渐变 / 网格 / 段落氛围光）连同"为什么这样写"都在
+            templates/composition.css 末尾。这一面旗只管画面：alpha 平面落不落得
+            进文件是渲染端的事，实测只有 mov（ProRes 4444）带得出，mp4 无通道、
+            webm 丢平面，所以 run.py 侧要求 --alpha 配 mov。
 
         字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
     """
@@ -862,7 +1103,7 @@ def generate_html(manifest, audio_src, images=None,
     # CDN 地址的 :/? 会被 quote 破坏）
     gsap_src_attr = gsap_src.replace("&", "&amp;").replace('"', "&quot;")
 
-    rc = _build_render_context(tpl, aspect, width, height, theme, images)
+    rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps)
 
     # 段落分组只有一份：manifest["segments"]（_manifest_schema 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
@@ -892,14 +1133,26 @@ def generate_html(manifest, audio_src, images=None,
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)
+        # 整页画布段：入场交给导演逐拍演，模板转场（clip-path 擦除 / 引导线 / 旧页剥离）
+        # 一律退场。把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、
+        # _line_timeline_lines、peel 三处都以 wipe<=0 为闸自动不生成，画布页在自己的
+        # 音频起点整页出现、运动全由 director 驱动（对标 3b1b 的连续镜头，而非翻页）。
+        # 接续页（stage:"keep"）同理且更要紧：这一页的画面是上一页演完的样子，
+        # 擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry 烘焙的意义。
+        if (seg_layout(clip["seg"]) == "canvas"
+                or _is_keep_page(rc, clip["seg"]["id"])):
+            clip["wipe"] = 0.0
         clip["win_start"] = round(max(0.0, s_i - clip["wipe"]), 2)
         win_end = clips[i + 1]["start"] if i + 1 < len(clips) else round(total_dur, 2)
         clip["vis"] = round(win_end - clip["win_start"], 2)
         # line 档的剥离挂在被犁走的旧卡上：本卡揭开窗口 [win_start, +wipe]
         # 就是上一页的"被推走"窗口（旧卡窗口恰铺到本段音频起点，补间在窗内）。
         # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
+        # 上一页是画布段时也不剥：把一张活 diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
+        # 画布页退场同样走硬切（被下一页直接盖住）。
         clip["peel"] = None
-        if _is_line and i and clip["wipe"] > 0:
+        if (_is_line and i and clip["wipe"] > 0
+                and seg_layout(clips[i - 1]["seg"]) != "canvas"):
             prev_sid = clips[i - 1]["seg"]["id"]  # sid 由契约把守，见 _prepare_card
             clip["peel"] = (prev_sid, clip["wipe"])
             clips[i - 1]["gets_peeled"] = True  # 旧卡要挂底缘暗边（_peel_shade_html）
@@ -951,6 +1204,7 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_SCRIPT__": script,
         "__CTV_SEG_CARDS__": chr(10).join(seg_cards),
         "__CTV_ASPECT__": aspect,
+        "__CTV_HTML_CLASS__": "ctv-alpha" if alpha else "",
         "__CTV_DURATION__": f"{total_dur:.2f}",
         "__CTV_WIDTH__": str(width),
         "__CTV_HEIGHT__": str(height),

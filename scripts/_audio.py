@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TTS 管线的 FFmpeg 音频操作。
 
-包含：时长测量、静音生成、atempo 变速、拼接、BGM 混音。
+包含：时长测量、静音生成、atempo 变速、拼接、BGM 混音、定长裁剪（单段预览）。
 所有函数都只依赖"ffmpeg 路径 + 参数"，不碰 TTS/网络，可脱离 pipeline 单独测试。
 """
 import os
@@ -109,6 +109,29 @@ def measure_duration(ffmpeg_path, audio_path):
               file=sys.stderr)
         return 0.0
     return dur if dur is not None else 0.0
+
+
+def trim_audio(ffmpeg_path, src, dst, start, duration):
+    """切出 ``[start, start+duration)`` 一段音频（``--only`` 单段预览用）。
+
+    ``-ss`` 放在 ``-i`` 之前配 ``-t`` 定长：重编码成 PCM 时输入端定位是样本级
+    准确的，而 ``-t`` 的语义不受各 ffmpeg 版本对 ``-to`` 是"绝对时间轴"还是
+    "相对 -ss"的解释差异影响——预览片宁可写死长度也不要赌版本。
+
+    失败抛 RuntimeError 并带上 stderr 末尾：这条路径的唯一产物就是预览音频，
+    回落到"用整条配音"会让时间轴错位却看不出来。
+    """
+    args = [ffmpeg_path, "-y",
+            "-ss", "{:.3f}".format(max(0.0, float(start))),
+            "-i", src,
+            "-t", "{:.3f}".format(float(duration)),
+            "-c:a", "pcm_s16le", dst]
+    r = _run_ff(args, 120)
+    if r is None:
+        raise RuntimeError(f"裁剪音频超时（120s）：{src} @{start:.3f}s")
+    if r.returncode != 0:
+        tail = (r.stderr or "").strip().splitlines()[-3:]
+        raise RuntimeError("裁剪音频失败：" + " | ".join(tail))
 
 
 def generate_silence(ffmpeg_path, duration, out_path):

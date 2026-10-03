@@ -19,15 +19,22 @@
     DOCTYPE/ENTITY                                                      [error]
   - 字号：按"画布宽 ÷ SVG 宽"折算后的最终 px 低于 26px                   [warn]
     写成 em/%/class 读不出绝对值的文字数量                              [warn]
-  - 对比度：文字用字面 hex 填充时，对页面底色算 WCAG 对比度；低于 3:1 为
-    error，低于 4.5:1 为 warn；背景族（深蓝 #0c1320/#16233a/#1a2536 加上当前
-    主题渐变的各档 stop）当文字色为 error——只在深色页底主题（默认 dark）下查，
-    cream 页底下深蓝恰是推荐正文色系。槽位版式才查（整页画布常自带底板，底色
-    未知，只提示）
+  - 对比度：文字用字面 hex 填充时，对**主题渐变的最坏一档** stop 算 WCAG 对比度；
+    低于 3:1 为 error，低于 4.5:1 为 warn；背景族（深蓝 #0c1320/#16233a/#1a2536 加上
+    当前主题渐变的各档 stop）当文字色为 error——只在深色页底主题（默认 dark）下查，
+    cream 页底下深蓝恰是推荐正文色系，而且只查槽位。整页画布只 warn 不 error：画布上
+    的字可能压着自己画的浅色局部底板，按页底算出来的数对它不成立
   - 透明度：文字带 opacity / fill-opacity < 0.8                          [warn]
-  - 槽位版式铺满 viewBox 的背景 <rect>（应不铺满幅底）                   [warn]
+    （整页画布上的 opacity=0 除外：那是导演逐拍点亮的起始态，终帧才亮）
+  - 铺满整幅的背景 <rect>：槽位版式会在页面上形成一圈色差框；整页画布会盖掉模板本来
+    就在这一页底下的三层背景（渐变 / 网格 / accent 氛围光）                          [warn]
   - 含中文却没有任何 font-family（<img> 载入读不到页面字体）             [warn]
   - 整页画布：字面 x 坐标落进安全边距（竖屏 50px / 横屏 96px）           [warn]
+  - 整页画布密度：存在高度 ≥25% 页高、横着没有任何图元的**整幅空带**      [warn]
+    （实拍复现的"画布页中间一大块空白"就是这个形状。盲区：只投到 y 轴，所以横向留白、
+    挤成一团、以及一根贯穿上下的细线替整页"占位"，它都看不见——构图仍归人眼）
+  - 墙钟动画（SMIL <animate*> / CSS animation / transition）：无法与口播
+    时间轴同步，提示改用 images.json 的 director                        [warn]
 """
 import argparse
 import os
@@ -35,6 +42,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
+from _path_morph import y_span
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 from _template import load_template
@@ -113,6 +121,95 @@ def _parse_num(v):
     return float(m.group(1)) if m else None
 
 
+# ── 整页画布的竖向占位（密度自查）─────────────────────────────
+# 判据来自实拍：一张 1080×1440 的画布只有顶部两行标题（y≈150-240）和一条 y≈800 的
+# 轴，中间 480px（1/3 页高）横着什么都没有——成片暂停就是一眼假的"空页"。槽位版式
+# 有模板网格兜着构图，画布页的构图责任全在那张 SVG 自己身上，所以只在这里查这一条
+# 最客观的：把可读几何投到 y 轴上，找最大的整幅空带。
+MAX_EMPTY_BAND = 0.25
+_DEFAULT_FS = float(MIN_PX)   # 字号读不出时给文字一个保守高度
+
+
+def _stroke_pad(el, inherited):
+    """一维图形（线 / 折线 / path）按描边宽度撑出可看见的厚度，至少 1px。"""
+    sw = _parse_num(inherited(el, "stroke-width")) or 0.0
+    return max(sw / 2.0, 1.0)
+
+
+def _ink_band(el, tag, inherited, page_w, page_h):
+    """一个图元在 y 轴上的占位区间 (y0, y1)；读不出几何就返回 None。
+
+    口径故意"宁可高估"：不解析 transform / `<use>` / 曲线精确 bbox，path 连控制点
+    一起算，opacity=0 的导演元素照算（那是终帧会亮起来的内容，不是空位）。高估只
+    会让这条 warn 少打一次，低估会误报，所以往安全那侧偏。
+    铺满整页的背景底板返回 None——它能把空带填成"看起来有东西"，正是本检查要防的假象。
+    """
+    def num(name):
+        return _parse_num(el.get(name))
+
+    if tag == "rect":
+        y, hh = num("y") or 0.0, num("height")
+        ww = num("width")
+        if hh is None or ww is None:
+            return None                     # 百分号/缺省：读不出就不算
+        if ww >= page_w * 0.98 and hh >= page_h * 0.98 \
+                and (num("x") or 0) <= 1 and y <= 1:
+            return None
+        return (y, y + hh)
+    if tag == "circle":
+        c, r = num("cy"), num("r")
+        return None if c is None or r is None else (c - r, c + r)
+    if tag == "ellipse":
+        c, ry = num("cy"), num("ry")
+        return None if c is None or ry is None else (c - ry, c + ry)
+    if tag == "line":
+        y1, y2 = num("y1") or 0.0, num("y2") or 0.0
+        return (min(y1, y2) - _stroke_pad(el, inherited),
+                max(y1, y2) + _stroke_pad(el, inherited))
+    if tag in ("polygon", "polyline"):
+        pts = [float(v) for v in re.split(r"[,\s]+", (el.get("points") or "").strip())
+               if _NUM.match(v)]
+        ys = pts[1::2]
+        if not ys:
+            return None
+        p = _stroke_pad(el, inherited)
+        return (min(ys) - p, max(ys) + p)
+    if tag == "path":
+        try:
+            span = y_span(el.get("d") or "")
+        except ValueError:                  # 畸形 d：别拿它当占位，交给解析报错那条路
+            return None
+        if span is None:
+            return None
+        p = _stroke_pad(el, inherited)      # 一条水平轴本身零高度，不补就漏成"空带"
+        return (span[0] - p, span[1] + p)
+    if tag == "text":
+        fs = _parse_num(inherited(el, "font-size")) or _DEFAULT_FS
+        y = num("y") or 0.0
+        return (y - fs, y + fs * 0.3)       # 基线上方是字身，下方留一点下伸部
+    if tag == "image":
+        y, hh = num("y"), num("height")
+        return None if y is None or hh is None else (y, y + hh)
+    return None
+
+
+def _largest_empty_band(bands, page_h):
+    """合并 y 占位区间后，返回页面里最大的整幅横向空带 (y0, y1)。"""
+    spans = sorted((max(0.0, a), min(page_h, b)) for a, b in bands if b > a)
+    merged = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    if not merged:
+        return 0.0, page_h
+    gaps = ([(0.0, merged[0][0])]
+            + [(merged[i - 1][1], merged[i][0]) for i in range(1, len(merged))]
+            + [(merged[-1][1], page_h)])
+    return max(gaps, key=lambda g: g[1] - g[0])
+
+
 def _root_size(root):
     """返回 (宽, 高, 说明)；读不出纯数字尺寸则宽高为 None。"""
     w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
@@ -177,6 +274,8 @@ def check_file(path, layout, aspect, theme):
     min_eff = None
     has_font_family = False
     has_cjk = False
+    has_wallclock = False
+    ink_bands = []
     parent = {c: p for p in root.iter() for c in p}
 
     def inherited(el, name):
@@ -204,6 +303,8 @@ def check_file(path, layout, aspect, theme):
             errors.append("含 <script>（内联后会在页面里执行）")
         if tag == "foreignObject":
             errors.append("含 <foreignObject>（渲染不可控，且可嵌入 HTML）")
+        if tag in ("animate", "animateTransform", "animateMotion", "set"):
+            has_wallclock = True
         for k, v in el.attrib.items():
             lk = _local(k).lower()
             if lk.startswith("on"):
@@ -214,6 +315,9 @@ def check_file(path, layout, aspect, theme):
             errors.append("<style> 里有 @import 或外链 url()")
         if el.get("style") and re.search(r"url\(\s*['\"]?https?:", el.get("style"), re.I):
             errors.append(f"<{tag}> 的 style 里有外链 url()")
+        if (tag == "style" and el.text and re.search(r"\b(animation|transition)\b", el.text, re.I)) \
+                or (el.get("style") and re.search(r"\b(animation|transition)\b", el.get("style"), re.I)):
+            has_wallclock = True
 
         if tag == "text":
             text_nodes += 1
@@ -230,15 +334,25 @@ def check_file(path, layout, aspect, theme):
                 eff = px * scale
                 min_eff = eff if min_eff is None else min(min_eff, eff)
 
-            # 颜色与对比度（槽位版式才有确定的页面底色）
+            # 字面色对页底的对比度。底色取主题渐变的**最坏一档**：深色页底上的浅字怕最亮
+            # 那档、浅色页底上的深字怕最暗那档，min 两边都自动选对。两档主题下这恰好等于
+            # 原先手挑的 PAGE_BG（渐变的中间档），所以槽位判定一字不变，只是从"赌中间那档"
+            # 变成"取最坏"。
+            # 画布页只 warn、不 error：画布上的字可能压在自己画的局部浅色底板上（那是正当
+            # 画法，见 image_options.md「图内文字的对比度」），按页底算出来的数对它不成立，
+            # 所以这里没有判死的资格。背景族那条启发式同理留在槽位。
             fill = inherited(el, "fill")
             fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
-            if fh and layout == "slot":
-                if fh in _bg_family(theme):
+            if fh:
+                if layout == "slot" and fh in _bg_family(theme):
                     errors.append(f"文字 {content.strip()[:12]!r} 用了背景色族 {fh} 当填充色（瞎字）")
                 else:
-                    c = contrast_ratio(fh, PAGE_BG[theme])
-                    if c < 3:
+                    c = min(contrast_ratio(fh, s) for s in theme_bg_stops(theme))
+                    if layout == "canvas" and c < 4.5:
+                        warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 主题页底最坏一档只有 "
+                                     f"{c:.1f}:1（<4.5:1）。它若直接落在页底上就是看不清；若压在"
+                                     f"自己画的浅色底板上，本条不成立可忽略。画布的氛围光还会再吃一档")
+                    elif c < 3:
                         errors.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度仅 {c:.1f}:1（<3:1）")
                     elif c < 4.5:
                         warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度 {c:.1f}:1（<4.5:1），"
@@ -247,8 +361,13 @@ def check_file(path, layout, aspect, theme):
             fop = inherited(el, "fill-opacity")
             for name, val in (("opacity", op), ("fill-opacity", fop)):
                 n = _parse_num(val) if val else None
-                if n is not None and n < 0.8:
-                    warns.append(f"文字 {content.strip()[:12]!r} 带 {name}={n:g}，会真实吃掉对比度；换更暗的实色")
+                if n is None or n >= 0.8:
+                    continue
+                # 整页画布上 opacity=0 是导演逐拍点亮的起始态（终帧才亮），不是吃掉对比度；
+                # 半透明才是真问题——它会让亮起来的那一帧本身就偏灰。
+                if layout == "canvas" and n == 0:
+                    continue
+                warns.append(f"文字 {content.strip()[:12]!r} 带 {name}={n:g}，会真实吃掉对比度；换更暗的实色")
 
             # 整页画布安全边距（只看字面 x、且祖先无 transform 时才可信）
             if layout == "canvas" and scale is not None and not has_transform_ancestor(el):
@@ -269,13 +388,25 @@ def check_file(path, layout, aspect, theme):
             has_font_family = True
 
         # 满幅背景 rect
-        if layout == "slot" and tag == "rect" and vb_w and vb_h:
+        if tag == "rect" and vb_w and vb_h and layout in ("slot", "canvas"):
             rw = _parse_num(el.get("width")) if not str(el.get("width", "")).endswith("%") else None
             rh = _parse_num(el.get("height")) if not str(el.get("height", "")).endswith("%") else None
             pct = str(el.get("width", "")) == "100%" and str(el.get("height", "")) == "100%"
             if pct or (rw and rh and rw >= vb_w * 0.98 and rh >= vb_h * 0.98
                        and (_parse_num(el.get("x")) or 0) <= 1 and (_parse_num(el.get("y")) or 0) <= 1):
-                warns.append("疑似铺满 viewBox 的背景 <rect>：槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）")
+                if layout == "slot":
+                    warns.append("疑似铺满 viewBox 的背景 <rect>：槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）")
+                else:
+                    warns.append("整页画布铺了一张满幅底板 <rect>：模板本来就在这一页底下画好了三层"
+                                 "（主题渐变 / 只在页缘显形的网格 / 本段 accent 氛围光），满幅 rect 把三层"
+                                 "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 image_options.md"
+                                 "「整页画布的密度与层次」）。确实要把整页换成另一种底色时可忽略本条")
+
+        # 竖向占位登记（只有画布档用得上：整页构图没有模板兜底，空带得自己发现）
+        if layout == "canvas" and w and h:
+            band = _ink_band(el, tag, inherited, w, h)
+            if band:
+                ink_bands.append(band)
 
     if min_eff is not None and min_eff < MIN_PX:
         warns.append(f"折算后最小字号约 {min_eff:.0f}px（<{MIN_PX}px 下限），两画幅缩放+压缩后读不出来")
@@ -283,9 +414,26 @@ def check_file(path, layout, aspect, theme):
         warns.append(f"{unknown_size} 个 <text> 的字号不是 px 数值（em/%/class/缺省），读不出绝对值，请自己按画幅复核")
     if has_cjk and not has_font_family:
         warns.append("含中文但没有任何 font-family：<img> 载入的 SVG 读不到页面字体，请在 <style> 里自带中文无衬线字体栈")
+    if has_wallclock:
+        warns.append("含墙钟动画（SMIL <animate*> / CSS animation / transition）：这类动画按页面墙上时钟自走，"
+                     "无法与口播时间轴同步，只适合氛围循环。要"
+                     "「随某句话变化」的时间轴同步动画，改用 images.json 的 director（净化内联后由 GSAP 补间驱动；"
+                     "内联时这些墙钟动画会被剥离，见 references/image_options.md 方式 C「SVG 动画：两档」）")
     if layout == "canvas":
-        warns.append("整页画布：图内对比度与文字是否溢出无法静态判定，请用 image_options.md「图内文字的对比度」"
-                     "的内联副本 + `hyperframes check` 量一次")
+        warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
+                     "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"
+                     "以及文字是否真的溢出。用 image_options.md「图内文字的对比度」的内联副本 "
+                     "+ `hyperframes check` 量一次")
+        if w and h:
+            gy0, gy1 = _largest_empty_band(ink_bands, h)
+            if gy1 - gy0 >= MAX_EMPTY_BAND * h:
+                warns.append(
+                    f"整页画布有一整条横向空带：y≈{gy0:.0f}–{gy1:.0f}（{gy1 - gy0:.0f}px，"
+                    f"占页高 {(gy1 - gy0) / h:.0%}，阈值 {MAX_EMPTY_BAND:.0%}）横着没有任何图元。"
+                    f"画布页的构图没人兜底，暂停成片时这就是一页空白——把主视觉撑开到这个带里、"
+                    f"或按 image_options.md「整页画布的密度与层次」补中景/底层信息。"
+                    f"有意的极简留白可忽略本条（它只查竖向：横向留白、挤成一团，以及一根"
+                    f"贯穿上下的细线把整页'填上'了却仍然很空，它都看不见）")
     return errors, warns
 
 

@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import urllib.request
+import xml.etree.ElementTree as ET
 
 
 # GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产。
@@ -143,14 +144,18 @@ def ensure_local_gsap(project_dir):
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402
-from _template import get_canvas  # noqa: E402
+from _template import get_canvas, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json, classify_media_path  # noqa: E402
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
-                           guard_not_in_skill_dir, is_inside)
+                           is_inside, guard_not_in_skill_dir)
 from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
+from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
+from _cam_crop import crop_warnings  # noqa: E402
+from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
+from _timeline import beat_positions  # noqa: E402
 
 from html_renderer import (  # noqa: E402
     segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
@@ -462,6 +467,341 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
     return errs, warns
 
 
+def _svg_selectable_tokens(raw):
+    """SVG 里可被 director target 命中的选择器集合：{'#id', ..., '.class', ...}。
+
+    target 白名单允许 id 或 class（class 专为 stagger 一组元素开），存在性校验就得
+    两类都收：一个 class 属性可能写多个空格分隔的类名，逐个拆进去。净化器保留 class
+    （只摘 on*/外链 href），所以这里从源文本收的类名和内联后 DOM 上的一致。
+    """
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return set()
+    toks = set()
+    for el in root.iter():
+        eid = el.get("id")
+        if eid:
+            toks.add("#" + eid)
+        cls = el.get("class")
+        if cls:
+            for c in cls.split():
+                toks.add("." + c)
+    return toks
+
+
+# ── 导演节拍 ↔ 旁白对轴───────────────────────────────────────────
+# 落点解析在 _timeline.beat_positions（与渲染端同一函数），这里只负责"把落点
+# 说成人话"：门禁要的窗外判定、以及 --beat-report 要的每拍落句表。之所以放在
+# 生成期而不是 check_svg：判据需要 manifest 的句子时间，而 check_svg 只看单个 SVG。
+
+_BEAT_EPS = 0.005   # 落点已与时间轴同精度（round 2 位），这里只吸收浮点尾巴
+
+
+def _director_default_duration():
+    """模板 animation.director.duration——没写 duration 的 step 用它，相对链游标也用它。
+    必须与渲染端取的是同一份，否则门禁算出的落点不是渲染器真正用的时刻。"""
+    return float(load_template()["animation"]["director"]["duration"])
+
+
+def _beat_anchor(step):
+    """这一步的锚点写法原样打印，供 warn/报告指认是哪一步。"""
+    if "at_time" in step:
+        return "at_time=%s" % (step["at_time"],)
+    return "at=%s" % (step["at"],)
+
+
+def _beat_landing(pos, sentences, seg_start, seg_end, next_start):
+    """beat 落在旁白的哪儿：返回 (类别, 说明)。before/after 两类就是门禁要报的"窗外"。
+
+    段尾（末句说完到下一页盖过来之间）**不算窗外**：这一页还挂在屏幕上，落在那里的
+    补间照样演。所以右界取"下一段起点"而不是"末句结束"——只有过了它才真的看不见。
+    """
+    for i, s in enumerate(sentences):
+        st = float(s["start_time"])
+        if st - _BEAT_EPS <= pos <= st + float(s.get("duration", 0.0)) + _BEAT_EPS:
+            return "in", "第%d句" % (i + 1)
+    if pos < seg_start - _BEAT_EPS:
+        return "before", "本段旁白之前（看不见）"
+    if next_start is not None and pos > next_start + _BEAT_EPS:
+        return "after", "下一页起点之后（看不见）"
+    if pos > seg_end + _BEAT_EPS:
+        return "tail", "段尾静音（页面仍在）"
+    for i in range(len(sentences) - 1):
+        a = float(sentences[i]["start_time"]) + float(sentences[i].get("duration", 0.0))
+        b = float(sentences[i + 1]["start_time"])
+        if a < pos < b:
+            return "gap", "句间静音（第%d句末 %.2f→第%d句起 %.2f）" % (i + 1, a, i + 2, b)
+    return "gap", "静音"
+
+
+def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, keep=False):
+    """beat 落在本页可见窗口之外（before/after/被切半路）→ warn 文案。
+
+    引擎按 data-start/data-duration 硬切 clip 可见性（实测排在窗口外的补间等于没写），
+    所以这类落点不是"稍微偏"，是那一拍在成片里**根本不演**。warn 不 error：落点是作者
+    写的，人可能就是要它压在下一页上。最后一段之后没有页盖过来，页面一直挂着，所以
+    next_start 为 None 时不设右界（宁漏不误报）。解析与渲染端共用 beat_positions，
+    门禁算的时刻与渲染器用的时刻不可能漂移。
+
+    除了起点出窗，还报**起点在内、终点越界**的那一类：补间演到一半就被下一页盖过来，
+    作者以为的终态在成片里从没出现过（`keep=True` 时更要紧——接续烘焙把时间轴折到最后
+    一帧，它搬的正是那个没演到的终态）。这里只判时刻，不去算缓动走了几成：那要把 ease
+    求值到页界，而"演到一半"本来就是该改节拍而不是该被精确复刻的东西。
+    """
+    try:
+        beats = beat_positions(steps, sentences, round(seg_start, 2), dflt_dur)
+    except ValueError:
+        return []   # at 越界由 director_prepare 的句序检查按步报错，这里不重复
+    seg_end = float(sentences[-1]["start_time"]) + float(sentences[-1].get("duration", 0.0))
+    out = []
+    for i, ((pos, dur), step) in enumerate(zip(beats, steps)):
+        kind, _where = _beat_landing(pos, sentences, seg_start, seg_end, next_start)
+        anchor = _beat_anchor(step)
+        if kind == "before":
+            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）落点 {pos:.2f}s "
+                       f"比本段旁白起点 {seg_start:.2f}s 还早 {seg_start - pos:.2f}s——这一页"
+                       "那时还没出现，补间排在 clip 窗口外等于没演")
+        elif kind == "after":
+            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）落点 {pos:.2f}s 已过"
+                       f"下一段旁白起点 {next_start:.2f}s——这一页那时已被下一页盖住，等于没演。"
+                       "多半是 at_time 按旧配音手算后过期了：跟旁白的节拍改用 at（句序锚），"
+                       "或把秒数调小")
+        elif next_start is not None and pos + dur > next_start + _BEAT_EPS:
+            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）从 {pos:.2f}s 演到 "
+                       f"{pos + dur:.2f}s 才完，而下一段旁白 {next_start:.2f}s 就把这一页盖"
+                       f"过来——这一拍被切在半路，终态在成片里从没出现过（早 {pos + dur - next_start:.2f}"
+                       "s）。要么把 duration/delay 收紧到本页内，要么让它在接续页里重演一遍"
+                       + ("；这一页写了 stage:\"keep\"，接续烘焙搬走的就是那个没演到的终态"
+                          if keep else ""))
+    return out
+
+
+def next_speech_start(segments, sid):
+    """紧邻其后的那一段旁白起点（绝对秒）；没有下一段返回 None。
+
+    按 start_time 取"比本段晚的最近一段"，不靠列表相邻：manifest 的段序就是时间序，
+    但孤儿配图/结构段可能让 sid 的邻居不是时间上的下一页。
+    """
+    mine = None
+    for seg in segments:
+        if seg["id"] == sid:
+            mine = float(seg["sentences"][0]["start_time"])
+            break
+    if mine is None:
+        return None
+    cands = [float(s["sentences"][0]["start_time"]) for s in segments
+             if float(s["sentences"][0]["start_time"]) > mine + _BEAT_EPS]
+    return min(cands) if cands else None
+
+
+def beat_report_lines(images, segments, dflt_dur):
+    """每个导演段一张对轴表（作者用 --beat-report 索取，默认不打，免得盖过 warn）。
+
+    它回答"每一拍到底踩在话的哪儿"：in=句内、gap=句间静音、tail=段尾静音、
+    before/after=窗外（就是门禁 warn 的那两类）。**in 也不等于准**：句内 frac 是
+    "语速均匀"的线性假设，实测一个标点停顿就能让它偏 0.2–1s——这里给的是机械能判的
+    那一层，词级对轴要么听一遍，要么换带 word timestamps 的配音。
+    """
+    seg_by_id = {seg["id"]: seg for seg in segments}
+    lines = []
+    for sid in (images or {}):
+        director = (images[sid] or {}).get("director")
+        seg = seg_by_id.get(sid)
+        if not director or not seg:
+            continue
+        sents = seg["sentences"]
+        seg_start = float(sents[0]["start_time"])
+        seg_end = float(sents[-1]["start_time"]) + float(sents[-1].get("duration", 0.0))
+        nxt = next_speech_start(segments, sid)
+        try:
+            beats = beat_positions(director["steps"], sents, round(seg_start, 2), dflt_dur)
+        except ValueError as e:
+            lines.append(f"[beat] {sid}: 解析中断 — {e}")
+            continue
+        lines.append(f"[beat] {sid}  旁白 {seg_start:.2f}–{seg_end:.2f}s（{len(sents)} 句）"
+                     + (f"，下一页 {nxt:.2f}s 起" if nxt is not None else "，末段无右界"))
+        tally = {}
+        for (pos, _dur), step in zip(beats, director["steps"]):
+            kind, where = _beat_landing(pos, sents, seg_start, seg_end, nxt)
+            tally[kind] = tally.get(kind, 0) + 1
+            lines.append("       %-12s %8.2fs  %-6s %-30s %s" % (
+                step["target"], pos, kind, where, _beat_anchor(step)))
+        lines.append("       — %d 拍：%s" % (
+            len(beats), " · ".join("%s %d" % (k, tally[k]) for k in
+                                   ("in", "gap", "tail", "before", "after") if tally.get(k))))
+    return lines
+
+
+def director_prepare(images, segments, out_dir):
+    """方式 C SVG「导演」编排的生成期体检 + 净化内联，返回 (错误, 警告)。
+
+    写了 director 的条目才走这条路：读盘 → 净化（_svg_sanitize 去掉 script/on*/
+    外链/SMIL/墙钟动画，root 改成 cover 语义）→ 回填 entry["inline_svg"]，渲染端
+    据此把 SVG 内联成活 DOM，GSAP 才能逐帧驱动图内命名元素（见 html_renderer
+    ._director_timeline_lines）。五件事只有这里查得到：
+
+    - at 越界：写了 steps[i].at 时，其整数部分必须 < 该段旁白句数（0 基句序）——越界会让
+      渲染端 raise，这里提前按段落点名。用 at_time（段落绝对秒）的步骤没有句序可锚，跳过此检。
+    - target 落空：steps[i].target 指的 id 必须在 SVG 里真实存在。落空不是报错
+      而是**静默无动画**（选择器匹配不到任何元素），成片看着"没动"却全程零提示，
+      所以按文件拦成 error。
+    - 运镜裁切：`#cam` 里的内容被 scale/平移推到画幅**静止位之外**（见 _cam_crop），warn。
+    - 节拍出窗：每一步的落点按 _timeline.beat_positions 解析成绝对秒，落在本页可见窗口
+      之外（早于本段旁白 / 晚于下一段起点）warn——那是"这一拍根本不演"，`at_time` 过期
+      最常见；起点在窗内、终点越过下一段起点的也 warn（那一拍被切在半路，终态从没出现过）。
+      逐拍踩在哪句可以用 `--beat-report` 打表看。
+    - 净化说明：删掉了哪些不安全/墙钟构造，按 warn 让人知情（决定性的代价写在明面）。
+    - 跨段延续（stage:"keep"）：写完上面这些，再按 manifest 段序走第二遍，把上一页
+      演完的画面烘焙成下一页的内联副本（见 _stage_carry_pass）。那一遍还要替接续页补做
+      运镜自查——第一遍按盘上原图算的投影对接续页是假话（原图里没有上一页推近的几何）。
+
+    非 SVG 挂 director 已由 _images_schema 在契约层拒掉，这里不重复。
+    """
+    errs, warns = [], []
+    seg_by_id = {seg["id"]: seg for seg in segments}
+    dflt_dur = _director_default_duration()   # 与渲染端同一份缺省，否则落点算错
+    for sid, entry in (images or {}).items():
+        director = entry.get("director")
+        # 接续页：起点不是盘上原图，而是上一页演完的画面（见 _stage_carry_pass）。
+        carried = entry.get("stage") == "keep"
+        if not director:
+            continue
+        src = entry["src"]
+        path = os.path.join(out_dir, src)
+        if not os.path.isfile(path):
+            errs.append(f"段落 '{sid}' 的 director 配图 {src} 在 {out_dir} 下不存在")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            errs.append(f"段落 '{sid}' 的 director 配图 {src} 读不了: {e}")
+            continue
+        try:
+            markup, notes = sanitize_svg_for_inline(raw)
+        except ValueError as e:
+            errs.append(f"段落 '{sid}' 的 director 配图 {src} 无法净化内联: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 的 director 配图 {src}：{n}")
+        ids = _svg_selectable_tokens(raw)
+        seg = seg_by_id.get(sid)
+        n_sent = len(seg["sentences"]) if seg else 0
+        for i, step in enumerate(director["steps"]):
+            if seg is None:
+                errs.append(f"段落 '{sid}' 写了 director，但 manifest 里没有这一段")
+                break
+            # at 才有句序越界可验；at_time 锚在段落绝对时间（含相对串），与旁白句数无关，跳过。
+            if "at" in step:
+                at = step["at"]
+                if int(at) >= n_sent:
+                    errs.append(f"段落 '{sid}' 的 director.steps[{i}] at={at} 越界："
+                                f"该段只有 {n_sent} 句旁白（at 的整数部分=句序，最大 {n_sent - 1}）")
+            target = step["target"]
+            if target not in ids:
+                errs.append(f"段落 '{sid}' 的 director.steps[{i}] target={target} 在 "
+                            f"{src} 里找不到对应 id/class 的元素——选择器落空不会报错，只会"
+                            "静默没有动画。给该元素补上这个 id/class，或改 target")
+        entry["inline_svg"] = markup
+        # 运镜裁切：源码看着坐标都在幅内，是 scale 把内容推出去的，只有这里同时握有
+        # SVG 原文与 steps（判据与口径见 _cam_crop 模块头）。warn 不 error：途中出画是
+        # 合法演法，这里只报"静止位看不见的内容"，而那也可能是作者故意的取舍。
+        # 净化后的串就够用（sanitize 只改 root 的 cover 语义、剥脚本，viewBox 与几何不动）。
+        # 接续页（stage:"keep"）跳过：起点不该是盘上原图而是上一页演完的画面，
+        # 由 _stage_carry_pass 拿烘焙后的副本重算，免得两遍各报一套互相矛盾的越界。
+        if not carried:
+            for w in crop_warnings(markup, director.get("steps")):
+                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+        # 节拍↔旁白对轴：at_time 是按某一版配音手算的绝对秒，重配音/改句长/动 --gap
+        # 之后它整体错位，而落在 clip 窗口外的那一拍是**静默不演**（引擎按
+        # data-start/data-duration 硬切可见性）。这里同时握有 steps 与 manifest 句子，
+        # 是整条链上唯一算得出落点的地方。warn 不 error：压在下一页可能正是要的效果。
+        if seg:
+            for w in _beat_window_warnings(director["steps"], seg["sentences"],
+                                           float(seg["sentences"][0]["start_time"]),
+                                           next_speech_start(segments, sid), dflt_dur,
+                                           keep=carried):
+                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+    _stage_carry_pass(images, segments, dflt_dur, errs, warns)
+    return errs, warns
+
+
+def _director_beats(steps, seg, dflt_dur):
+    """steps → [(绝对秒, 时长)]，锚在段落首句起点；解析不动时返回 None。
+
+    只服务"按时刻结算收尾态"的排序需求（_stage_carry._ordered），所以 at 越界这类
+    已经由别处按步报过的错，这里退回数组序兜底就好——再报一遍只会把同一条错误说两次。
+    """
+    try:
+        return beat_positions(steps, seg["sentences"],
+                              round(float(seg["sentences"][0]["start_time"]), 2),
+                              dflt_dur)
+    except (ValueError, KeyError, IndexError):
+        return None
+
+
+def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
+    """跨段场景延续的生成期第二遍：上一页"演完之后"的画面 = 下一页的起点。
+
+    为什么要第二遍而不是就地做：下一页要的起点是**上一页烘焙之后**的副本（A→B→C 里 C
+    必须拿到 A+B 的叠加），所以只能沿 manifest 段序推进；第一遍走的是 images.json 的
+    键序，两者不保证一致，就地算会用到还没烘焙的前页。
+
+    烘焙本身在 _stage_carry（口径与边界写在那个模块头）。这里只回答"接的是谁"：
+    前一段存在吗、它内联得出来吗、两页是不是同一张图，以及接续页的运镜自查。
+    """
+    if not images:
+        return
+    for i, seg in enumerate(segments):
+        sid = seg["id"]
+        entry = images.get(sid)
+        if not entry or entry.get("stage") != "keep":
+            continue
+        src = entry["src"]
+        where = f"段落 '{sid}' 写了 stage:\"keep\""
+        if i == 0:
+            errs.append(f"{where}，但它是 manifest 里的第一段——接续的起点是上一页演完的"
+                        "画面，第一页没有上一页。把 stage 挪到真正接续的那一页，或这一页"
+                        "独立成图")
+            continue
+        prev = segments[i - 1]
+        prev_entry = images.get(prev["id"]) or {}
+        prev_markup = prev_entry.get("inline_svg")
+        if not prev_markup:
+            errs.append(f"{where}，但上一段 '{prev['id']}' 没有可接续的内联画面——它没写"
+                        " director（写了才净化内联），或它的配图没读进来/没能内联。"
+                        " 接续页要的是上一页演完的那幅活画面，<img> 那份没有可烘焙的元素态")
+            continue
+        if prev_entry.get("src") != src:
+            errs.append(f"{where}，但它的 src={src!r} 和上一段 '{prev['id']}' 的 "
+                        f"{prev_entry.get('src')!r} 不是同一张图——接续的前提是同一幅画"
+                        " 跨页继续演。要换画面就别写 stage；要同一幅画就把两页的 src 对齐")
+            continue
+        prev_steps = (prev_entry.get("director") or {}).get("steps") or []
+        try:
+            markup, notes = bake_settled_state(
+                prev_markup, prev_steps, _director_beats(prev_steps, prev, dflt_dur))
+        except ValueError as e:
+            errs.append(f"{where}，但烘焙上一页的收尾态失败: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 接续自 '{prev['id']}'：{n}")
+        entry["inline_svg"] = markup
+        # 接续页的运镜自查拿**烘焙后**的副本来算：这一页的相机姿态是在上一页推近的画
+        # 面之上再乘一层，只看盘上原图会把已经出画的元素当成"在幅内"。
+        own = (entry.get("director") or {}).get("steps")
+        for w in crop_warnings(markup, own):
+            warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+        for i, sel in global_ref_leaks(markup, own):
+            errs.append(f"{where}，但它的 director.steps[{i}]（target={sel}）打在了两份副本"
+                        "共享的元素上——图里的 url(#id)/href=\"#id\" 按文档序只认第一份"
+                        f"（= 上一段 '{prev['id']}' 那一幅），所以这一拍打在本页这份上，本页"
+                        "没有任何图形会去读它。渐变/滤镜/marker 这类共享元素的补间请只在"
+                        "前一段写，别在接续页重写")
+    return
+
+
 def _svg_text_metrics(path):
     """从 SVG 全文取 (最小 px 字号, <text> 个数)，读不到字号时返回 (None, n)。
 
@@ -524,6 +864,16 @@ def main(argv=None):
                              "用户缓存 → 钉固 CDN 的顺序安装（下载体过 sha256 校验"
                              "才落盘）。传显式值（URL 或相对路径）可覆盖，但自定义源"
                              "不做哈希钉固校验，可信度自负。")
+    parser.add_argument("--alpha", action="store_true",
+                        help="透明底导出：给 <html> 挂 ctv-alpha 类，页面渐变/网格/段落"
+                             "氛围光三层不画（关掉了什么写在 templates/composition.css "
+                             "末尾）。HTML 本身不知道最终容器，所以这只改变画面；"
+                             "要真拿到 alpha 通道还得渲染端配合，本技能实测只有 "
+                             "--format mov 带得出平面（webm 会压成黑底，判据见 "
+                             "references/rendering.md「透明底导出」）。")
+    parser.add_argument("--beat-report", action="store_true",
+                        help="打印每个导演段每一拍落在旁白哪句/句间静音/段尾/窗外的对轴表"
+                             "（排查动画与语音不同步用；只打表，不改变生成结果）。")
     args = parser.parse_args(argv)
 
     # 产物路径守卫：HTML 与它引用的音频/配图都写进 -o 所在目录，落在技能
@@ -659,6 +1009,22 @@ def main(argv=None):
             print(f"[error] {_e}", file=sys.stderr)
         sys.exit(1)
 
+    # 导演（时间轴同步 SVG 动画）的生成期体检 + 净化内联：必须在 generate_html
+    # 之前跑，它把净化后的 SVG 回填进 entry["inline_svg"]，渲染端才知道这张要内联。
+    _dir_errs, _dir_warns = director_prepare(images, manifest["segments"], out_dir)
+    for _w in _dir_warns:
+        print(f"[warn] {_w}", file=sys.stderr)
+    if args.beat_report:
+        # 对轴表打在 warn 之后、失败退出之前：报的正是"哪一拍没踩在话上"，
+        # 越界这类错误发生时它最有价值，所以不能被 exit 挡在前面。
+        for _line in beat_report_lines(images, manifest["segments"],
+                                       _director_default_duration()):
+            print(_line, flush=True)
+    if _dir_errs:
+        for _e in _dir_errs:
+            print(f"[error] {_e}", file=sys.stderr)
+        sys.exit(1)
+
     if args.audio:
         audio_candidates = _audio_candidates(args.audio, out_dir)
         audio_path = next((p for p in audio_candidates if os.path.isfile(p)), None)
@@ -704,10 +1070,19 @@ def main(argv=None):
                     "拒绝用新字幕烧旧音轨。请重跑 TTS，或显式 --audio。")
         audio_src = _stage_audio_file(audio_path, out_dir)
 
+    if args.alpha:
+        # 出声而不是静默改外观：透明底会关掉整片背景，第一次看到的人一定会以为
+        # 主题配错了；而 mp4 根本没有 alpha 通道，不提醒就会拿着一片黑底回来问。
+        # webm 本想吃掉这个坑，但本机实测 hyperframes 渲 webm 时不落 alpha 平面
+        # （逐帧 yuv420p，透明处压成纯黑），所以别推荐它。
+        print("[warn] 透明底导出：页面渐变 / 网格 / 段落氛围光三层已关闭，成片只有"
+              "内容层。mp4 不带 alpha（透明处会变黑底），webm 实测同样丢平面，"
+              "渲染请用 --format mov（固定的 ProRes 4444 alpha 档）。", file=sys.stderr)
     html = generate_html(manifest, audio_src,
                          images=images,
                          width=w, height=h, gsap_src=gsap_src,
-                         aspect=aspect, theme=args.theme, fps=args.fps)
+                         aspect=aspect, theme=args.theme, fps=args.fps,
+                         alpha=args.alpha)
 
     # 原子写：index.html 是渲染输入，写到一半被打断会留下半份 HTML——
     # render 会报莫名其妙的语法错，而不是"上次生成中断了，重跑"。
@@ -736,6 +1111,8 @@ def main(argv=None):
     print(f"     Sentences: {len(manifest['sentences'])}")
     print(f"     Aspect: {aspect} ({w}x{h})")
     print(f"     Theme: {args.theme}")
+    if args.alpha:
+        print("     Alpha: 透明底（页面渐变/网格/氛围光不画）")
     print(f"     FPS: {args.fps}")
     print(f"     Images: {len(images)}")
     print(f"     Audio src: {audio_src}")

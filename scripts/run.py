@@ -210,7 +210,6 @@ def _build_parser():
                         default="render",
                         help="跑到该步骤为止（默认 render；迭代时用 html："
                              "生成 HTML 即停，先看版式和配图再渲染）")
-    parser.add_argument("--no-resume", action="store_true", help="TTS 不用 --resume")
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏）或 "
@@ -305,9 +304,9 @@ def main():
     }
 
     # ── 第 3 步：TTS ──────────────────────────────────────────────
-    tts_args = ["--source", args.source, "-o", out]
-    if not args.no_resume:
-        tts_args.append("--resume")
+    # --resume 恒开（指纹缓存能证明一致才复用；要整重跑时直接调 pipeline.py，
+    # 不加 --resume 即可）。
+    tts_args = ["--source", args.source, "-o", out, "--resume"]
     # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子步骤参数，
     # 让 pipeline 的 resume 指纹与本次参数一致，不依赖两边默认值恰好相同。
     tts_args += ["--speed", str(args.speed), "--voice-id", args.voice_id]

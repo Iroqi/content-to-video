@@ -76,7 +76,7 @@ def _hex_rgb_bytes(hex_color):
     3 位缩写（#fff）先展开成 6 位——is_safe_css_color 放行用户传入的
     "#rgb" 缩写色，不展开会解析失败返回 None，深浅主题判断
     静默失效（dark 被当浅色，tagline 走压暗分支，对比度掉到 ~2.1）。
-    全模块的 hex 解析只有这一份：darken / hex_to_rgb01 / css_color_to_hex
+    全模块的 hex 解析只有这一份：hex_to_rgb01 / css_color_to_hex
     各自再写一遍 3 位展开与 int(h,16) 迟早漂移。
     """
     h = hex_color.lstrip("#")
@@ -85,18 +85,6 @@ def _hex_rgb_bytes(hex_color):
     if len(h) != 6 or not all(c in "0123456789abcdef" for c in h.lower()):
         return None
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def darken(hex_color, factor=0.6):
-    """把 accent 十六进制色压暗一档，用于浅色主题下的小字（如 tagline）。
-
-    保持色相不变、只降低亮度，让文字在米白/浅色背景上达到可读对比度，
-    同时不改变该段落 accent 色在大元素（竖条/glow/进度条）上的视觉效果。
-    """
-    rgb = _hex_rgb_bytes(hex_color)
-    if rgb is None:
-        return hex_color
-    return "#" + "".join(f"{int(v * factor):02x}" for v in rgb)
 
 
 def hex_to_rgb01(hex_color):

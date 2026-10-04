@@ -15,9 +15,8 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 from _theme import (
-    get_theme_colors, get_default_accent, darken,
-    relative_luminance, mix, normalize_accent, theme_bg_stops,
-    ensure_text_contrast, DEFAULT_THEME,
+    get_theme_colors, get_default_accent, mix, normalize_accent,
+    theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS
@@ -162,7 +161,7 @@ def _agenda_row_html(rows):
         for idx, name, dur in rows)
 
 
-def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
+def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                      title_size, bgs):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
@@ -173,10 +172,8 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
     sid = seg["id"]
     kicker_html = ""
     if seg.get("tagline"):
-        # 深浅底的起手色与内容段 tagline 同方向（深底提亮、浅底压暗），
-        # 再统一过 ensure_text_contrast 的对比度保底。
-        _kc = ensure_text_contrast(
-            mix(ac, "#ffffff", 0.55) if dark_theme else darken(ac, 0.75), bgs)
+        # 深底起手色向白提亮，再统一过 ensure_text_contrast 的对比度保底。
+        _kc = ensure_text_contrast(mix(ac, "#ffffff", 0.55), bgs)
         kicker_html = (f'<div class="agenda-kicker" style="color:{_kc}">'
                        f'{esc(seg["tagline"])}</div>')
     rows, tail_rows = _agenda_rows(sid, clips, manifest, ag)
@@ -264,10 +261,6 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
     rc.theme_colors = get_theme_colors(theme)
-    # 按主题主文字色亮度判深浅底（_theme._THEMES 是唯一权威，
-    # 新增主题无需改这里的枚举）——tagline 的"同色相只调明度"在深色
-    # 底下方向要反过来（提亮而不是压暗）。
-    rc.dark = relative_luminance(rc.theme_colors["text_color"]) > 0.5
     # 背景渐变的十六进制色标集合：accent 派生文字色的对比度保底按其中最坏
     # 一档判定（theme_bg_stops 只解析自家 _THEMES 的渐变串）。
     rc.bgs = theme_bg_stops(theme)
@@ -451,10 +444,10 @@ def _card_colors(rc, seg):
     # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
     # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
     ac_attr = esc(ac)
-    # 文本安全 accent：dark 底从原色起步，两条路径最后都过
-    # ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
-    # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
-    ac_text = ensure_text_contrast(ac if rc.dark else darken(ac), rc.bgs)
+    # 文本安全 accent：accent 从原色起步，过 ensure_text_contrast 兜到 check
+    # 门禁的最严一档。只喂给"写在底上的字"（活动句着色 / .ag-idx），装饰
+    # 仍走原色 --seg-accent。
+    ac_text = ensure_text_contrast(ac, rc.bgs)
     return ac, ac_attr, esc(ac_text)
 
 
@@ -503,11 +496,9 @@ def _tagline_html(rc, seg, sid, ac):
     """段落 tagline 行（可空）。缩进与对齐归 CSS（--ctv-tagline-indent）。"""
     if not seg.get("tagline"):
         return ""
-    # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
-    # WCAG AA）；浅色主题压暗一档后仍由 ensure_text_contrast 兜到门禁最
-    # 严档。
-    _tag_color = ensure_text_contrast(
-        mix(ac, "#ffffff", 0.62) if rc.dark else darken(ac), rc.bgs)
+    # 深色主题向白提亮（无差别压暗在 dark 下对比度只有 ~3.3，不达
+    # WCAG AA），再由 ensure_text_contrast 兜到门禁最严档。
+    _tag_color = ensure_text_contrast(mix(ac, "#ffffff", 0.62), rc.bgs)
     return (f'<div class="tagline" id="tag-{sid}" '
             f'style="color:{_tag_color}">{esc(seg["tagline"])}</div>')
 
@@ -661,7 +652,7 @@ def _assemble_card(rc, card, clips, manifest):
         # agenda 卡：head+列表在 .agenda-col 内，verse 收在列尾（锚底），
         # 进度条留在卡底部（col 之外，贴屏底）。
         return (card.card_open
-                + _agenda_col_html(card.seg, clips, manifest, rc.ag, rc.dark,
+                + _agenda_col_html(card.seg, clips, manifest, rc.ag,
                                    card.ac, card.ac_attr, card.title_size, rc.bgs)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html

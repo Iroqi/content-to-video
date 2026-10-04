@@ -121,10 +121,6 @@ class FlagPassthrough(unittest.TestCase):
         for opt in ("--gap", "--voice-style"):
             self.assertNotIn(opt, self.h.tts_argv)
 
-    def test_no_resume_omits_flag(self):
-        self.h.invoke(["--until", "tts", "--no-resume"])
-        self.assertNotIn("--resume", self.h.tts_argv)
-
     def test_optional_flags_forward(self):
         self.h.invoke(["--until", "tts", "--gap", "0.7", "--voice-style", "轻快"])
         for pair in (("--gap", "0.7"), ("--voice-style", "轻快")):

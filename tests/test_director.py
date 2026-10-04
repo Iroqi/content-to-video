@@ -22,7 +22,8 @@ def _write_svg(tmp, sid, text):
 
 SVG_WITH_ALL = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" viewBox="0 0 980 735">'
-    '<style>.a{animation:pulse 2s infinite}.b{fill:#dbe6f5}</style>'
+    '<style>.a{animation:pulse 2s infinite}@keyframes pulse{from{opacity:0}to{opacity:1}}'
+    '.b{fill:#dbe6f5}</style>'
     '<g id="node" opacity="0"><rect width="10" height="10" onclick="steal()">'
     '<animate attributeName="opacity" to="1" dur="2s"/></rect></g>'
     '<image href="https://evil/x.png"/>'
@@ -41,6 +42,8 @@ class Sanitize(unittest.TestCase):
         self.assertNotIn("https://evil", markup)          # 外链 href 已删
         self.assertNotIn("<animate", markup)              # SMIL 墙钟动画已剥
         self.assertNotIn("animation:", markup)            # CSS 动画已剥
+        self.assertNotIn("@keyframes", markup)            # 墙钟动画的定义也剥净
+        self.assertNotIn("pulse", markup)
         self.assertIn(".b{fill:#dbe6f5}", markup)         # 非墙钟样式保留
         self.assertTrue(notes)
 

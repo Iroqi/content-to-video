@@ -145,7 +145,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _template import get_canvas, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
-from _images_schema import load_images_json, unknown_media_keys  # noqa: E402
+from _images_schema import load_images_json  # noqa: E402
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
@@ -932,7 +932,7 @@ def main(argv=None):
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"
-              f"在 A/B/C/D 四条路线中选型补图（见 references/image_options.md）"
+              f"在 A/B/C 三条路线中选型补图（见 references/image_options.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
     # GSAP 取用：显式 --gsap-src 直接写进 HTML 引用（不校验），否则走

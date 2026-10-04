@@ -39,6 +39,9 @@ _WALLCLOCK_CSS = re.compile(
     re.I)
 # 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
 _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|data:text/html)", re.I)
+# @keyframes 规则（含厂商前缀）的起始标记：剥定义用的，见 _strip_keyframes。
+# 前缀组 [a-z]* 可为零字符，纯 @keyframes 也要命中（@-webkit-keyframes 靠 -? 接上）。
+_KEYFRAMES_AT = re.compile(r"@-?[a-z]*-?keyframes\b", re.I)
 
 
 def _local(tag):
@@ -51,8 +54,42 @@ def _is_external_href(value):
             or _EXT_URL.search(v) is not None)
 
 
+def _strip_keyframes(css):
+    """剥掉 @keyframes（含厂商前缀）规则体：墙钟动画的定义本身。
+
+    声明剥掉后规则体还留在 <style> 里，等于把作者写死的旧动画原样带进
+    成片——@keyframes 本身不驱动任何元素（惰性），但"墙钟动画已剥净"的
+    不变量应该连定义一起兑现。用括号配平扫：规则体里每个 keyframe 选择器
+    各带一层 {}（总深度 2），配平到 0 就是规则结束。遇到未闭合的残缺规则
+    就保留剩余文本（解析器对坏 CSS 的容忍，净化不越权去修它）。
+    """
+    if "@keyframes" not in css.lower():
+        return css
+    out = []
+    i, n = 0, len(css)
+    while i < n:
+        m = _KEYFRAMES_AT.search(css, i)
+        if not m:
+            out.append(css[i:])
+            break
+        out.append(css[i:m.start()])
+        j, depth = m.start(), 0
+        while j < n:
+            ch = css[j]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        i = j
+    return "".join(out)
+
+
 def _clean_style_text(css, notes):
-    """从 <style> 文本里剥掉墙钟动画声明与外链 url()/@import。"""
+    """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）与外链 url()/@import。"""
     if not css:
         return css
     out = css
@@ -64,8 +101,14 @@ def _clean_style_text(css, notes):
         notes.append("<style> 里的外链 url() 已中和")
     if _WALLCLOCK_CSS.search(out):
         out = _WALLCLOCK_CSS.sub("", out)
-        notes.append("<style> 里的 CSS animation/transition 已剥离"
+        notes.append("<style> 里的 CSS animation/transition 声明已剥离"
                      "（墙钟动画在逐帧渲染里不可复现；要动请用 director 补间）")
+    if "@keyframes" in out.lower():
+        out = _strip_keyframes(out)
+        notes.append("<style> 里的 @keyframes 规则已剥离"
+                     "（墙钟动画的定义；要动请用 director 补间）")
+    # 声明被剥掉后留下的空壳选择器（.a{}）一并清掉，不留死规则。
+    out = re.sub(r"[^{}]*\{\s*\}", "", out)
     return out
 
 

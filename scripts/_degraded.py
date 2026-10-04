@@ -45,12 +45,6 @@ def _read_lost(_tm, deg):
     return (n, f"{n} 句完全丢失（连静音占位都没生成）") if n else None
 
 
-def _read_flag(key, label):
-    def reader(_tm, deg):
-        return (1, label) if deg.get(key) else None
-    return reader
-
-
 def _read_dropped(_tm, deg):
     # segments_dropped 是 pipeline 写下的被剔除 sid 列表（不是计数）
     ids = deg.get(SEGMENTS_DROPPED) or []

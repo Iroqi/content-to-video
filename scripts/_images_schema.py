@@ -421,13 +421,3 @@ def validate_images_json(data):
 def load_images_json(path):
     """读取并校验 images.json（读取失败统一成带路径的 ValueError）。"""
     return validate_images_json(read_json_file(path))
-
-
-def classify_media_path(path, explicit_type="auto"):
-    """媒体类型：静态图统一 "image"（gif/svg/png 等都走 <img>，无需分支）。
-
-    保留本函数是给调用方一个"素材类型"的稳定问询点；当前恒为 "image"。
-    """
-    if explicit_type != "auto":
-        return explicit_type
-    return "image"

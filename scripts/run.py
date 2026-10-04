@@ -27,9 +27,7 @@ from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产
 from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
-from _manifest_schema import (load_timing_manifest,  # noqa: E402
-                              validate_timing_manifest)
-from _audio import get_ffmpeg  # noqa: E402
+from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402

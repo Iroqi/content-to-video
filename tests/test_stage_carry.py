@@ -203,6 +203,46 @@ class FoldCamera(unittest.TestCase):
         self.assertTrue(any("#num" in w and "下边" in w for w in warns), warns)
 
 
+class RepeatAndYoyoCarry(unittest.TestCase):
+    """`repeat` / `yoyo` 的收尾态：接续烘焙按"最后真的停在哪一头"搬。"""
+
+    def test_yoyo_even_cycles_is_not_carried(self):
+        # 呼吸一拍：偶数遍收在起点，下一页接手时它本来就是那个样子，没什么可搬
+        out, notes = _bake([{"target": "#plate", "to": {"opacity": 1},
+                             "repeat": 1, "yoyo": True}])
+        self.assertNotIn("style", _find(out, "plate").attrib)
+        self.assertEqual(notes, [])
+
+    def test_yoyo_odd_cycles_carries_the_target(self):
+        out, _ = _bake([{"target": "#plate", "to": {"opacity": 1},
+                         "repeat": 2, "yoyo": True}])
+        self.assertIn("opacity:1", _find(out, "plate").get("style"))
+
+    def test_repeat_without_yoyo_carries_the_target(self):
+        out, _ = _bake([{"target": "#plate", "to": {"opacity": 1}, "repeat": 5}])
+        self.assertIn("opacity:1", _find(out, "plate").get("style"))
+
+    def test_infinite_repeat_is_skipped_and_named(self):
+        """永远演不完就没有"最后停在哪儿"：跳过必须出声，静默少搬一样查不出来。"""
+        out, notes = _bake([{"target": "#plate", "to": {"opacity": 1}, "repeat": -1}])
+        self.assertNotIn("style", _find(out, "plate").attrib)
+        self.assertTrue(any("repeat:-1" in n and "#plate" in n for n in notes), notes)
+
+    def test_infinite_camera_step_blocks_the_whole_fold(self):
+        """一条永不停下的相机步就让整台相机的收尾位不作数：宁可不折，也不折编出来的姿态。"""
+        steps = [{"target": "#cam", "to": {"scale": "*=1.2"}},
+                 {"target": "#cam", "to": {"y": "+=80"}, "repeat": -1, "yoyo": True}]
+        out, notes = _bake(steps)
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertTrue(any("repeat:-1" in n and "#cam" in n for n in notes), notes)
+
+    def test_camera_that_yoys_back_is_not_folded(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": "*=1.2", "y": "+=80"},
+                             "repeat": 1, "yoyo": True}])
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertEqual(notes, [])
+
+
 def _stage_pose(markup):
     """读出折进来的那层 `translate(e,f) scale(s)` → (e, f, s)。"""
     m = re.search(r"translate\(([-\d.]+),([-\d.]+)\) scale\(([-\d.]+)\)", markup)

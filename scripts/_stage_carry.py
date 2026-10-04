@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
                        decompose_transform, resolve_num)
+from _timeline import beat_cycles, ends_at_start
 
 SVG_NS = "http://www.w3.org/2000/svg"
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
@@ -265,7 +266,7 @@ def _fold_camera(root, steps, center=None):
     `bake_settled_state`）；省略则按当前树现算——只有不关心与渲染器对齐的场合才该省。
     """
     pose = cam_resting_pose(steps)
-    if pose is None:
+    if pose is None or not pose.get("rests", True):
         return None
     cam = root.find(".//*[@id='%s']" % CAM_ID)
     if cam is None or not len(cam):
@@ -313,10 +314,24 @@ def bake_settled_state(markup, steps, beats=None):
     pre_center = cam_projection_origin(root, pose) if pose else None
     notes = []
     transforms, misfires = [], []
+    loops = []
     for _i, step in _ordered(steps or [], beats):
+        # 没有收尾态的两种一步都不搬：`repeat:-1` 永远演不完（终点无从谈起），`yoyo` 走
+        # 偶数遍的元素回到它原来的样子（搬了等于凭空挪走一个从没出现过的状态）。前者必须
+        # 出声，后者什么都不必说。
+        if beat_cycles(step) is None:
+            loops.append(step["target"])
+            continue
+        if ends_at_start(step):
+            continue
         t, m = _settle_step(root, step)
         transforms += t
         misfires += m
+    if loops:
+        notes.append("这些步写了 repeat:-1，永远演不完，也就没有'最后停在哪儿'：" 
+                    + "、".join(sorted(set(loops)))
+                    + "。接续页不搬它们的终态（相机只要有一条这样的步，整台相机的收尾位就"
+                      "不作数、一律不折）；要接续就写明确遍数 repeat:N")
     if transforms:
         notes.append("接续搬不动元素级 transform 属性 " + "、".join(sorted(set(transforms)))
                      + "——它们要么要以元素自己的 bbox 中心为原点折算（scale/rotation/"

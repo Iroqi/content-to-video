@@ -7,7 +7,6 @@ remain outside this module.
 """
 import html
 import json
-import math
 import re
 import sys
 from pathlib import Path
@@ -22,7 +21,8 @@ from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
-from _timeline import beat_positions
+from _ease import curve as ease_curve
+from _timeline import beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 
 
@@ -783,53 +783,24 @@ def _line_timeline_lines(rc, card):
     return lines
 
 
-def _morph_ease(name, default):
-    """morph 采样的缓动曲线：给定 GSAP 风格 ease 名，返回 f:[0,1]→[0,1]。
+def _cycle_vars(step):
+    """step 上的 repeat / yoyo → 要塞进 GSAP 补间变量的那几项（没写就不塞）。
 
-    因为 morph 是**生成期烘焙成离散 tl.set**、GSAP 不会对 set 再缓动，所以这里的曲线
-    就是最终成片里形状随时间的变化——不追求与 GSAP 逐字节同式，只要是一条合理的
-    in/out/inOut 曲线即可（认得的档用 GSAP 的标准公式，认不出的档退回线性，绝不 raise）。
-    default 取模板 animation.director.ease，让 morph 默认和无痕补间的兄弟 tween 同手性。
+    跨度由 `_timeline.beat_span` 算，门禁、接续烘焙和这里读的都是同一个数；这里只负责
+    把它变成 GSAP 听得懂的写法。`repeat:0` 与缺省等价，不塞进去省字节。
     """
-    spec = (name or default or "none").strip()
-    base, _, mod = spec.partition(".")
-    if not mod:
-        mod = "out"           # GSAP 裸名（power2）默认 .out
-    # mod 上面已保证非空（裸名默认 .out），back 与 power*/quad 等共享
-    # 同一套 in/out/inOut 变换，这里只需要挡掉 none/linear 两个直通档。
-    if base in ("none", "linear"):
-        return lambda t: t
+    out = {}
+    if step.get("repeat"):
+        out["repeat"] = int(step["repeat"])
+    if step.get("yoyo"):
+        out["yoyo"] = True
+    return out
 
-    # "in" 曲线 g(t)：单调、g(0)=0、g(1)=1（back 会轻微越界，interp 可外推）。
-    if base.startswith("power"):
-        try:
-            exp = int(base[5:] or "2") + 1   # power1=quad(t^2)…power4=quint(t^5)
-        except ValueError:
-            exp = 3
-        g = lambda t, e=exp: t ** e
-    else:
-        exp = {"quad": 2, "cubic": 3, "quart": 4, "quint": 5}.get(base)
-        if exp is not None:
-            g = lambda t, e=exp: t ** e
-        elif base == "sine":
-            g = lambda t: 1 - math.cos(t * math.pi / 2)
-        elif base == "expo":
-            g = lambda t: (2 ** (10 * (t - 1))) if t else 0.0
-        elif base == "circ":
-            g = lambda t: 1 - math.sqrt(max(0.0, 1 - t * t))
-        elif base.startswith("back"):
-            c1 = 1.70158
-            c3 = c1 + 1
-            g = lambda t: c3 * t ** 3 - c1 * t ** 2
-        else:
-            return lambda t: t        # 未知档：线性兜底
 
-    if mod == "in":
-        return g
-    if mod == "out":
-        return lambda t, g=g: 1 - g(1 - t)
-    # inOut：由 in 曲线拼标准对称型（t=.5 处连续，端点 0/1 不动）
-    return lambda t, g=g: (0.5 * g(2 * t)) if t < 0.5 else (1 - 0.5 * g(2 - 2 * t))
+def _cycle_js(step):
+    """count / type 的手写代理补间要的那段 JS（含尾逗号）；无循环时是空串。"""
+    vars_ = _cycle_vars(step)
+    return "".join(f'{k}:{json.dumps(v)},' for k, v in vars_.items())
 
 
 def _director_timeline_lines(rc, card):
@@ -903,21 +874,37 @@ def _director_timeline_lines(rc, card):
             out["ease"] = ease
             if stagger is not None:
                 out["stagger"] = stagger
+            out.update(_cycle_vars(step))
             return _pin(out)
 
         if "morph" in step:
             # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
-            # 时间均匀推进（t=pos+u·dur），形状进度 k=ease(u)——因为 GSAP 不会对 set 再
-            # 缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与兄弟 tween 同手性）。
-            # 逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是时间的确定函数、跨平台
-            # 可复现，不需要任何运行时 morph 库。拓扑相符性在契约层已校验。
+            # 时间均匀推进（t=pos+u·span），形状进度 k=ease(每一遍内的位置)——因为 GSAP
+            # 不会对 set 再缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与
+            # 兄弟 tween 同手性）。逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是
+            # 时间的确定函数、跨平台可复现，不需要任何运行时 morph 库。拓扑相符性在契约层
+            # 已校验。repeat/yoyo 折进采样：整段跨度 = dur×遍数，遍序号奇偶决定这一遍正放
+            # 还是倒放（倒放喂 ease(1-p)，实测与 GSAP 的 yoyo 一字不差）。
             pf, pt = make_morph(step["morph"]["from"], step["morph"]["to"])
-            ease_fn = _morph_ease(step.get("ease"), dflt["ease"])
-            n = max(2, min(240, round(dur * rc.fps * 2)))
+            ease_fn = ease_curve(step.get("ease"), dflt["ease"])
+            cycles = beat_cycles(step) or 1
+            yoyo = bool(step.get("yoyo"))
+            span = beat_span(step, dur)
+            n = max(2, min(240, round(span * rc.fps * 2)))
             for i in range(n + 1):
                 u = i / n
-                d = _morph_interp(pf, pt, ease_fn(u))
-                t = round(pos + u * dur, 2)
+                phase = u * cycles
+                c = int(phase)
+                p = phase - c
+                if p == 0.0 and c > 0:
+                    # 正好踩在遍与遍的分界：GSAP 在这一瞬间报的是**上一遍的末尾**
+                    # （实测 t=1.000 处 v=1，1.001 才回到 0），下一遍从 0 重放。
+                    c -= 1
+                    p = 1.0
+                if yoyo and c % 2:
+                    p = 1.0 - p             # GSAP 的 yoyo 是"拿倒放的进度去查同一条缓动"
+                d = _morph_interp(pf, pt, ease_fn(p))
+                t = round(pos + u * span, 2)
                 lines.append(
                     f"tl.set({sel_js}, {json.dumps({'attr': {'d': d}})}, {t:.2f})")
             continue
@@ -942,7 +929,8 @@ def _director_timeline_lines(rc, card):
                 "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
                 "f();"
                 "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if "type" in step:
@@ -957,7 +945,8 @@ def _director_timeline_lines(rc, card):
                 "var p={k:0};"
                 "var f=function(){e.textContent=s.slice(0,Math.round(p.k));};"
                 "f();tl.to(p,{k:s.length,duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if step.get("draw"):
@@ -965,10 +954,10 @@ def _director_timeline_lines(rc, card):
                 f"tl.set({sel_js}, "
                 f"{json.dumps({'attr': {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
                 f"{card.s:.2f})")
+            draw_vars = {"strokeDashoffset": 0, "duration": dur, "ease": ease}
+            draw_vars.update(_cycle_vars(step))
             lines.append(
-                f"tl.to({sel_js}, "
-                f"{json.dumps({'strokeDashoffset': 0, 'duration': dur, 'ease': ease})}, "
-                f"{pos:.2f})")
+                f"tl.to({sel_js}, {json.dumps(draw_vars)}, {pos:.2f})")
         if "set" in step:
             set_vars = _pin(dict(step["set"]))
             if stagger is not None:

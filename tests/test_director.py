@@ -207,6 +207,100 @@ class Schema(unittest.TestCase):
                         "stagger": {"each": 0.2, "bogus": 1}})
 
 
+class TweenKnobContract(unittest.TestCase):
+    """step 级旋钮的唯一位置 + 缓动档名必须是钉固的 GSAP 真认的那些。
+
+    两类静默失效在这一层挡掉：写了却不起作用（缓动认不出→退化成线性、旋钮塞在补间
+    变量里→被渲染端覆盖），和写了却演不完（repeat 挂在瞬时 set 上、yoyo 只有一遍）。
+    """
+
+    def _ok(self, step):
+        validate_images_json({"seg4": {"src": "images/seg4.svg",
+                                      "director": {"steps": [step]}}})
+
+    def _bad(self, step, *needles):
+        with self.assertRaises(ValueError) as cm:
+            self._ok(step)
+        for n in needles:
+            self.assertIn(n, str(cm.exception), str(cm.exception))
+
+    def test_catalog_families_accepted_in_all_directions(self):
+        # 与钉固 GSAP 的 gsap.parseEase 对拍过：这些族名 × 三个方向全部解析得出
+        from _ease import EASE_FAMILIES
+        for fam in sorted(EASE_FAMILIES - {"none", "steps"}):
+            for mod in ("", ".in", ".out", ".inOut"):
+                self._ok({"at": 0, "target": "#a", "to": {"opacity": 1},
+                          "ease": fam + mod})
+
+    def test_steps_only_takes_a_direction_with_counts(self):
+        # 实测 gsap.parseEase：`steps`、`steps(4).in` 认，`steps.in` 不认（静默换缓动）
+        for good in ("steps", "steps(4)", "steps(4).in", "steps(4,true).out"):
+            self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": good})
+        for bad in ("steps.in", "steps.out", "steps.inOut"):
+            self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": bad},
+                      "steps 要带方向就必须给档数")
+
+    def test_plugin_only_ease_rejected(self):
+        # 实测钉固的 gsap@3.14.2 核心包解析不了这些（rough/slow/stepped 都不认）
+        for bad in ("rough", "slow", "custom", "stepped(4)", "RoughEase", "morph"):
+            self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": bad},
+                      "不在钉固的 GSAP core 里")
+
+    def test_none_takes_no_direction(self):
+        for bad in ("none.in", "none.out", "none.inOut"):
+            self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": bad},
+                      "none 是直通档")
+
+    def test_parameterized_ease_accepted(self):
+        # 参数写在方向前后都认（back.out(1.7) / elastic(1,0.3).inOut）
+        for good in ("back.out(1.7)", "elastic.inOut(1,0.3)", "steps(4,true)",
+                    "power3.in", "Bounce.easeOut", "strong.out"):
+            self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": good})
+
+    def test_stagger_ease_uses_the_same_catalog(self):
+        self._bad({"at": 0, "target": ".a", "to": {"opacity": 1},
+                   "stagger": {"each": 0.2, "ease": "rough"}}, "不在钉固的 GSAP core 里")
+
+    def test_control_knob_inside_payload_rejected(self):
+        # 塞在补间变量里的旋钮要么被覆盖、要么让门禁算的跨度分家，只能拒
+        for knob in ("duration", "ease", "delay", "stagger", "repeat", "yoyo"):
+            self._bad({"at": 0, "target": "#a", "to": {"opacity": 1, knob: 2}},
+                      "只在 step 级有定义")
+
+    def test_repeat_and_yoyo_need_a_replayable_tween(self):
+        for extra in ({"repeat": 2}, {"yoyo": True}):
+            self._bad(dict({"at": 0, "target": "#a", "set": {"opacity": 1}}, **extra),
+                      "没有可重放的补间")
+
+    def test_repeat_zero_on_set_is_absent_repeat(self):
+        self._ok({"at": 0, "target": "#a", "set": {"opacity": 1}, "repeat": 0})
+
+    def test_yoyo_without_repeat_does_nothing(self):
+        self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "yoyo": True},
+                  "repeat 缺省或 0")
+        self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "yoyo": False})
+
+    def test_repeat_must_be_an_integer_ge_minus_one(self):
+        for bad in (1.5, -2, True, "3"):
+            self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "repeat": bad},
+                      "repeat 必须是")
+
+    def test_repeats_accepted_on_every_replayable_primitive(self):
+        steps = [{"at": 0, "target": "#a", "draw": True, "repeat": 1, "yoyo": True},
+                 {"at": 0, "target": "#n", "count": {"to": 5}, "repeat": -1},
+                 {"at": 0, "target": "#t", "type": {}, "repeat": 2, "yoyo": True},
+                 {"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
+                                                     "to": "M 0 5 L 1 9"}, "repeat": 3}]
+        for step in steps:
+            self._ok(step)
+
+    def test_infinite_repeat_rejected_for_morph_only(self):
+        """morph 是生成期采样：没有终点就无从采样。运行期的补间/count/type 相反是确定的。"""
+        self._bad({"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
+                                                      "to": "M 0 5 L 1 9"},
+                   "repeat": -1}, "没有终点可采")
+
+
 class Renderer(unittest.TestCase):
     def _images(self):
         return {
@@ -351,6 +445,139 @@ class Renderer(unittest.TestCase):
         self.assertEqual(sets[-1][1], f"{s0 + 1.0:.2f}")     # 铺满 duration
         # 缺省 ease=power2.out：u=0.5 处形状进度 k=.875（前载），不是线性的 .5
         self.assertEqual(sets[24][0], "M0 4.375 L1 8")
+
+    def _morph_frames(self, step, fps=24):
+        """真实跑一遍渲染，取回这条 morph 步烘焙出的 (页内时刻, 形状进度) 序列。
+
+        进度从 d 的第一个 y 反解（from 的 y=0、to 的 y=5，插值对进度是线性的），所以断言
+        读的是**成片里真会显示的那个形状**，不是采样公式的复刻。期望值一律实测自钉固的
+        gsap@3.14.2（同 ease/repeat/yoyo 的代理补间，逐时刻 seek 取值）。
+        """
+        import re
+        m = H.make_manifest()
+        seg_a = next(s for s in m["segments"] if s["id"] == "seg-a")
+        s0 = round(seg_a["sentences"][0]["start_time"], 2)
+        imgs = {
+            "seg-a": {"src": "images/seg-a.svg",
+                      "inline_svg": '<svg viewBox="0 0 10 10"><path id="p"/></svg>',
+                      "director": {"steps": [
+                          dict(step, target="#p",
+                               morph={"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"})]}},
+            "seg-b": {"src": "images/seg-b.svg"},
+        }
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs,
+                                aspect="portrait", fps=fps)
+        found = re.findall(
+            r'tl\.set\("#img-seg-a #p", \{"attr": \{"d": "M0 (-?[\d.]+) L1 [^"]*"\}\}, ([\d.]+)\)',
+            html)
+        return [(round(float(t) - s0, 2), float(y) / 5.0) for y, t in found]
+
+    def _assert_at(self, frames, expected):
+        for t, want in expected:
+            _near, got = min(frames, key=lambda f: abs(f[0] - t))
+            self.assertAlmostEqual(got, want, places=3, msg=f"t={t}s 处形状 {got} ≠ {want}")
+
+    # 这三张表是从钉固的那份 gsap.min.js 里逐时刻 seek 出来的真值，不是手算的
+    GSAP_POWER2_OUT_R2 = [(0.0, 0.0), (0.5, 0.875), (1.0, 1.0), (1.5, 0.875),
+                          (2.0, 1.0), (2.5, 0.875), (3.0, 1.0)]
+    GSAP_POWER2_INOUT_R1_YOYO = [(0.0, 0.0), (0.25, 0.0625), (0.5, 0.5),
+                                 (0.625, 0.789063), (0.75, 0.9375), (1.0, 1.0),
+                                 (1.25, 0.9375), (1.5, 0.5), (1.75, 0.0625),
+                                 (2.0, 0.0)]
+    GSAP_BOUNCE_OUT_R2_YOYO = [(0.0, 0.0), (0.5, 0.765625), (1.0, 1.0),
+                               (1.5, 0.765625), (2.0, 0.0), (2.5, 0.765625),
+                               (3.0, 1.0)]
+
+    def test_repeat_stretches_the_morph_span(self):
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "power2.out", "repeat": 2})
+        self.assertEqual(len(frames), 3 * 24 * 2 + 1)     # 采样按总跨度，不是单遍
+        self.assertAlmostEqual(frames[-1][0], 3.0, places=2)
+        self._assert_at(frames, self.GSAP_POWER2_OUT_R2)
+
+    def test_morph_cycle_boundary_is_the_previous_cycles_end(self):
+        """遍与遍的分界：GSAP 在这一瞬间报的是上一遍演完的样子，下一遍才从 0 重放。
+
+        采样按"这一遍的第 0 帧"处理的话，边界帧会凭空闪回起点。
+        """
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "power2.out", "repeat": 2})
+        for t in (1.0, 2.0, 3.0):
+            self._assert_at(frames, [(t, 1.0)])
+
+    def test_yoyo_morph_matches_pinned_gsap(self):
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "power2.inOut", "repeat": 1, "yoyo": True})
+        self._assert_at(frames, self.GSAP_POWER2_INOUT_R1_YOYO)
+
+    def test_yoyo_bounce_morph_matches_pinned_gsap(self):
+        """倒放是"拿倒放的进度去查同一条缓动"（ease(1-p)），不是 1-ease(p)。
+
+        bounce 那两条差别很大，正好把口径钉死。
+        """
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "bounce.out", "repeat": 2, "yoyo": True})
+        self._assert_at(frames, self.GSAP_BOUNCE_OUT_R2_YOYO)
+
+    def test_yoyo_even_cycles_morph_lands_back_on_from(self):
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "bounce.out", "repeat": 1, "yoyo": True})
+        self.assertEqual(frames[-1][1], 0.0)              # 收尾回 from
+        self.assertEqual(frames[0][1], 0.0)
+
+    def test_yoyo_odd_cycles_morph_lands_on_to(self):
+        frames = self._morph_frames({"at_time": 0.0, "duration": 1.0,
+                                     "ease": "bounce.out", "repeat": 2, "yoyo": True})
+        self.assertEqual(frames[-1][1], 1.0)
+
+    def test_repeat_and_yoyo_reach_the_tween_vars(self):
+        m = H.make_manifest()
+        seg_a = next(s for s in m["segments"] if s["id"] == "seg-a")
+        s0 = round(seg_a["sentences"][0]["start_time"], 2)
+        imgs = {
+            "seg-a": {"src": "images/seg-a.svg",
+                      "inline_svg": '<svg viewBox="0 0 980 735"><g id="node"/></svg>',
+                      "director": {"steps": [
+                          {"at_time": 0.0, "target": "#node", "to": {"opacity": 1},
+                           "duration": 0.4, "repeat": 3, "yoyo": True}]}},
+            "seg-b": {"src": "images/seg-b.svg"},
+        }
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
+        self.assertIn(f'tl.to("#img-seg-a #node", {{"opacity": 1, "duration": 0.4, '
+                      f'"ease": "power2.out", "repeat": 3, "yoyo": true}}, {s0:.2f})', html)
+
+    def test_cycle_vars_absent_when_not_written(self):
+        # 没写 repeat 就不该多出这两个 GSAP 变量（golden 与字节稳定的护栏）
+        m = H.make_manifest()
+        imgs = {"seg-a": {"src": "images/seg-a.svg",
+                          "inline_svg": '<svg viewBox="0 0 980 735"><g id="node"/></svg>',
+                          "director": {"steps": [
+                              {"at_time": 0.0, "target": "#node",
+                               "to": {"opacity": 1}, "duration": 0.4}]}},
+                "seg-b": {"src": "images/seg-b.svg"}}
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
+        self.assertNotIn('"repeat"', html)
+        self.assertNotIn('"yoyo"', html)
+
+    def test_draw_and_count_and_type_carry_repeat(self):
+        m = H.make_manifest()
+        imgs = {"seg-a": {"src": "images/seg-a.svg",
+                          "inline_svg": ('<svg viewBox="0 0 980 735"><path id="c"/>'
+                                         '<text id="n">0</text><text id="t">字</text></svg>'),
+                          "director": {"steps": [
+                              {"at_time": 0.0, "target": "#c", "draw": True,
+                               "duration": 0.8, "repeat": 1, "yoyo": True},
+                              {"at_time": 1.0, "target": "#n", "count": {"to": 10},
+                               "duration": 0.8, "repeat": 2},
+                              {"at_time": 2.0, "target": "#t", "type": {},
+                               "duration": 0.8, "repeat": 1, "yoyo": True}]}},
+                "seg-b": {"src": "images/seg-b.svg"}}
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
+        self.assertIn('"strokeDashoffset": 0, "duration": 0.8, "ease": "power2.out", '
+                      '"repeat": 1, "yoyo": true', html)
+        self.assertIn('tl.to(p,{v:10.0,duration:0.8,ease:"power2.out",repeat:2,onUpdate:f}', html)
+        self.assertIn('tl.to(p,{k:s.length,duration:0.8,ease:"power2.out",'
+                      'repeat:1,yoyo:true,onUpdate:f}', html)
 
     def test_count_emits_proxy_tween(self):
         # count：渲染端生成代理补间 + onUpdate 写 textContent（seek 可复现）
@@ -530,22 +757,6 @@ class DirectorPrepare(unittest.TestCase):
         errs, _ = G.director_prepare(images, segs, self.tmp.name)
         self.assertEqual([e for e in errs if "越界" in e], [])
         self.assertIn("inline_svg", images["seg-a"])
-
-
-class MorphEase(unittest.TestCase):
-    def test_endpoints_fixed_for_all_known_curves(self):
-        for name in ("power2.out", "power1.in", "sine.inOut", "expo.in",
-                     "circ.out", "back.out", "linear", "none", "bogus"):
-            f = HR._morph_ease(name, "power2.out")
-            self.assertAlmostEqual(f(0), 0.0, places=6, msg=name)
-            self.assertAlmostEqual(f(1), 1.0, places=6, msg=name)
-
-    def test_out_is_frontloaded_and_default_is_power2_out(self):
-        lin = HR._morph_ease("linear", "")
-        out = HR._morph_ease("power2.out", "")
-        self.assertGreater(out(0.5), lin(0.5))          # .out 前载
-        dflt = HR._morph_ease(None, "power2.out")        # 缺省取模板 ease
-        self.assertAlmostEqual(dflt(0.5), out(0.5), places=9)
 
 
 class CheckSvgWallclock(unittest.TestCase):

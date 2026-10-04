@@ -154,7 +154,7 @@ from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  
 from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
-from _timeline import beat_positions  # noqa: E402
+from _timeline import beat_positions, beat_span, beat_cycles  # noqa: E402
 
 from html_renderer import (  # noqa: E402
     segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
@@ -535,13 +535,21 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
                        f"下一段旁白起点 {next_start:.2f}s——这一页那时已被下一页盖住，等于没演。"
                        "多半是 at_time 按旧配音手算后过期了：跟旁白的节拍改用 at（句序锚），"
                        "或把秒数调小")
-        elif next_start is not None and pos + dur > next_start + _BEAT_EPS:
-            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）从 {pos:.2f}s 演到 "
-                       f"{pos + dur:.2f}s 才完，而下一段旁白 {next_start:.2f}s 就把这一页盖"
-                       f"过来——这一拍被切在半路，终态在成片里从没出现过（早 {pos + dur - next_start:.2f}"
-                       "s）。要么把 duration/delay 收紧到本页内，要么让它在接续页里重演一遍"
-                       + ("；这一页写了 stage:\"keep\"，接续烘焙搬走的就是那个没演到的终态"
-                          if keep else ""))
+        elif next_start is not None:
+            # 跨度按 beat_span 算：写了 repeat 的这一拍要演好几遍，只按单遍 duration 判
+            # 就是四倍误差——"演到一半被盖过来"的门禁必须拿成片里真正的那个大括号。
+            # repeat:-1 没有终点，也不报：它本来就要被页界切掉，报它是训练作者忽略 warn。
+            span = beat_span(step, dur)
+            if span is not None and pos + span > next_start + _BEAT_EPS:
+                n = beat_cycles(step)
+                again = f"（演 {n} 遍、共 {span:.2f}s）" if n and n > 1 else ""
+                out.append(f"director.steps[{i}]（{step['target']}，{anchor}）从 {pos:.2f}s 演到 "
+                           f"{pos + span:.2f}s 才完{again}，而下一段旁白 {next_start:.2f}s 就把这一页盖"
+                           f"过来——这一拍被切在半路，它要收的那个尾在成片里从没出现过（早 "
+                           f"{pos + span - next_start:.2f}"
+                           "s）。要么把 duration/delay/repeat 收紧到本页内，要么让它在接续页里重演一遍"
+                           + ("；这一页写了 stage:\"keep\"，接续烘焙搬走的就是那个没演到的终态"
+                              if keep else ""))
     return out
 
 
@@ -592,6 +600,11 @@ def beat_report_lines(images, segments, dflt_dur):
         tally = {}
         for (pos, _dur), step in zip(beats, director["steps"]):
             kind, where = _beat_landing(pos, sents, seg_start, seg_end, nxt)
+            n = beat_cycles(step)
+            if n is None:
+                where += "（无限循环，没有收尾）"
+            elif n > 1:
+                where += f"（演 {n} 遍）"
             tally[kind] = tally.get(kind, 0) + 1
             lines.append("       %-12s %8.2fs  %-6s %-30s %s" % (
                 step["target"], pos, kind, where, _beat_anchor(step)))

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
+from _ease import validate_ease  # noqa: E402
 
 
 def validate_relative_project_path(src, where):
@@ -73,7 +74,13 @@ MEDIA_ENTRY_KEYS = frozenset({
 _DIRECTOR_TARGET_RE = re.compile(r"^([#.])[A-Za-z_][A-Za-z0-9_-]*$")
 _DIRECTOR_STEP_KEYS = frozenset({"at", "at_time", "target", "from", "to", "set",
                                  "draw", "morph", "count", "type", "stagger",
-                                 "duration", "ease", "delay"})
+                                 "duration", "ease", "delay", "repeat", "yoyo"})
+# 写在 from/to/set **里面**的旋钮：一律拒，指回 step 级。理由是这些键渲染端会自己覆盖或
+# 根本不读——`ease` 会被 step 级顶掉（写了等于没写），`duration`/`delay` 却会被 GSAP 真的
+# 吃掉，于是补间实际跨度与门禁拿去判窗的那个数分家（`beat_positions` 只读 step 级）。
+# 一处两个真源正是最坏形状：门禁的判词就成了谎话。
+_PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
+                                   "repeat", "yoyo"})
 # at_time 的相对写法：以 "+0.5" / "-0.2" 出现，含义是"上一条 beat 结束之后再过
 # 这么多秒"（首条则从段落音频起点算）。让整页画布的自由时间线能顺次链接节奏，
 # 不必每步手算绝对秒——重配音后绝对秒会整体漂移，相对链则跟着上一条走。
@@ -204,8 +211,7 @@ def _validate_stagger(stagger, where):
             if not (isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))):
                 raise ValueError(f"{where} 的 from 必须是字符串或数字（实际: {v!r}）")
         elif k == "ease":
-            if not isinstance(v, str):
-                raise ValueError(f"{where} 的 ease 必须是字符串（实际: {v!r}）")
+            validate_ease(v, f"{where} 的 ease")
         else:  # each / amount
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
                 raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
@@ -308,7 +314,14 @@ def _validate_director(key, dirval):
                     "morph 做 path 形变、count 做数字滚动、type 做逐字揭示"
                     "（补间起止/瞬时赋值/描边生长/形状互变/数值递增/打字机）")
             for k in kinds:
-                _validate_tween_vars(step[k], f"{where} 的 {k}")
+                payload = step[k]
+                _validate_tween_vars(payload, f"{where} 的 {k}")
+                clash = sorted(_PAYLOAD_CONTROL_KEYS & set(payload))
+                if clash:
+                    raise ValueError(
+                        f"{where} 的 {k} 里写了 {clash}——这些旋钮只在 step 级有定义，"
+                        "放在补间变量里要么被渲染端覆盖、要么让补间的真实跨度与门禁算的"
+                        "那个数分家。把它们提到这一 step 上")
         # stagger 只对命中一组元素、且逐帧补间的 step 有意义（from/to/fromTo/set）；
         # morph/count/type 各自负责整段、忽略 stagger。这里统一验形，渲染端按 kind 决定。
         if "stagger" in step:
@@ -318,8 +331,39 @@ def _validate_director(key, dirval):
                 v = step[k]
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
                     raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
-        if "ease" in step and not isinstance(step["ease"], str):
-            raise ValueError(f"{where} 的 ease 必须是字符串（实际: {step['ease']!r}）")
+        if "ease" in step:
+            validate_ease(step["ease"], f"{where} 的 ease")
+        # repeat / yoyo：这一拍演完再演几遍、以及来回（GSAP 的同名补间变量）。整数而非
+        # 小数是故意的：GSAP 吃 0.5 这种"半遍"，而跨段接续与出画自查都要按"最后停在
+        # 哪一头"说话，半遍收尾在两者里都是猜。
+        if "repeat" in step:
+            v = step["repeat"]
+            if isinstance(v, bool) or not isinstance(v, int) or v < -1:
+                raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
+                                 f"0=只演一遍；实际: {v!r}）")
+        if "yoyo" in step and not isinstance(step["yoyo"], bool):
+            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
+                             f"（实际: {step['yoyo']!r}）")
+        # 反复必须挂在真会"演"的步上。纯 set 是瞬时赋值：门禁按"瞬时"推进相对链的游标，
+        # 而 GSAP 会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
+        # 在单遍上更是直接被忽略。静默失效的那一类宁可在契约层就说不通。
+        replayable = bool(draw or morph is not None or count is not None or typ is not None
+                          or "from" in step or "to" in step)
+        if (step.get("repeat") or step.get("yoyo")) and not replayable:
+            raise ValueError(
+                f"{where} 写了 repeat / yoyo 却没有可重放的补间（from / to / draw / morph /"
+                " count / type 一个都没有）——纯 set 是瞬时赋值，重放它在成片里看不出区别，"
+                "只会让门禁算的落点和渲染端用的落点分家")
+        if step.get("yoyo") and not step.get("repeat"):
+            raise ValueError(
+                f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP 根本不会回头。"
+                "要来回就写 repeat:1（奇数遍收尾在 to，偶数遍收尾回起点）")
+        # morph 的形变是生成期采样成离散关键帧的：无限循环没有"最后一帧"可采，采样器只能
+        # 猜。补间/count/type 走运行期，GSAP 按时间解析求值，无限循环反而是确定的。
+        if morph is not None and step.get("repeat", 0) < 0:
+            raise ValueError(
+                f"{where} 的 morph 不能配 repeat:-1——形变是生成期按帧率采样成离散关键帧的，"
+                "无限循环没有终点可采。要循环就写明确遍数（repeat:N）")
     return dirval
 
 

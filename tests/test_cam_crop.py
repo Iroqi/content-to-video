@@ -38,6 +38,32 @@ class RestingPose(unittest.TestCase):
                                  {"target": "#cam", "set": {"scale": 0.9}}])
         self.assertEqual(pose["scale"], 0.9)
 
+    def test_yoyo_that_returns_to_rest_contributes_nothing(self):
+        # 实测 gsap@3.14.2：repeat:1+yoyo 收尾回起点，静止位就是没推过的样子
+        pose = cam_resting_pose([{"target": "#cam", "to": {"scale": 1.4, "x": 90},
+                                  "repeat": 1, "yoyo": True}])
+        self.assertEqual((pose["scale"], pose["x"]), (1.0, 0.0))
+        self.assertTrue(pose["rests"])
+
+    def test_odd_cycles_leave_the_camera_pushed_in(self):
+        pose = cam_resting_pose([{"target": "#cam", "to": {"scale": 1.4},
+                                  "repeat": 2, "yoyo": True}])
+        self.assertEqual(pose["scale"], 1.4)
+        self.assertTrue(pose["rests"])
+
+    def test_infinite_camera_has_no_resting_pose_and_says_so(self):
+        """永不停下的相机没有"收尾位"：不替它编姿态，也不报"一切在幅内"。"""
+        steps = [{"target": "#cam", "to": {"scale": 3.0}, "repeat": -1, "yoyo": True}]
+        pose = cam_resting_pose(steps)
+        self.assertFalse(pose["rests"])
+        self.assertEqual(pose["scale"], 1.0)
+        warns = crop_warnings(_svg('<g id="cam">'
+                                   '<rect id="panel" x="60" y="300" width="960" height="700"/>'
+                                   "</g>"), steps)
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("repeat:-1", warns[0])
+        self.assertIn("没有收尾位可查", warns[0])
+
 
 class Crop(unittest.TestCase):
     def _band_in_cam(self):

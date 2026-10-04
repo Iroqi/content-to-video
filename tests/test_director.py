@@ -53,6 +53,46 @@ class Sanitize(unittest.TestCase):
         self.assertIn('width="100%"', markup)
         self.assertIn('height="100%"', markup)
         self.assertIn('preserveAspectRatio="xMidYMid slice"', markup)
+
+    def test_local_file_and_data_scheme_hrefs_are_stripped(self):
+        """净化器对外链的判定按"任何 scheme"收口：file:/data: 等与 http 同级
+        （产物 HTML 常以 file:// 打开，file: 引用会触及本机磁盘）。"""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735">'
+               '<image href="file:///etc/passwd" x="0" y="0" width="10" height="10"/>'
+               '<image href="data:image/svg+xml,&lt;svg onload=alert(1)&gt;" x="0" y="0" '
+               'width="10" height="10"/>'
+               '<a href="blob:https://evil/x"><rect width="10" height="10"/></a>'
+               "</svg>")
+        markup, notes = SAN.sanitize_svg_for_inline(svg)
+        self.assertNotIn("file://", markup)
+        self.assertNotIn("data:image", markup)
+        self.assertNotIn("blob:", markup)
+        self.assertIn("外链", "".join(notes))
+
+    def test_fragment_and_relative_hrefs_are_kept(self):
+        """内部片段（<use href="#id">）与相对路径是合法引用，净化器不能误伤。"""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735">'
+               '<defs><circle id="c" r="5" fill="#fff"/></defs>'
+               '<use href="#c" x="10" y="10"/>'
+               '<image href="images/photo.png" x="0" y="0" width="20" height="20"/>'
+               "</svg>")
+        markup, notes = SAN.sanitize_svg_for_inline(svg)
+        self.assertIn('href="#c"', markup)
+        self.assertIn('href="images/photo.png"', markup)
+        self.assertEqual([n for n in notes if "href" in n], [])
+
+    def test_css_url_file_scheme_is_neutralized(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735">'
+               '<style>.a{background:url(file:///etc/motd)}</style>'
+               "<rect width=\"10\" height=\"10\" style=\"fill:url(data:image/png;base64,AAAA)\"/>"
+               "</svg>")
+        markup, notes = SAN.sanitize_svg_for_inline(svg)
+        self.assertNotIn("file://", markup)
+        self.assertNotIn("data:image", markup)
+        self.assertIn("url()", "".join(notes))
         self.assertIn('viewBox="0 0 980 735"', markup)    # 几何 viewBox 保留
 
     def test_keeps_ids_for_director_targets(self):

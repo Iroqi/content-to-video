@@ -38,7 +38,13 @@ _WALLCLOCK_CSS = re.compile(
     r"(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
     re.I)
 # 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
-_EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|data:text/html)", re.I)
+# url() 上下文一并拦 file:/data:——CSS 里 url(file:…) 同样会把本地文件拉进
+# 成片（HTML 以 file:// 打开时可达本机磁盘）。
+_EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)", re.I)
+# href 的 scheme 判定：任何 "scheme:" 开头都算外部资源（file:/data:/blob:/
+# chrome:/javascript: 等一律不收——内联 SVG 是同源活节点，且产物 HTML 常以
+# file:// 打开，file: 引用会触及本机磁盘）。内部片段 "#id" 与相对路径除外。
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 # @keyframes 规则（含厂商前缀）的起始标记：剥定义用的，见 _strip_keyframes。
 # 前缀组 [a-z]* 可为零字符，纯 @keyframes 也要命中（@-webkit-keyframes 靠 -? 接上）。
 _KEYFRAMES_AT = re.compile(r"@-?[a-z]*-?keyframes\b", re.I)
@@ -50,7 +56,11 @@ def _local(tag):
 
 def _is_external_href(value):
     v = (value or "").strip().lower()
-    return (v.startswith(("http://", "https://", "//", "javascript:"))
+    if not v or v.startswith("#"):
+        # 空值 / 内部片段引用（<use href="#id"> 同文档引用）合法。
+        return False
+    return (_SCHEME_RE.match(v) is not None
+            or v.startswith("//")
             or _EXT_URL.search(v) is not None)
 
 

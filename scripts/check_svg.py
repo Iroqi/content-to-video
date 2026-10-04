@@ -307,11 +307,18 @@ def check_file(path, layout, aspect, theme):
             lk = _local(k).lower()
             if lk.startswith("on"):
                 errors.append(f"<{tag}> 带事件属性 {lk}")
-            if lk == "href" and v.strip().lower().startswith(("http://", "https://", "//")):
-                errors.append(f"<{tag}> 引用外链资源 {v[:60]}")
-        if tag == "style" and el.text and re.search(r"@import|url\(\s*['\"]?https?:", el.text, re.I):
+            _lv = v.strip().lower()
+            if lk == "href" and (
+                    _lv.startswith("//")
+                    or re.match(r"^[a-z][a-z0-9+.-]*:", _lv)):
+                # 与净化器同一口径：任何 scheme 都算外部资源（file:/data:/
+                # blob:/javascript: …），内部片段 "#id" 与相对路径放行。
+                errors.append(f"<{tag}> 引用外链/脚本/本地文件资源 {v[:60]}")
+        if tag == "style" and el.text and re.search(
+                r"@import|url\(\s*['\"]?(?:https?:|//|file:|data:)", el.text, re.I):
             errors.append("<style> 里有 @import 或外链 url()")
-        if el.get("style") and re.search(r"url\(\s*['\"]?https?:", el.get("style"), re.I):
+        if el.get("style") and re.search(
+                r"url\(\s*['\"]?(?:https?:|//|file:|data:)", el.get("style"), re.I):
             errors.append(f"<{tag}> 的 style 里有外链 url()")
         if (tag == "style" and el.text and re.search(r"\b(animation|transition)\b", el.text, re.I)) \
                 or (el.get("style") and re.search(r"\b(animation|transition)\b", el.get("style"), re.I)):

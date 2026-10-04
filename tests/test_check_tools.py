@@ -42,6 +42,26 @@ class SvgChecker(unittest.TestCase):
         self.assertTrue(any("<script>" in e for e in errs))
         self.assertTrue(any("外链" in e for e in errs))
 
+    def test_file_and_data_scheme_hrefs_are_errors(self):
+        """写图门禁与净化器同一口径：file:/data: 这类 scheme 也是外部资源。"""
+        for bad in ('file:///etc/passwd', 'data:text/plain,abc',
+                    'javascript:alert(1)'):
+            with self.subTest(href=bad):
+                errs, _ = self.run_check(
+                    GOOD.replace("</svg>", f'<image href="{bad}"/></svg>'))
+                self.assertTrue(any("外链" in e for e in errs), errs)
+
+    def test_fragment_and_relative_hrefs_are_allowed(self):
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>", '<use href="#t"/><image href="images/p.png"/></svg>'))
+        self.assertFalse(any("外链" in e for e in errs), errs)
+
+    def test_css_url_file_scheme_is_error(self):
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         '<style>.a{background:url(file:///etc/motd)}</style></svg>'))
+        self.assertTrue(any("外链 url()" in e for e in errs), errs)
+
     def test_entity_declaration_refused(self):
         errs, _ = self.run_check('<!DOCTYPE svg [<!ENTITY a "b">]><svg xmlns="http://www.w3.org/2000/svg"/>')
         self.assertTrue(errs)

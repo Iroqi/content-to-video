@@ -295,7 +295,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 都消费的键才两边都写。竖屏独有的定位键（segCard.padding、verse.bottom、
     # image.marginSide/bottomGapToVerse）只存在于 vertical 块——横屏是弹性
     # 列，没有这些概念，放一个 0 值占位只会让人以为改得动。
-    _v_verse_clip = rc.verse_clip = _vv["clipPad"]
+    rc.verse_clip = _vv["clipPad"]
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         _v_pad = tpl_layout["segCard"]["padding"]
@@ -817,9 +817,9 @@ def _morph_ease(name, default):
     base, _, mod = spec.partition(".")
     if not mod:
         mod = "out"           # GSAP 裸名（power2）默认 .out
-    if base.startswith("back"):
-        mod = mod or "out"
-    elif base in ("none", "linear"):
+    # mod 上面已保证非空（裸名默认 .out），back 与 power*/quad 等共享
+    # 同一套 in/out/inOut 变换，这里只需要挡掉 none/linear 两个直通档。
+    if base in ("none", "linear"):
         return lambda t: t
 
     # "in" 曲线 g(t)：单调、g(0)=0、g(1)=1（back 会轻微越界，interp 可外推）。
@@ -1129,7 +1129,7 @@ def generate_html(manifest, audio_src, images=None,
     _wd = (rc.anim["propLine"]["duration"] if _is_line
            else rc.anim["segmentWipe"]["duration"])
     for i, clip in enumerate(clips):
-        s_i, d_i = clip["start"], clip["duration"]
+        s_i = clip["start"]
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)

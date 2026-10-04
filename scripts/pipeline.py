@@ -309,12 +309,10 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
     with open(out_path + ".sha", "w", encoding="utf-8") as f:
         f.write(_sentence_hash(text, voice_id, voice_style, model))
     if needs_speed_change(speed):
-        if speed_applied:
-            with open(out_path + ".spd", "w", encoding="utf-8") as f:
-                f.write(str(speed_marker_value(speed)))
-        else:
-            with open(out_path + ".spd", "w", encoding="utf-8") as f:
-                f.write("1.0")
+        # 已施加的写实际语速、未施加的写显式 "1.0"（两种都是"事实"，见
+        # 函数 docstring：绝不能写请求语速）。同一段 open/write 不需要两份。
+        with open(out_path + ".spd", "w", encoding="utf-8") as f:
+            f.write(str(speed_marker_value(speed) if speed_applied else "1.0"))
     else:
         remove_if_exists(out_path + ".spd")
 

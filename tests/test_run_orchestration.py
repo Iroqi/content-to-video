@@ -349,7 +349,6 @@ class OnlyPreview(unittest.TestCase):
     def test_subset_manifest_and_images_feed_the_html_step(self):
         self.invoke("seg-a")
         sub_manifest = self._preview("preview_seg-a.manifest.json")
-        sub_images = self._preview("preview_seg-a.images.json")
         self.assertEqual(self.h.gen_argv[self.h.gen_argv.index("-m") + 1],
                          sub_manifest)
         with open(sub_manifest, encoding="utf-8") as f:

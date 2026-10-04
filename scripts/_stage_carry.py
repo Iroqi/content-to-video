@@ -115,7 +115,14 @@ def _set_style(el, prop, value):
     if prop.lower() == "autoalpha":        # GSAP 专有：opacity + visibility 的合写
         # 必须在 _kebab 之前认出它：驼峰一转成 auto-alpha 就不是合法 CSS 属性，
         # 浏览器整条丢掉，于是"烘焙了"等于"没烘焙"。
-        av = resolve_num(value, 1.0) or 0.0
+        # 基值与下面 else 分支同一口径：先 inline style、再呈现属性，都没有才落到
+        # 1.0（opacity 的 CSS 初值）。原先这里无条件按 1.0 起算，于是 "+=0.5" 在一个
+        # opacity="0.2" 的元素上烘焙出 1、运行期却是 0.7——同一元素的两条等价写法烘
+        # 焙出两个值，接续页就在页界静默跳一下，正是本模块要消灭的阶跃。
+        cur = _css_num(styles.get("opacity"))
+        if cur is None:
+            cur = _css_num(el.get("opacity"))
+        av = resolve_num(value, 1.0 if cur is None else cur) or 0.0
         styles["opacity"] = _fmt(min(av, 1.0))
         styles["visibility"] = "visible" if av > 0 else "hidden"
     else:

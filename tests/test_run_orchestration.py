@@ -128,6 +128,16 @@ class FlagPassthrough(unittest.TestCase):
             self.assertEqual(self.h.tts_argv[self.h.tts_argv.index(pair[0]) + 1],
                              pair[1])
 
+    def test_gap_help_default_matches_the_single_source(self):
+        """--gap 的 help 不许自己抄一份默认值：DEFAULT_GAP 一改，help 就漂。
+
+        证伪：原先这句写死"默认 0.4"，而真源是 _timeline.DEFAULT_GAP——隔壁 --speed
+        用 f-string 引 DEFAULT_SPEED，这一条却是抄下来的字面量，改默认值时只有
+        --speed 跟着变。
+        """
+        from _timeline import DEFAULT_GAP
+        self.assertIn("默认 {:g}".format(DEFAULT_GAP), R._build_parser().format_help())
+
     def test_nan_speed_rejected(self):
         with self.assertRaises(SystemExit) as cm:
             self.h.invoke(["--until", "tts", "--speed", "nan"])

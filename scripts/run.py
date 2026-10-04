@@ -24,7 +24,7 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _timeline import DEFAULT_SPEED, validate_speed  # noqa: E402
+from _timeline import DEFAULT_GAP, DEFAULT_SPEED, validate_speed  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
@@ -245,8 +245,8 @@ def _build_parser():
                         help="自然语言风格描述（透传给 pipeline，控制语气情绪）；"
                              "默认沿用 pipeline 的播报风格文案")
     parser.add_argument("--gap", type=float, default=None,
-                        help="句间静音秒数（透传给 pipeline，时间轴与段落擦除时长的"
-                             "钳制上限都依赖它）；默认 0.4")
+                        help=f"句间静音秒数（透传给 pipeline，时间轴与段落擦除时长的"
+                             f"钳制上限都依赖它）；默认 {DEFAULT_GAP:g}")
     parser.add_argument("--dry-run", action="store_true",
                         help="只跑 pipeline --dry-run（不写文件）")
     return parser

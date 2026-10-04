@@ -41,6 +41,19 @@ MANIFEST_TOP_KEYS = ("schema_version", "status", "degraded", "sentences",
 _TURN_KEYS = ("start", "end", "speaker", "label", "voice_id", "voice_style")
 
 
+def _validate_voice_id(value, where):
+    """voice_id（单个音色或逗号拼接串）：逐 token 落在预置音色白名单里。
+
+    顶层与段级是同一条判据、同一句报错，所以只有这一份——两边各写一遍时改一边
+    另一边就漂，而"可用音色"清单是从 _voices 派生的，漂移就是报一串错的音色名。
+    """
+    if not isinstance(value, str) or not all(
+            is_valid_voice_id(v) for v in value.split(",")):
+        raise ValueError(
+            f"{where} 的 voice_id={value!r} 含不在预置音色里的值"
+            f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+
+
 def validate_timing_manifest(data):
     """timing_manifest.json：sentences（非空）与 total_duration（数值）必填。"""
     if not isinstance(data, dict):
@@ -59,12 +72,7 @@ def validate_timing_manifest(data):
     # 音色逗号拼接串（多音色对话稿），逐 token 都要落在预置音色里。手写
     # manifest 塞任意串会在下游报告/缓存指纹里当合法音色用。
     if data.get("voice_id") is not None:
-        vid = data["voice_id"]
-        if not isinstance(vid, str) or not all(
-                is_valid_voice_id(v) for v in vid.split(",")):
-            raise ValueError(
-                f"timing_manifest.json 的 voice_id={vid!r} 含不在预置音色里的值"
-                f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+        _validate_voice_id(data["voice_id"], "timing_manifest.json")
     if data.get("gap") is not None:
         _validate_finite_number(data["gap"], "timing_manifest.json 的 gap",
                                 nonnegative=True)
@@ -164,9 +172,9 @@ def validate_timing_manifest(data):
         raise ValueError(
             "timing_manifest.json 含 synth_failed 句子，却标记为 status=ok；"
             "请重跑 pipeline，或将降级状态正确标记为 degraded")
-    # segments 若提供，每段必须自带非空 sentences 列表——
     # segments 必填且非空：画面标题/tagline/accent 与开屏/结尾 agenda 只从这些分组
-    # 取，没有它就没有内容段版式可渲染。段内 sentences 一并显性化：
+    # 取，没有它就没有内容段版式可渲染；每段还要自带非空 sentences 列表——
+    # 段内 sentences 一并显性化：
     # gen_hyperframes.py 对 seg["sentences"] 是直接下标访问，缺失时炸裸
     # KeyError: 'sentences'，不指向真正缺的键——手写/裁剪 manifest 的报错
     # 必须第一时间报对人。
@@ -218,15 +226,10 @@ def validate_timing_manifest(data):
         # 段级 voice_id 与顶层同一白名单口径（pipeline 从已校验的 source
         # 透传，手写 manifest 是另一条入口）：坏音色名混进来只会在配音
         # 错位时才被发现
-        _seg_vid = sg.get("voice_id")
-        if _seg_vid is not None:
-            if (not isinstance(_seg_vid, str)
-                    or not all(is_valid_voice_id(v)
-                               for v in _seg_vid.split(","))):
-                raise ValueError(
-                    f"timing_manifest.json 的段落 '{sid}' 的 voice_id="
-                    f"{_seg_vid!r} 含不在预置音色里的值"
-                    f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+        if sg.get("voice_id") is not None:
+            _validate_voice_id(
+                sg["voice_id"],
+                "timing_manifest.json 的段落 '{}'".format(sid))
         # speed / voice_style / turns 都在封闭键集里，值也一起封：键集封闭的
         # rationale 是"拼错即报错"，值类型错同样会让读侧炸裸异常或静默走
         # 默认分支——`"speed": "fast"` 到 apply_speed 那步才炸，`turns: 5`
@@ -260,8 +263,11 @@ def validate_timing_manifest(data):
                     if edge in turn:
                         _validate_finite_number(turn[edge], f"{where_turn} 的 {edge!r}",
                                                 nonnegative=True)
-                if isinstance(turn.get("start"), int) and isinstance(turn.get("end"), int) \
-                        and turn["end"] < turn["start"]:
+                # 两个边只要存在，上面就已过 _validate_finite_number（非 bool 的有限
+                # 数值），所以这里直接比。原先按 isinstance(…, int) 判，
+                # {"start":5.0,"end":2.0} 这种浮点写法整个漏过去——注释里那句"值域
+                # 一起封"就只对一半写法成立。
+                if "start" in turn and "end" in turn and turn["end"] < turn["start"]:
                     raise ValueError(
                         f"{where_turn} 的 end={turn['end']} 小于 start="
                         f"{turn['start']}（轮次区间是 [start, end)）")

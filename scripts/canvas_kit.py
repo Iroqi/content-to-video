@@ -743,6 +743,14 @@ def main(argv=None):
     ap.add_argument("--no-check", action="store_true",
                     help="跳过 check_svg 门禁自查（有意为之的极简页才用）")
     args = ap.parse_args(argv)
+    # 句数不是"给不给"，是"给的一定是正整数"。这里不拦有两个后果：0 会让自动拍的取模
+    # 回绕静默退化成顺序递增（`if sentences` 对 0 为假），草稿看着像给过句数、其实没回绕；
+    # 负数更直接——at 被顶成负数，契约校验抛的是裸 Python 栈（实测 `--sentences -3` 打印
+    # ValueError traceback）而不是本模块口径里那句人话。两种都是"参数错了却报不清"。
+    if args.sentences is not None and args.sentences < 1:
+        print("[error] --sentences 必须是正整数（该段旁白句数），实际: {}"
+              .format(args.sentences), file=sys.stderr)
+        return 2
 
     try:
         spec = load_spec(args.spec, aspect=args.aspect, accent=args.accent)

@@ -192,10 +192,13 @@ class ManifestValidation(unittest.TestCase):
             ({"start": "x"}, "start"),                        # 类型错
             ({"start": -1}, "start"),                         # 负数
             ({"start": 5, "end": 2}, "end"),                  # 区间倒挂
+            ({"start": 5.0, "end": 2.0}, "end"),              # 区间倒挂（浮点写法）
             ({"start": 0, "speaker": 7}, "speaker"),
         ):
             with self.subTest(turn=turn):
                 bad(MAN.validate_timing_manifest, with_turns(turn), contains=contains)
+        # 浮点写法的合法区间照放：0.0 也是 int 之外的同一条通路。
+        MAN.validate_timing_manifest(with_turns({"start": 0.0, "end": 1.0}))
 
     def test_unknown_top_key_rejected(self):
         m = H.make_manifest()

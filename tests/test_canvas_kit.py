@@ -473,6 +473,32 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(rc2, 0)
         self.assertNotIn("未给 --sentences", err2)
 
+    def test_non_positive_sentences_is_rejected_in_plain_words(self):
+        """--sentences 不是正整数要报成人话 + exit 2，不是 Python 栈、也不是静默退化。
+
+        证伪（去掉 main() 那条校验后实测）：
+          - `--sentences=-3`：契约校验抛 ValueError 裸栈（"at 必须是非负数（实际: -2）"），
+            rc=1——脚手架自己印的草稿，报错却不说是哪条参数错了；
+          - `--sentences=0`：不报错，但自动拍静默退化成不回绕（3 个元素排到 at=0..2 是
+            巧合，5 个元素就排到 at=4），与"给了句数就按句数回绕"的口径相反，那份草稿
+            会被生成期整条 error 拒掉。
+        """
+        spec = write_json(self.tmp.name, "negsent.json", {
+            "elements": [{"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "negsent.svg")
+        for bad in ("-3", "0"):
+            with self.subTest(sentences=bad):
+                rc, _o, err = run_cli(["--spec", spec, "-o", out,
+                                       "--sentences=" + bad, "--no-check"])
+                self.assertEqual(rc, 2, err)
+                self.assertIn("--sentences", err)
+                self.assertIn(bad, err)
+                self.assertNotIn("Traceback", err)
+        # 校验不过就不该落产物：留着上一轮的 SVG，作者会以为这轮也出了图。
+        self.assertFalse(os.path.exists(out))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,7 +18,8 @@ from _theme import (
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import load_template, get_canvas, normalize_aspect
-from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS, classify_media_path
+from _images_schema import (unknown_media_keys, MEDIA_ENTRY_KEYS,  # noqa: E402
+                            classify_media_path, is_svg_path)
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
@@ -276,9 +277,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 从模板提取 CSS 变量值
     _tl = rc.tl = tpl_layout["title"]
     _ag = rc.ag = tpl_layout["agenda"]
-    _vv = rc.vv = tpl_layout["verse"]
-    _il = rc.il = tpl_layout["image"]
-    _tgl = rc.tgl = tpl_layout["tagline"]
+    _vv = tpl_layout["verse"]
+    _il = tpl_layout["image"]
+    _tgl = tpl_layout["tagline"]
 
     _sl = tpl_layout["subtitle"]
     # 字幕字号是唯一被消费的 subtitle 参数（两画幅各读各的 subtitle 块）
@@ -358,8 +359,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 段落氛围光（.seg-card::after 的径向渐变几何）。它是随画幅变的——竖屏那团
     # 居中、宽大于高；横屏偏媒体区中心（68% 50%）且高大于宽。所以几何进模板，
     # CSS 只拿 var(--ctv-amb-*) 拼字符串，不在 [data-aspect] 分支里存第二份。
-    _amb = rc.amb = tpl_layout["ambience"]
-    _camb = rc.camb = tpl["canvasAmbience"]
+    _amb = tpl_layout["ambience"]
+    _camb = tpl["canvasAmbience"]
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -549,7 +550,7 @@ def _media_html(rc, sid, s, d):
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
-    _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
+    _bare = " bare-media" if is_svg_path(media_path) else ""
     inline_svg = media_opts.get("inline_svg")
     if inline_svg:
         return (

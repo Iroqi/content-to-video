@@ -307,6 +307,19 @@ class TweenKnobContract(unittest.TestCase):
             self._bad({"at": 0, "target": "#a", "to": {"opacity": 1, knob: 2}},
                       "只在 step 级有定义")
 
+    def test_control_knob_inside_nested_payload_rejected(self):
+        """嵌套层（GSAP 的 attr:{}）同样不许有旋钮——拦截跟着递归走。
+
+        证伪：clash 判定原先只在调用点查一次顶层，`{"to": {"attr": {"duration": 2}}}`
+        整条漏过去，于是 duration="2" 被当成 SVG 属性写进元素——"每层的键都查"
+        这条口径只对一层成立。
+        """
+        for knob in ("duration", "ease", "delay", "stagger", "repeat", "yoyo"):
+            self._bad({"at": 0, "target": "#a", "to": {"attr": {knob: 2}}},
+                      "只在 step 级有定义")
+        # 嵌套层里的真属性照放：attr 那一层本来就是给 SVG 属性用的。
+        self._ok({"at": 0, "target": "#a", "to": {"attr": {"width": 10}}})
+
     def test_repeat_and_yoyo_need_a_replayable_tween(self):
         for extra in ({"repeat": 2}, {"yoyo": True}):
             self._bad(dict({"at": 0, "target": "#a", "set": {"opacity": 1}}, **extra),

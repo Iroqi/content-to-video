@@ -71,6 +71,17 @@ MEDIA_ENTRY_KEYS = frozenset({
 MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
+def is_svg_path(path):
+    """这条路径是不是 SVG（"能不能被净化内联、有没有图内命名元素"那一问）。
+
+    生成端有三处各自问过它（缺图探测跳过、画布段必须 SVG、渲染端加 bare-media
+    类），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
+    endswith/splitext 就是五份真源：将来认一个 .svgz、或把大小写规则改一下，
+    只改到的一处会和其他四处分家，症状是"契约说能挂 director、渲染端却不内联"。
+    """
+    return os.path.splitext(str(path).lower())[1] == ".svg"
+
+
 def classify_media_path(path, explicit_type="auto"):
     """根据文件扩展名和显式 type 判断媒体类型。
 
@@ -109,15 +120,25 @@ _RELATIVE_AT_TIME_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 
 
 def _validate_tween_vars(vars_, where):
-    """GSAP 补间变量：只允许 JSON 可序列化的值，禁任何 on* 回调键。
+    """GSAP 补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
 
     这些字典会被 json.dumps 成 JS 对象字面量注入内联脚本——JSON 转义挡住了
     字符串注入，但回调键（onStart/onUpdate/…）本身不是注入而是"在渲染页里
     执行任意 JS 逻辑"的入口，且信源不可信（SKILL.md 核心规则），一律不收。
     允许嵌套 dict（GSAP 的 attr:{} 等非 CSS 属性走它），逐层校验叶子是标量。
+
+    控制旋钮（_PAYLOAD_CONTROL_KEYS）判在这里而不是调用点判一次：调用点只认顶层，
+    `{"to": {"attr": {"duration": 2}}}` 就漏过去，把 duration="2" 写进 SVG 元素——
+    递归的这一层才是"每一层都不许有"的正确位置。
     """
     if not isinstance(vars_, dict):
         raise ValueError(f"{where} 必须是对象（GSAP 补间变量）")
+    clash = sorted(_PAYLOAD_CONTROL_KEYS & set(vars_))
+    if clash:
+        raise ValueError(
+            f"{where} 里写了 {clash}——这些旋钮只在 step 级有定义，"
+            "放在补间变量里要么被渲染端覆盖、要么让补间的真实跨度与门禁算的"
+            "那个数分家。把它们提到这一 step 上")
     for k, v in vars_.items():
         if not isinstance(k, str) or not k.strip():
             raise ValueError(f"{where} 的键必须是非空字符串（实际: {k!r}）")
@@ -335,14 +356,9 @@ def _validate_director(key, dirval):
                     "morph 做 path 形变、count 做数字滚动、type 做逐字揭示"
                     "（补间起止/瞬时赋值/描边生长/形状互变/数值递增/打字机）")
             for k in kinds:
-                payload = step[k]
-                _validate_tween_vars(payload, f"{where} 的 {k}")
-                clash = sorted(_PAYLOAD_CONTROL_KEYS & set(payload))
-                if clash:
-                    raise ValueError(
-                        f"{where} 的 {k} 里写了 {clash}——这些旋钮只在 step 级有定义，"
-                        "放在补间变量里要么被渲染端覆盖、要么让补间的真实跨度与门禁算的"
-                        "那个数分家。把它们提到这一 step 上")
+                # 控制旋钮（duration/ease/…）的拦截在 _validate_tween_vars 里，跟着
+                # 它一起递归——这里只查顶层的话，attr:{} 那类嵌套层就是漏网。
+                _validate_tween_vars(step[k], f"{where} 的 {k}")
         # stagger 只对命中一组元素、且逐帧补间的 step 有意义（from/to/fromTo/set）；
         # morph/count/type 各自负责整段、忽略 stagger。这里统一验形，渲染端按 kind 决定。
         if "stagger" in step:
@@ -475,7 +491,7 @@ def validate_images_json(data):
         # director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
         # 没有可被 GSAP 逐帧驱动的图内命名元素）。
         if "director" in value:
-            if not src.lower().endswith(".svg"):
+            if not is_svg_path(src):
                 raise ValueError(
                     f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
                     "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
@@ -490,7 +506,7 @@ def validate_images_json(data):
                 raise ValueError(
                     f"images.json 的 '{key}' 的 stage 只认字符串 \"keep\""
                     f"（实际: {value['stage']!r}）——keep=接着上一页演，不写=每页独立成片")
-            if not src.lower().endswith(".svg"):
+            if not is_svg_path(src):
                 raise ValueError(
                     f"images.json 的 '{key}' 写了 stage，但 src={src!r} 不是 SVG"
                     "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")

@@ -145,7 +145,8 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _template import get_canvas, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
-from _images_schema import load_images_json, classify_media_path  # noqa: E402
+from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
+                            is_svg_path)
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
@@ -336,7 +337,7 @@ def validate_images_files(images, out_dir, seg_durs=None):
                               file=sys.stderr)
             continue
         # svg 是文本格式，ffmpeg 打不开，存在性校验已足够
-        if os.path.splitext(p.lower())[1] == ".svg":
+        if is_svg_path(p):
             continue
         # 栅格图（jpg/png/webp/gif…）用 ffmpeg 全解码探测损坏/截断——
         # ffmpeg 是渲染必需依赖，无需再引入 Pillow
@@ -425,7 +426,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
         src = entry["src"]
         path = os.path.join(out_dir, src)
         n_sent = len(seg["sentences"])
-        if os.path.splitext(src.lower())[1] != ".svg":
+        if not is_svg_path(src):
             warns.append(f"段落 '{sid}' 的整页画布配图是 {src}（不是 SVG）——"
                          f"画布版式不生成标题层与句子流层，照片/视频里也没有"
                          f"图内文字，这一整段画面上不会出现任何文字。"

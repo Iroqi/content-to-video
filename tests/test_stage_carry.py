@@ -162,6 +162,26 @@ class SettleElementState(unittest.TestCase):
         self.assertIn("opacity:0", style)
         self.assertIn("visibility:hidden", style)
 
+    def test_auto_alpha_relative_amount_starts_from_the_computed_base(self):
+        """autoAlpha 的相对量也按计算值起算，与 opacity 那条同一口径。
+
+        证伪：基值原先无条件按 1.0 起算，于是 opacity="0.2" 的元素上
+        `autoAlpha:"+=0.5"` 烘焙出 1、`opacity:"+=0.5"` 却烘焙出 0.7（实测）——同一
+        元素的两条等价写法烘焙出两个值，接续页就在页界静默跳一下，正是本模块要消灭
+        的那个阶跃。
+        """
+        svg = ('<svg xmlns="%s" viewBox="0 0 1080 1440">'
+               '<rect id="plate" x="60" y="300" width="960" height="500" opacity="0.2"/>'
+               "</svg>") % NS
+        for prop in ("autoAlpha", "opacity"):
+            with self.subTest(prop=prop):
+                out, _ = _bake([{"target": "#plate", "to": {prop: "+=0.5"}}],
+                               markup=svg)
+                self.assertIn("opacity:0.7", _find(out, "plate").get("style"))
+        # autoAlpha 还要顺带把 visibility 带上：0.7 > 0，所以是 visible。
+        out, _ = _bake([{"target": "#plate", "to": {"autoAlpha": "+=0.5"}}], markup=svg)
+        self.assertIn("visibility:visible", _find(out, "plate").get("style"))
+
 
 class FoldCamera(unittest.TestCase):
     def test_resting_pose_becomes_one_static_layer(self):

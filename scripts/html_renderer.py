@@ -18,7 +18,7 @@ from _theme import (
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import load_template, get_canvas, normalize_aspect
-from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS
+from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS, classify_media_path
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
@@ -195,7 +195,8 @@ def _normalize_images(images):
     入参必须是过 _images_schema.validate_images_json 的数据（契约先校验是本
     技能的入口规则：gen_hyperframes 经 load_images_json 进来，键合法性、
     媒体对象形状、src 非空都在那里拦下），这里只做归一与丢键提醒。
-    素材统一是静态图（gif/svg 都走 <img>），无媒体类型分支。
+    素材类型分两档：静态图（image/svg/gif 走 <img>）与视频（video 走 <video>
+    自动循环静音播放）。gif 与 image 同档——它就是一张会自己动的静态图。
     """
     normalized = {}
     for sid, media in (images or {}).items():
@@ -211,9 +212,11 @@ def _normalize_images(images):
                   "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
                   file=sys.stderr)
         media_path = media["src"]
+        media_type = classify_media_path(media_path, media.get("type", "auto"))
         media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
         normalized[sid] = {
             "src": media_path,
+            "type": media_type,
             "opts": media_opts,
         }
     return normalized
@@ -504,14 +507,32 @@ def _tagline_html(rc, seg, sid, ac):
 
 
 def _media_html(rc, sid, s, d):
-    """配图容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。
+    """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。
 
-    静态图统一走 <img>（gif 也 <img>）。SVG 按 C3 规范不铺满幅底，外面再套描边
-    和发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
+    静态图与动图统一走 <img>（gif 也 <img>），视频走 <video> 自动循环静音播放。
+    SVG 按 C3 规范不铺满幅底，外面再套描边和发光就等于给一片空白画框，
+    挂 bare-media 让 CSS 撤掉这两层装饰。
     """
     media_info = rc.images[sid]
     media_path = media_info["src"]
     media_opts = media_info["opts"]
+    if media_info.get("type") == "video":
+        loop = "loop" if media_opts.get("loop", True) else ""
+        muted = "muted" if media_opts.get("muted", True) else ""
+        playsinline = "playsinline" if media_opts.get("playsinline", True) else ""
+        # autoplay 同样读 images.json 选项（与其余 video 选项一致）
+        autoplay = "autoplay" if media_opts.get("autoplay", True) else ""
+        poster = media_opts.get("poster", "")
+        poster_attr = f'poster="{quote(poster)}"' if poster else ""
+        return (
+            f'\n    <div class="seg-image" id="img-{sid}">\n'
+            f'      <video id="vid-{sid}" src="{quote(media_path)}" '
+            f'data-start="{s}" data-duration="{d}" '
+            f'{loop} {muted} {autoplay} {playsinline} '
+            f'{poster_attr}>\n'
+            f'      </video>\n'
+            f'    </div>'
+        )
     # 导演模式（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，

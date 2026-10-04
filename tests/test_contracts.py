@@ -192,6 +192,52 @@ class ImagesJson(unittest.TestCase):
         IMG.validate_images_json({"seg-a": entry})
         self.assertEqual(IMG.unknown_media_keys(entry), ["alt", "scr"])
 
+    def test_video_and_gif_type_accepted(self):
+        """video/gif 是合法 type：gif 与 image 同档，视频另走 <video> 分支。"""
+        IMG.validate_images_json({"seg-a": {"src": "images/a.mp4", "type": "video"}})
+        IMG.validate_images_json({"seg-a": {"src": "images/a.gif", "type": "gif"}})
+        IMG.validate_images_json(
+            {"seg-a": {"src": "images/a.mp4", "type": "video", "loop": True,
+                       "muted": True, "autoplay": False, "playsinline": True,
+                       "poster": "images/a.png"}})
+
+    def test_still_removed_types_stay_rejected(self):
+        """chart/formula 是真删掉的能力，误写时必须点名劝去手绘 SVG。"""
+        bad(IMG.validate_images_json, {"seg-a": {"src": "images/a.png", "type": "chart"}},
+            contains="手绘 SVG")
+        bad(IMG.validate_images_json, {"seg-a": {"src": "images/a.png", "type": "formula"}},
+            contains="手绘 SVG")
+
+    def test_video_playback_flags_must_be_json_bool(self):
+        """字符串 "false" 是真值——渲染端按 opts.get("loop", True) 取值，
+        写成字符串会让"关掉循环"变成"永远循环"，所以契约层就拒。"""
+        for flag in ("loop", "muted", "autoplay", "playsinline"):
+            bad(IMG.validate_images_json,
+                {"seg-a": {"src": "images/a.mp4", "type": "video", flag: "false"}},
+                contains=flag)
+
+    def test_poster_must_be_non_empty_string(self):
+        """旧写法 `if poster:` 让空串 "" 与 None 同判，坏空串会原样拼进 HTML。"""
+        bad(IMG.validate_images_json,
+            {"seg-a": {"src": "images/a.mp4", "poster": ""}}, contains="poster")
+        bad(IMG.validate_images_json,
+            {"seg-a": {"src": "images/a.mp4", "poster": 7}}, contains="poster")
+
+    def test_poster_shares_the_src_path_rules(self):
+        for evil in ("../p.png", "/etc/passwd", "C:\\p.png"):
+            bad(IMG.validate_images_json,
+                {"seg-a": {"src": "images/a.mp4", "poster": evil}}, contains="poster")
+
+    def test_classify_media_path_by_extension(self):
+        for p, want in (("a.mp4", "video"), ("a.WEBM", "video"), ("a.mov", "video"),
+                        ("a.mkv", "video"), ("a.avi", "video"),
+                        ("a.gif", "gif"), ("a.png", "image"), ("a.svg", "image"),
+                        ("a.jpg", "image"), ("a.webp", "image")):
+            self.assertEqual(IMG.classify_media_path(p), want, p)
+        # 显式 type 优先于扩展名
+        self.assertEqual(IMG.classify_media_path("a.gif", "image"), "image")
+        self.assertEqual(IMG.classify_media_path("a.png", "video"), "video")
+
 
 class Speed(unittest.TestCase):
     def test_validate_speed(self):

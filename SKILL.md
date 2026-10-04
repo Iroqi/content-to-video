@@ -59,7 +59,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 ### 4. 配图
 
-**先定这一页怎么演，再定素材从哪来。** 只有方式 C 的 SVG 能进导演层（A/B 的位图只能当素材贴进画面，逐拍驱动不了它们），所以"要不要演"这一问决定后面怎么画、画多大。
+**先定这一页怎么演，再定素材从哪来。** 只有方式 C 的 SVG 能进导演层（位图与视频只能当素材贴进画面，逐拍驱动不了它们），所以"要不要演"这一问决定后面怎么画、画多大。
 
 要点：
 
@@ -70,7 +70,9 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 素材落盘与选型（放在编排之后，因为它是"演"用什么的问题）：素材写入 HTML 项目目录（`--project`，默认 `<output 同级>/hf-project`）的 `images/`，并通过同目录 `images.json` 映射到 segment（`src` 写相对项目根的路径，如 `images/seg1.png`）。配图按 4:3 出图（整页画布按当前画幅出图）。provenance 字段（来源记账）按 `references/image_options.md`「images.json」的清单保留，二次整理时不要覆盖。
 
-三条路线：A 真实照片检索、B ImageGen、C SVG 矢量示意（数据图、公式、示意图）。选型、规格与质量标准见 `references/image_options.md`；要不要演这一问在「先问要不要演」。
+三条路线：**位图**（A 真实照片检索 / B ImageGen，两者同档，落盘与门禁一致）、C SVG 矢量示意（数据图、公式、示意图）、**视频**（VideoGen 出片或现成 mp4/gif）。选型、规格与质量标准见 `references/image_options.md`；要不要演这一问在「先问要不要演」。
+
+视频是**唯一破坏逐帧可复现**的素材：`<video>` 走页面墙钟，多 worker 各自从 0 起播，同一秒抓到的帧不保证一致。只有"运动本身携带信息"（真实过程、场景变化）才值得用——固定镜头能画成 SVG 就别用视频，代价见 `references/image_options.md`「视频素材」。
 
 ### 5. 生成 HTML、预览、检查、渲染
 

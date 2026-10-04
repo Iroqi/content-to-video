@@ -145,7 +145,7 @@ sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache_
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _template import get_canvas, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
-from _images_schema import load_images_json  # noqa: E402
+from _images_schema import load_images_json, classify_media_path  # noqa: E402
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
@@ -291,9 +291,12 @@ def validate_images_files(images, out_dir, seg_durs=None):
         return True, "", parse_duration(err_text)
 
     for sid, entry in images.items():
-        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空；
-        # 素材统一是静态图（gif 也走 <img>）。
+        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空
+        media_type = entry.get("type", "auto")
         media_path = entry["src"]
+        # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
+        if media_type == "auto":
+            media_type = classify_media_path(media_path)
         # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
         # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
         p = os.path.join(out_dir, media_path)
@@ -303,6 +306,34 @@ def validate_images_files(images, out_dir, seg_durs=None):
         if not is_inside(p, out_dir):
             corrupt_imgs.append((sid, media_path,
                                  "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
+            continue
+        poster = entry.get("poster")
+        # poster 的问题只记录、不提前 continue：同一条目的 src 若也有毛病，必须
+        # 一起报出来（先 continue 会让人以为"只是封面缺了"，修完才发现视频本身
+        # 还是坏的，白跑一轮）。
+        if poster:
+            poster_path = os.path.join(out_dir, poster)
+            if not os.path.isfile(poster_path):
+                missing_imgs.append((sid, poster))
+            elif not is_inside(poster_path, out_dir):
+                corrupt_imgs.append((sid, poster,
+                                     "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
+        # 视频用 ffmpeg 解码探测（只查存在性不够：
+        # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
+        if media_type == "video":
+            if _ffmpeg_probe:
+                ok, reason, vdur = _probe_media_ok(p)
+                if not ok:
+                    corrupt_imgs.append((sid, media_path,
+                                         f"视频解码失败: {reason}"))
+                elif vdur is not None:
+                    seg_dur = (seg_durs or {}).get(sid, 0)
+                    if seg_dur > 0 and vdur > seg_dur + 0.05:
+                        print(f"[warn] 视频 {vdur:.1f}s 超过段落 "
+                              f"'{sid}' 时长 {seg_dur:.1f}s，渲染只显示"
+                              f"前 {seg_dur:.1f}s（尾部内容会被截断）。"
+                              f"请剪短视频或换到更长的段落。",
+                              file=sys.stderr)
             continue
         # svg 是文本格式，ffmpeg 打不开，存在性校验已足够
         if os.path.splitext(p.lower())[1] == ".svg":

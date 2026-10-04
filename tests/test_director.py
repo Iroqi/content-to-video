@@ -325,6 +325,55 @@ class Renderer(unittest.TestCase):
         # 普通 SVG（seg-b）仍是 <img>，没有内联
         self.assertIn('<img src="images/seg-b.svg"', html)
 
+    def test_video_entry_renders_video_tag_with_playback_attrs(self):
+        """视频素材出 <video> 而非 <img>：四个播放开关默认全开（渲染端按
+        opts.get(flag, True) 取值），poster 只在给了的时候拼上去。
+        段 b 是 canvas 段（缺配图会报错），两条都得给映射。"""
+        m = H.make_manifest()
+        html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+            "seg-a": {"src": "images/seg-a.png"},
+            "seg-b": {"src": "images/seg-b.mp4", "poster": "images/seg-b-cover.png"}})
+        self.assertIn('<video id="vid-seg-b" src="images/seg-b.mp4"', html)
+        self.assertIn('poster="images/seg-b-cover.png"', html)
+        v = html.split('<video id="vid-seg-b"')[1].split("</video>")[0]
+        # 缺省即开：四个开关都在
+        for flag in ("loop", "muted", "autoplay", "playsinline"):
+            self.assertIn(flag, v.split(">")[0], flag)
+        # 静态图那段仍是 <img>，没被带成视频
+        self.assertIn('<img src="images/seg-a.png"', html)
+
+    def test_video_playback_flags_can_be_switched_off(self):
+        """显式写 false 的开关不出现在标签里——渲染端按 opts.get(flag, True) 取值，
+        属性在就是开。loop 关掉的视频只播一遍。"""
+        m = H.make_manifest()
+        html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+            "seg-a": {"src": "images/seg-a.png"},
+            "seg-b": {"src": "images/seg-b.mp4", "loop": False, "muted": False}})
+        v = html.split('<video id="vid-seg-b"')[1].split("</video>")[0]
+        head = v.split(">")[0]
+        self.assertNotIn("loop", head)
+        self.assertNotIn("muted", head)
+        self.assertIn("autoplay", head)
+        self.assertIn("playsinline", head)
+
+    def test_gif_renders_as_img_not_video(self):
+        """gif 是会自己动的静态图，走 <img>；别把它当视频塞进 <video>。
+        断言只查标签（CSS 里有 .seg-image video 这类选择器字面量，整页找会误判）。"""
+        m = H.make_manifest()
+        html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+            "seg-a": {"src": "images/seg-a.png"},
+            "seg-b": {"src": "images/seg-b.gif"}})
+        self.assertIn('<img src="images/seg-b.gif"', html)
+        self.assertNotIn("<video id=", html)
+
+    def test_explicit_type_overrides_extension(self):
+        """type 显式指定优先于扩展名：.gif 写 type:"video" 就该出 <video>。"""
+        m = H.make_manifest()
+        html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+            "seg-a": {"src": "images/seg-a.png"},
+            "seg-b": {"src": "images/seg-b.gif", "type": "video"}})
+        self.assertIn('<video id="vid-seg-b" src="images/seg-b.gif"', html)
+
     def test_at_out_of_range_raises(self):
         m = H.make_manifest()
         imgs = self._images()

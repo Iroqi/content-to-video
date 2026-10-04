@@ -770,6 +770,14 @@ def main(argv=None):
                   "——生成期会按 error 拦，请补旁白或把 beat 收回来".format(
                       len(pinned), args.sentences,
                       "、".join(str(b) for b in pinned)), file=sys.stderr)
+    elif len(frag["steps"]) > 1:
+        # 实例实测的摩擦：不给 --sentences 时自动拍的 at 从 0 一路递增，内容元素多于
+        # 该段旁白句数时，生成期把越界拍整条管线 error 拒。这里提前出声，让作者在
+        # 写稿阶段就对好句数，而不是等 gen_hyperframes 那一声报错。
+        n = len(frag["steps"])
+        print("[hint] 未给 --sentences：自动拍 at 从 0 递增到 {}（草稿共 {} 拍）。"
+              "若该段旁白不足 {} 句，生成期会把越界拍当 error 拒——"
+              "给上 --sentences N 让草稿按句数回绕".format(n - 1, n, n), file=sys.stderr)
 
     rc = 0
     if not args.no_check:

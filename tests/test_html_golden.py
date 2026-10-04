@@ -9,7 +9,7 @@ import os
 import re
 import unittest
 
-import _helpers as H
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 from html_renderer import generate_html
 
 CASES = {

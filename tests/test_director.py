@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-import _helpers as H
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 import _svg_sanitize as SAN
 from _images_schema import validate_images_json
 import html_renderer as HR

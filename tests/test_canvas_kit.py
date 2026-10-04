@@ -12,7 +12,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-import _helpers as H
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 import _svg_sanitize
 import canvas_kit as K
 import check_svg
@@ -452,6 +452,26 @@ class CommandLine(unittest.TestCase):
         with open(steps, encoding="utf-8") as f:
             frag = json.load(f)
         self.assertEqual([s["at"] for s in frag["steps"]], [0, 1, 2])
+
+    def test_missing_sentences_hints_at_overflow_risk(self):
+        """不给 --sentences 且自动拍不止一拍时，提示作者按句数回绕（实测摩擦：
+        内容元素多于旁白句数时生成期整条 error 拒，提前出声让写稿阶段就对好）。"""
+        spec = write_json(self.tmp.name, "hint.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "hint.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--no-check"])
+        self.assertEqual(rc, 0)
+        self.assertIn("[hint] 未给 --sentences", err)
+        self.assertIn("给上 --sentences N", err)
+        # 给了 --sentences 就不该再提示（自动拍已按句数回绕）。
+        rc2, _o2, err2 = run_cli(["--spec", spec, "-o", out, "--sentences", "2",
+                                  "--no-check"])
+        self.assertEqual(rc2, 0)
+        self.assertNotIn("未给 --sentences", err2)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 
-import _helpers as H          # 必须最先导入：它把 scripts/ 挂上 sys.path
+import _helpers as H  # noqa: F401  必须最先导入：它把 scripts/ 挂上 sys.path
 from _timeline import (beat_positions, beat_span, beat_cycles, ends_at_start,
                        _beat_spans_time)
 import gen_hyperframes as G

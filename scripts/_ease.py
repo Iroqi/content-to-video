@@ -32,6 +32,12 @@ _MODS = {"": "out", "in": "in", "out": "out", "inout": "inOut", "both": "inOut",
 # 旧名 → 采样器用的族名（GSAP 对这两个都解析，实测）
 _FAMILY_ALIAS = {"strong": "power4"}
 
+# 多项式族次数表：power1=平方 … power4=五次；quad/cubic/quart/quint 是同一族
+# 的旧名（GSAP 对两套拼法都解析，见 EASE_FAMILIES）。裸 power 不在放行目录里，
+# 由 curve() 按 power2 的语义兜。这张表是两条旧分支的合流——它们算的是同一个 t**exp。
+_POLY_EXP = {"power1": 2, "power2": 3, "power3": 4, "power4": 5,
+             "quad": 2, "cubic": 3, "quart": 4, "quint": 5}
+
 EASE_HELP = ("认得的档：" + "、".join(sorted(EASE_FAMILIES))
              + "；写法 power2.out / back.out(1.7) / elastic.out(1,0.3) / steps(4)，"
                "方向 .in/.out/.inOut，裸名按 .out。"
@@ -168,13 +174,11 @@ def curve(name, default):
             return -a * (2 ** (10 * (t - 1))) * math.sin((t - 1 - s) * (2 * math.pi) / p)
     elif family == "bounce":
         g = lambda t: 0.0 if t <= 0 else (1.0 if t >= 1 else 1 - _bounce_out(1 - t))
-    elif family.startswith("power"):
-        # 次数来自族名尾巴的数字（power1=平方 … power4=五次），裸 power 按 power2 兜
-        tail = family[5:]
-        exp = (int(tail) if tail.isdigit() else int(_num(args, 0, 2))) + 1
-        g = lambda t, e=exp: t ** e
-    elif family in ("quad", "cubic", "quart", "quint"):
-        exp = {"quad": 2, "cubic": 3, "quart": 4, "quint": 5}[family]
+    elif family.startswith("power") or family in _POLY_EXP:
+        # 次数：目录内的族直接查表；裸 power（不在放行目录，这里是渲染端最后一道
+        # 兜底）取第一个参数当次数、缺省按 power2 的语义（exp=3）。
+        exp = _POLY_EXP[family] if family in _POLY_EXP else (
+            (int(family[5:]) if family[5:].isdigit() else int(_num(args, 0, 2))) + 1)
         g = lambda t, e=exp: t ** e
     elif family == "sine":
         g = lambda t: 1 - math.cos(t * math.pi / 2)

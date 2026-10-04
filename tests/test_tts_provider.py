@@ -146,8 +146,10 @@ class SynthSentenceThroughProtocol(unittest.TestCase):
                     client, "你好。", "茉莉", None, out,
                     ffmpeg_path="ffmpeg", speed=speed, model="m",
                     api_timeout=30, max_retries=max_retries)
-            content = (open(out, "rb").read()
-                       if os.path.exists(out) else None)
+            content = None
+            if os.path.exists(out):
+                with open(out, "rb") as f:
+                    content = f.read()
         return ok, applied, client, content
 
     def test_success_writes_audio_and_passes_domain_args(self):

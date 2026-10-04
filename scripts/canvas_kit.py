@@ -7,7 +7,7 @@
 所有坐标由 spec 给，脚本不做任何自动布局——那是版式引擎，不是脚手架。
 
 用法：
-    python scripts/canvas_kit.py --spec spec.json --aspect portrait --theme dark -o seg1.svg [--emit-steps steps.json]
+    python scripts/canvas_kit.py --spec spec.json --aspect portrait -o seg1.svg [--emit-steps steps.json]
 
 两份产物配套消费：
   - seg1.svg：透明底（绝不自铺满幅底板；模板的渐变/网格/氛围光三层要从内容背后透出来）
@@ -39,8 +39,7 @@ from _script_utils import read_json_file  # noqa: E402
 from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
-                    get_default_accent, get_theme_colors, list_theme_names,
-                    mix, theme_bg_stops)
+                    get_default_accent, get_theme_colors, mix, theme_bg_stops)
 from _validate import _reject_unknown_keys, _validate_accent  # noqa: E402
 from _validate import _validate_finite_number  # noqa: E402
 
@@ -727,8 +726,6 @@ def main(argv=None):
     ap.add_argument("--spec", required=True, help="画布页元素清单 JSON")
     ap.add_argument("-o", "--out", required=True, help="输出 SVG 路径")
     ap.add_argument("--aspect", choices=list(ASPECTS), help="画幅（覆盖 spec 顶层；默认 portrait）")
-    ap.add_argument("--theme", choices=list_theme_names(),
-                    help=f"主题（覆盖 spec 顶层；默认 {DEFAULT_THEME}）")
     ap.add_argument("--accent", help="本页强调色（覆盖 spec 顶层；默认取段落缺省 accent）")
     ap.add_argument("--emit-steps", help="把 director 草稿另写一份 JSON 到该路径")
     ap.add_argument("--sentences", type=int, help="该段旁白句数（用来提前告警 at 越界）")
@@ -737,7 +734,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
-        spec = load_spec(args.spec, aspect=args.aspect, theme=args.theme, accent=args.accent)
+        spec = load_spec(args.spec, aspect=args.aspect, accent=args.accent)
         svg = render_svg(spec)
     except ValueError as e:
         print(f"[error] {e}", file=sys.stderr)

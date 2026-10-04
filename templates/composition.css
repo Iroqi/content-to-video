@@ -244,15 +244,4 @@ body{font-family:var(--ctv-font-family)}
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
-/* ── 透明底导出（run.py --alpha → <html class="ctv-alpha">）───────────────
-   页面渐变、网格、段落氛围光这三层是"底"：叠到别的素材上就是一团掀不掉的雾，
-   所以 --alpha 整层关掉它们，只留内容（标题、句子流、配图、进度条）。
-   写在全表最末尾（变量表之前）：氛围光那三条按画幅/画布各有各的选择器，其中
-   [data-aspect] .seg-card.seg-canvas::after 与本表最后这组同为 0,3,1，只能靠
-   源序决胜；变量注入点会随渲染参数变化，位置在这里是唯一稳定的"后面"。
-   :root.ctv-alpha 压过末尾注入的 :root 变量表靠的是优先级（0,2,0 > 0,1,0），
-   与源序无关 —— 光写 html{--ctv-bg-gradient:...} 是盖不住的。 */
-:root.ctv-alpha{--ctv-bg-gradient:transparent;--ctv-grid-color:transparent}
-:root.ctv-alpha .seg-card::after,:root.ctv-alpha .seg-canvas::after{background:none}
-
 __CTV_ROOT_VARS__

@@ -14,6 +14,7 @@
 render_wait。hyperframes_spec / resolve_command / fmt_cmd 是模块内部的命令解析
 链（Windows shim 处理与日志），由 tests/test_render_backend.py 直接覆盖，不对外。
 进程树清理（_try_kill_process_tree）只在本模块的失败/超时/中断路径里用，不对外。
+成片容器固定 mp4（由 -o 后缀决定），透明底/mov/webm 已从本技能移除。
 """
 import os
 import shutil
@@ -111,24 +112,14 @@ def resolve_command(cmd):
 
 
 def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         command: List[str],
-                         composition: str = None,
-                         fmt: str = None) -> List[str]:
-    """拼一条 `hyperframes render`。``composition`` 非空时渲染该项目里的
-    另一份 HTML（``--only`` 的单段预览片就走这条），``-c`` 必须紧跟 ``render``：
-    hyperframes 把第一个非选项参数当项目目录，参数顺序错了会连项目根都换掉。
+                         command: List[str]) -> List[str]:
+    """拼一条 `hyperframes render`，输出容器由 ``-o`` 后缀决定（恒为 mp4）。
 
-    ``fmt`` 只在非 mp4 时显式写 ``--format``：默认命令保持原样（渲染器本来就按
-    ``-o`` 的后缀推断容器），要 ProRes 4444 的 mov（透明底唯一认的容器）才多这一
-    面旗。
+    透明底/非 mp4 容器已从本技能移除，无需 --format 旗标。
     """
     base = list(command)
     cmd = base + ["render"]
-    if composition:
-        cmd += ["-c", composition]
     cmd += ["-o", output]
-    if fmt and fmt != "mp4":
-        cmd += ["--format", fmt]
     cmd += ["--quality", quality,
             "--fps", str(fps), "--workers", str(workers)]
     # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve

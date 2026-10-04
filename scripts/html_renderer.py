@@ -20,8 +20,7 @@ from _theme import (
     ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import load_template, get_canvas, normalize_aspect
-from _images_schema import (classify_media_path, unknown_media_keys,
-                            MEDIA_ENTRY_KEYS)
+from _images_schema import unknown_media_keys, MEDIA_ENTRY_KEYS
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _timeline import beat_positions
@@ -194,11 +193,12 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
 
 
 def _normalize_images(images):
-    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。
+    """把媒体条目归一成渲染器的单一形状 {src, opts}。
 
     入参必须是过 _images_schema.validate_images_json 的数据（契约先校验是本
     技能的入口规则：gen_hyperframes 经 load_images_json 进来，键合法性、
     媒体对象形状、src 非空都在那里拦下），这里只做归一与丢键提醒。
+    素材统一是静态图（gif/svg 都走 <img>），无媒体类型分支。
     """
     normalized = {}
     for sid, media in (images or {}).items():
@@ -214,11 +214,9 @@ def _normalize_images(images):
                   "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
                   file=sys.stderr)
         media_path = media["src"]
-        media_type = classify_media_path(media_path, media.get("type", "auto"))
         media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
         normalized[sid] = {
             "src": media_path,
-            "media_type": media_type,
             "opts": media_opts,
         }
     return normalized
@@ -453,9 +451,8 @@ def _card_colors(rc, seg):
     # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
     # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
     ac_attr = esc(ac)
-    # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
-    # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
-    # 都过 ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
+    # 文本安全 accent：dark 底从原色起步，两条路径最后都过
+    # ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
     # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
     ac_text = ensure_text_contrast(ac if rc.dark else darken(ac), rc.bgs)
     return ac, ac_attr, esc(ac_text)
@@ -516,36 +513,19 @@ def _tagline_html(rc, seg, sid, ac):
 
 
 def _media_html(rc, sid, s, d):
-    """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。"""
+    """配图容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。
+
+    静态图统一走 <img>（gif 也 <img>）。SVG 按 C3 规范不铺满幅底，外面再套描边
+    和发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
+    """
     media_info = rc.images[sid]
     media_path = media_info["src"]
-    media_type = media_info["media_type"]
     media_opts = media_info["opts"]
-    if media_type == "video":
-        # 视频配图：<video> 自动循环静音播放
-        loop = "loop" if media_opts.get("loop", True) else ""
-        muted = "muted" if media_opts.get("muted", True) else ""
-        playsinline = "playsinline" if media_opts.get("playsinline", True) else ""
-        # autoplay 同样读 images.json 选项（与其余 video 选项一致）
-        autoplay = "autoplay" if media_opts.get("autoplay", True) else ""
-        poster = media_opts.get("poster", "")
-        poster_attr = f'poster="{quote(poster)}"' if poster else ""
-        return (
-            f'\n    <div class="seg-image" id="img-{sid}">\n'
-            f'      <video id="vid-{sid}" src="{quote(media_path)}" '
-            f'data-start="{s}" data-duration="{d}" '
-            f'{loop} {muted} {autoplay} {playsinline} '
-            f'{poster_attr}>\n'
-            f'      </video>\n'
-            f'    </div>'
-        )
-    # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
-    # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
-    _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
     # 导演模式（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
+    _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
     inline_svg = media_opts.get("inline_svg")
     if inline_svg:
         return (
@@ -1071,8 +1051,7 @@ def _card_timeline_lines(rc, card):
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme=DEFAULT_THEME, fps=24,
-                  alpha=False):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=24):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -1081,15 +1060,10 @@ def generate_html(manifest, audio_src, images=None,
         aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
             画布尺寸都按它取，归一化在函数体内完成。
         theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
-            可选值见 _theme 的主题注册表。
+            当前只有 "dark"（见 _theme 的主题注册表）。
         gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
         fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
             20% 帧、出片更快。
-        alpha: 透明底导出。只做一件事——往 <html> 挂 ctv-alpha 类；被关掉的三层
-            （页面渐变 / 网格 / 段落氛围光）连同"为什么这样写"都在
-            templates/composition.css 末尾。这一面旗只管画面：alpha 平面落不落得
-            进文件是渲染端的事，实测只有 mov（ProRes 4444）带得出，mp4 无通道、
-            webm 丢平面，所以 run.py 侧要求 --alpha 配 mov。
 
         字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
     """
@@ -1211,7 +1185,6 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_SCRIPT__": script,
         "__CTV_SEG_CARDS__": chr(10).join(seg_cards),
         "__CTV_ASPECT__": aspect,
-        "__CTV_HTML_CLASS__": "ctv-alpha" if alpha else "",
         "__CTV_DURATION__": f"{total_dur:.2f}",
         "__CTV_WIDTH__": str(width),
         "__CTV_HEIGHT__": str(height),

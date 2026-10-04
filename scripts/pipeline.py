@@ -19,9 +19,9 @@ import time
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _audio import (apply_loudnorm, apply_speed, concat_audio,  # noqa: E402
+from _audio import (apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
-                    mix_bgm, wav_data_consistent)
+                    wav_data_consistent)
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从契约模块取
 from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
@@ -509,19 +509,12 @@ def _build_parser():
                         help="Speech speed multiplier via ffmpeg atempo "
                              "(1.0=normal, 1.5=faster). Default follows "
                              "_timeline.DEFAULT_SPEED (single source).")
-    parser.add_argument("--loudness", type=float, default=None,
-                        help="响度归一化目标（LUFS，如 -16）。默认不做归一化；"
-                             "设置后对最终音频做单遍 loudnorm")
     parser.add_argument("--resume", action="store_true",
                         help="仅当缓存 WAV 能被「证明」属于当前稿件时跳过重合成："
                              "内容指纹 .sha、可测时长、无截断、语速状态 .spd 全部"
                              "对上才算命中（命中打 [skip,cached]/[skip,respeed]，"
                              "失效打「缓存失效（原因）」）。判定口径见 "
                              "references/tts_pipeline.md")
-    parser.add_argument("--bgm", default=None,
-                        help="Background music file path (mp3/wav/ogg)")
-    parser.add_argument("--bgm-volume", type=float, default=0.15,
-                        help="BGM volume relative to voice (0.0-1.0, default 0.15)")
     parser.add_argument("--model", default=None,
                         help=f"TTS model name (default: MIMO_TTS_MODEL env var or "
                              f"'{DEFAULT_MODEL}')")
@@ -562,14 +555,6 @@ def _validate_args(parser, args):
     if not math.isfinite(args.gap) or args.gap < 0:
         parser.error(f"--gap 必须是非负有限数（句间静音秒数，收到 {args.gap}）；"
                      "要无间隙拼接请显式传 0")
-    # --loudness 直接拼进 ffmpeg 滤镜串，NaN/Inf 会产出非法滤镜再报一串
-    # 迷惑性 stderr；跟 --bgm-volume 的处理对齐，提前拦下
-    if args.loudness is not None and not math.isfinite(args.loudness):
-        parser.error(f"--loudness 必须是有限数值（LUFS，收到 {args.loudness}）")
-    # --bgm-volume 同样会拼进 ffmpeg 滤镜串（BGM 混音段），NaN/Inf
-    # 在这里提前拦下——原路径拖到混音阶段才报错，TTS 额度已经白烧一遍
-    if not math.isfinite(args.bgm_volume):
-        parser.error(f"--bgm-volume 必须是有限数值（0.0-1.0，收到 {args.bgm_volume}）")
     if args.workers < 1:
         parser.error(f"--workers 至少为 1（收到 {args.workers}）")
     # --api-timeout 直接交给 HTTP 客户端当超时用：0 意味着"每次请求立刻超时"，
@@ -577,15 +562,6 @@ def _validate_args(parser, args):
     # 整条管线在烧完时间后才报"全部句子失败"。
     if not math.isfinite(args.api_timeout) or args.api_timeout <= 0:
         parser.error(f"--api-timeout 必须是大于 0 的有限秒数（收到 {args.api_timeout}）")
-    # --bgm 指向不存在的文件时提前警告并忽略，而不是静默跳过混音——
-    # 用户以为加了 BGM，成片里却没有，排查起来非常绕。
-    # 忽略的同时留一个标记：混音阶段压根没跑，走不到下面的
-    # bgm_mix_failed 分支，"显式要了 BGM 却没有"这件事也必须进 degraded 明细。
-    if args.bgm and not os.path.exists(args.bgm):
-        print(f"[warn] --bgm 文件不存在，已忽略 BGM 混音：{args.bgm}",
-              file=sys.stderr)
-        args.bgm_missing_file = True
-        args.bgm = None
 
 
 def _concat_voice_audio(args, ffmpeg_path, sentence_data):
@@ -633,72 +609,6 @@ def _concat_voice_audio(args, ffmpeg_path, sentence_data):
     return combined_path, total_dur
 
 
-def _mix_bgm(args, ffmpeg_path, combined_path, total_dur, degraded):
-    """可选 BGM 混音：成功换母带并重量长度，失败记降级走纯人声。"""
-    # 三种"要了 BGM 却没有"：文件在校验后被删（本 if 不进）、--bgm 校验时就
-    # 不存在（上面已清空并打 bgm_missing_file）、混音本身失败（下面的
-    # bgm_mix_failed）。三者都必须落到 degraded 明细，否则成片静音轨照常交付。
-    if getattr(args, "bgm_missing_file", False):
-        degraded[D.BGM_MISSING_FILE] = True
-    if args.bgm and not os.path.exists(args.bgm):
-        degraded[D.BGM_MISSING_FILE] = True
-        print("[warn] --bgm 文件在校验后消失，跳过混音"
-              "（已记入 manifest 的 degraded 明细）", file=sys.stderr, flush=True)
-    if args.bgm and os.path.exists(args.bgm):
-        # bgm_volume 直接插进 ffmpeg filter_complex 字符串："1,aecho" 这类值会
-        # 注入任意滤镜，所以只取数值并 clamp 到 [0,1]（>1 会削波失真）。
-        # 非数值/NaN/Inf 已在 argparse 阶段 parser.error 拦下（早于 TTS，不烧额度）。
-        if args.bgm_volume < 0 or args.bgm_volume > 1:
-            clamped = max(0.0, min(1.0, args.bgm_volume))
-            print(f"[warn] --bgm-volume {args.bgm_volume} out of [0,1], "
-                  f"clamped to {clamped}", file=sys.stderr)
-            args.bgm_volume = clamped
-        print(f"[bgm] Mixing {args.bgm} at volume {args.bgm_volume}...", flush=True)
-        mixed_path = os.path.join(args.output, "combined_bgm.wav")
-        if mix_bgm(ffmpeg_path, combined_path, args.bgm, args.bgm_volume, mixed_path):
-            combined_path = mixed_path
-            # 换了母带文件就得重新量长度：amix 的 duration=first 理论上跟人声等长，
-            # 但"理论上"正是这条管线被 amix 静默截断教育过的地方（见 _audio.mix_bgm）。
-            # 沿用人声长度会让 total_duration 与实际音频不符，而契约照样放行。
-            mixed_dur = measure_duration(ffmpeg_path, mixed_path)
-            if mixed_dur and mixed_dur > 0:
-                total_dur = mixed_dur
-            print(f"  [OK] {mixed_path}", flush=True)
-        else:
-            degraded[D.BGM_MIX_FAILED] = True
-            print("  [warn] BGM mix failed, using voice-only audio"
-                  "（本次成片不含 BGM，已记入 manifest 的 degraded 明细）",
-                  file=sys.stderr, flush=True)
-    return combined_path, total_dur
-
-
-def _normalize_loudness(args, ffmpeg_path, combined_path, total_dur, degraded):
-    """可选响度归一化：产物可用才换母带并采用新时长，否则回退并记降级。"""
-    if args.loudness is None:
-        return combined_path, total_dur
-    loud_path = os.path.join(args.output, "combined_loud.wav")
-    if apply_loudnorm(ffmpeg_path, combined_path, loud_path, args.loudness):
-        loud_dur = measure_duration(ffmpeg_path, loud_path)
-        if loud_dur and loud_dur > 0:
-            combined_path = loud_path
-            total_dur = loud_dur
-            print(f"  [loudness] normalized to {args.loudness} LUFS -> {loud_path}",
-                  flush=True)
-        else:
-            degraded[D.LOUDNESS_NORM_FAILED] = True
-            # 换文件后测量失败会把 total_dur 置 0，契约层仍放行"合法但废掉"
-            # 的 manifest——回退未归一化音频并保留原时长，比交给下游强校验好
-            print("  [warn] loudness 产物时长测量失败，沿用未归一化音频"
-                  "（响度未达标，已记入 manifest 的 degraded 明细）",
-                  file=sys.stderr, flush=True)
-    else:
-        degraded[D.LOUDNESS_NORM_FAILED] = True
-        print("  [warn] loudness normalization failed, using un-normalized audio"
-              "（响度未达标，已记入 manifest 的 degraded 明细）",
-              file=sys.stderr, flush=True)
-    return combined_path, total_dur
-
-
 def _manifest_sentence_entries(sentence_data):
     """句数据 → manifest.sentences 行（只带下游要读的键）。"""
     manifest_sentences = []
@@ -733,7 +643,7 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
     if _timeline_end - total_dur > 0.005:
         # 补长只能兜住"round 到毫秒后差一点点"（几十毫秒量级）。契约层允许
         # 最后一句超出 total_duration 至多 250ms，所以超出 250ms 就不是舍入
-        # 问题，而是音频文件真被截断了——amix / loudnorm 都改写过母带。
+        # 问题，而是音频文件真被截断了。
         # 无条件按时间轴取值会把这种截断抹平成一份 status=ok 的 manifest：
         # 片尾几秒没声音，没人知道。记进 degraded 让 run.py 的闸门拦得住。
         _deficit = _timeline_end - total_dur
@@ -860,13 +770,12 @@ def _validate_and_write_manifest(args, manifest, degraded):
 def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, seg_config,
                                  silence_fallback_count, total_sentences, cached_count,
                                  voices_used):
-    """TTS 之后的收口编排：拼接 → BGM → 响度 → 时长对账 → 组装 manifest → 校验落盘。
+    """TTS 之后的收口编排：拼接 → 时长对账 → 组装 manifest → 校验落盘。
 
-    各阶段是独立函数，(combined_path, total_dur) 顺序传递；任何
-    "用户显式要了、但这次没做到"的事都记进 degraded 明细，最后统一翻成
+    任何"用户显式要了、但这次没做到"的事都记进 degraded 明细，最后统一翻成
     status=degraded 交给 run.py 的 --allow-degraded 闸门。只打一行滚动过的
     [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头看警告，
-    而响度没归一化、BGM 没混进去、少了一整段这些事实都已经丢了。
+    而少了一整段这些事实都已经丢了。
     """
     degraded = {}
 
@@ -874,18 +783,12 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         args, ffmpeg_path, sentence_data)
 
     # ── Calculate start times ──────────────────────────────────────
-    # 提前到 BGM 混音之前算，因为混音后的 manifest 需要每句的 start_time。
     cumulative = 0.0
     for i, sd in enumerate(sentence_data):
         sd["start_time"] = round(cumulative, 3)
         cumulative += sd["duration"]
         if i < len(sentence_data) - 1:
             cumulative += args.gap
-
-    combined_path, total_dur = _mix_bgm(
-        args, ffmpeg_path, combined_path, total_dur, degraded)
-    combined_path, total_dur = _normalize_loudness(
-        args, ffmpeg_path, combined_path, total_dur, degraded)
 
     manifest_sentences = _manifest_sentence_entries(sentence_data)
     total_dur = _reconcile_timeline(manifest_sentences, total_dur, degraded)

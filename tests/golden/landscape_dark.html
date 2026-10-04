@@ -1,7 +1,5 @@
 <!DOCTYPE html>
-<!-- class 由 run.py --alpha 填成 ctv-alpha（关掉页面背景/网格/氛围光三层，
-     见 composition.css 末尾）；正常出片时是空串。 -->
-<html lang="zh-CN" class="">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1920,height=1080">
@@ -253,24 +251,13 @@ body{font-family:var(--ctv-font-family)}
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
-/* ── 透明底导出（run.py --alpha → <html class="ctv-alpha">）───────────────
-   页面渐变、网格、段落氛围光这三层是"底"：叠到别的素材上就是一团掀不掉的雾，
-   所以 --alpha 整层关掉它们，只留内容（标题、句子流、配图、进度条）。
-   写在全表最末尾（变量表之前）：氛围光那三条按画幅/画布各有各的选择器，其中
-   [data-aspect] .seg-card.seg-canvas::after 与本表最后这组同为 0,3,1，只能靠
-   源序决胜；变量注入点会随渲染参数变化，位置在这里是唯一稳定的"后面"。
-   :root.ctv-alpha 压过末尾注入的 :root 变量表靠的是优先级（0,2,0 > 0,1,0），
-   与源序无关 —— 光写 html{--ctv-bg-gradient:...} 是盖不住的。 */
-:root.ctv-alpha{--ctv-bg-gradient:transparent;--ctv-grid-color:transparent}
-:root.ctv-alpha .seg-card::after,:root.ctv-alpha .seg-canvas::after{background:none}
-
 :root{
   --ctv-w:1920px;--ctv-h:1080px;
-  --ctv-bg-gradient:linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%);
+  --ctv-bg-gradient:linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%);
   --ctv-font-family:"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif;
   --ctv-font-mono:ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
-  --ctv-grid-size:60px;--ctv-grid-color:rgba(58,92,140,0.07);
-  --ctv-text-color:#22262b;
+  --ctv-grid-size:60px;--ctv-grid-color:rgba(0,220,150,0.055);
+  --ctv-text-color:#eef2ee;
   --ctv-img-glow:40px;
   --ctv-title-weight:900;
   --ctv-title-lh:1.45;--ctv-title-tracking:-0.02em;
@@ -306,29 +293,29 @@ body{font-family:var(--ctv-font-family)}
   <div class="bg"></div>
   <div class="grid"></div>
 
-  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
     <div class="bg"></div>
     <div class="grid"></div>
     <div class="agenda-col">
       <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
     
-    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="0">大家好，今天聊两件事。</div></div></div>
+    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="0">大家好，今天聊两件事。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-opening" style="height:6px"></div>
     <div class="peel-shade" id="shade-opening" style="height:86px"></div>
 </div>
-  <div id="seg-a" class="clip seg-card" data-start="2.00" data-duration="5.20" data-accent="#ffd54f" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#ffd54f;--seg-accent-text:#735f23">
+  <div id="seg-a" class="clip seg-card" data-start="2.00" data-duration="5.20" data-accent="#ffd54f" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#ffd54f;--seg-accent-text:#ffd54f">
     <div class="bg"></div>
     <div class="grid"></div>
     <div class="text-col">
     <div class="seg-title-wrap">
       <div class="seg-title" id="title-seg-a" style="font-size:62px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
-      <div class="tagline" id="tag-seg-a" style="color:#735f23">背景</div>
+      <div class="tagline" id="tag-seg-a" style="color:#ffefbc">背景</div>
     </div>
     
-    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#735f23"><div class="verse-line" data-i="1">这是第一段的第一句。</div><div class="verse-line" data-i="2">这是第一段的第二句，稍微长一点点。</div></div></div>
+    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f"><div class="verse-line" data-i="1">这是第一段的第一句。</div><div class="verse-line" data-i="2">这是第一段的第二句，稍微长一点点。</div></div></div>
     </div>
     <div class="seg-image bare-media" id="img-seg-a">
       <img src="images/seg-a.svg" alt="">
@@ -336,7 +323,7 @@ body{font-family:var(--ctv-font-family)}
     <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
       <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
 </div>
-  <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#845505">
+  <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
     <div class="bg"></div>
     <div class="grid"></div>
 
@@ -345,14 +332,14 @@ body{font-family:var(--ctv-font-family)}
     </div>
     <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
   </div>
-  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#176c61">
+  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
     <div class="bg"></div>
     <div class="grid"></div>
     <div class="agenda-col">
       <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
     
-    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#176c61"><div class="verse-line" data-i="5">谢谢观看，下期再见。</div></div></div>
+    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="5">谢谢观看，下期再见。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-closing" style="height:6px"></div>

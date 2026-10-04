@@ -14,7 +14,7 @@ from html_renderer import generate_html
 
 CASES = {
     "portrait_dark": dict(aspect="portrait", theme="dark"),
-    "landscape_cream": dict(aspect="landscape", theme="cream"),
+    "landscape_dark": dict(aspect="landscape", theme="dark"),
 }
 
 
@@ -221,51 +221,6 @@ def strip_css_comments(html):
     """取 <style> 里的 CSS 并去掉注释：注释会复述选择器，留着正则就是在测文档。"""
     css = html.split("<style>", 1)[1].split("</style>", 1)[0]
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-
-
-class AlphaExport(unittest.TestCase):
-    """透明底导出（--alpha）：只关"底"，样式常驻、靠类命中。
-
-    真正证明透明的是渲染 + ffprobe（见 references/rendering.md），这里只锁住
-    两条一旦破掉就会静默出错的结构事实：改动面只有 <html> 的一个属性；撤销规则
-    绝不越界去关内容层。
-    """
-
-    def test_only_the_html_class_differs(self):
-        plain = render()
-        alpha = render(alpha=True)
-        self.assertIn('<html lang="zh-CN" class="">', plain)
-        self.assertIn('<html lang="zh-CN" class="ctv-alpha">', alpha)
-        # 关底靠的是 ctv-alpha 这个类命中末尾规则：没有类就一条都不生效，
-        # 所以两份 HTML 除了这个属性必须逐字节相同（默认出片零风险）。
-        self.assertEqual(alpha.replace('class="ctv-alpha"', 'class=""', 1), plain)
-
-    def test_alpha_block_touches_only_backdrop_layers(self):
-        css = strip_css_comments(render(alpha=True))
-        rules = re.findall(r":root\.ctv-alpha[^{]*\{[^}]*\}", css)
-        self.assertEqual(len(rules), 2, f"ctv-alpha 规则数变了：{rules}")
-        for rule in rules:
-            sel, decl = rule.split("{", 1)
-            decl = decl.rstrip("}").rstrip()
-            for prop in re.findall(r"(?:^|;)\s*(-{0,2}[A-Za-z-]+)\s*:", decl):
-                self.assertIn(prop, ("--ctv-bg-gradient", "--ctv-grid-color",
-                                     "background"), f"透明底多关了一层：{prop}")
-            # 内容层（配图、标题、句子流、进度条）一个都不许出现在选择器里。
-            # .verse 的 background 也在内容侧：文字没有它就读不出来。
-            for banned in ("seg-image", "seg-title", "verse", "seg-progress",
-                           "reveal-line"):
-                self.assertNotIn(banned, sel, rule)
-
-    def test_glow_override_uses_two_hooks_that_both_hold(self):
-        css = strip_css_comments(render())
-        # 变量：:root.ctv-alpha (0,2,0) 压过末尾注入的 :root 表 (0,1,0)——写
-        # html{...} 是盖不住的（实测踩过一次）。
-        self.assertIn(":root.ctv-alpha{--ctv-bg-gradient:transparent;"
-                      "--ctv-grid-color:transparent}", css)
-        # 氛围光：与 [data-aspect] .seg-card.seg-canvas::after 同为 (0,3,1)，
-        # 只能靠源序决胜，所以撤销规则必须排在它后面。
-        self.assertGreater(css.index(":root.ctv-alpha .seg-card::after"),
-                           css.index("[data-aspect] .seg-card.seg-canvas::after"))
 
 
 if __name__ == "__main__":

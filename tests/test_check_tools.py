@@ -50,15 +50,6 @@ class SvgChecker(unittest.TestCase):
         errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"))
         self.assertTrue(any("背景色族" in e for e in errs))
 
-    def test_background_family_not_checked_on_light_page(self):
-        # cream 页底下深蓝族恰是推荐正文色系，家族判定只剩假阳性
-        errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"), theme="cream")
-        self.assertFalse(any("背景色族" in e for e in errs))
-
-    def test_theme_mixup_caught(self):
-        errs, _ = self.run_check(GOOD, theme="cream")
-        self.assertTrue(any("对比度" in e for e in errs))
-
     def test_small_font_warns(self):
         _, warns = self.run_check(GOOD.replace('font-size="36"', 'font-size="18"'))
         self.assertTrue(any("26px" in w for w in warns))

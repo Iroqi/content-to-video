@@ -1,5 +1,5 @@
 """主题注册表。配色数据直接内联在本模块。包含：
-  - "cream" / "dark"：背景/文字等主题配色（get_theme_colors）
+  - "dark"：背景/文字主题配色（get_theme_colors；单一主题，无选择面）
   - "_ACCENT_PALETTE"：8 色 accent 色板，供 build_from_structured
     按内容段序号轮询取色（get_accent_palette）
   - "_DEFAULT_ACCENT"：默认段落强调色
@@ -8,14 +8,9 @@
 import copy
 import re
 # ── 主题注册表──
-# 主题表只放主题，accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
+# 单一主题 dark。accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
 # 区分，新加的下划线键容易被误当成配色。
 _THEMES = {
-    "cream": {
-        "bg_gradient": "linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%)",
-        "grid_color": "rgba(58,92,140,0.07)",
-        "text_color": "#22262b",
-    },
     "dark": {
         "bg_gradient": "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
         "grid_color": "rgba(0,220,150,0.055)",
@@ -36,7 +31,7 @@ def get_theme_colors(theme):
     影响背景渐变、网格线与文字颜色；每段 accent 彩色不受影响。
 
     Args:
-        theme: 主题名，取值见 list_theme_names()（当前为 cream/dark）
+        theme: 主题名，当前只有 "dark"。
 
     Returns:
         dict: 包含 bg_gradient, grid_color, text_color 三个键。
@@ -49,9 +44,7 @@ def get_theme_colors(theme):
 
 
 def list_theme_names():
-    """返回注册表里所有可用主题名（按字母排序），供 CLI --theme 的
-    choices 动态生成，避免 gen_hyperframes.py / run.py 各硬编码一份列表。
-    """
+    """返回注册表里所有可用主题名（当前只有 "dark"）。"""
     return sorted(_THEMES.keys())
 
 

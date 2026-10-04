@@ -143,10 +143,8 @@ def ensure_local_gsap(project_dir):
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _theme import list_theme_names, DEFAULT_THEME  # noqa: E402
 from _template import get_canvas, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
-from _images_schema import load_images_json, classify_media_path  # noqa: E402
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
@@ -292,12 +290,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
         return True, "", parse_duration(err_text)
 
     for sid, entry in images.items():
-        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空
-        media_type = entry.get("type", "auto")
+        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空；
+        # 素材统一是静态图（gif 也走 <img>）。
         media_path = entry["src"]
-        # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
-        if media_type == "auto":
-            media_type = classify_media_path(media_path)
         # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
         # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
         p = os.path.join(out_dir, media_path)
@@ -308,38 +303,10 @@ def validate_images_files(images, out_dir, seg_durs=None):
             corrupt_imgs.append((sid, media_path,
                                  "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
             continue
-        poster = entry.get("poster")
-        # poster 的问题只记录、不提前 continue：同一条目的 src 若也有毛病，必须
-        # 一起报出来（先 continue 会让人以为"只是封面缺了"，修完才发现视频本身
-        # 还是坏的，白跑一轮）。
-        if poster:
-            poster_path = os.path.join(out_dir, poster)
-            if not os.path.isfile(poster_path):
-                missing_imgs.append((sid, poster))
-            elif not is_inside(poster_path, out_dir):
-                corrupt_imgs.append((sid, poster,
-                                     "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
-        # 视频用 ffmpeg 解码探测（只查存在性不够：
-        # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
-        if media_type == "video":
-            if _ffmpeg_probe:
-                ok, reason, vdur = _probe_media_ok(p)
-                if not ok:
-                    corrupt_imgs.append((sid, media_path,
-                                         f"视频解码失败: {reason}"))
-                elif vdur is not None:
-                    seg_dur = (seg_durs or {}).get(sid, 0)
-                    if seg_dur > 0 and vdur > seg_dur + 0.05:
-                        print(f"[warn] 视频 {vdur:.1f}s 超过段落 "
-                              f"'{sid}' 时长 {seg_dur:.1f}s，渲染只显示"
-                              f"前 {seg_dur:.1f}s（尾部内容会被截断）。"
-                              f"请剪短视频或换到更长的段落。",
-                              file=sys.stderr)
-            continue
         # svg 是文本格式，ffmpeg 打不开，存在性校验已足够
         if os.path.splitext(p.lower())[1] == ".svg":
             continue
-        # 栅格图（jpg/png/webp…）用 ffmpeg 全解码探测损坏/截断——
+        # 栅格图（jpg/png/webp/gif…）用 ffmpeg 全解码探测损坏/截断——
         # ffmpeg 是渲染必需依赖，无需再引入 Pillow
         if _ffmpeg_probe:
             ok, reason, _dur = _probe_media_ok(p)
@@ -845,10 +812,6 @@ def main(argv=None):
                         help="Audio src path in HTML (default: auto-detect from manifest)")
     parser.add_argument("--images", default=None,
                         help="Path to images.json (maps segment ID -> image path relative to HTML)")
-    parser.add_argument("--theme", default=DEFAULT_THEME,
-                        choices=list_theme_names(),
-                        help=f"主题配色（背景/网格/文字/配图底板），默认 {DEFAULT_THEME}；"
-                             "主题注册表在 _theme.py，选型见 references/rendering.md「主题」")
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏 3:4）或 "
@@ -864,13 +827,6 @@ def main(argv=None):
                              "用户缓存 → 钉固 CDN 的顺序安装（下载体过 sha256 校验"
                              "才落盘）。传显式值（URL 或相对路径）可覆盖，但自定义源"
                              "不做哈希钉固校验，可信度自负。")
-    parser.add_argument("--alpha", action="store_true",
-                        help="透明底导出：给 <html> 挂 ctv-alpha 类，页面渐变/网格/段落"
-                             "氛围光三层不画（关掉了什么写在 templates/composition.css "
-                             "末尾）。HTML 本身不知道最终容器，所以这只改变画面；"
-                             "要真拿到 alpha 通道还得渲染端配合，本技能实测只有 "
-                             "--format mov 带得出平面（webm 会压成黑底，判据见 "
-                             "references/rendering.md「透明底导出」）。")
     parser.add_argument("--beat-report", action="store_true",
                         help="打印每个导演段每一拍落在旁白哪句/句间静音/段尾/窗外的对轴表"
                              "（排查动画与语音不同步用；只打表，不改变生成结果）。")
@@ -1070,19 +1026,10 @@ def main(argv=None):
                     "拒绝用新字幕烧旧音轨。请重跑 TTS，或显式 --audio。")
         audio_src = _stage_audio_file(audio_path, out_dir)
 
-    if args.alpha:
-        # 出声而不是静默改外观：透明底会关掉整片背景，第一次看到的人一定会以为
-        # 主题配错了；而 mp4 根本没有 alpha 通道，不提醒就会拿着一片黑底回来问。
-        # webm 本想吃掉这个坑，但本机实测 hyperframes 渲 webm 时不落 alpha 平面
-        # （逐帧 yuv420p，透明处压成纯黑），所以别推荐它。
-        print("[warn] 透明底导出：页面渐变 / 网格 / 段落氛围光三层已关闭，成片只有"
-              "内容层。mp4 不带 alpha（透明处会变黑底），webm 实测同样丢平面，"
-              "渲染请用 --format mov（固定的 ProRes 4444 alpha 档）。", file=sys.stderr)
     html = generate_html(manifest, audio_src,
                          images=images,
                          width=w, height=h, gsap_src=gsap_src,
-                         aspect=aspect, theme=args.theme, fps=args.fps,
-                         alpha=args.alpha)
+                         aspect=aspect, fps=args.fps)
 
     # 原子写：index.html 是渲染输入，写到一半被打断会留下半份 HTML——
     # render 会报莫名其妙的语法错，而不是"上次生成中断了，重跑"。
@@ -1110,9 +1057,6 @@ def main(argv=None):
     print(f"     Segments: {seg_count}")
     print(f"     Sentences: {len(manifest['sentences'])}")
     print(f"     Aspect: {aspect} ({w}x{h})")
-    print(f"     Theme: {args.theme}")
-    if args.alpha:
-        print("     Alpha: 透明底（页面渐变/网格/氛围光不画）")
     print(f"     FPS: {args.fps}")
     print(f"     Images: {len(images)}")
     print(f"     Audio src: {audio_src}")

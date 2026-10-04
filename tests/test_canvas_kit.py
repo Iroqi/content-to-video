@@ -123,7 +123,7 @@ class Gate(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def _write_svg(self, spec, theme):
+    def _write_svg(self, spec, theme="dark"):
         p = os.path.join(self.tmp.name, "seg1.svg")
         # theme 必须走 validate_spec：画布页的取色就是照主题派生的，
         # 用默认主题渲染再按别的主题判对比度，量的是一页根本不存在的颜色。
@@ -133,12 +133,11 @@ class Gate(unittest.TestCase):
 
     def test_generated_page_passes_canvas_gate_for_both_aspects(self):
         for aspect in ("portrait", "landscape"):
-            for theme in ("dark", "cream"):
-                with self.subTest(aspect=aspect, theme=theme):
-                    p = self._write_svg(spec_for(aspect), theme)
-                    errors, warns = check_svg.check_file(p, "canvas", aspect, theme)
-                    self.assertEqual(errors, [])
-                    self.assertEqual(actionable(warns), [])
+            with self.subTest(aspect=aspect):
+                p = self._write_svg(spec_for(aspect))
+                errors, warns = check_svg.check_file(p, "canvas", aspect, "dark")
+                self.assertEqual(errors, [])
+                self.assertEqual(actionable(warns), [])
 
     def test_no_full_bleed_rect_is_ever_emitted(self):
         for aspect in ("portrait", "landscape"):
@@ -362,7 +361,7 @@ class CommandLine(unittest.TestCase):
 
     def test_writes_svg_and_steps_and_prints_the_draft(self):
         rc, out, err = run_cli(["--spec", self.spec, "--aspect", "portrait",
-                                "--theme", "dark", "-o", self.out,
+                                "-o", self.out,
                                 "--emit-steps", self.steps])
         self.assertEqual(rc, 0, err)
         self.assertTrue(os.path.isfile(self.out))

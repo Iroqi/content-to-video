@@ -46,8 +46,7 @@ class Items(unittest.TestCase):
         tm = {
             "sentences": [{"synth_failed": True}, {}],
             "degraded": {
-                D.LOST_SENTENCE_COUNT: 2, D.BGM_MIX_FAILED: True, D.BGM_MISSING_FILE: True,
-                D.LOUDNESS_NORM_FAILED: True, D.SEGMENTS_DROPPED: ["seg2", "seg3"],
+                D.LOST_SENTENCE_COUNT: 2, D.SEGMENTS_DROPPED: ["seg2", "seg3"],
                 D.AUDIO_SHORTER_THAN_TIMELINE: 0.8,
             },
         }
@@ -79,15 +78,15 @@ class ManifestRejectsUnknownKey(unittest.TestCase):
     def test_unknown_degraded_key_rejected(self):
         m = H.make_manifest()
         m["status"] = "degraded"
-        m["degraded"] = {"bgm_mix_faild": True}  # 拼错
+        m["degraded"] = {"tts_silence_fallbak": True}  # 拼错
         with self.assertRaises(Exception) as cm:
             MAN.validate_timing_manifest(m)
-        self.assertIn("bgm_mix_faild", str(cm.exception))
+        self.assertIn("tts_silence_fallbak", str(cm.exception))
 
     def test_known_degraded_key_accepted(self):
         m = H.make_manifest()
         m["status"] = "degraded"
-        m["degraded"] = {D.BGM_MIX_FAILED: True}
+        m["degraded"] = {D.LOST_SENTENCE_COUNT: 1}
         MAN.validate_timing_manifest(m)
 
 

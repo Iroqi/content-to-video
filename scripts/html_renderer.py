@@ -404,6 +404,13 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区
         # 各自固定定位）：算小了会把 tagline 静默切掉一截，算大了会往画布上压，
         # 两头都不报错——所以放不进时在这里直接 raise。
+        # 行高与字号成对定（template.layout.vertical.title.fontSize=64 +
+        # typography.titleLineHeight=1.45）：行高是下限不是口味——竖屏标题带
+        # line-clamp + overflow:hidden，CJK 墨迹必须装进行盒。微软雅黑度量盒
+        # ≈1.32em 刚好不裁，但 Linux headless 回退 Noto Sans CJK Black 时墨迹
+        # ≈1.39em，1.32 会被官方门禁 hyperframes check 报 clipped_text
+        # （references/rendering.md「官方校验命令」：不在噪声之列）。64×1.45
+        # 两行 + tagline 一行的预算 = 原 72×1.32 几乎不变，两画幅都够装。
         _v_title_area = (_tl["maxLines"] * _tl["fontSize"] * css_title_lh
                          + _tgl["marginTop"]
                          + _tgl["fontSize"] * _tgl["lineHeight"])

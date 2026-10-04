@@ -218,8 +218,12 @@ body{font-family:var(--ctv-font-family)}
 .agenda-tail .agenda-row:first-child{border-top:0}
 .ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
 /* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
-   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。 */
-.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.25;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。
+   行高 1.4 = Noto Sans CJK Bold 实测墨迹下限（hyperframes 判 clipped_text 的
+   阈值是墨迹 ≤ 行盒 − 2px，42px 时 1.32 仍超 3px、1.4 才装下）；微软雅黑在
+   此行高下同样有余量，且两画幅 maxRows 预算都放得下（横屏 40px×1.4 的 7 行
+   仍低于定高列预算）。1.25 时字形墨迹溢出被 overflow:hidden 裁掉。 */
+.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.4;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
 /* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
    与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让

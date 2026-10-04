@@ -68,7 +68,7 @@ _TEMPLATE_JSON = r'''
       },
       "title": {
         "top": 80,
-        "fontSize": 72,
+        "fontSize": 64,
         "maxLines": 2,
         "glow": 40
       },
@@ -226,7 +226,7 @@ _TEMPLATE_JSON = r'''
     "monoStack": "ui-monospace, \"SF Mono\", Consolas, \"Courier New\", monospace",
     "titleWeight": 900,
     "taglineWeight": 600,
-    "titleLineHeight": 1.32,
+    "titleLineHeight": 1.45,
     "titleTracking": "-0.02em"
   }
 }

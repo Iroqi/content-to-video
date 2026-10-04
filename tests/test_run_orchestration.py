@@ -212,6 +212,10 @@ class Gates(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self.h.invoke([])
         self.assertEqual(cm.exception.code, 3)
+        # 阻断信息必须附上可执行的补录路径——降级句带指纹缓存，会被
+        # --resume 一直复用，没有这条提示，隔天重跑仍会卡在同一处静音。
+        self.assertIn("补录", self.h.last_err)
+        self.assertIn(os.path.join(self.h.out, "sentences"), self.h.last_err)
 
     def test_degraded_allowed_until_html_marks_report(self):
         self._degrade()

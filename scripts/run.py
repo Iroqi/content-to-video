@@ -198,7 +198,11 @@ def _image_coverage(manifest_path, images_json):
 # 只作用于 TTS 步骤的旗标集中定义在这里；render 侧参数（--fps/--quality/--workers）
 # 走 hyperframes 字面透传，不复制第二份默认值。
 def _build_parser():
-    parser = argparse.ArgumentParser(description="信源转视频一键编排（薄组合层）")
+    parser = argparse.ArgumentParser(
+        description="信源转视频一键编排（薄组合层）",
+        epilog="TTS 凭据不从本 CLI 传入，由 pipeline 从环境/用户级 .env 读取："
+               "MIMO_API_KEY（必需）、MIMO_BASE_URL、MIMO_TTS_MODEL。"
+               "完整取值与优先级见 pipeline.py --help 与 references/tts_pipeline.md。")
     parser.add_argument("--source", required=True, help="segments_source.json 路径")
     parser.add_argument("-o", "--output", default="audio_output",
                         help="音频/中间产物输出目录（默认 audio_output）")
@@ -427,6 +431,12 @@ def main():
             print(f"[run] 检测到 {_why}，"
                   "为避免把降级产物误当成正常成片，默认停止。"
                   "需要有意发布时再加 --allow-degraded。", file=sys.stderr)
+            # 降级句带指纹缓存，静音占位会被 --resume 一直复用——不放一句
+            # 可执行的补录路径，定时任务/隔天重跑会永远卡在同一处。
+            print("[run] 补录：删除 " + os.path.join(out, "sentences")
+                  + " 下对应句子的 .wav 及 .sha/.spd/.failed sidecar，"
+                  "下次带 --resume 重跑会自动重合成该句；"
+                  "成功合成后 .failed marker 由管线自动清理。", file=sys.stderr)
             sys.exit(3)
         if args.allow_degraded:
             print(f"[warn] 已显式允许降级：{_why}，"

@@ -31,6 +31,12 @@
 > 只要 `degraded` 非空，`run.py` 正式渲染前就会停住（exit 3）要求显式 `--allow-degraded`，
 > 并把原因念给人看（少几句配音、少一整段都不该被当成正常成片交付）。
 > `--until html` 只警告不阻断，方便先看版式。
+>
+> **补录（解除粘性降级）**：静音占位句带内容指纹与 `.failed` marker，`--resume` 会一直复用
+> 同一份静音——修好 TTS 后不清理，隔天重跑仍命中静音并再次被阻断（定时任务场景尤甚）。
+> 补录 = 删除该句缓存：删掉 `音频输出目录/sentences/` 下对应句子的 `.wav`（连同
+> `.sha`/`.spd`/`.failed` sidecar），下次带 `--resume` 重跑即自动重合成；真合成成功后
+> `.failed` marker 由管线自动清理。run.py 的阻断信息里也附了这条路径。
 
 完整参数列表见 `python scripts/pipeline.py --help`——本文只列核心参数。
 

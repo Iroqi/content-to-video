@@ -624,11 +624,17 @@ def render_svg(spec):
 
 
 # ── director 草稿：一份能直接进 images.json 的 {"steps": […]} ──────
-def build_director(spec):
+def build_director(spec, sentences=None):
     """结构底不进 steps（它和页面一起到位），内容元素按文档顺序一拍一个 at 锚点。
 
     句序锚点只在"这一拍跟着某句话"的意义上成立，具体秒数由渲染端按 manifest 的句子算——
     所以草稿不需要知道配音时长，也不会因为重配音而漂移。这就是本模块只用 at 的理由。
+
+    `sentences` 是该段旁白句数。给了它，自动拍的游标就按它取模回绕，让"内容元素比句子多"
+    的稿子也产出一份**能直接生成**的草稿：多出来的元素与前面的同拍一起亮，而不是把 at
+    顶到句序之外、被生成期当 error 拒掉（实测一个 3 句段配 5 个内容元素，自动拍到 at=4
+    就整条管线 exit 1）。    不给时游标只增不减——那份草稿的 at 是否越界由 `--sentences` 的
+    告警和生成期兜底，脚本不替作者猜段里有几句。
     """
     steps = []
     cursor = 0
@@ -639,7 +645,10 @@ def build_director(spec):
             at = float(el["beat"])
             cursor = max(cursor, at + 1)   # 显式钉拍也把游标推过去，后面的自动拍不会插到它前面
         else:
-            at, cursor = cursor, cursor + 1
+            # 显式钉拍是作者意图，越界要照实报（见 main 的告警）；自动拍是机械分配，
+            # 已知句数时按句数回绕，产出的草稿才真的能直接用。
+            at = cursor % sentences if sentences else cursor
+            cursor += 1
         at = int(at) if at == int(at) else at
         step = OrderedDict([("at", at), ("target", _target_of(el))])
         if el.get("draw"):
@@ -665,14 +674,14 @@ def build_director(spec):
     return {"steps": steps}
 
 
-def selfcheck_fragment(spec, sid="seg1"):
+def selfcheck_fragment(spec, sid="seg1", sentences=None):
     """把草稿套成一份 images.json 过一遍真契约。
 
     为什么不自己判 steps 的形状：_images_schema 才是那份契约的正文，它改一个键集，
     这里就该同时报错——否则脚手架印出的草稿要等 run.py 在渲染前才拒掉。
     sid 用一个合法段 id 当壳（真实段 id 由作者替换）。
     """
-    frag = build_director(spec)
+    frag = build_director(spec, sentences=sentences)
     if not frag["steps"]:
         return frag
     validate_images_json({sid: {"src": "images/{}.svg".format(sid), "director": frag}})
@@ -728,7 +737,9 @@ def main(argv=None):
     ap.add_argument("--aspect", choices=list(ASPECTS), help="画幅（覆盖 spec 顶层；默认 portrait）")
     ap.add_argument("--accent", help="本页强调色（覆盖 spec 顶层；默认取段落缺省 accent）")
     ap.add_argument("--emit-steps", help="把 director 草稿另写一份 JSON 到该路径")
-    ap.add_argument("--sentences", type=int, help="该段旁白句数（用来提前告警 at 越界）")
+    ap.add_argument("--sentences", type=int,
+                    help="该段旁白句数。给了它，自动拍按句数回绕（内容元素多于句子时产出的"
+                         "草稿仍可直接生成），并对显式钉拍的 at 越界提前告警")
     ap.add_argument("--no-check", action="store_true",
                     help="跳过 check_svg 门禁自查（有意为之的极简页才用）")
     args = ap.parse_args(argv)
@@ -740,7 +751,7 @@ def main(argv=None):
         print(f"[error] {e}", file=sys.stderr)
         return 2
 
-    frag = selfcheck_fragment(spec)
+    frag = selfcheck_fragment(spec, sentences=args.sentences)
     _write(args.out, svg)
     if args.emit_steps:
         _write(args.emit_steps, json.dumps(frag, ensure_ascii=False, indent=2) + "\n")
@@ -750,12 +761,15 @@ def main(argv=None):
         print(f"[hint] {note}", file=sys.stderr)
     n_struct = sum(1 for e in spec["elements"] if role_of(e) == "structure")
     if args.sentences is not None:
-        out_of_range = [s["at"] for s in frag["steps"] if s["at"] >= args.sentences]
-        if out_of_range:
-            print("[warn] director 草稿里有 {} 拍 at 越界（该段只有 {} 句旁白，越界的 at：{}）"
-                  "——生成期会按 error 拦，请先补旁白或把 beat 收回来".format(
-                      len(out_of_range), args.sentences,
-                      "、".join(str(a) for a in out_of_range)), file=sys.stderr)
+        # 自动拍已按句数回绕，这里只会剩显式钉拍越界——那是作者意图，照实报。
+        pinned = [el.get("beat") for el in spec["elements"]
+                  if role_of(el) == "content" and "beat" in el
+                  and float(el["beat"]) >= args.sentences]
+        if pinned:
+            print("[warn] {} 个显式 beat 超出该段句数（只有 {} 句旁白，越界的 beat：{}）"
+                  "——生成期会按 error 拦，请补旁白或把 beat 收回来".format(
+                      len(pinned), args.sentences,
+                      "、".join(str(b) for b in pinned)), file=sys.stderr)
 
     rc = 0
     if not args.no_check:

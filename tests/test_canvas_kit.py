@@ -393,19 +393,65 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("[error]", err)
 
-    def test_beats_beyond_the_narration_are_warned(self):
-        spec = write_json(self.tmp.name, "few.json", {
-            "elements": [{"kind": "panel", "x": 60, "y": 60, "w": 900, "h": 700},
-                         {"kind": "text", "id": "t", "x": 100, "y": 120,
-                          "tier": "title", "content": "标题"},
-                         {"kind": "circle", "id": "c", "cx": 200, "cy": 600, "r": 40},
-                         {"kind": "circle", "id": "d", "cx": 400, "cy": 600, "r": 40}]})
-        out = os.path.join(self.tmp.name, "few.svg")
-        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--sentences", "2"])
+    def test_auto_beats_wrap_so_the_draft_is_always_usable(self):
+        """内容元素多于旁白句子时，自动拍按句数回绕，草稿仍能直接生成。
+
+        这是实测翻过的车：3 句段配 5 个内容元素，自动拍一路排到 at=4，而 at 的整数部分
+        是句序——生成期按 error 把整条管线拒掉（"at=4 越界：该段只有 3 句旁白"），
+        脚手架自己印出来的草稿却过不了自己下游的契约。
+        """
+        spec = write_json(self.tmp.name, "wrap.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "d", "cx": 800, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "e", "cx": 900, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "wrap.svg")
+        steps = os.path.join(self.tmp.name, "wrap_steps.json")
+        rc, _o, _err = run_cli(["--spec", spec, "-o", out, "--emit-steps", steps,
+                                "--sentences", "3", "--no-check"])
+        self.assertEqual(rc, 0)
+        with open(steps, encoding="utf-8") as f:
+            frag = json.load(f)
+        ats = [s["at"] for s in frag["steps"]]
+        # 5 个内容元素、3 句旁白：游标回绕，且每一拍都落在句序范围内
+        #（at 的整数部分就是句序，越界的那一拍会被生成期整条拒掉）。
+        self.assertEqual(ats, [0, 1, 2, 0, 1])
+        self.assertTrue(all(a < 3 for a in ats), ats)
+
+    def test_pinned_beat_beyond_the_narration_is_warned(self):
+        """显式钉拍越界要照实告警——那是作者意图，与自动拍的回绕不是一回事。"""
+        spec = write_json(self.tmp.name, "pinned.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "c", "cx": 200, "cy": 600, "r": 40,
+                          "beat": 7}]})
+        out = os.path.join(self.tmp.name, "pinned.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--sentences", "2",
+                               "--no-check"])
         self.assertIn("越界", err)
         self.assertIn("已写", err)
         self.assertIn("[ok]", err)
-        self.assertIn(rc, (0, 1))
+        self.assertEqual(rc, 0)
+
+    def test_without_sentences_auto_beats_are_not_wrapped(self):
+        """不给 --sentences 时脚本不替作者猜段里有几句，保持原先的顺序排拍。"""
+        spec = write_json(self.tmp.name, "nosent.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "nosent.svg")
+        steps = os.path.join(self.tmp.name, "nosent_steps.json")
+        rc, _o, _err = run_cli(["--spec", spec, "-o", out, "--emit-steps", steps,
+                                "--no-check"])
+        self.assertEqual(rc, 0)
+        with open(steps, encoding="utf-8") as f:
+            frag = json.load(f)
+        self.assertEqual([s["at"] for s in frag["steps"]], [0, 1, 2])
 
 
 if __name__ == "__main__":

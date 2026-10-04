@@ -32,10 +32,17 @@ class Golden(unittest.TestCase):
             with self.subTest(case=name):
                 html = render(**kw)
                 path = os.path.join(H.GOLDEN_DIR, name + ".html")
-                if update or not os.path.exists(path):
+                if update:
                     with open(path, "w", encoding="utf-8", newline="\n") as f:
                         f.write(html)
                     continue
+                # 缺文件必须报错，不能静默新建后 pass：那样快照文件一次误删
+                # 就会让这条测试变成"每次都比自己"的自证，而它正是重构时唯一的
+                # 安全网。快照要更新时显式 UPDATE_GOLDEN=1。
+                self.assertTrue(
+                    os.path.exists(path),
+                    f"缺快照 {path}——快照是重构的安全网，不该被静默重建。"
+                    "有意更新请显式跑 UPDATE_GOLDEN=1")
                 with open(path, encoding="utf-8", newline="") as f:
                     want = f.read()
                 if html != want:
@@ -52,6 +59,126 @@ class Golden(unittest.TestCase):
 
 
 class Structure(unittest.TestCase):
+    def test_no_aspect_scoped_geometry_in_css(self):
+        """CSS 里不许存第二份"随画幅变"的观感常量。
+
+        SKILL.md「视觉真源」那条契约：随画幅变、或要与模板数值联动的量，一律
+        进 _template.py（经 --ctv-* 注入）。这条机械地把它钉住——扫 CSS 里
+        剩下的每一条 [data-aspect] 规则：只允许**布局定位**类属性（left/top/
+        width 这类"这段内容放哪"，两画幅结构本来就不同），出现**观感值**
+        （gradient 几何、颜色、字号、圆角、阴影、透明度）就是第二份真源。
+
+        真实踩过的坑：段落氛围光 .seg-card::after 的径向渐变几何
+        （58%×42% 居中 vs 46%×52% 偏媒体区）在 CSS 里写了两份，改模板时它们
+        不动——两画幅从此各自漂移，且没有任何报错。
+        """
+        # 这些属性天然随画幅变：它们是"东西放在哪"，不是"东西长什么样"。
+        LAYOUT_PROPS = {
+            "left", "right", "top", "bottom", "inset", "margin", "margin-top",
+            "margin-bottom", "margin-left", "margin-right", "width", "height",
+            "line-height", "line-clamp", "flex-direction", "align-items",
+            "justify-content", "gap", "text-align", "text-wrap", "font-size",
+            "position", "display", "grid-template", "order",
+        }
+        # 观感值：这些出现在 [data-aspect] 块里就是第二份真源。
+        APPEARANCE = re.compile(
+            r"(gradient\(|color-mix|#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|"
+            r"box-shadow|text-shadow|border-radius|opacity|font-weight|"
+            r"letter-spacing|filter|backdrop)", re.S)
+
+        css_path = os.path.join(H.SKILL_DIR, "templates", "composition.css")
+        with open(css_path, encoding="utf-8") as f:
+            css = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
+
+        offenders = []
+        # 逐条取 [data-aspect...] 作用域内的声明块
+        for m in re.finditer(r"\[data-aspect[^\]]*\][^{]*\{([^}]*)\}", css):
+            for decl in m.group(1).split(";"):
+                if ":" not in decl:
+                    continue
+                prop, value = decl.split(":", 1)
+                prop, value = prop.strip(), value.strip()
+                if not prop or not value:
+                    continue
+                # 全程走 var(--ctv-*) 的声明正是这条契约的达成形态，放行。
+                if "var(--ctv-" in value:
+                    continue
+                if APPEARANCE.search(value) and prop not in LAYOUT_PROPS:
+                    offenders.append(f"{prop}: {value[:70]}")
+        self.assertEqual(
+            offenders, [],
+            "templates/composition.css 的 [data-aspect] 块里出现了观感值——"
+            "这些随画幅变的量属于 scripts/_template.py（经 --ctv-* 注入），"
+            "CSS 存第二份会让改模板不带着它们走：\n  " + "\n  ".join(offenders))
+
+    def test_ambience_geometry_comes_from_template(self):
+        """氛围光几何确实由模板注入，且两画幅取到各自的档。"""
+        from _template import load_template
+        tpl = load_template()
+        v = tpl["layout"]["vertical"]["ambience"]
+        h = tpl["layout"]["landscape"]["ambience"]
+        # 竖屏那团居中、宽大于高；横屏偏媒体区中心（68% 50%）且高大于宽。
+        self.assertEqual((v["cx"], v["cy"]), (50, 50))
+        self.assertGreater(v["rx"], v["ry"])
+        self.assertEqual((h["cx"], h["cy"]), (68, 50))
+        self.assertGreater(h["ry"], h["rx"])
+        for amb in (v, h, tpl["canvasAmbience"]):
+            for key in ("rx", "ry", "cx", "cy", "alpha", "edge"):
+                self.assertIn(key, amb)
+        # 变量真的进了产物，且两画幅不同
+        for name, aspect, want in (("portrait", "portrait", "58%"),
+                                   ("landscape", "landscape", "46%")):
+            html = render(aspect=aspect, theme="dark")
+            self.assertIn(f"--ctv-amb-rx:{want}", html,
+                          f"{aspect} 的氛围光横向半轴没注入成 {want}")
+
+    def test_agenda_ambience_centre_is_right_in_both_aspects(self):
+        """.agenda-card::after 不带画幅限定，两个画幅的 agenda 圆心都得填对。
+
+        这条 CSS 曾经写成 [data-aspect="landscape"]，迁到模板时顺手去掉了限定符。
+        但 agenda 卡（opening/closing）同时挂 .seg-card，两个选择器都命中它，
+        去掉限定后竖屏的开场/收尾页也会开始用 agenda-cx/cy——而模板里竖屏那档
+        一度照抄了横屏的 45，氛围光就在竖屏静默挪了位：没有任何报错，只有肉眼
+        可见的偏移。守住"每个画幅的 agenda 圆心都不越界"。
+        """
+        from _template import load_template
+        tpl = load_template()
+        v = tpl["layout"]["vertical"]["ambience"]
+        h = tpl["layout"]["landscape"]["ambience"]
+        # 竖屏：agenda 与普通段同档（都是页面正中）。
+        self.assertEqual((v["agendaCx"], v["agendaCy"]), (v["cx"], v["cy"]))
+        # 横屏：agenda 圆心拨回文字重心，但仍应是"居中偏上"，不能跑到边角。
+        self.assertEqual((h["agendaCx"], h["agendaCy"]), (50, 45))
+        for amb in (v, h):
+            for key in ("agendaCx", "agendaCy"):
+                self.assertGreaterEqual(amb[key], 30,
+                                        f"agenda 圆心 {key}={amb[key]} 跑得太偏")
+                self.assertLessEqual(amb[key], 70)
+        # 产物里两个画幅的 agenda 变量都要存在（曾经只注入横屏那档的语义）。
+        for aspect, want in (("portrait", "--ctv-amb-agenda-cy:50%"),
+                             ("landscape", "--ctv-amb-agenda-cy:45%")):
+            self.assertIn(want, render(aspect=aspect, theme="dark"))
+
+    def test_every_verse_line_carries_layout_exemptions(self):
+        """每一行 verse-line 都要自带 layout 豁免标记，不能只靠 .verse 上的。
+
+        hyperframes check 只读元素自己身上的 data-layout-allow-*，**不继承祖先
+        的**。滚出 .verse-clip 窗口的行 rect 仍在原位，检查器逐行量它就会判
+        text_occluded——这是真实踩过的：7 段竖屏稿只打 .verse 时报 1 error，
+        给每行补上后 0 error 且 warning 条数不变（快照确认画面本身无遮挡）。
+        """
+        import re
+        for aspect in ("portrait", "landscape"):
+            html = render(aspect=aspect, theme="dark")
+            lines = re.findall(r'<div class="verse-line"[^>]*>', html)
+            self.assertTrue(lines, f"{aspect} 没有渲染出任何 verse-line")
+            for tag in lines:
+                for attr in ("data-layout-allow-overflow",
+                             "data-layout-allow-overlap",
+                             "data-layout-allow-occlusion"):
+                    self.assertIn(attr, tag,
+                                  f"{aspect} 有一行 verse-line 缺 {attr}：{tag[:90]}")
+
     def test_unknown_aspect_rejected(self):
         with self.assertRaises(ValueError):
             render(aspect="square", theme="dark")
@@ -172,18 +299,30 @@ class Structure(unittest.TestCase):
         self.assertIn('<div class="bg"></div>', head)
         self.assertIn('<div class="grid"></div>', head)
         # 画布专属氛围光：整页铺满时槽位那团小光撑不出景深，这里换成近全屏宽带柔光，
-        # 覆盖要明显大于两档槽位光（宽 58%/46%、高 42%/52%），且仍吃本段 accent
+        # 覆盖要明显大于两档槽位光，且仍吃本段 accent。
+        # 几何现在由 _template.py 的 canvasAmbience 经 --ctv-camb-* 注入，所以这条
+        # 断言的是"变量在、值够大"——不是 CSS 里写死了哪几个数字（那是第二份真源）。
         wash = re.search(r'\[data-aspect\] \.seg-card\.seg-canvas::after\{background:'
-                         r'radial-gradient\((\d+)% (\d+)% at[^,]*,color-mix\(in srgb,var\(--seg-accent\)',
-                         html)
+                         r'radial-gradient\(var\(--ctv-camb-rx\) var\(--ctv-camb-ry\) at'
+                         r'[^,]*,color-mix\(in srgb,var\(--seg-accent\)', html)
         self.assertIsNotNone(wash, "画布氛围光规则缺失或不再吃 --seg-accent")
-        self.assertGreater(int(wash.group(1)), 100)
-        self.assertGreater(int(wash.group(2)), 60)
-        # 补上的只是 background；content/inset/z-index:-1 由两档槽位光规则提供，
-        # 它们一撤本条就变成一条不渲染的声明
-        for aspect in ("vertical", "landscape"):
-            self.assertIn('[data-aspect="%s"] .seg-card::after{content:"";'
-                          'position:absolute;inset:0;z-index:-1' % aspect, html)
+        # 注入的值：近全屏宽带（>100% 宽、>60% 高）
+        canvas_rx = int(re.search(r"--ctv-camb-rx:(\d+)%", html).group(1))
+        canvas_ry = int(re.search(r"--ctv-camb-ry:(\d+)%", html).group(1))
+        self.assertGreater(canvas_rx, 100)
+        self.assertGreater(canvas_ry, 60)
+        # 明显大于两档槽位光（竖 58/42、横 46/52），否则"换近全屏"这句注释是假的
+        for aspect, rx, ry in (("vertical", 58, 42), ("landscape", 46, 52)):
+            seg_rx = int(re.search(r"--ctv-amb-rx:(\d+)%", render(aspect=aspect, theme="dark")).group(1))
+            seg_ry = int(re.search(r"--ctv-amb-ry:(\d+)%", render(aspect=aspect, theme="dark")).group(1))
+            self.assertEqual((seg_rx, seg_ry), (rx, ry),
+                             f"{aspect} 槽位氛围光几何与模板档位不符")
+            self.assertGreater(canvas_rx, seg_rx)
+            self.assertGreater(canvas_ry, seg_ry)
+        # 补上的只是 background；content/inset/z-index:-1 由无属性限定的
+        # .seg-card::after 提供（几何走 --ctv-amb-*），它一撤本条就变成不渲染的声明
+        self.assertIn('.seg-card::after{content:"";position:absolute;inset:0;z-index:-1',
+                      html)
 
 
 class Injection(unittest.TestCase):
@@ -215,12 +354,6 @@ class Injection(unittest.TestCase):
         # 占位符是单遍替换：稿件里的同名文本不会被当成骨架占位符再次替换
         self.assertEqual(clean.count("<script"), evil.count("<script"))
         self.assertIn("__CTV_GSAP__", evil)
-
-
-def strip_css_comments(html):
-    """取 <style> 里的 CSS 并去掉注释：注释会复述选择器，留着正则就是在测文档。"""
-    css = html.split("<style>", 1)[1].split("</style>", 1)[0]
-    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
 
 if __name__ == "__main__":

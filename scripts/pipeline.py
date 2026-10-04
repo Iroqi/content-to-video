@@ -225,8 +225,14 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
                 # 其 wave 头完整、下次 --resume 会把它当有效缓存跳过。
                 remove_if_exists(out_path)
                 return False, False
-            print(f"    [{label}][retry {attempt+1}/{max_retries}] {e}",
-                  flush=True)
+            # 最后一次不再打 retry：打出来会让人以为还有下一次重试在排队，
+            # 排障时会去找"第 4 次"并不存在。耗尽就直说耗尽。
+            # 不用嵌套 f-string（同一引号族要 3.12+，本技能下限是 3.9）。
+            if attempt == max_retries - 1:
+                tag = "giveup"
+            else:
+                tag = "retry %d/%d" % (attempt + 1, max_retries)
+            print(f"    [{label}][{tag}] {e}", flush=True)
             if attempt < max_retries - 1:
                 # 线性退避 + 随机抖动：多 worker 在 429 下若同步休眠同步
                 # 唤醒，会一起撞上限流窗口反复踩踏；抖动把重试时间打散
@@ -294,6 +300,24 @@ def _sentence_hash(text, voice_id=None, voice_style=None, model=None):
     """
     payload = "\x1f".join([text, voice_id or "", voice_style or "", model or ""])
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+def _write_spd(out_path, value, label, on_error_hint):
+    """写 .spd 语速 marker，失败只警告不抛。
+
+    三处调用点（合成后落 marker、restore_first 替换坏 marker、reapply 后补写）
+    语义不同但失败处理是同一件事：磁盘满/文件被占都不该把已合成好的音频变成
+    丢句，也该告诉用户下次 --resume 会多做什么。收在一处，口径与提示语不再
+    三份各自漂移。返回是否写成功。
+    """
+    try:
+        with open(out_path + ".spd", "w", encoding="utf-8") as f:
+            f.write(str(value))
+        return True
+    except OSError as e:
+        print(f"  [{label}][warn] .spd marker 写入失败（{e}），{on_error_hint}",
+              file=sys.stderr)
+        return False
+
 
 def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
                              voice_id=None, voice_style=None, model=None):
@@ -1010,13 +1034,8 @@ def main(argv=None):
                 if apply_speed(ffmpeg_path, out_path, decision.apply_speed_to,
                                prev_speed=decision.prev_speed):
                     if decision.write_spd is not None:
-                        try:
-                            with open(out_path + ".spd", "w", encoding="utf-8") as f:
-                                f.write(str(decision.write_spd))
-                        except OSError as e:
-                            print(f"  [{label}][warn] .spd marker 写入"
-                                  f"失败（{e}），下次 --resume 会重新对齐语速",
-                                  file=sys.stderr)
+                        _write_spd(out_path, decision.write_spd, label,
+                                   "下次 --resume 会重新对齐语速")
                     elif os.path.exists(out_path + ".spd"):
                         remove_if_exists(out_path + ".spd")
                 else:
@@ -1053,13 +1072,8 @@ def main(argv=None):
                     # 的状态，resolve_resume_state 每次 --resume 都会再走一遍
                     # 还原+重测（幂等但白烧 ffmpeg）；显式 1.0 才能直接证明
                     # 缓存有效。
-                    try:
-                        with open(out_path + ".spd", "w", encoding="utf-8") as f:
-                            f.write("1.0")
-                    except OSError as e:
-                        print(f"  [{label}][warn] .spd marker 写入"
-                              f"失败（{e}），下次 --resume 会重复一次还原",
-                              file=sys.stderr)
+                    if not _write_spd(out_path, "1.0", label,
+                                      "下次 --resume 会重复一次还原"):
                         remove_if_exists(out_path + ".spd")
             # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
             # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
@@ -1102,7 +1116,13 @@ def main(argv=None):
     # 并行 TTS 合成：用线程池并行调用 synth_sentence
     new_results = []
     if pending_tasks:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+        # 不用 with：__exit__ 走的是 shutdown(wait=True)，Ctrl-C 之后会把已提交的
+        # future 全部跑完才返回——200 句稿按了 Ctrl-C，终端像是卡住，而后台仍在
+        # 一句句计费，用户以为退出了。显式持有 executor，在 finally 里
+        # cancel_futures=True 撤掉还没开始的任务（cancel_futures 需要 3.9+，
+        # 与 SKILL.md 声明的下限一致），正在跑的那几句放弃等待、随中断一起退出。
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
+        try:
             futures = {executor.submit(_tts_worker, t, client, ffmpeg_path,
                                        model, args.api_timeout): t
                        for t in pending_tasks}
@@ -1171,10 +1191,21 @@ def main(argv=None):
                         # 留着上一稿的 .orig.wav 时，本句 speed=1.0 又不写 .spd，
                         # 下次 --resume 会走 restore_first 用 apply_speed(1.0) 把
                         # 那份旧音频原样盖回静音位——旧稿复活、还带 .failed 标记。
+                        #
+                        # 清理失败就不兜底：落一份静音等于假装"这句已处理"，
+                        # 而残留的 .orig.wav 会在用户之后改 --speed 时被 _audio
+                        # 当原速源做 atempo，新字幕配上一稿的旧配音——比直接丢
+                        # 这句更难查。宁可让这句走下面的 failed 分支被如实报出。
                         if not _clear_stale_sidecars(out_path):
-                            print(f"    [{label}][warn] 上一轮 sidecar 清理失败，"
-                                  f"若残留 .orig.wav，下次 --resume 可能用它覆盖本句"
-                                  f"静音（重启该句合成即可恢复）", file=sys.stderr)
+                            print(f"    [{label}][warn] 上一轮 sidecar 清理失败"
+                                  f"（{out_path}.orig.wav 残留），跳过静音兜底："
+                                  f"落静音会让下次 --resume 把上一稿音频当原速源"
+                                  f"做变速，新字幕配旧配音。删掉该句的 .orig.wav "
+                                  f"后重跑即可恢复", file=sys.stderr)
+                            failed.append(idx)
+                            print(f"[TTS {done_count}/{pending_count}] {label} "
+                                  f"{preview} [FAILED]", flush=True)
+                            continue
                         generate_silence(ffmpeg_path, fallback_dur, out_path)
                         # 落一个 sidecar marker（跟已有的 .spd 速度 marker 同一套
                         # 模式），不然下次 --resume 时这句会走"文件已存在=缓存"
@@ -1221,6 +1252,12 @@ def main(argv=None):
                 failed.append(idx)
                 print(f"[TTS {done_count}/{pending_count}] {label} "
                       f"{preview} [FAILED]", flush=True)
+        finally:
+            # Ctrl-C / 任何异常离开上面的循环时，先撤掉排队中的 future，
+            # 再不等它们跑完（wait=False）。否则已提交的句子会在用户以为
+            # 已退出之后继续合成并计费。cancel_futures 在 3.9+ 可用
+            #（与本技能声明的 Python 下限一致）。
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # 合并结果并按原始 index 排序，保证 sentence_data 顺序正确
     sentence_data.extend(new_results)

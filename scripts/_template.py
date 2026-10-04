@@ -96,6 +96,16 @@ _TEMPLATE_JSON = r'''
       "grid": {
         "size": 60
       },
+      "ambience": {
+        "rx": 58,
+        "ry": 42,
+        "cx": 50,
+        "cy": 50,
+        "alpha": 15,
+        "edge": 72,
+        "agendaCx": 50,
+        "agendaCy": 50
+      },
       "agenda": {
         "insetX": 72,
         "insetTop": 88,
@@ -162,6 +172,16 @@ _TEMPLATE_JSON = r'''
       "grid": {
         "size": 60
       },
+      "ambience": {
+        "rx": 46,
+        "ry": 52,
+        "cx": 68,
+        "cy": 50,
+        "alpha": 13,
+        "edge": 70,
+        "agendaCx": 50,
+        "agendaCy": 45
+      },
       "agenda": {
         "insetX": 96,
         "insetTop": 80,
@@ -183,6 +203,14 @@ _TEMPLATE_JSON = r'''
         "titleGlow": 48
       }
     }
+  },
+  "canvasAmbience": {
+    "rx": 135,
+    "ry": 85,
+    "cx": 50,
+    "cy": 42,
+    "alpha": 13,
+    "edge": 82
   },
   "animation": {
     "titleEntrance": {

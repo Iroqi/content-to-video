@@ -9,13 +9,22 @@ import _images_schema as IMG
 
 
 def bad(fn, *a, contains=None):
-    """断言校验函数抛错（契约层统一抛 ValueError/SystemExit 一类），并可核对报错里的关键词。"""
+    """断言校验函数抛错（契约层统一抛 ValueError/SystemExit 一类），并可核对报错里的关键词。
+
+    刻意**不捕 TypeError**：契约层的职责就是把"字段类型写错"报成人话，
+    一条裸 TypeError 意味着某个坏值漏到了校验之外、要到下游才崩栈。把它
+    当成"通过"过一次，字段名拼错与类型写错这两类真实缺陷都会被静默放过。
+    """
     try:
         fn(*a)
-    except (ValueError, SystemExit, TypeError) as e:
+    except (ValueError, SystemExit) as e:
         if contains:
             assert contains in str(e), f"报错里没有 {contains!r}: {e}"
         return
+    except TypeError as e:
+        raise AssertionError(
+            f"契约层抛了裸 TypeError（{e}）——该报成人话而不是让调用方崩栈。"
+            "这说明该字段没被校验到") from None
     raise AssertionError("应该被契约层拒绝，却通过了")
 
 
@@ -139,6 +148,54 @@ class LayoutDispatch(unittest.TestCase):
 class ManifestValidation(unittest.TestCase):
     def test_built_manifest_ok(self):
         MAN.validate_timing_manifest(H.make_manifest())
+
+    def _seg(self, m, sid="seg-a"):
+        return next(s for s in m["segments"] if s["id"] == sid)
+
+    def test_segment_speed_value_validated(self):
+        """speed 在封闭键集里，值也一起封——否则 "fast" 一路活到 apply_speed 才炸。"""
+        for value, contains in (("fast", "speed"), (0, "speed"), (-1.5, "speed"),
+                                (float("nan"), "speed"), (True, "speed")):
+            with self.subTest(value=value):
+                m = H.make_manifest()
+                self._seg(m)["speed"] = value
+                bad(MAN.validate_timing_manifest, m, contains=contains)
+        # 合法值放行
+        m = H.make_manifest()
+        self._seg(m)["speed"] = 1.5
+        MAN.validate_timing_manifest(m)
+
+    def test_segment_voice_style_must_be_string(self):
+        m = H.make_manifest()
+        self._seg(m)["voice_style"] = 123
+        bad(MAN.validate_timing_manifest, m, contains="voice_style")
+        m = H.make_manifest()
+        self._seg(m)["voice_style"] = "沉稳讲解"
+        MAN.validate_timing_manifest(m)
+
+    def test_turns_shape_validated(self):
+        """turns 是人工回查用的数据层，不进 HTML——拼错键/类型只会静默忽略。"""
+        def with_turns(turn):
+            m = H.make_manifest()
+            self._seg(m)["turns"] = [turn]
+            return m
+        ok = {"start": 0, "end": 1, "speaker": "host", "label": "主播",
+              "voice_id": "茉莉"}
+        MAN.validate_timing_manifest(with_turns(ok))
+        # voice_style / label 缺省合法（producer 只在说话人配了才写 voice_style）
+        MAN.validate_timing_manifest(with_turns({"start": 0, "end": 1,
+                                                  "speaker": "host"}))
+        for turn, contains in (
+            (5, "turns"),
+            (["x"], "turns"),
+            ({"start": 0, "speler": "host"}, "speler"),      # 键拼错
+            ({"start": "x"}, "start"),                        # 类型错
+            ({"start": -1}, "start"),                         # 负数
+            ({"start": 5, "end": 2}, "end"),                  # 区间倒挂
+            ({"start": 0, "speaker": 7}, "speaker"),
+        ):
+            with self.subTest(turn=turn):
+                bad(MAN.validate_timing_manifest, with_turns(turn), contains=contains)
 
     def test_unknown_top_key_rejected(self):
         m = H.make_manifest()

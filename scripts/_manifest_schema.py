@@ -36,6 +36,9 @@ MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
 MANIFEST_TOP_KEYS = ("schema_version", "status", "degraded", "sentences",
                      "segments", "total_duration", "gap", "voice_id",
                      "combined_audio", "closing_cta")
+# 对话轮的键集（build_from_structured.turns 的产出形状）。它在 manifest 里，
+# 但只服务人工回查、不进 HTML——所以拼错的键同样是"静默忽略"，一并封。
+_TURN_KEYS = ("start", "end", "speaker", "label", "voice_id", "voice_style")
 
 
 def validate_timing_manifest(data):
@@ -224,6 +227,48 @@ def validate_timing_manifest(data):
                     f"timing_manifest.json 的段落 '{sid}' 的 voice_id="
                     f"{_seg_vid!r} 含不在预置音色里的值"
                     f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+        # speed / voice_style / turns 都在封闭键集里，值也一起封：键集封闭的
+        # rationale 是"拼错即报错"，值类型错同样会让读侧炸裸异常或静默走
+        # 默认分支——`"speed": "fast"` 到 apply_speed 那步才炸，`turns: 5`
+        # 到切片处才炸（那里 [:trim] 遇 int 直接 TypeError）。
+        _seg_speed = sg.get("speed")
+        if _seg_speed is not None:
+            _validate_finite_number(
+                _seg_speed, f"timing_manifest.json 的段落 '{sid}' 的 'speed'",
+                positive=True)
+        _seg_style = sg.get("voice_style")
+        if _seg_style is not None and not isinstance(_seg_style, str):
+            raise ValueError(
+                f"timing_manifest.json 的段落 '{sid}' 的 'voice_style' "
+                f"必须是字符串（实际: {_seg_style!r}）")
+        _seg_turns = sg.get("turns")
+        if _seg_turns is not None:
+            if isinstance(_seg_turns, bool) or not isinstance(_seg_turns, (list, tuple)):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sid}' 的 'turns' "
+                    f"必须是列表（对话轮的元数据，实际: {_seg_turns!r}）")
+            for j, turn in enumerate(_seg_turns):
+                if not isinstance(turn, dict):
+                    raise ValueError(
+                        f"timing_manifest.json 的段落 '{sid}' 的 "
+                        f"turns[{j}] 必须是对象（实际: {turn!r}）")
+                where_turn = f"timing_manifest.json 的段落 '{sid}' 的 turns[{j}]"
+                _reject_unknown_keys(turn, _TURN_KEYS, where_turn)
+                # 轮次区间是段内 0-based 的 [start, end)：坏了不会炸在渲染端
+                # （它不进 HTML），只让人工回查看错说话人归属，值域一起封。
+                for edge in ("start", "end"):
+                    if edge in turn:
+                        _validate_finite_number(turn[edge], f"{where_turn} 的 {edge!r}",
+                                                nonnegative=True)
+                if isinstance(turn.get("start"), int) and isinstance(turn.get("end"), int) \
+                        and turn["end"] < turn["start"]:
+                    raise ValueError(
+                        f"{where_turn} 的 end={turn['end']} 小于 start="
+                        f"{turn['start']}（轮次区间是 [start, end)）")
+                if turn.get("speaker") is not None and not isinstance(turn["speaker"], str):
+                    raise ValueError(
+                        f"{where_turn} 的 'speaker' 必须是字符串"
+                        f"（实际: {turn['speaker']!r}）")
         ss = sg.get("sentences")
         if not isinstance(ss, list) or not ss:
             raise ValueError(

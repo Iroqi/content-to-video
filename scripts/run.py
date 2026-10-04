@@ -251,13 +251,12 @@ def _build_parser():
 
 def main():
     setup_stdio()
-    global _REPORT_DIR, _REPORT, _REPORT_FILE, _DRY_RUN, _RUN_T0
+    global _REPORT_DIR, _REPORT, _DRY_RUN, _RUN_T0
     # 同一进程里重复调用 main()（import run 后直接调用的测试/嵌入式用法）
     # 时，模块级 _REPORT 不能累积上一次的 steps/skipped——每次都从空白
     # 报告开始。
     _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
     _DRY_RUN = False
-    _REPORT_FILE = "production_report.json"
     _RUN_T0 = time.time()
     parser = _build_parser()
     args = parser.parse_args()

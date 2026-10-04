@@ -805,8 +805,11 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
         own = (entry.get("director") or {}).get("steps")
         for w in crop_warnings(markup, own):
             warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
-        for i, sel in global_ref_leaks(markup, own):
-            errs.append(f"{where}，但它的 director.steps[{i}]（target={sel}）打在了两份副本"
+        # step_i 不叫 i：外层 for i, seg 用的是段序，内层复用 i 会静默把它
+        # 换成 step 下标——今天块内不读外层 i 所以无害，下一行加一句用 i 的
+        # 代码就会拿到错的值。
+        for step_i, sel in global_ref_leaks(markup, own):
+            errs.append(f"{where}，但它的 director.steps[{step_i}]（target={sel}）打在了两份副本"
                         "共享的元素上——图里的 url(#id)/href=\"#id\" 按文档序只认第一份"
                         f"（= 上一段 '{prev['id']}' 那一幅），所以这一拍打在本页这份上，本页"
                         "没有任何图形会去读它。渐变/滤镜/marker 这类共享元素的补间请只在"

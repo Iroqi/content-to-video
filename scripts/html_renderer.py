@@ -355,6 +355,11 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 其余 CSS 变量（网格/进度条/字体排印）也从模板读取
     _grid = tpl_layout["grid"]
     css_grid_size = _grid["size"]
+    # 段落氛围光（.seg-card::after 的径向渐变几何）。它是随画幅变的——竖屏那团
+    # 居中、宽大于高；横屏偏媒体区中心（68% 50%）且高大于宽。所以几何进模板，
+    # CSS 只拿 var(--ctv-amb-*) 拼字符串，不在 [data-aspect] 分支里存第二份。
+    _amb = rc.amb = tpl_layout["ambience"]
+    _camb = rc.camb = tpl["canvasAmbience"]
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -392,7 +397,14 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
   --ctv-ag-kicker:{_ag["kickerSize"]}px;--ctv-ag-idx:{_ag["idxSize"]}px;
   --ctv-ag-idx-min:{_ag["idxMinWidth"]}px;--ctv-ag-name:{_ag["nameSize"]}px;
   --ctv-ag-dur:{_ag["durSize"]}px;--ctv-ag-gap:{_ag["rowGap"]}px;
-  --ctv-ag-row-pad:{_ag["rowPad"]}px;--ctv-ag-verse-w:{_ag["verseMaxWidth"]}px;--ctv-ag-list-mt:{_ag["listMarginTop"]}px;"""
+  --ctv-ag-row-pad:{_ag["rowPad"]}px;--ctv-ag-verse-w:{_ag["verseMaxWidth"]}px;--ctv-ag-list-mt:{_ag["listMarginTop"]}px;
+  --ctv-amb-rx:{_amb["rx"]}%;--ctv-amb-ry:{_amb["ry"]}%;
+  --ctv-amb-cx:{_amb["cx"]}%;--ctv-amb-cy:{_amb["cy"]}%;
+  --ctv-amb-alpha:{_amb["alpha"]}%;--ctv-amb-edge:{_amb["edge"]}%;
+  --ctv-amb-agenda-cx:{_amb["agendaCx"]}%;--ctv-amb-agenda-cy:{_amb["agendaCy"]}%;
+  --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
+  --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
+  --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区
@@ -554,20 +566,26 @@ def _media_html(rc, sid, s, d):
 
 def _verse_html(seg, sid, ac_text_attr):
     """句子流（歌词式 verse）DOM：该段全部句子按序渲染成静态行。"""
+    # 三个 layout 豁免属性打在 .verse 与**每一行**上，两处都要，缺一不可：
+    # 检查器只认元素自己身上的标记，**不继承祖先的**。只打 .verse 的话它照样
+    # 去量每行，而被 .verse-clip 裁在窗口外的半截行 rect 仍在原位 → 判
+    # text_occluded 报 error。实测（7 段竖屏稿）：只打 .verse 报 1 error，
+    # 连每行一起打则 0 error、warning 条数不变。快照确认画面本身没问题。
     _vlines = [
         # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
         # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
         # 永久失灵或错行——宁可都不高亮，也不错误高亮
-        f'<div class="verse-line" data-i="{_s2.get("index", -1)}">'
+        f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
+        f' data-layout-allow-overflow data-layout-allow-overlap'
+        f' data-layout-allow-occlusion>'
         f'{esc(_s2["text"])}</div>'
         for _s2 in seg["sentences"]
     ]
     return (
-        # 三个 layout 豁免属性源于同一误报机制：滚出窗口的行视觉上被
-        # overflow:hidden 裁掉，但静态 DOM rect 仍在原位——上越标题区
-        # （allow-overlap）、下碰底部元素如进度条（allow-occlusion）、
-        # 整体越出卡片（allow-overflow）。活动行锚定在窗口内 clipPad
-        # 处，真实重叠不可能发生。
+        # 豁免的成因：滚出窗口的行视觉上被 overflow:hidden 裁掉，但静态 DOM
+        # rect 仍在原位——上越标题区（allow-overlap）、下碰底部元素如进度条
+        # （allow-occlusion）、整体越出卡片（allow-overflow）。活动行锚定在
+        # 窗口内 clipPad 处，真实重叠不可能发生。
         f'\n    <div class="verse" id="verse-{sid}" '
         f'data-layout-allow-overflow data-layout-allow-overlap '
         f'data-layout-allow-occlusion>'

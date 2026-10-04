@@ -40,8 +40,18 @@ body{font-family:var(--ctv-font-family)}
    让不同段落各有色彩氛围，破除整片米白的单调。
    isolation 写在无属性限定的 .seg-card 上：两画幅都要它，且 hyperframes 的
    negative_z_index 检查只看静态声明、不解析 [data-aspect] 作用域，写成属性
-   选择器会被误报成"祖先没有层叠上下文"。 */
-[data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
+   选择器会被误报成"祖先没有层叠上下文"。
+   几何（椭圆半轴、圆心、浓度、截止点）随画幅变——竖屏那团居中且宽大于高，
+   横屏偏媒体区中心且高大于宽——所以全部走 var(--ctv-amb-*)，值在
+   _template.py 的 layout.<画幅>.ambience。**别在这里写死第二份**：改模板
+   不会带着 CSS 里的字面量走。 */
+.seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-cx) var(--ctv-amb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 纯文字 agenda 卡（opening/closing，与 .seg-card 同时挂在同一元素上）把圆心从媒体
+   区拨回文字重心：横屏是 50% 45%，竖屏本来就是 50% 50%、与 .seg-card 相同。
+   椭圆半轴/浓度/截止点两画幅共用，只圆心有第二种取值。注意这条**不带画幅限定**，
+   两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
+   把开场/收尾那两页的氛围光挪位。 */
+.agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
 .seg-card{position:absolute;inset:0;isolation:isolate}
 /* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
    页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
@@ -157,10 +167,7 @@ body{font-family:var(--ctv-font-family)}
 
 /* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
    仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
-   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。
-   氛围光偏媒体区中心（68% 50%），纯文字 agenda 卡则回正（50% 45%）。 */
-[data-aspect="landscape"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(46% 52% at 68% 50%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
-[data-aspect="landscape"] .agenda-card::after{background:radial-gradient(46% 52% at 50% 45%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
+   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。 */
 [data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
 [data-aspect="landscape"] .seg-title-wrap{position:static}
 /* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
@@ -187,7 +194,7 @@ body{font-family:var(--ctv-font-family)}
    打光。所以这里取近全屏的宽高、把中心略抬到主视觉一带、并把截止点推到 82% 让边界消失。
    抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
    网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
-[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(135% 85% at 50% 42%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 82%)}
+[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
 /* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
    的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
    段进度整个盖掉。 */

@@ -248,7 +248,9 @@ def _build_parser():
                         help=f"句间静音秒数（透传给 pipeline，时间轴与段落擦除时长的"
                              f"钳制上限都依赖它）；默认 {DEFAULT_GAP:g}")
     parser.add_argument("--dry-run", action="store_true",
-                        help="只跑 pipeline --dry-run（不写文件）")
+                        help="只预检 TTS 链路（分句/段检测/稿件契约），不合成、"
+                             "不写任何文件；--until 在 dry-run 下不生效（HTML/"
+                             "渲染步骤整体跳过）")
     return parser
 
 

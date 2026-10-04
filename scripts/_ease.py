@@ -120,10 +120,11 @@ def curve(name, default):
     族名已由 `validate_ease` 在契约层过了一遍，这里仍留线性兜底（渲染端不该因为一条
     算不出的曲线抛断整页）。
 
-    与 GSAP 的一致性是对拍出来的（见模块头）：同族同参数时逐点一致，`elastic` 与
-    `bounce` 全档一致，`expo` 差在 GSAP 对端点的截断（≤0.008），裸 `elastic.inOut`
-    取 GSAP 显式参数版 `elastic.inOut(1,0.3)` 的语义。不追求逐字节同式——GSAP 不会对
-    `tl.set` 再缓动，这条曲线就是成片里的那一条。
+    与 GSAP 的一致性是对拍出来的（见模块头）：同族同参数时逐点一致（含裸名缺省——
+    裸 `elastic.inOut` 的缺省周期是 .45、`amplitude<1` 时周期按 1/振幅 放大，均照 GSAP
+    `_configElastic` 源码实现，实测与钉固 bundle 逐点一致），`expo` 差在 GSAP 对端点的
+    截断（≤0.008）。不追求逐字节同式——GSAP 不会对 `tl.set` 再缓动，这条曲线就是成片里的
+    那一条。
     """
     parts = split_ease(name or default or "none")
     if parts is None:
@@ -144,13 +145,22 @@ def curve(name, default):
         return lambda t, n=n: 1.0 if t >= 1 else min(math.floor(t * (n + 1)), n) / n
 
     if family == "elastic":
-        a, p = _num(args, 0, 1.0), _num(args, 1, 0.3)
-        if a < 1 or p <= 0:                 # 与 GSAP 同：振幅不足 1 时退回 a=1、s=p/4
-            a, p, s = 1.0, 0.3 if p <= 0 else p, (0.3 if p <= 0 else p) / 4.0
-        else:
-            s = p * math.asin(1.0 / a) / (2 * math.pi)
+        # GSAP `_configElastic`（钉固 3.14.2 源码逐行对过）：
+        #   p1 = amplitude >= 1 ? amplitude : 1
+        #   p2 = (period || (type ? .3 : .45)) / (amplitude < 1 ? amplitude : 1)
+        # 缺省周期按方向走：in/out 是 .3，inOut 是 .45（裸 `elastic.inOut` 实测≡(1,0.45)，
+        # 不是 (1,0.3)——GSAP 注册 inOut 时 type 为空，走了 .45 分支）；振幅不足 1 时 p1
+        # 钳到 1、周期按 1/振幅 放大，等价于 (1, p/a)（实测 (0.6,0.18)≡(1,0.3)）。
+        a = _num(args, 0, 1.0)
+        default_p = 0.45 if mod == "inOut" else 0.3
+        p = _num(args, 1, default_p)
+        if not p or p != p:             # GSAP 的 `period || 缺省`：0/NaN 一律回落
+            p = default_p
+        p1 = a if a >= 1 else 1.0
+        per = p / (a if a < 1 else 1.0)
+        s = per * math.asin(1.0 / p1) / (2 * math.pi)
 
-        def g(t, a=a, p=p, s=s):
+        def g(t, a=p1, p=per, s=s):
             if t <= 0:
                 return 0.0
             if t >= 1:

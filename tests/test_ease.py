@@ -23,6 +23,13 @@ GSAP_STEPS_4 = [0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5,
                 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1]
 GSAP_STEPS_4_IMM = [0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5,
                     0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1]
+# 裸 `elastic.inOut` 的 GSAP 真值：inOut 的缺省周期是 .45（GSAP `_configElastic`
+# 里 `period || (type ? .3 : .45)`，type 为空走 .45），不是 .3。从钉固 bundle 的
+# `Elastic.easeInOut`（即裸名注册那条）逐点打印。
+GSAP_ELASTIC_INOUT_BARE = [0, 0.000977, 0.000339, -0.003671, -0.003906, 0.011969,
+                           0.023939, -0.03125, -0.117462, 0.043412, 0.5, 0.956588,
+                           1.117462, 1.03125, 0.976061, 0.988031, 1.003906,
+                           1.003671, 0.999661, 0.999023, 1]
 
 
 def _samples(f):
@@ -107,6 +114,24 @@ class CurveMatchesPinnedGsap(unittest.TestCase):
         self._assert("elastic.out", GSAP_ELASTIC_OUT)
         self._assert("elastic.out(1,0.3)", GSAP_ELASTIC_OUT)
         self._assert("elastic.in", GSAP_ELASTIC_IN)
+
+    def test_elastic_inout_bare_matches_pinned_gsap(self):
+        # 裸 elastic.inOut 的缺省周期是 .45（GSAP 注册时 type 为空走 .45 分支）；
+        # 采样器必须跟它一致，否则 morph 与同名补间的手感分家。
+        self._assert("elastic.inOut", GSAP_ELASTIC_INOUT_BARE)
+        self._assert("elastic.inOut(1,0.45)", GSAP_ELASTIC_INOUT_BARE)
+
+    def test_elastic_amplitude_below_one_scales_period(self):
+        # GSAP：amplitude<1 时 p1 钳到 1、周期按 1/振幅 放大（等价于 (1, p/a)），
+        # 实测 (0.6,0.18)≡(1,0.3)。采样器照源码实现，这几对必须逐点相同。
+        pairs = [("elastic.out(0.6,0.18)", "elastic.out(1,0.3)"),
+                 ("elastic.in(0.5,0.4)", "elastic.in(1,0.8)"),
+                 ("elastic.inOut(0.5,0.45)", "elastic.inOut(1,0.9)")]
+        for a, b in pairs:
+            fa, fb = E.curve(a, ""), E.curve(b, "")
+            for i in range(101):
+                self.assertAlmostEqual(fa(i / 100), fb(i / 100), places=9,
+                                       msg=f"{a} 与 {b} 在 t={i/100:.2f} 分家")
 
     def test_steps_with_and_without_immediate(self):
         self._assert("steps(4)", GSAP_STEPS_4)

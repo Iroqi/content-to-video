@@ -75,19 +75,14 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 _WHOLE_BEAT_KEYS = ("morph", "count", "type")   # 各自负责整段，从 pos 一直占满 dur
 
 
-def _cycles(step):
-    """这一拍演几遍：GSAP 的 repeat=N 是 N+1 遍，`repeat:-1` 是无限（返回 None）。"""
-    repeat = int(step.get("repeat", 0))
-    return None if repeat < 0 else repeat + 1
-
-
 def beat_cycles(step):
     """这一拍演几遍（公开口径）；None = `repeat:-1` 无限，**没有收尾态可言**。
 
     渲染端、接续烘焙和出画判定都读这一个数：遍数一旦在两处各算一遍，"成片里停在哪"
     和"门禁报的那一站"就分家，而那正是跨页接续最难查的一类错。
     """
-    return _cycles(step)
+    repeat = int(step.get("repeat", 0))
+    return None if repeat < 0 else repeat + 1
 
 
 def beat_span(step, dur):
@@ -97,7 +92,7 @@ def beat_span(step, dur):
     盖住"的窗口判定、以及接续烘焙"最后停在哪儿"的收尾态。只按 duration 算的话，一条
     `repeat:3` 的呼吸动画在门禁里被当成一拍就完，报出来的时刻与成片差四倍。
     """
-    n = _cycles(step)
+    n = beat_cycles(step)
     return None if n is None else round(float(dur) * n, 6)
 
 
@@ -107,7 +102,7 @@ def ends_at_start(step):
     不确定（无限循环）返回 None——调用方不能替它猜一个终态，只能跳过并出声。
     无 `yoyo` 时永远停在目标值（每遍都从头重放，收尾仍是 `to`）。
     """
-    n = _cycles(step)
+    n = beat_cycles(step)
     if n is None:
         return None
     return bool(step.get("yoyo")) and n % 2 == 0

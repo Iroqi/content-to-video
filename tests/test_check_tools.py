@@ -226,6 +226,21 @@ class DocRefChecker(unittest.TestCase):
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
 
 
+# 抓**函数对象**而不是模块属性：Linux 上 `posixpath is os.path`、Windows 上
+# `ntpath is os.path`——平台总有一半的 path 模块就是被 `_as_windows` 打补丁的那个
+# 模块。所以模拟函数里写 `ntpath.relpath(...)`（原实现）在真 Windows 上就是自己调
+# 自己（CI 三个用例 RecursionError），写 `posixpath.relpath(...)` 在 Linux 上同样
+# 会撞上补丁。抓住函数对象本身，两套 path 模块的属性替换都碰不到它。
+_POSIX_RELPATH = __import__("posixpath").relpath
+
+
+def _windows_relpath(path, start=None):
+    """模拟 Windows 的 relpath 输出：相对路径 + 反斜杠分隔符。"""
+    rel = _POSIX_RELPATH(str(path).replace("\\", "/"),
+                         str(start or ".").replace("\\", "/"))
+    return rel.replace("/", "\\")
+
+
 class StaleScanPathShape(unittest.TestCase):
     """门禁自己的路径形状不能随平台变。
 
@@ -242,19 +257,21 @@ class StaleScanPathShape(unittest.TestCase):
 
     def _as_windows(self):
         """把 check_docs 看到的路径环境换成 Windows 的，返回还原器。"""
-        import ntpath
         real_relpath = check_docs.os.path.relpath
         real_sep = check_docs.os.sep
 
-        def fake_relpath(path, start=None):
-            p = ntpath.relpath(str(path).replace("/", "\\"),
-                               str(start).replace("/", "\\"))
-            return p
-
-        check_docs.os.path.relpath = fake_relpath
+        check_docs.os.path.relpath = _windows_relpath
         check_docs.os.sep = "\\"
-        return lambda: (setattr(check_docs.os.path, "relpath", real_relpath),
-                        setattr(check_docs.os, "sep", real_sep))
+
+        def restore():
+            check_docs.os.path.relpath = real_relpath
+            check_docs.os.sep = real_sep
+
+        # 补丁打在**全局** os 上（check_docs.os 就是 os 模块）：用例自己 finally
+        # 里也会调一次，这里再兜一层——断言先于 finally 抛错时，反斜杠环境不会
+        # 泄漏给后面的用例（那种串扰在 CI 上表现为"只有某个顺序才红"）。
+        self.addCleanup(restore)
+        return restore
 
     def test_rel_normalises_windows_separators(self):
         restore = self._as_windows()
@@ -283,13 +300,31 @@ class StaleScanPathShape(unittest.TestCase):
                 os.path.isfile(os.path.join(check_docs.ROOT, key)),
                 f"ALLOW 键指向的文件不存在：{key}")
 
+    def test_windows_relpath_stub_is_not_self_recursive(self):
+        """钉住上一条：模拟函数一旦走 `os.path.relpath`（Windows 上 ntpath 就是
+        它）就会无限递归，而这个洞在 Linux 上永远看不见。"""
+        real = check_docs.os.path.relpath
+
+        def boom(*a, **k):
+            raise AssertionError("模拟函数不该再去调 os.path.relpath")
+
+        check_docs.os.path.relpath = boom
+        try:
+            self.assertEqual(_windows_relpath("/repo/references/x.md", "/repo"),
+                             "references\\x.md")
+        finally:
+            check_docs.os.path.relpath = real
+
     def test_stale_scan_still_flags_a_planted_word(self):
         # 反向确认：归一化没把门禁改瞎。真造一个含禁用词的临时文件喂给它。
-        with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "planted.md")
-            with open(p, "w", encoding="utf-8") as f:
-                f.write("这里的指路已失效：见 gen_hyperframes 生成\n")
-            stale = check_docs._scan_stale([p])
+        # 必须建在 ROOT 下：Windows 的 relpath 跨盘符会抛 ValueError（runner 的
+        # 临时目录在 C:、仓库在 D:），而门禁扫的本来就是仓库内文件——喂仓库外的
+        # 路径不是这一层要处理的事。
+        p = os.path.join(check_docs.ROOT, "tests", "_planted_tmp.md")
+        self.addCleanup(lambda: os.path.isfile(p) and os.remove(p))
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("这里的指路已失效：见 gen_hyperframes 生成\n")
+        stale = check_docs._scan_stale([p])
         self.assertEqual([s[2] for s in stale], ["gen_hyperframes"])
 
 

@@ -1,5 +1,5 @@
 import React from "react";
-import {AbsoluteFill, staticFile} from "remotion";
+import {AbsoluteFill} from "remotion";
 import {FONT_STACK, LAYOUTS, MONO_STACK, THEME, TYPO, rgba} from "../theme";
 import type {Aspect} from "../theme";
 import type {GenSegment} from "../data";
@@ -7,6 +7,7 @@ import {entranceK} from "../data";
 import {backOut, clamp01, lerp, power2Out} from "../easing";
 import {ProgressBar} from "./ProgressBar";
 import {Verse} from "./Verse";
+import {MediaBox} from "./MediaBox";
 import {ensureTextContrast as ensureTextContrastColor} from "../theme";
 
 interface SlotCardProps {
@@ -31,10 +32,12 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
   const titleScale = lerp(aTitle.from, 1, titleP);
 
   const aImg = ANIM_IMG;
+  // 接续页（stage:"keep"）：画面是上一页演完的烘焙副本，入场补间退场
+  // （HTML 的 _card_timeline_lines 对 keep/canvas 同闸），配图从第一帧就位。
   const imgStart = seg.start + aImg.startDelay * k;
-  const imgP = power2Out(clamp01((t - imgStart) / (aImg.duration * k)));
-  const imgY = aImg.vertY * (1 - imgP);
-  const imgOpacity = t >= imgStart ? imgP : 0;
+  const imgP = seg.keep ? 1 : power2Out(clamp01((t - imgStart) / (aImg.duration * k)));
+  const imgY = seg.keep ? 0 : aImg.vertY * (1 - imgP);
+  const imgOpacity = seg.keep ? 1 : t >= imgStart ? imgP : 0;
 
   // 横屏左文字栏：标题 + tagline + verse 成列垂直居中
   if (aspect === "landscape") {
@@ -95,13 +98,7 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
             transform: imgY !== 0 ? `translateY(${imgY}px)` : undefined,
           }}
         >
-          {seg.image ? (
-            <img
-              src={staticFile(seg.image)}
-              alt=""
-              style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
-            />
-          ) : null}
+          <MediaBox seg={seg} t={t} style={{borderRadius: lay.image.borderRadius}} />
         </div>
         <ProgressBar seg={seg} t={t} aspect={aspect} w={w} h={h} />
       </AbsoluteFill>
@@ -164,14 +161,8 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
           transform: imgY !== 0 ? `translateY(${imgY}px)` : undefined,
         }}
       >
-        {seg.image ? (
-          <img
-            src={staticFile(seg.image)}
-            alt=""
-            style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}}
-          />
-        ) : null}
-      </div>
+          <MediaBox seg={seg} t={t} style={{borderRadius: lay.image.borderRadius}} />
+        </div>
 
       <Verse seg={seg} t={t} aspect={aspect} placement="vertical-slot" />
       <ProgressBar seg={seg} t={t} aspect={aspect} w={w} h={h} />

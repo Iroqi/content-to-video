@@ -28,6 +28,12 @@ from _manifest_schema import load_timing_manifest  # noqa: E402
 from _segments import is_content_sid, seg_layout, STRUCTURAL_SIDS  # noqa: E402
 from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
 from _script_utils import setup_stdio, write_text_atomic  # noqa: E402
+from _images_schema import load_images_json, classify_media_path  # noqa: E402
+from _timeline import beat_positions, beat_span, beat_cycles  # noqa: E402
+from _path_morph import make_morph, interp as _morph_interp  # noqa: E402
+from _ease import curve as ease_curve  # noqa: E402
+from _cam_crop import cam_default_origin  # noqa: E402
+from gen_hyperframes import director_prepare, next_speech_start  # noqa: E402
 
 
 def segment_duration(seg):
@@ -43,13 +49,14 @@ def _fmt_mmss(seconds):
     return f"{total // 60}:{total % 60:02d}"
 
 
-def compute_clips(manifest, tpl):
+def compute_clips(manifest, tpl, images=None):
     """逐条移植 html_renderer.generate_html 的 clips 预处理。
 
     同一段注释也搬过来：引擎（这里是 Remotion 的逐帧渲染）按窗口硬切卡片可见性，
     元素窗口必须精确覆盖"这张页在屏幕上"的全程——从擦除起点（本句音频起点 − 擦除
     时长）到下一页擦除完成把它盖住的时刻。
     """
+    images = images or {}
     total_dur = float(manifest["total_duration"])
     segments = manifest["segments"]
     _is_line = tpl["animation"]["segmentWipe"]["style"] == "line"
@@ -69,13 +76,18 @@ def compute_clips(manifest, tpl):
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)
-        # 整页画布段：模板转场（擦除/引导线/剥离）一律退场，在自己的音频起点整页出现。
-        if seg_layout(clip["seg"]) == "canvas":
+        # 整页画布段：模板转场（擦除/引导线/剥离）一律退场，在自己的音频起点整页出现，
+        # 运动全由 director 驱动。接续页（stage:"keep"）同理且更要紧：这一页的画面是
+        # 上一页演完的样子，擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry
+        # 烘焙的意义（口径与 html_renderer 的 clips 预处理逐条一致）。
+        if (seg_layout(clip["seg"]) == "canvas"
+                or (images.get(clip["seg"]["id"]) or {}).get("stage") == "keep"):
             clip["wipe"] = 0.0
         clip["win_start"] = round(max(0.0, s_i - clip["wipe"]), 2)
         win_end = clips[i + 1]["start"] if i + 1 < len(clips) else round(total_dur, 2)
         clip["vis"] = round(win_end - clip["win_start"], 2)
         # line 档的剥离挂在被犁走的旧卡上（上一页被下一页的揭开窗口推走）。
+        # 上一页是画布段时也不剥（活 diagram 不翻页，见 html_renderer 同处注释）。
         clip["peel"] = None
         if (_is_line and i and clip["wipe"] > 0
                 and seg_layout(clips[i - 1]["seg"]) != "canvas"):
@@ -153,6 +165,117 @@ def _bytes_equal(a, b):
         return False
 
 
+def _stage_media(src_path, out_dir, staged_names):
+    """把媒体文件暂存进 out_dir/public/images，返回 public 相对路径。
+
+    staged_names：{basename: 已占用的完整 public 相对路径}——同名不同内容的两个
+    文件（images.json 两个键指向不同目录的同名图）不能互相覆盖，给后者加数字
+    后缀；同名同内容直接复用（只比大小会把"同大小不同内容"的旧拷贝误当最新
+    资产复用，所以逐字节比）。文件不存在/不可读返回 None（fail-fast 由调用方
+    按 error 处理，渲染会静默出空白裂图/无声媒体）。"""
+    if not os.path.isfile(src_path):
+        return None
+    dst_dir = os.path.join(out_dir, "public", "images")
+    os.makedirs(dst_dir, exist_ok=True)
+    base = os.path.basename(src_path)
+    name = base
+    k = 1
+    while name in staged_names:
+        occupied = staged_names[name]
+        if _bytes_equal(src_path, os.path.join(out_dir, "public", occupied)):
+            return occupied
+        stem, ext = os.path.splitext(base)
+        k += 1
+        name = f"{stem}-{k}{ext}"
+    dst = os.path.join(dst_dir, name)
+    tmp = dst + ".tmp"
+    try:
+        shutil.copy2(src_path, tmp)
+        os.replace(tmp, dst)
+    except OSError as exc:
+        raise SystemExit(f"[error] 媒体复制失败 {src_path} → {dst}: {exc}") from exc
+    rel = f"images/{name}"
+    staged_names[name] = rel
+    return rel
+
+
+def _director_data(entry, seg, dflt, fps):
+    """把 images.json 的 director.steps 展开成组件可逐帧求值的数据胶。
+
+    与 html_renderer._director_timeline_lines 同一条节拍解析（beat_positions，
+    同一函数：at 跟着 manifest 句子走、at_time 是段落绝对秒、delay 叠加）、
+    同一份缺省 duration/ease、同一套 morph 生成期采样（fps×2 关键帧 + 遍序
+    奇偶折 yoyo，逐帧 seek 可复现、无运行时依赖）。count/type/draw/set/from/
+    to/fromTo 只把校验过的标量搬进数据，组件端按帧求值（读的都是契约层过
+    过的标量，不是信源回调）。
+    """
+    director = (entry or {}).get("director")
+    steps = (director or {}).get("steps")
+    if not steps:
+        return None
+    sentences = seg["sentences"]
+    seg_start = round(float(sentences[0]["start_time"]), 2)
+    beats = beat_positions(steps, sentences, seg_start, dflt["duration"])
+    pin = cam_default_origin(entry.get("inline_svg"), steps)
+    out = {"segStart": seg_start, "camOrigin": pin, "steps": []}
+    for step, (pos, dur) in zip(steps, beats):
+        common = {
+            "target": step["target"],
+            "pos": round(pos, 2),
+            "dur": round(dur, 2),
+            "ease": step.get("ease", dflt["ease"]),
+            "repeat": int(step.get("repeat", 0)),
+            "yoyo": bool(step.get("yoyo")),
+            "stagger": step.get("stagger"),
+        }
+        if "morph" in step:
+            pf, pt = make_morph(step["morph"]["from"], step["morph"]["to"])
+            ease_fn = ease_curve(step.get("ease"), dflt["ease"])
+            cycles = beat_cycles(step) or 1
+            yoyo = bool(step.get("yoyo"))
+            span = beat_span(step, dur)
+            n = max(2, min(240, round(span * fps * 2)))
+            keys = []
+            for i in range(n + 1):
+                u = i / n
+                phase = u * cycles
+                c = int(phase)
+                p = phase - c
+                if p == 0.0 and c > 0:
+                    # 正好踩在遍与遍的分界：GSAP 在这一瞬间报的是上一遍的末尾
+                    c -= 1
+                    p = 1.0
+                if yoyo and c % 2:
+                    p = 1.0 - p
+                keys.append({"t": round(pos + u * span, 2),
+                             "d": _morph_interp(pf, pt, ease_fn(p))})
+            out["steps"].append(dict(common, kind="morph", morphKeys=keys))
+        elif "count" in step:
+            cnt = step["count"]
+            out["steps"].append(dict(
+                common, kind="count",
+                count={"from": cnt.get("from", 0), "to": cnt["to"],
+                       "decimals": int(cnt.get("decimals", 0)),
+                       "prefix": cnt.get("prefix", ""),
+                       "suffix": cnt.get("suffix", "")}))
+        elif "type" in step:
+            out["steps"].append(dict(common, kind="type"))
+        elif step.get("draw"):
+            out["steps"].append(dict(common, kind="draw"))
+        elif "set" in step:
+            out["steps"].append(dict(common, kind="set", vars=step["set"]))
+        elif "from" in step and "to" in step:
+            out["steps"].append(dict(common, kind="fromTo",
+                                     fromVars=step["from"], toVars=step["to"]))
+        elif "to" in step:
+            out["steps"].append(dict(common, kind="to", toVars=step["to"]))
+        elif "from" in step:
+            out["steps"].append(dict(common, kind="from", fromVars=step["from"]))
+        else:
+            continue   # 无补间动作的 step：无数据可求值，跳过
+    return out if out["steps"] else None
+
+
 def main(argv=None):
     setup_stdio()
     parser = argparse.ArgumentParser(
@@ -187,10 +310,10 @@ def main(argv=None):
     aspect = normalize_aspect(args.aspect)
     w, h = get_canvas(aspect)
     total_dur = float(manifest["total_duration"])
-    clips = compute_clips(manifest, tpl)
 
     # ── 配图归一（移植 gen_hyperframes 的 images 处理：agenda 结构性页键弹出、
-    #    孤儿键忽略、文件复制进 public/images）──────────────────────────────
+    #    孤儿键忽略、媒体文件复制进 public/images、director 体检+净化内联+keep 烘焙）─
+    #    必须先于 clips 几何：keep 页要把 wipe 归零（compute_clips 读 stage）。
     images = {}
     images_dir = None
     if args.images:
@@ -199,9 +322,12 @@ def main(argv=None):
                   "（纯文字版兜底）", file=sys.stderr)
         else:
             images_dir = os.path.dirname(os.path.abspath(args.images))
-            with open(args.images, encoding="utf-8") as f:
-                images = json.load(f)
-            seg_by_id = {c["seg"]["id"]: c["seg"] for c in clips}
+            try:
+                images = load_images_json(args.images)
+            except ValueError as e:
+                print(f"[error] {e}", file=sys.stderr)
+                sys.exit(1)
+            seg_by_id = {seg["id"]: seg for seg in manifest["segments"]}
             # agenda 结构性页不消费配图
             for k in STRUCTURAL_SIDS:
                 if k in images and k in seg_by_id \
@@ -212,6 +338,37 @@ def main(argv=None):
                 print(f"[warn] images.json 的 {k} 键未匹配到 manifest 中的任何段落，"
                       "已忽略", file=sys.stderr)
                 images.pop(k)
+            # 媒体文件暂存进 public/images（director_prepare 读的是 out_dir 下的
+            # 相对路径；poster 与 src 同档处理），同名同内容复用、撞名不同内容报错
+            _staged_names = {}
+            for sid, entry in list(images.items()):
+                for key in ("src", "poster"):
+                    raw = entry.get(key)
+                    if not raw:
+                        continue
+                    resolved = (raw if os.path.isabs(raw)
+                                else os.path.join(images_dir, raw))
+                    rel = _stage_media(resolved, args.out, _staged_names)
+                    if rel is None:
+                        print(f"[error] 段落 '{sid}' 的 {key}={raw!r} 找不到或不可读，"
+                              "拒绝生成（渲染会静默出空白裂图/无声媒体）", file=sys.stderr)
+                        sys.exit(1)
+                    entry[key] = rel
+            # director 体检 + 净化内联 + stage:"keep" 跨段烘焙（errs 即 fail-fast，
+            # 与 gen_hyperframes 同一口径；warns 打印）。此调用会原地改写 entry
+            # 的 inline_svg：普通 SVG 仍是 <img>，只有 director/keep 走净化内联。
+            # 循环变量不能叫 w：外层 w,h = get_canvas(aspect) 是画布宽，被这句
+            # 覆盖后 data["width"] 会变成警告文本（实测踩过）。
+            dir_errs, dir_warns = director_prepare(
+                images, manifest["segments"], os.path.join(args.out, "public"))
+            for warn_ in dir_warns:
+                print(f"[warn] {warn_}", file=sys.stderr)
+            if dir_errs:
+                for e in dir_errs:
+                    print(f"[error] {e}", file=sys.stderr)
+                sys.exit(1)
+
+    clips = compute_clips(manifest, tpl, images)
 
     audio_src = None
     if args.audio:
@@ -226,30 +383,37 @@ def main(argv=None):
 
     # ── 段数据 → generated.ts 数据胶 ────────────────────────────────────────
     segs_out = []
+    dflt_director = tpl["animation"]["director"]
     for clip in clips:
         seg = clip["seg"]
         sid = seg["id"]
         layout = seg_layout(seg)
-        image = None
-        if layout != "agenda" and sid in images:
-            src = images[sid]
-            # images.json 允许裸字符串路径或 {src: ...} 对象
-            src_path = src if isinstance(src, str) else (src or {}).get("src")
-            # 相对路径按 images.json 所在目录解析（与 gen_hyperframes 按 HTML
-            # 输出目录解析同一惯例：资产路径是"相对清单文件"写的）；非绝对路径
-            # 且已存在于 public/ 下 = 上一次生成复制的相对路径，直接复用。
-            if src_path:
-                if (not os.path.isabs(src_path)
-                        and os.path.isfile(os.path.join(args.out, "public", src_path))):
-                    image = src_path
-                else:
-                    resolved = (src_path if os.path.isabs(src_path)
-                                else os.path.join(images_dir or ".", src_path))
-                    if os.path.isfile(resolved):
-                        image = _stage_asset(resolved, args.out, "images")
-                    else:
-                        print(f"[warn] 段落 '{sid}' 的配图 {src_path!r} 找不到，该段将无图",
-                              file=sys.stderr)
+        entry = images.get(sid)
+        media = None
+        image_mode = None
+        svg = None
+        director = None
+        if layout != "agenda" and entry:
+            if classify_media_path(entry["src"], entry.get("type", "auto")) == "video":
+                image_mode = "video"
+                media = {
+                    "src": entry["src"],
+                    "poster": entry.get("poster") or None,
+                    "loop": entry.get("loop", True),
+                    "muted": entry.get("muted", True),
+                    "autoplay": entry.get("autoplay", True),
+                    "playsinline": entry.get("playsinline", True),
+                }
+            elif entry.get("inline_svg"):
+                # director / stage:"keep"：净化内联 SVG（keep 页的 inline_svg 是
+                # 上一页演完画面烘焙出的副本，见 _stage_carry）；导演编排按步
+                # 采样成数据胶，组件只按帧求值（morph 与 HTML 一样在生成期采样）。
+                image_mode = "svgInline"
+                svg = entry["inline_svg"]
+                director = _director_data(entry, seg, dflt_director, args.fps)
+            else:
+                image_mode = "img"
+                media = {"src": entry["src"]}
         seg_out = {
             "id": sid,
             "title": seg.get("title", ""),
@@ -269,7 +433,11 @@ def main(argv=None):
             "winStart": clip["win_start"],
             "vis": clip["vis"],
             "peel": clip["peel"],
-            "image": image,
+            "imageMode": image_mode,
+            "media": media,
+            "svg": svg,
+            "director": director,
+            "keep": bool(entry and entry.get("stage") == "keep"),
             "rows": [],
             "tail": None,
         }
@@ -307,7 +475,10 @@ def main(argv=None):
     print(f"     Aspect: {aspect} ({w}x{h})")
     print(f"     Segments: {len(segs_out)}")
     print(f"     Audio: {audio_src or '无（成片将无声）'}")
-    print(f"     Images: {sum(1 for s in segs_out if s['image'])}")
+    print(f"     Media: {sum(1 for s in segs_out if s['imageMode'])}"
+          f"（其中 svgInline {sum(1 for s in segs_out if s['imageMode'] == 'svgInline')}"
+          f" / video {sum(1 for s in segs_out if s['imageMode'] == 'video')}"
+          f" / keep {sum(1 for s in segs_out if s['keep'])})")
     print(f"     渲染: cd {os.path.abspath(args.out)} && "
           "npx remotion render src/index.ts ContentToVideo out.mp4")
 

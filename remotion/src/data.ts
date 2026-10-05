@@ -16,6 +16,40 @@ export interface GenRow {
   dur: string | null;
 }
 
+/** director.steps 的求值数据（生成器按帧采样/展开，组件只按绝对帧求值，
+ * 等价于 html_renderer._director_timeline_lines 的 GSAP 补间逐帧 seek）。 */
+export interface DirectorStep {
+  target: string;
+  kind: "to" | "from" | "fromTo" | "set" | "draw" | "count" | "type" | "morph";
+  pos: number;
+  dur: number;
+  ease: string;
+  repeat: number;          // -1 = 无限（周期求值，无收尾态，与 GSAP repeat:-1 同确定性）
+  yoyo: boolean;
+  stagger: number | {each?: number; amount?: number; from?: string | number; grid?: [number, number]} | null;
+  // 补间变量（契约层已滤成 JSON 标量；值可为嵌套 attr:{}）
+  fromVars?: Record<string, unknown>;
+  toVars?: Record<string, unknown>;
+  vars?: Record<string, unknown>;   // set
+  count?: {from: number; to: number; decimals: number; prefix: string; suffix: string};
+  morphKeys?: {t: number; d: string}[];
+}
+
+export interface DirectorData {
+  segStart: number;
+  camOrigin: [number, number] | null;
+  steps: DirectorStep[];
+}
+
+export interface GenMedia {
+  src: string;
+  poster?: string | null;
+  loop?: boolean;
+  muted?: boolean;
+  autoplay?: boolean;
+  playsinline?: boolean;
+}
+
 export interface GenSegment {
   id: string;
   title: string;
@@ -30,7 +64,14 @@ export interface GenSegment {
   winStart: number;
   vis: number;
   peel: {sid: string; wipe: number} | null;
-  image: string | null;
+  /** 媒体渲染方式：img（静态图/gif <img>）、video（Remotion <Video>）、
+   * svgInline（净化内联 SVG：director / stage:"keep"）、null（纯文字）。 */
+  imageMode: "img" | "video" | "svgInline" | null;
+  media: GenMedia | null;
+  /** 净化内联的 SVG（keep 页为上一页演完画面的烘焙副本）。 */
+  svg: string | null;
+  director: DirectorData | null;
+  keep: boolean;
   rows: GenRow[];
   tail: GenRow | null;
 }

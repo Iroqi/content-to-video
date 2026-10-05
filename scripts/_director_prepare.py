@@ -378,7 +378,7 @@ def next_speech_start(segments, sid):
 
 
 def beat_report_lines(images, segments, dflt_dur):
-    """每个导演段一张对轴表（作者用 --beat-report 索取，默认不打，免得盖过 warn）。
+    """每个导演段一张对轴表（生成器默认不打，免得盖过 warn；维护者在测试里调它）。
 
     它回答"每一拍到底踩在话的哪儿"：in=句内、gap=句间静音、tail=段尾静音、
     before/after=窗外（就是门禁 warn 的那两类）。**in 也不等于准**：句内 frac 是
@@ -437,7 +437,6 @@ def director_prepare(images, segments, out_dir):
     - 节拍出窗：每一步的落点按 _timeline.beat_positions 解析成绝对秒，落在本页可见窗口
       之外（早于本段旁白 / 晚于下一段起点）warn——那是"这一拍根本不演"，`at_time` 过期
       最常见；起点在窗内、终点越过下一段起点的也 warn（那一拍被切在半路，终态从没出现过）。
-      逐拍踩在哪句可以用 `--beat-report` 打表看。
     - 净化说明：删掉了哪些不安全/墙钟构造，按 warn 让人知情（决定性的代价写在明面）。
     - 跨段延续（stage:"keep"）：写完上面这些，再按 manifest 段序走第二遍，把上一页
       演完的画面烘焙成下一页的内联副本（见 _stage_carry_pass）。那一遍还要替接续页补做

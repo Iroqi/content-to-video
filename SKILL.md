@@ -14,7 +14,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 - **先编排，再选版式**：一页的第一性问题是"什么时刻出现什么"（导演的节拍），不是"模板给了哪个槽位"。`layout:"canvas"` × `director` 是技能里唯一由你完全拥有画面的写法——整页一张净化内联 SVG，Remotion 求值器按旁白时间轴逐拍驱动，逐帧可复现；模板在这种页只交给你三样：背景三层（主题渐变、页缘网格、本段 accent 氛围光）、主题与字号 token、以及页边界。槽位版式与 agenda 是**兜底而不是默认目标**——这一页没有过程要演、或素材本来就是照片/生图，就交给模板管构图。
 - **版式由段落 `layout` 分派**：不写 = 槽位版式（标题 + 4:3 配图槽 + 句子流）；`"canvas"` = 整页画布（配图就是整个画面，标题与文字由图自己画）；`"agenda"` = 开屏/结尾的纯文字卡，由 pipeline 自动盖章，内容段不能手写。开屏/结尾想做整页海报，写顶层 `opening_layout` / `closing_layout: "canvas"`。画面结构与折行规则见 `references/rendering.md`「画面结构」。
 - **时间轴单一来源**：`timing_manifest.json` 的句子时间轴同时驱动字幕、段落和动画，不要在渲染数据或组件里另维护一份时长。
-- **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，此时 manifest 的 `status` 会是 `degraded`、`degraded` 数组列出降级项——生成前先看一眼它，别让静音句悄悄混进成片（渲染端不认退化闸门，也没有可再开的开关）。
+- **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，此时 manifest 的 `status` 会是 `degraded`、`degraded` 对象（键 → 计数）列出降级项——生成前先看一眼它，别让静音句悄悄混进成片（渲染端不认退化闸门，也没有可再开的开关）。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
 - **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`，配色在 `scripts/_theme.py`，两处都是 Python；渲染端的 TS 副本（`remotion/src/theme.ts`）由人同步——改视觉参数要双写，这一条的代价与操作见 `remotion/README.md`「主题」。结构与选择器在 `remotion/src/components/*.tsx`；只有**两画幅同值、单值即终态**的观感常量（字重、透明度、辉光浓度）允许写死在组件样式里。
 
@@ -63,7 +63,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 要点：
 
-- **导演层（先排这个）**：方式 C 的 SVG 有两档动画——纯氛围循环（`<img>`+墙钟 CSS/SMIL，不同步）与「导演」（images.json 写 `director`，净化内联后由 Remotion 求值器按旁白时间轴逐拍驱动，逐帧可复现）。导演档九类能力：句内小数偏移的 `at`、按段落秒数锚定的 `at_time`、`draw` 描边自绘、`morph` 同拓扑形变、`count` 数字滚动、`type` 逐字揭示、`stagger`+class 目标一组错峰揭示、对 `<g id="cam">` 补间的运镜、`repeat`+`yoyo` 的一拍往复（呼吸/脉动）——写法、缺省值与各自约束都在 `references/image_options.md`「SVG 动画：两档」。两条会影响取舍的结论留在这里：`at_time` **与语音无绑定**，重配音就整体错位（跟旁白走的节拍该用 `at`）；相机停在"把内容推出画幅"的姿态、或节拍落在本页可见窗口外，都在生成期打 `[warn]`（每拍落点的对轴判据见 `references/image_options.md`「跨段场景延续」）。配合 `layout:"canvas"`（整页只有这张图、模板标题/句子流层都不生成，画面上要出的字得自己画）就是一整个可自由编排的舞台，能拼 3b1b 式"边讲边画、镜头跟随、形状互变、数字递增"的镜头。**一个舞台演不完一句话就跨页接续**：下一页的 images.json 条目写 `"stage": "keep"` 并把 `src` 指到同一张 SVG，这一页的起点就是上一页演完的那幅画面（不再擦页、不再重放入场），口径与实测见同文件「跨段场景延续」。**机械部分有脚手架**：画布页那张 SVG 可以用 `python scripts/canvas_kit.py --spec spec.json -o images/segN.svg --sentences N` 生成（`N` = 该段旁白句数，务必给上：不给时自动拍可能排到句序之外、被生成期按 error 拒掉），按画幅原生尺寸出图 + 一份能直接用的 `director` steps 草稿 + 先过一遍 `check_svg` 的画布门禁，构图仍归人。
+- **导演层（先排这个）**：方式 C 的 SVG 有两档——纯氛围循环（`<img>`+墙钟 CSS/SMIL，不同步）与「导演」（images.json 写 `director`，净化内联后由 Remotion 求值器按旁白时间轴逐拍驱动）。导演档九类能力（`at` / `at_time` / `draw` / `morph` / `count` / `type` / `stagger` / 运镜 / `repeat`+`yoyo`）的写法、缺省值与各自约束都在 `references/image_options.md`「SVG 动画：两档」。两条会影响取舍的结论留在这里：`at_time` **与语音无绑定**，重配音就整体错位（跟旁白走的节拍该用 `at`）；相机停在"把内容推出画幅"的姿态、或节拍落在本页可见窗口外，都在生成期打 `[warn]`。配合 `layout:"canvas"`（整页只有这张图，标题层与句子流层都不生成）就是一整个自由编排的舞台。**一个舞台演不完就跨页接续**：下一条目写 `"stage": "keep"` 并指向同一张 SVG，起点即上一页演完的那幅画面（口径见同文件「跨段场景延续」）。机械部分有脚手架 `scripts/canvas_kit.py`（按 spec 出图 + `director` 草稿，构图仍归人）。
 
 - 默认 agenda 版式的开屏/结尾不配图，`images.json` 里的 `opening` / `closing` 键会被忽略并打 `[warn]`。
 - **画 SVG 前先读** `references/image_options.md` 的「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节，第一版就按约束画——管线与渲染都看不见图里画得对不对，画错不会有任何报错。**画布档（`layout:"canvas"`）再加一节**「整页画布的密度与层次」：槽位有模板兜构图，画布没有，暂停一帧还成立才是及格。背景那三层归模板，画布 SVG **别自铺满幅底板**（判据与例外在「不铺满幅底」）。画完可跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`）；它查什么、查不到什么，写在「画布几何」一节末尾。
@@ -96,7 +96,7 @@ cd remotion && npx remotion render src/index.ts ContentToVideo out.mp4 --codec h
 
 参数只认一处真源：`python scripts/gen_remotion_project.py --help`（取值、默认值、用途都在那里，改代码同步更新）。TTS 侧（`pipeline.py`）只有一条 `--help` 看不出来的：`--workers` 是 **TTS 并发**数（渲染并行度由 Remotion 的 `--concurrency` 控制，2 核机器必须给 2）。
 
-缺图处理：`images.json` 引用缺失时生成器 fail-fast（exit 1）；`director` 页的 SVG 无法净化内联、`stage:"keep"` 接续前提不成立同样 fail-fast——每一处都点名到段落到文件。
+缺图处理：缺图一律 fail-fast（exit 1），点名到段落到文件——`images.json` 引用缺失、以及**整页画布段压根没拿到配图**（不传 `--images` 也算，那种页不画标题也不画句子流，没图就是一整页空白）都拦；`director` 页的 SVG 无法净化内联、`stage:"keep"` 接续前提不成立同样 fail-fast。槽位版式缺图不拦：它还有标题层与句子流层，不是空白页。
 
 ## 输出契约
 
@@ -108,7 +108,7 @@ cd remotion && npx remotion render src/index.ts ContentToVideo out.mp4 --codec h
 - 产物（音频、数据胶、配图、成片）不得落进技能目录，脚本有 `guard_not_in_skill_dir` 拦截。
 - 进入数据胶/内联 SVG 的文本必须走现有转义路径，不要新增未转义的 f-string 插值。
 - `accent` 与媒体路径的白名单/路径约束在 `_validate.py` 与 `_images_schema.py`，相对路径不得逃出项目根。
-- 音频缺失直接失败，不生成无声成片。
+- 音频缺失直接失败，不生成无声成片：manifest 声明的 `combined_audio` 读不到就 exit 1（多半是缓存被清了 / 目录被挪了）。manifest 本身不带这个字段（手写稿做画面检查）只打 `[warn]` 放行。
 - 密钥只从 CLI / 环境 / 用户 `.env` 读取，不写入 manifest、数据胶、images.json 或技能目录。
 
 ## 参考文档

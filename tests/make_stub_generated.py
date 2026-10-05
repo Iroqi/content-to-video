@@ -30,12 +30,15 @@ from gen_remotion_project import main as gen_main  # noqa: E402
 def build(out_path):
     """把数据胶写到 out_path（用临时工程再搬过去：生成器的产物是一整个工程）。"""
     with tempfile.TemporaryDirectory() as tmp:
+        manifest = H.make_manifest()
         m_path = os.path.join(tmp, "manifest.json")
         with open(m_path, "w", encoding="utf-8") as f:
-            json.dump(H.make_manifest(), f, ensure_ascii=False)
+            json.dump(manifest, f, ensure_ascii=False)
         proj = os.path.join(tmp, "proj")
-        # 不带 --images：纯文字版照样产出全部段落与 clip 几何，够 tsc 查全字段。
-        gen_main(["-m", m_path, "-o", proj, "--aspect", "portrait", "--fps", "24"])
+        # 必须带 --images：夹具里有一段 layout:"canvas"，整页画布没有配图就是
+        # 空白页，生成器按 fail-fast 拒掉——数据胶也就产不出来。
+        gen_main(["-m", m_path, "-o", proj, "--aspect", "portrait", "--fps", "24",
+                  "--images", H.write_placeholder_images(manifest, tmp)])
         src = os.path.join(proj, "src", "generated.ts")
         with open(src, encoding="utf-8") as f:
             text = f.read()

@@ -839,8 +839,11 @@ def main(argv=None):
                   "看得见的毛病。改 spec 重跑；确属有意的取舍再加 --no-check", file=sys.stderr)
             rc = 1
 
-    print(f"[ok] {n_struct} 个结构底 / {len(frag['steps'])} 拍内容 / 已写 {args.out}",
-          file=sys.stderr)
+    # 门禁没过时别打 [ok]：同一条 stderr 里 [error] 后面跟一个 [ok]，读起来是
+    # "报错但成功了"——退出码才是真的，日志不该跟退出码打架。
+    print(f"{'[ok]' if rc == 0 else '[done]'} {n_struct} 个结构底 / "
+          f"{len(frag['steps'])} 拍内容 / 已写 {args.out}"
+          f"{'' if rc == 0 else '（未过门禁，见上）'}", file=sys.stderr)
     print(json.dumps(frag, ensure_ascii=False, indent=2))
     return rc
 

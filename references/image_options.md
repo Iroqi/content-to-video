@@ -106,7 +106,7 @@
 
 - `src`：必填，相对 images.json 所在目录的媒体路径（生成器把它复制进输出工程的 `public/images/`）。
 - `type`：可选，合法取值 `auto`/`image`/`video`/`gif`；缺省即 `auto`（按扩展名判断：`.mp4/.webm/.mov/.avi/.mkv` → video，`.gif` → gif，其余 → image）。gif 与 image 同档，都走 `<img>`。
-- `loop` / `muted` / `autoplay` / `playsinline`：可选，视频播放属性，默认均为 `true`。**必须写 JSON 布尔**，字符串 `"false"` 会被契约层拒（渲染端按 `opts.get(flag, True)` 取值，字符串是真值，"关掉循环"会变成"永远循环"）。
+- `loop` / `muted`：可选，视频播放属性，默认均为 `true`。**必须写 JSON 布尔**，字符串 `"false"` 会被契约层拒（渲染端按 `opts.get(flag, True)` 取值，字符串是真值，"关掉循环"会变成"永远循环"）。`autoplay` / `playsinline` 两个键契约层仍收下（老 `images.json` 照旧过校验），但**逐帧渲染里没有"自动播放"这回事**，生成器不会把它们写进数据胶——写了也不生效。
 - `poster`：可选，视频加载前显示的封面图，与 `src` 同一校验口径（禁绝对路径、禁越出项目根）。
 - `director`：可选，**仅 `.svg`**，方式 C 的「时间轴同步动画（导演）」编排块。写了它这张 SVG 才走净化内联、由 Remotion 求值器按句驱动图内元素；不写就是普通 `<img>` 静态图。结构与语义见下面方式 C「SVG 动画：两档」。
 - `stage`：可选，**仅 `.svg`**，目前只认字符串 `"keep"` 一个值——**跨段场景延续**：这一页不从头画，而是接着上一页演完的那幅画面继续演（写在哪一页的条目上就接续哪一页的前一段）。口径与能接住什么/接不住什么见下面「跨段场景延续」。
@@ -296,7 +296,7 @@ Prompt 先描述"讲什么"，再描述"怎么画"。不要先写一堆风格词
     所以"打什么字"完全由你在 SVG 里写好的 `<text>` 决定，**这里没有任何参数可配**——刻意如此：要改文字就改 SVG，要改快慢就用 step 级 `duration`/`ease`。`target` 要指一个**直接写文本的 `<text>`**（带子 `<tspan>` 排版的复杂文本会被压平成纯文本，别用在这类节点上）。`ease` 缺省取模板（多为 `power2.out`，打字会前快后慢）；**想要匀速打字的手感就写 `"ease": "none"`**。不能叠 `from`/`to`/`set`/`draw`/`morph`/`count`，且 `stagger` 会被契约层直接拒（type 负责整段、没有"错峰"可言）。
 
     与 `count` 走同一条按帧重算的路（每帧由 `textContent` 原文切片），所以天然可复现：渲染多少次结果都一样，也不用担心跨段之间的状态残留。
-- `stagger`：可选，**配 class 目标做一组元素的错峰揭示**。数字（`0.12`=每个间隔秒）或对象（`each`/`amount`/`from`(`"start"`/`"center"`/`"edges"`/序号)）。`{"at_time":"+0.4","target":".row","from":{"opacity":0,"y":16},"to":{"opacity":1,"y":0},"stagger":0.12}` = 一组 `.row` 依次浮入。只对有补间的 step（`from`/`to`/`fromTo`/`set`）生效；`morph`/`count`/`type`/`draw` 各自负责整段，`stagger` 会被契约层拒（静默失效与 `repeat`/`yoyo` 挂纯 `set` 同类）。
+- `stagger`：可选，**配 class 目标做一组元素的错峰揭示**。数字（`0.12`=每个间隔秒）或对象（`each`/`amount`/`from`(序号/`"end"`/`"center"`/`"start"`)）。`from` 只认序号与这三个字符串，其它写法（含 GSAP 的 `"edges"`/`"random"`）一律退回顺序错峰 `i*each`，不报错。`{"at_time":"+0.4","target":".row","from":{"opacity":0,"y":16},"to":{"opacity":1,"y":0},"stagger":0.12}` = 一组 `.row` 依次浮入。只对有补间的 step（`from`/`to`/`fromTo`/`set`）生效；`morph`/`count`/`type`/`draw` 各自负责整段，`stagger` 会被契约层拒（静默失效与 `repeat`/`yoyo` 挂纯 `set` 同类）。
 - `duration` / `ease` / `delay`：可选。缺省 `duration`/`ease` 取模板 `animation.director`（视觉真源单一数据源，别在 JSON 里各处写死）。这三个旋钮连同 `stagger`/`repeat`/`yoyo` **只能写在 step 级**：塞进 `to`/`from`/`set` 的补间变量里会被契约层拒——那种写法要么被渲染端覆盖掉、要么让门禁算的跨度与补间真实跨度分家，两种都是静默的。
 
 - `ease`：缓动档。放行目录在 `scripts/_ease.py`（`EASE_FAMILIES`），**认不出的档当场报错**——不会留成"作者以为演的是弹一下落定、成片里是平稳落定"。这份目录当年是对着钉固的 GSAP core 逐个试出来的，如今 Python 侧（`_ease.curve`，morph 采样用）与 TS 侧（`remotion/src/easing.ts`，逐帧求值用）是同一口径的两份实现，`tests/test_ease_parity.py` 逐点盯着它们不分家。
@@ -561,7 +561,7 @@ VideoGen 同为能力泛称，见 SKILL.md 第 4 步。本文不列举具体工�
 
 这一条必须先知道，再决定用不用：
 
-- **播放进度与段落时间轴不做逐帧同步**。段落显示多久由时间轴决定，视频只是循环填充。比段落长的视频**渲染只显示前段**（生成期按 ffprobe 实测时长打 `[warn]`，报出视频时长与段落时长）。
+- **播放进度与段落时间轴不做逐帧同步**。段落显示多久由时间轴决定，视频只是循环填充。比段落长的视频**渲染只显示前段**（生成期按 ffmpeg 实测时长打 `[warn]`，报出视频时长与段落时长）。只用 `ffmpeg`，不需要 `ffprobe`——见 SKILL.md「环境」。
 - **`<video>` 走页面墙钟，多 worker 各自从 0 起播，抓到的帧可能不同**——同一秒的画面不保证可复现，同一份稿件两次渲染可能不一致。这与方式 C「导演」的逐帧 seek 不可比，也与 CSS 氛围循环同类（见「SVG 动画：两档」的①档）。
 - **画面必须对上某句话时，别指望视频帧同步**。改用剪好的静态 poster 序列，或者干脆换成 SVG 导演层编排。
 
@@ -572,10 +572,10 @@ VideoGen 同为能力泛称，见 SKILL.md 第 4 步。本文不列举具体工�
 视频默认：
 
 ```html
-loop muted autoplay playsinline
+loop muted
 ```
 
-四个开关都能在 `images.json` 里显式关掉（**必须写 JSON 布尔 `false`，写字符串 `"false"` 会被契约层拒**——渲染端按 `opts.get(flag, True)` 取值，字符串是真值，"关掉循环"会变成"永远循环"）。GIF 用自身循环，走 `<img>` 不受这些开关影响。
+`loop` / `muted` 都能在 `images.json` 里显式关掉（**必须写 JSON 布尔 `false`，写字符串 `"false"` 会被契约层拒**——渲染端按 `opts.get(flag, True)` 取值，字符串是真值，"关掉循环"会变成"永远循环"）。`autoplay` / `playsinline` 已从渲染链路移除：逐帧渲染下每帧取的是视频同一时刻的帧，"自动播放"没有语义，写了也不会往下传。GIF 用自身循环，走 `<img>` 不受这些开关影响。
 
 **视频封面用 `poster` 提供**，避免首帧空白。它与 `src` 同一校验口径（禁绝对路径、禁越出项目根），`poster` 的问题会被单独点名，不影响 `src` 自己的报错。
 

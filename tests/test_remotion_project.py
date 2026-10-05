@@ -157,7 +157,8 @@ class GeneratedProjectShape(unittest.TestCase):
                 json.dump(H.make_manifest(), f, ensure_ascii=False)
             out = os.path.join(tmp, "proj")
             gen_main(["-m", m_path, "--out", out, "--aspect", "portrait",
-                      "--fps", "24"])
+                      "--fps", "24", "--images",
+                      H.write_placeholder_images(H.make_manifest(), tmp)])
             # 自包含工程：npm 配置 + 组件源码 + 数据胶都在输出目录里
             for rel in ("package.json", "package-lock.json", "tsconfig.json",
                         "remotion.config.ts", "README.md", ".gitignore",
@@ -188,7 +189,8 @@ class GeneratedProjectShape(unittest.TestCase):
                 json.dump(H.make_manifest(), f, ensure_ascii=False)
             out = os.path.join(tmp, "proj")
             gen_main(["-m", m_path, "--out", out, "--aspect", "portrait",
-                      "--fps", "24"])
+                      "--fps", "24", "--images",
+                      H.write_placeholder_images(H.make_manifest(), tmp)])
             gen_ts = H.read_text(os.path.join(out, "src", "generated.ts"))
             self.assertIn("export const DATA", gen_ts)
             # 数据胶可独立解析回 JSON（字符串是 JSON 直出的 TS 字面量）
@@ -447,7 +449,8 @@ class OutDirGuardAndScaffoldSafety(unittest.TestCase):
             with open(m_path, "w", encoding="utf-8") as f:
                 json.dump(H.make_manifest(), f, ensure_ascii=False)
             out = os.path.join(tmp, "proj")
-            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24",
+                      "--images", H.write_placeholder_images(H.make_manifest(), tmp)])
             self.assertTrue(os.path.isfile(os.path.join(out, "src", "generated.ts")),
                             "-o 应与 --out 等价")
 
@@ -476,12 +479,15 @@ class OutDirGuardAndScaffoldSafety(unittest.TestCase):
             with open(m_path, "w", encoding="utf-8") as f:
                 json.dump(H.make_manifest(), f, ensure_ascii=False)
             out = os.path.join(tmp, "proj")
-            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            img = H.write_placeholder_images(H.make_manifest(), tmp)
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24",
+                      "--images", img])
             card = os.path.join(out, "src", "components", "Card.tsx")
             self.assertTrue(os.path.isfile(card))
             with open(card, "a", encoding="utf-8") as f:
                 f.write("\n// 我改过这一行\n")
-            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24",
+                      "--images", img])
             with open(card, encoding="utf-8") as f:
                 self.assertIn("我改过这一行", f.read(),
                               "第二次生成把用户改过的 Card.tsx 覆盖了")

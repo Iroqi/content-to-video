@@ -20,7 +20,7 @@
 > **manifest 的降级字段**：`status` 只有 `ok` / `degraded` 两种，`degraded` 是明细对象。
 > 它的键是一份**封闭集合**，由 `scripts/_degraded.py` 的注册表 `KINDS` 派生（`_manifest_schema.DEGRADED_KEYS` 是它的别名），并在 `validate_timing_manifest`
 > 拦截未知键（拼错的键会让制作报告静默少一条，只剩 `status` 拦交付却说不出拦的是哪一项）。
-> 新增一档降级只改 `_degraded.py` 一处登记（加键名常量 + reader + 在 `KINDS` 里登记一行），`pipeline.py` 写入时用该常量（`D.<常量>`，拼错是 NameError，不会静默丢失）；
+> 新增一档降级只改 `_degraded.py` 一处登记（加键名常量 + reader + 在 `KINDS` 里登记一行），`pipeline.py` 写入时用该常量（`D.<常量>`，拼错是 AttributeError，不会静默丢失）；
 > 目前会出现的键：
 > - `tts_silence_fallback_count`：静音占位句数；
 > - `tts_lost_sentence_count`：**连静音都没生成、已从成片里消失**的句数（按"应产出句数 − 实际句数"算）；
@@ -48,7 +48,10 @@
 时长+句间静音排布，两边是同一个条件），管线直接报错退出而不是继续。这道对账是
 "某句 WAV 头部声明一个长度、实际只写了一半字节"（上次写入被截断——ffmpeg 仍量得出
 名义时长，单看头部检不出）这类静默损坏的下游兜底；真损坏的量级是秒到几十秒，
-250ms 只吸收逐句舍入误差。真触发时删掉 `combined.wav` 重跑——`--resume` 的状态机
+250ms 只吸收逐句舍入误差。真触发时**不中断本次生成**：超出部分记进 `degraded` 的
+`audio_shorter_than_timeline`（秒数），`total_duration` 仍按时间轴取值，日志打
+`[duration][warn]` 点明末尾几秒无音频——让人看见，而不是替人决定。处理办法是删掉
+`combined.wav` 重跑——`--resume` 的状态机
 会按头部/字节一致性把坏句判成失效缓存自动重合成，正常句子照常复用。
 
 ## 预置音色表
@@ -104,7 +107,7 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 
 - 顶层 `schema_version`（只能是 `2`）、`status`（`ok` / `degraded`）、`sentences`（非空列表）、`segments`（非空列表）与数值 `total_duration`（ffmpeg 实测总时长）必填；`degraded` 只在 `status` 为 `degraded` 时必须是非空对象。每个句子对象含 `index`/`text`/`start_time`/`duration` 四个字段（对话段落的句子另有 `speaker`，TTS 失败降级为静音的句子带 `synth_failed: true`）
 - 顶层 `closing_cta`（可选，单行字符串）：结尾 agenda 卡的 `→` 尾行，pipeline 从稿件顶层 `cta` 原样透传；手写 manifest 要有这行就直接写。它只在存在 `closing` 段、且那一页是 agenda 版式时才有地方画（`closing_layout: "canvas"` 时它随 agenda 卡一起不生成）；两种"无处可画"（没有 closing 段 / 结尾页换成了整页海报）生成阶段都打同一条 `[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它`
-- `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`layout`/`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是版式、语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`layout` 只在显式时才出现：opening/closing 由 pipeline 必盖——默认 `"agenda"`，稿件写了顶层 `opening_layout` / `closing_layout: "canvas"` 就改盖 `"canvas"`；内容段只在作者声明时带 `"canvas"`（不带 = 槽位版式）。`start`/`end` 句子索引只是 pipeline 的内部中间格式，最终 manifest 不含这两个字段
+- `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`layout`/`opening_animation`/`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是版式、语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`layout` 只在显式时才出现：opening/closing 由 pipeline 必盖——默认 `"agenda"`，稿件写了顶层 `opening_layout` / `closing_layout: "canvas"` 就改盖 `"canvas"`；内容段只在作者声明时带 `"canvas"`（不带 = 槽位版式）。`start`/`end` 句子索引只是 pipeline 的内部中间格式，最终 manifest 不含这两个字段
 
 **可选字段**：
 - `speed`（float）：段落级语速倍率，覆盖全局 `--speed`。例如开场/结尾用 `1.2`、正文段用 `1.5`。仅影响 TTS atempo 变速，不影响字幕时间轴精度

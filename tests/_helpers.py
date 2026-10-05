@@ -1,5 +1,6 @@
 """测试共用：把 scripts/ 放进 sys.path，并提供确定性的样例稿件 / manifest 构造器。"""
 import copy
+import json
 import os
 import sys
 
@@ -60,6 +61,31 @@ def sample_images(manifest):
     """给每个需要配图的段落一个占位映射（生成 HTML 只读路径，不读文件）。"""
     from _segments import sids_needing_image
     return {sid: {"src": f"images/{sid}.svg"} for sid in sids_needing_image(manifest)}
+
+
+def write_placeholder_images(manifest, directory, aspect="portrait"):
+    """给 manifest 里需要配图的段落各写一张**真实存在**的占位 SVG，返回 images.json 路径。
+
+    画布段（layout:"canvas"）缺图会被生成器 fail-fast——整页画布不画标题层也不画
+    句子流层，没有配图就是一整页空白。所以"不带 --images 跑生成器"只对纯槽位稿
+    件成立；含画布段的稿件必须给得出能落盘的图，用例要按这个真用法写。
+    """
+    from _segments import sids_needing_image
+    from _template import get_canvas, normalize_aspect
+    w, h = get_canvas(normalize_aspect(aspect))
+    mapping = {}
+    for sid in sids_needing_image(manifest):
+        name = f"{sid}.svg"
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as f:
+            f.write(f'<svg xmlns="http://www.w3.org/2000/svg" '
+                    f'viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
+                    f'<rect x="40" y="40" width="240" height="140" '
+                    f'fill="#2dd4bf"/></svg>')
+        mapping[sid] = {"src": name}
+    path = os.path.join(directory, "images.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, ensure_ascii=False)
+    return path
 
 
 def read_text(path):

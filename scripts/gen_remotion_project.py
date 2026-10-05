@@ -461,6 +461,7 @@ def main(argv=None):
     #    必须先于 clips 几何：keep 页要把 wipe 归零（compute_clips 读 stage）。
     images = {}
     images_dir = None
+    public_dir = os.path.join(args.out, "public")
     if args.images:
         if not os.path.exists(args.images):
             print(f"[warn] --images 文件不存在: {args.images}，本次渲染将不带配图"
@@ -515,7 +516,6 @@ def main(argv=None):
 
             # ── 素材门禁：这两道闸是本支路唯一能拦住"整页空白 / 图元被裁掉"的
             #    地方——不拦的话，缺图与坏图就会一路静默进成片。
-            public_dir = os.path.join(args.out, "public")
             missing, corrupt = validate_images_files(images, public_dir)
             for sid, path in missing:
                 print(f"[error] 段落 '{sid}' 的 {path} 在工程里找不到（--images "
@@ -526,15 +526,20 @@ def main(argv=None):
                       "渲染阶段才炸就白烧一整轮", file=sys.stderr)
             if missing or corrupt:
                 sys.exit(1)
-            # 画布段专门的体检（无图、比例不对、字号被缩到读不出来）
-            c_errs, c_warns = canvas_layout_errors(
-                images, manifest["segments"], public_dir, w, h)
-            for warn_ in c_warns:
-                print(f"[warn] {warn_}", file=sys.stderr)
-            if c_errs:
-                for e in c_errs:
-                    print(f"[error] {e}", file=sys.stderr)
-                sys.exit(1)
+
+    # ── 画布段体检（无图 / 比例不对 / 字号被缩到读不出来）──
+    #    独立于 --images：整页画布没有配图就是**整页空白**，与槽位版式"没图还有
+    #    标题和字幕"不是一回事。不传 --images 时这条同样要拦，否则一次忘给参数
+    #    就换来一段静默的空白成片（SKILL.md 的 fail-fast 是针对"缺图"这件事，
+    #    不是针对"传了 images.json"这个动作）。
+    c_errs, c_warns = canvas_layout_errors(
+        images, manifest["segments"], public_dir, w, h)
+    for warn_ in c_warns:
+        print(f"[warn] {warn_}", file=sys.stderr)
+    if c_errs:
+        for e in c_errs:
+            print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
 
     # keep 页要在 wipe 归零后才算得对（compute_clips 读 stage），所以带 images 重算。
     clips = compute_clips(manifest, tpl, images)
@@ -546,11 +551,35 @@ def main(argv=None):
         audio_abs = manifest.get("combined_audio")
         if audio_abs and os.path.isfile(audio_abs):
             audio_src = _stage_asset(audio_abs, args.out, "audio")
+        elif audio_abs:
+            # manifest 点了名却读不到：这不是"作者没要音频"，是缓存被清了 /
+            # 目录被挪了。成片照样出，只是全程无声——那是最贵的一类废品，
+            # 因为要等到渲染完才看得出来。所以这里 fail-fast（SKILL.md 安全
+            # 边界：音频缺失直接失败，不生成无声成片）。
+            print(f"[error] manifest 的 combined_audio 指向的文件不存在或不可读："
+                  f"{audio_abs!r}——拒绝生成无声成片；确认后重跑 pipeline，或用 "
+                  "--audio 显式指定。", file=sys.stderr)
+            sys.exit(1)
         else:
-            print(f"[warn] manifest 的 combined_audio 不可用（{audio_abs!r}），"
-                  "成片将无声；请显式 --audio 指定", file=sys.stderr)
+            # manifest 本身不带音频字段：手写 manifest 做画面检查的合法用法，
+            # 出声提醒但不拦。
+            print("[warn] manifest 没有 combined_audio 字段，成片将无声；"
+                  "要配音就先跑 pipeline.py，或用 --audio 显式指定",
+                  file=sys.stderr)
 
     # ── 段数据 → generated.ts 数据胶 ────────────────────────────────────────
+    #    cta 尾行只有"存在 closing 段且它是 agenda 版式"时才有地方画；另外两种
+    #    情形（没有 closing 段 / 结尾页换成整页画布）它在画面上静默消失，作者
+    #    只能从成片里发现。这里按 tts_pipeline.md 的承诺出声（不拦：cta 是可选
+    #    装饰，不是成片能不能用的问题）。
+    if str(manifest.get("closing_cta") or "").strip():
+        closing = next((s for s in manifest["segments"]
+                        if s["id"] == "closing"), None)
+        if closing is None or seg_layout(closing) != "agenda":
+            print("[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页"
+                  "可承载它（没有 closing 段，或结尾页是整页画布）——这行不会出现在"
+                  "画面上", file=sys.stderr)
+
     segs_out = []
     dflt_director = tpl["animation"]["director"]
     for clip in clips:

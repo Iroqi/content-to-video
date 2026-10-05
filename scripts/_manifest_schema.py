@@ -95,7 +95,7 @@ def validate_timing_manifest(data):
     if degraded is not None and not isinstance(degraded, dict):
         raise ValueError("timing_manifest.json 的 degraded 必须是对象")
     if isinstance(degraded, dict):
-        # 降级项的键是一份跨模块词汇表：pipeline.py 写、run.py 的制作报告读、这里
+        # 降级项的键是一份跨模块词汇表：pipeline.py 写、渲染编排读、这里
         # 验。三处各知一份时，写侧把键拼错（或多一档新降级没登记）就会让报告静默
         # 少一条，只剩 status 兜底拦交付却说不清拦的是哪一项。收在这里，坏键在
         # producer 侧（pipeline 写盘前自己会 validate 一遍）就炸，不等到渲染完。
@@ -177,7 +177,7 @@ def validate_timing_manifest(data):
     # segments 必填且非空：画面标题/tagline/accent 与开屏/结尾 agenda 只从这些分组
     # 取，没有它就没有内容段版式可渲染；每段还要自带非空 sentences 列表——
     # 段内 sentences 一并显性化：
-    # gen_hyperframes.py 对 seg["sentences"] 是直接下标访问，缺失时炸裸
+    # 生成器对 seg["sentences"] 是直接下标访问，缺失时炸裸
     # KeyError: 'sentences'，不指向真正缺的键——手写/裁剪 manifest 的报错
     # 必须第一时间报对人。
     segs = data.get("segments")
@@ -295,7 +295,7 @@ def validate_timing_manifest(data):
                 f"'sentences' 列表（segments 分组渲染的数据源，"
                 f"pipeline.py 产出格式）")
         # 段内句子与顶层 sentences 走同一份必需字段校验（只查
-        # "非空列表"的话，段内缺 start_time 会在 gen_hyperframes/
+        # "非空列表"的话，段内缺 start_time 会在生成器/
         # 下游炸裸 KeyError，不指向真正缺的键）
         segment_seen = set()
         segment_prev = None

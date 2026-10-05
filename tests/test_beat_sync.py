@@ -12,7 +12,7 @@ import unittest
 import _helpers as H  # noqa: F401  必须最先导入：它把 scripts/ 挂上 sys.path
 from _timeline import (beat_positions, beat_span, beat_cycles, ends_at_start,
                        _beat_spans_time)
-import gen_hyperframes as G
+import _director_prepare as G
 
 
 def _sent(start, dur=1.0, text="句"):

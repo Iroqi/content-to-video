@@ -59,7 +59,7 @@ SLOT_W, SLOT_H = _IMG["width"], _IMG["height"]
 
 def _safe_margins():
     """画布页四周留白：竖屏 = segCard 左右内边距（CSS 简写取横向值，与
-    html_renderer 读同一键同一口径），横屏 = layout.landscape.margin。"""
+    渲染端读同一键同一口径），横屏 = layout.landscape.margin。"""
     _v = _TPL["layout"]["vertical"]["segCard"]["padding"].split()
     _h = _v[1] if len(_v) >= 2 else _v[0]
     return {"portrait": int(float(_h.replace("px", ""))),
@@ -428,7 +428,7 @@ def check_file(path, layout, aspect, theme):
         warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
                      "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"
                      "以及文字是否真的溢出。用 image_options.md「图内文字的对比度」的内联副本 "
-                     "+ `hyperframes check` 量一次")
+                     "+ 渲染后抽帧目检一次")
         if w and h:
             gy0, gy1 = _largest_empty_band(ink_bands, h)
             if gy1 - gy0 >= MAX_EMPTY_BAND * h:

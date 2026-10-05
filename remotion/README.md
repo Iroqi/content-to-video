@@ -5,6 +5,12 @@
 HTML+GSAP+hyperframes 后端共享同一份契约与同一套视觉语言。
 
 ## 架构
+## 主题
+
+配色与版式数值真源在 `scripts/_theme.py` / `scripts/_template.py`（Python）；
+生成器把两画幅的 token 烘焙进 `src/theme.ts`，组件只消费这份 TS 副本。
+改视觉参数需双写：先改 Python 真源，再同步 `src/theme.ts`（差异表见下）。
+
 
 ```text
 source.json ──► scripts/pipeline.py ──► timing_manifest.json（契约不变）

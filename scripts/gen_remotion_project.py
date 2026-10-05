@@ -11,7 +11,7 @@ generated.ts，再按需把音频/配图复制进 remotion/public/。remotion/ �
 
 用法示例：
     python scripts/gen_remotion_project.py -m audio_output/timing_manifest.json \
-        --images hf-project/images.json --out remotion --aspect portrait --fps 24
+        --images audio_output/images.json --out remotion --aspect portrait --fps 24
     cd remotion && npx remotion render src/index.ts ContentToVideo out.mp4
 
 完整参数见 --help。
@@ -33,7 +33,7 @@ from _timeline import beat_positions, beat_span, beat_cycles  # noqa: E402
 from _path_morph import make_morph, interp as _morph_interp  # noqa: E402
 from _ease import curve as ease_curve  # noqa: E402
 from _cam_crop import cam_default_origin  # noqa: E402
-from gen_hyperframes import director_prepare, next_speech_start  # noqa: E402
+from _director_prepare import director_prepare, next_speech_start  # noqa: E402
 
 
 def segment_duration(seg):

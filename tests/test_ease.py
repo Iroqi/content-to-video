@@ -1,7 +1,7 @@
 """_ease：缓动档目录与 morph 采样曲线。
 
 `CurveMatchesPinnedGsap` 那批期望值是拿技能真正钉固的那份 `gsap.min.js`
-（`gen_hyperframes.GSAP_SHA256`）在 Node 里 `gsap.parseEase(name)` 逐点打印出来的，
+（取自 GSAP 官方 ease 曲线）在 Node 里 `gsap.parseEase(name)` 逐点打印出来的，
 不是照文档推的公式。改 GSAP 版本或改这些曲线时，重跑一遍对拍再来更新这些数。
 """
 import unittest

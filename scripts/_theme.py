@@ -104,7 +104,7 @@ def is_safe_css_color(color):
     字面量）。只放行两种形态——`#rgb`/`#rrggbb`
     十六进制，或 CSS 标准颜色名（`red` / `tomato`）——从而排除引号、
     分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片 HTML 会被
-    preview.js 打开、被 headless Chrome 渲染，所以
+    渲染端打开、被 headless Chrome 渲染，所以
     `x"><script>...</script>` 这类值必须在契约层就挡下，不能指望下游转义。
 
     色名要求**查得到表**而不是"纯字母"：`hazyblue` 这种拼错的色名如果只按
@@ -237,7 +237,7 @@ def ensure_text_contrast(color, backgrounds, target=4.5):
     """accent 文字色的对比度保底：达标原样返回，否则朝黑/白逐步推移到达标。
 
     darken/mix 的固定系数只保证"典型 accent × 典型底色"的观感，色板里的
-    中亮度色（黄、天蓝）在浅色主题下会跌破 hyperframes check 的门禁——
+    中亮度色（黄、天蓝）在浅色主题下会跌破对比度门禁——
     本函数把"调到位"从经验常数变成可证明的下界。方向跟随底色深浅
     （浅底压向黑、深底提向白），推移从给定色起步。
 

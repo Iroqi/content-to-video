@@ -15,7 +15,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = re.compile(
-    r"(SKILL\.md|references/[\w.]+\.md|[\w.]+\.md)`?"
+    r"(SKILL\.md|references/[\w./]+\.md|[\w./]+\.md)`?"
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
 
@@ -44,7 +44,8 @@ def main():
     sources = [os.path.join(ROOT, "SKILL.md")]
     sources += glob.glob(os.path.join(ROOT, "references", "*.md"))
     sources += glob.glob(os.path.join(ROOT, "scripts", "*.py"))
-    sources += glob.glob(os.path.join(ROOT, "templates", "*"))
+    sources += [f for f in glob.glob(os.path.join(ROOT, "remotion", "src", "**", "*"),
+                                       recursive=True) if os.path.isfile(f)]
     for src in sorted(sources):
         with open(src, encoding="utf-8") as f:
             text = f.read()

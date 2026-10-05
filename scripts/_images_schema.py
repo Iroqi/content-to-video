@@ -5,7 +5,7 @@
 空白裂图，所以引用完整性在 load_images_json / validate_images_json
 fail-fast，路径语义（禁绝对路径/越出项目根）由 validate_relative_project_path
 统一收口。媒体类型判定（扩展名 → image/video/gif）也在这里，与
-html_renderer 的媒体分支共用。
+Remotion 渲染端的媒体分支共用。
 """
 import os
 import re
@@ -43,12 +43,12 @@ def validate_relative_project_path(src, where):
     return norm
 
 # images.json 条目里渲染端**真正会读**的键。
-# src/type/poster/loop/muted/autoplay/playsinline → html_renderer 的媒体分支；
+# src/type/poster/loop/muted/autoplay/playsinline → Remotion 渲染端的媒体分支；
 # 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
 # 之外的键（`position`/`fit`/`alt` 这类凭空发明的写法）过去会被静默丢掉：
 # "我明明写了 alt，画面上什么都没有"变成无解的困惑。判定收口在这一个函数，
-# warn 只在丢键的那一处（html_renderer
-# ._normalize_images）打；run.py/gen_hyperframes 的预检走 validate_images_json。
+# warn 只在丢键的那一处（渲染端
+# ._normalize_images）打；生成器/管线的预检走 validate_images_json。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
@@ -59,7 +59,7 @@ MEDIA_ENTRY_KEYS = frozenset({
     # 上：本页画面从上一页演完的样子起跑。只有这一个取值，所以是枚举而不是布尔——
     # 将来要"只搬相机不搬元素态"这类档位时不必把 keep:true 的语义改掉。
     "stage",
-    # inline_svg：**内部键**，由 gen_hyperframes 在读盘净化后回填，渲染端消费。
+    # inline_svg：**内部键**，由 _director_prepare 在读盘净化后回填，渲染端消费。
     # 它进 MEDIA_ENTRY_KEYS 只是为了不被 unknown_media_keys 误报；用户手写在
     # images.json 里会被 validate_images_json 直接拒（见下），否则等于开了一个
     # "绕过净化、把任意字符串塞进成片 DOM"的注入口。
@@ -488,7 +488,7 @@ def validate_images_json(data):
             if field in value and not isinstance(value[field], str):
                 raise ValueError(f"images.json 的 '{key}' 的 {field} 必须是字符串")
 
-        # inline_svg 是 gen_hyperframes 净化回填的内部键，绝不允许用户在
+        # inline_svg 是 _director_prepare 净化回填的内部键，绝不允许用户在
         # images.json 里手写——手写等于绕过 _svg_sanitize 把任意字符串塞进
         # 成片 DOM（内联 SVG 是同源活节点）。
         if "inline_svg" in value:
@@ -505,7 +505,7 @@ def validate_images_json(data):
             _validate_director(key, value["director"])
         # stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
         # 契约层只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有
-        # 读得到 manifest 的 gen_hyperframes 判得了，那边按段落点名报错。
+        # 读得到 manifest 的 _director_prepare 判得了，那边按段落点名报错。
         # 不要求本页自己写 director：一段演完、下一页只是"停在那幅画上说话"是合法演法，
         # 那种页面 steps 为空，画面照常接续（inline_svg 由接续烘焙给出，不靠本页 steps）。
         if "stage" in value:

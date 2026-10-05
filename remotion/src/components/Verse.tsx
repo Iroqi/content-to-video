@@ -17,7 +17,7 @@ interface VerseProps {
  *
  * 行高按版式数值直接算（linePad × 2 + 字号 × 行高），不依赖 DOM 测量——
  * Remotion 逐帧渲染，算术推导与 runtime.js 的懒缓存测量是同一组数的两个
- * 实现，口径见 references/rendering.md「verse 句子流」。
+ * 实现，口径见 references/rendering.md「画面结构」。
  *
  * placement：
  * - agenda：开屏/结尾卡内，随 flex 列文档流锚底（maxWidth + margin:auto 0 0）

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """段 id 与版式的唯一口径。
 
-id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP 选择器字符串，
+id 会被生成器直接拼进数据胶的 id=/class= 选择器字符串，
 版式决定渲染器分派到哪套 DOM——两者的判定只在这里写一份：
 is_valid_sid / seg_layout / needs_image / sids_needing_image，
 以及契约层的字段校验 _validate_sid / _validate_layout。
@@ -9,7 +9,7 @@ is_valid_sid / seg_layout / needs_image / sids_needing_image，
 import re
 
 # 段落 id 的合法形态见 _SID_RE / SID_RULE。之所以要收口成一条正则而不是各处
-# 宽松判断：id 会被 gen_hyperframes 直接拼进 HTML 的 id=/class= 属性和 GSAP
+# 宽松判断：id 会被生成器直接拼进数据胶的 id=/class=
 # 选择器字符串（tl.fromTo("#{sid}",...)）——手写 manifest 里带引号/点号/方
 # 括号的 sid 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段
 # SyntaxError、字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
@@ -35,7 +35,7 @@ def is_valid_sid(sid):
 
     这些 id 会拼进 HTML 属性、JS 对象键与 GSAP 选择器（见 _SID_RE 注释）。
     校验收口在契约层（_validate_sid / validate_images_json，即"契约先校验"
-    的入口），html_renderer 直接信任已校验的数据，不再各处补一道。
+    的入口），生成器直接信任已校验的数据，不再各处补一道。
     """
     return isinstance(sid, str) and bool(_SID_RE.match(sid))
 
@@ -50,7 +50,7 @@ def is_content_sid(sid):
 
 
 def needs_image(seg):
-    """该段是否计入"配图覆盖率 / 缺图拦截"。run.py 与 gen_hyperframes 共用这一条。
+    """该段是否计入"配图覆盖率 / 缺图拦截"。渲染编排与生成器共用这一条。
 
     内容段一律计入（槽位版式缺图只是少一块画面，仍然该报）；结构性页默认不计入
     （agenda 卡纯文字），但 layout:"canvas" 那一页整页就是那张图，不计入的话
@@ -66,8 +66,8 @@ def needs_image(seg):
 def sids_needing_image(manifest):
     """manifest 里"需要配图"的段 id 列表（按段落顺序）。
 
-    这是 needs_image() 的遍历封装，存在的理由只有一个：run.py 的覆盖率统计与
-    gen_hyperframes 的缺图提示原先各抄一份同样的列表推导，并在注释里互相指认
+    这是 needs_image() 的遍历封装，存在的理由只有一个：渲染编排的覆盖率统计与
+    生成器的缺图提示原先各抄一份同样的列表推导，并在注释里互相指认
     "同一口径"——那种口径靠人维持，改一边就漏一边（报告说图齐了而出片失败）。
     要不要因缺图而拦，仍归各自决定，这里只回答"该有哪些段有图"。
     """
@@ -108,7 +108,7 @@ def _validate_layout(value, where, *, content=False):
     两个显式值里只有 agenda 绑段 id：它是结构性页那张投影卡，内容段借用它等于在
     画面上印别人的目录。canvas 反过来谁都能用，包括 opening/closing——那条路的
     代价（标题层、句子流、章节列表全都不再上画面）由作者自愿承担，门禁只保证
-    画布本身成立（有图、等比、字号够，见 gen_hyperframes.canvas_layout_errors）。
+    画布本身成立（有图、等比、字号够，见 _director_prepare.canvas_layout_errors）。
     """
     if value is None:
         return

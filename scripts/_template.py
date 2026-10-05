@@ -4,8 +4,8 @@ layout.landscape 下（顶层只有 canvas 与 layout 按画幅分块）。
 
 注意：_TEMPLATE_JSON 是**严格 JSON**（json.loads 直解），内部一律不能写
 `#` / `//` 注释——写了整份模板在模块加载时就崩。要给某个数值留说明，
-就把话写到它唯一的消费者那一侧（版式几何 → templates/composition.css，
-组装逻辑 → html_renderer.py）。
+就把话写到它唯一的消费者那一侧（版式几何 → 渲染端样式，
+组装逻辑 → 数据胶/组件）。
 """
 import copy
 import json

@@ -711,7 +711,7 @@ def selfcheck_fragment(spec, sid="seg1", sentences=None):
     """把草稿套成一份 images.json 过一遍真契约。
 
     为什么不自己判 steps 的形状：_images_schema 才是那份契约的正文，它改一个键集，
-    这里就该同时报错——否则脚手架印出的草稿要等 run.py 在渲染前才拒掉。
+    这里就该同时报错——否则脚手架印出的草稿要等生成器在渲染前才拒掉。
     sid 用一个合法段 id 当壳（真实段 id 由作者替换）。
     """
     frag = build_director(spec, sentences=sentences)
@@ -814,7 +814,7 @@ def main(argv=None):
     elif len(frag["steps"]) > 1:
         # 实例实测的摩擦：不给 --sentences 时自动拍的 at 从 0 一路递增，内容元素多于
         # 该段旁白句数时，生成期把越界拍整条管线 error 拒。这里提前出声，让作者在
-        # 写稿阶段就对好句数，而不是等 gen_hyperframes 那一声报错。
+        # 写稿阶段就对好句数，而不是等 _director_prepare 那一声报错。
         n = len(frag["steps"])
         print("[hint] 未给 --sentences：自动拍 at 从 0 递增到 {}（草稿共 {} 拍）。"
               "若该段旁白不足 {} 句，生成期会把越界拍当 error 拒——"

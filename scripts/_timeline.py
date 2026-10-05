@@ -69,8 +69,8 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 
 
 # ── 导演节拍 → 时间轴位置──────────────────────────────────────────
-# 「这一步落在绝对秒哪儿」只有一份实现：渲染端（html_renderer 发 GSAP 关键帧）与
-# 生成期门禁/对轴报告（gen_hyperframes.director_prepare）都调这里。两处各写一套就
+# 「这一步落在绝对秒哪儿」只有一份实现：渲染端（Remotion 求值器）与
+# 生成期门禁/对轴报告（_director_prepare.director_prepare）都调这里。两处各写一套就
 # 会漂移——门禁拿着渲染器根本不会用的时刻报错，比没门禁更糟。
 _WHOLE_BEAT_KEYS = ("morph", "count", "type")   # 各自负责整段，从 pos 一直占满 dur
 

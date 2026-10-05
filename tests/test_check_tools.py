@@ -5,7 +5,7 @@ import unittest
 import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
 import check_docs
-import gen_hyperframes
+import _director_prepare as _DP
 
 
 def write(tmp, name, text):
@@ -192,7 +192,7 @@ class CanvasDensity(unittest.TestCase):
 
 
 class SvgIntrinsicSize(unittest.TestCase):
-    """gen_hyperframes 读 SVG 根尺寸：门禁端要与 check_svg 同一口径。"""
+    """_director_prepare 读 SVG 根尺寸：门禁端要与 check_svg 同一口径。"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -202,7 +202,7 @@ class SvgIntrinsicSize(unittest.TestCase):
     def size(self, attrs):
         with open(self.path, "w", encoding="utf-8") as f:
             f.write('<svg xmlns="http://www.w3.org/2000/svg" ' + attrs + "></svg>")
-        return gen_hyperframes._svg_intrinsic_size(self.path)
+        return _DP._svg_intrinsic_size(self.path)
 
     def test_px_suffix_accepted_like_check_svg(self):
         self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0))

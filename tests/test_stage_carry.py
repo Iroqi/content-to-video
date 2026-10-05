@@ -7,7 +7,7 @@ import _helpers as H                       # noqa: F401  sys.path 装配
 import _svg_sanitize as SAN
 import _stage_carry as SC
 import _cam_crop as CC
-import gen_hyperframes as G
+import _director_prepare as G
 from _cam_crop import cam_content_center, cam_geometry, crop_warnings, decompose_transform
 from _images_schema import validate_images_json
 from test_director import _write_svg
@@ -473,46 +473,6 @@ class StageContract(unittest.TestCase):
 
     def test_stage_does_not_require_its_own_steps(self):
         validate_images_json(self._entry(stage="keep"))
-
-
-class CarriedPageIsNotReintroduced(unittest.TestCase):
-    """接续页不再"当新的一页演一遍"：不擦进来，配图也不再淡入上移。
-
-    烘焙只保证**画面**连续；只要这一页还带 0.40s 擦除 + 配图 40px 滑入，页界处
-    就照样看得见回弹——而那正是 stage:"keep" 存在的理由。所以这两处听同一面旗。
-    """
-
-    def _html(self, keep):
-        import contextlib
-        import io
-        from html_renderer import generate_html
-        m = H.make_manifest()
-        images = H.sample_images(m)
-        if keep:
-            images["seg-a"]["stage"] = "keep"
-        with contextlib.redirect_stderr(io.StringIO()):
-            return generate_html(m, "audio/combined.wav", images=images,
-                                 aspect="portrait", theme="dark")
-
-    def test_keep_page_hard_cuts_and_its_picture_is_already_in_place(self):
-        html = self._html(True)
-        # 挂载即音频起点（2.40 = 首句 start_time），擦除时长归零
-        self.assertIn('id="seg-a" class="clip seg-card" data-start="2.40"', html)
-        self.assertIn('tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},'
-                      '{clipPath:"inset(0% 0 0 0)",duration:0.00,'
-                      'ease:"power2.inOut"},2.40)', html)
-        # 引导线整条不生成（DOM 与补间都没有），配图卡自己的滑入也撤掉
-        self.assertNotIn('id="line-seg-a"', html)
-        self.assertNotIn('tl.from("#img-seg-a"', html)
-        # 进度条照常：它是这一段的时长，不是"新页感"
-        self.assertIn('tl.to("#prog-seg-a",{width:"100%"', html)
-
-    def test_without_the_flag_nothing_changes(self):
-        html = self._html(False)
-        self.assertIn('id="seg-a" class="clip seg-card" data-start="2.00"', html)
-        self.assertIn('tl.from("#img-seg-a",{opacity:0,y:40,duration:0.80,'
-                      'ease:"power2.out"},2.60)', html)
-        self.assertIn('id="line-seg-a"', html)
 
 
 if __name__ == "__main__":

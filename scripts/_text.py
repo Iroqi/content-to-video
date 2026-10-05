@@ -4,7 +4,7 @@
 守卫），供 pipeline / build_from_structured 逐句合成。
 
 字幕不再有"显示层切行"这一步：verse 把整句渲染成一条静态行、由 CSS 自然折行，
-cue 数组只带时间与段内句序（见 html_renderer._build_subtitle_cues）。断句只认
+cue 数组只带时间与段内句序（见生成器/组件）。断句只认
 终止标点，句间停顿由 `--gap` 决定。本模块不依赖任何其他模块，不碰磁盘、进程与
 网络。
 """

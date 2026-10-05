@@ -15,7 +15,7 @@ import os
 import sys
 
 # 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——混进技能目录会污染
-# 仓库、多次制作串台。三个入口（pipeline / gen_hyperframes / run）共用这一处判定。
+# 仓库、多次制作串台。三个入口（pipeline / 生成器 / 渲染编排）共用这一处判定。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -147,7 +147,7 @@ def guard_not_in_skill_dir(*labeled_paths):
     -o/--output 之类是相对 CWD 解析的，而文档示例命令用的正是相对路径
     （`-o audio_output`）——从技能目录照抄就会把产物建在技能目录里，正好
     踩中"不要在技能目录内生成任何文件"的禁令。这道守卫把约定变成机械
-    拦截，三个写盘入口（run/pipeline/gen_hyperframes）共用。
+    拦截，三个写盘入口（渲染编排/pipeline/生成器）共用。
     """
     offenders = [(label, p) for label, p in labeled_paths if is_inside(p, SKILL_DIR)]
     if not offenders:

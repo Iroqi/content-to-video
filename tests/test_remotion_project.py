@@ -1,8 +1,7 @@
 """Remotion 后端桥（scripts/gen_remotion_project.py）的单元测试。
 
-重点是与 HTML 后端（html_renderer.generate_html 的 clips 预处理）的**几何一致性**
-——两后端对同一 manifest 必须算出同一套 wipe/win_start/vis/peel，否则换渲染后端
-时转场错位；以及 agenda 行/生成产物形状的确定性。
+重点是 clips 预处理（compute_clips）的**几何确定性**——wipe/win_start/vis/peel
+与渲染端逐帧求值必须同构，转场才不会错位；以及 agenda 行/生成产物形状的确定性。
 """
 import json
 import os
@@ -24,7 +23,7 @@ def _clips(manifest):
 
 
 class ClipGeometryParity(unittest.TestCase):
-    """compute_clips 与 html_renderer 的 clips 预处理逐条对齐。"""
+    """compute_clips 的 clip 几何逐条对齐渲染端口径。"""
 
     def test_first_card_wipe_is_propline_duration(self):
         m = H.make_manifest()
@@ -135,7 +134,7 @@ class GeneratedProjectShape(unittest.TestCase):
             self.assertEqual(len(data["segments"]), 4)
             opening = next(s for s in data["segments"] if s["id"] == "opening")
             self.assertEqual(opening["layout"], "agenda")
-            # clip 几何与 compute_clips 同源
+            # clip 几何口径与渲染端同源
             self.assertIn("winStart", opening)
             # 手写生成产物可再进契约校验（数据胶无损）
             from _manifest_schema import validate_timing_manifest

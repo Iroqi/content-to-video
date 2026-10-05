@@ -135,7 +135,7 @@ def _collect_blocks(source):
             extra={"speed": source.get("opening_speed")
                    or OPENING_CLOSING_DEFAULT_SPEED,
                    # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
-                   # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
+                   # "canvas"）：渲染端按 layout 分派，manifest 因此是
                    # 自描述的（见 _segments.seg_layout）。
                    "layout": source.get("opening_layout") or "agenda",
                    # 開場動畫模式（可选，取值由 _segments._validate_opening_

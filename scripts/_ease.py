@@ -8,7 +8,7 @@
 不会对 `tl.set` 再缓动）。两者必须同源——目录放行而采样器不认的档，morph 会静默变线性。
 
 **目录怎么来的**：不是照 GSAP 文档抄的，是拿技能实际钉固的那一份 `gsap.min.js`
-（`gen_hyperframes.GSAP_SHA256`）在 Node 里逐个 `gsap.parseEase(name)` 试出来的。
+（取自 GSAP 官方 ease 曲线）在 Node 里逐个 `gsap.parseEase(name)` 试出来的。
 所以 `rough` / `slow` / `stepped` 这些**不在目录里**：它们属于 EasePack 之类的插件文件，
 core dist 里没有，写了就是无声退化。换 GSAP 版本时重跑一次对拍，别凭记忆改这张表。
 """

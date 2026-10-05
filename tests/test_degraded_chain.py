@@ -2,7 +2,7 @@
 
 为什么单独一条集成测试：降级是本技能唯一"允许交付缺内容"的路径，每个
 环节（on-fail 分支、.failed marker、synth_failed 字段、_degraded 注册表、
-run.py 的 exit 3 阻断）此前各有一条注册表一致性测试，但**没有一条把它们
+渲染编排的 exit 3 阻断）此前各有一条注册表一致性测试，但**没有一条把它们
 串起来跑通**。链条中任何一环改坏，单独看每条测试都是绿的。
 
 用假 client（不联网）+ 真 ffmpeg（静音占位要真生成 wav 并被量时长）。
@@ -87,7 +87,7 @@ class DegradedChainIntegration(unittest.TestCase):
 
             manifest_path = os.path.join(out, "timing_manifest.json")
             self.assertTrue(os.path.exists(manifest_path),
-                            "降级也要产出 manifest——这是 run.py 后续步骤的唯一输入")
+                            "降级也要产出 manifest——这是渲染编排后续步骤的唯一输入")
             with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
 
@@ -144,7 +144,7 @@ class DegradedChainIntegration(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1)
             self.assertFalse(
                 os.path.exists(os.path.join(out, "timing_manifest.json")),
-                "abort 下不该留下 manifest——留下半份会让 run.py 误以为 TTS 过了")
+                "abort 下不该留下 manifest——留下半份会让渲染编排误以为 TTS 过了")
 
     @unittest.skipUnless(_have_ffmpeg(), "需要 ffmpeg")
     def test_stale_sidecar_blocks_silence_fallback(self):

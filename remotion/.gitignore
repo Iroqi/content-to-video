@@ -1,0 +1,8 @@
+node_modules/
+out*.mp4
+out*.webm
+public/audio/
+public/images/
+src/generated.ts
+.remotion/
+*.log

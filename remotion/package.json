@@ -1,0 +1,20 @@
+{
+  "name": "content-to-video-remotion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "content-to-video 的 Remotion 渲染后端：与 Python pipeline 共享 timing_manifest.json，组件按绝对帧推导画面。",
+  "scripts": {
+    "render": "remotion render src/index.ts ContentToVideo out.mp4",
+    "studio": "remotion studio src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

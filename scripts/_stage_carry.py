@@ -321,13 +321,14 @@ def bake_settled_state(markup, steps, beats=None):
     pre_center = cam_projection_origin(root, pose) if pose else None
     notes = []
     transforms, misfires = [], []
-    loops = []
+    loops, cam_loops = [], []
     for _i, step in _ordered(steps or [], beats):
         # 没有收尾态的两种一步都不搬：`repeat:-1` 永远演不完（终点无从谈起），`yoyo` 走
         # 偶数遍的元素回到它原来的样子（搬了等于凭空挪走一个从没出现过的状态）。前者必须
-        # 出声，后者什么都不必说。
+        # 出声，后者什么都不必说。相机步单独记账：它决定 _fold_camera 折不折（见下）。
         if beat_cycles(step) is None:
-            loops.append(step["target"])
+            (cam_loops if step.get("target") == "#" + CAM_ID else loops) \
+                .append(step["target"])
             continue
         if ends_at_start(step):
             continue
@@ -335,10 +336,19 @@ def bake_settled_state(markup, steps, beats=None):
         transforms += t
         misfires += m
     if loops:
+        # 只有非相机元素：它们各自的终态不搬，但相机照常折（_fold_camera 只认
+        # target=="#cam" 的步）——旧文案把两件事混成一句话，实测打印出"相机一律
+        # 不折"的同时相机层照常折进去了，自相矛盾。
         notes.append("这些步写了 repeat:-1，永远演不完，也就没有'最后停在哪儿'：" 
                     + "、".join(sorted(set(loops)))
-                    + "。接续页不搬它们的终态（相机只要有一条这样的步，整台相机的收尾位就"
-                      "不作数、一律不折）；要接续就写明确遍数 repeat:N")
+                    + "。接续页不搬它们的终态；要接续就写明确遍数 repeat:N")
+    if cam_loops:
+        # 相机步无限循环：整台相机没有收尾位，_fold_camera 照例不折（这层静默没有
+        # 别的出口，必须在这里说清，不然作者以为推近的镜头会带进下一页）。
+        notes.append("相机步 " + "、".join(sorted(set(cam_loops)))
+                     + " 写了 repeat:-1，相机永不停下——整台相机的收尾位不作数，"
+                       "本页不折 <g data-ctv-stage>（那一页的镜头没有'最后停在哪儿'；"
+                       "要接续就把 repeat 改成明确遍数）")
     if transforms:
         notes.append("接续搬不动元素级 transform 属性 " + "、".join(sorted(set(transforms)))
                      + "——它们要么要以元素自己的 bbox 中心为原点折算（scale/rotation/"

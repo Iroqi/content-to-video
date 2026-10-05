@@ -331,6 +331,21 @@ class TweenKnobContract(unittest.TestCase):
     def test_yoyo_without_repeat_does_nothing(self):
         self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "yoyo": True},
                   "repeat 缺省或 0")
+
+    def test_stagger_without_a_from_to_set_tween_is_rejected(self):
+        """stagger 只对逐帧补间有意义；morph/count/type/draw 各自负责整段，渲染端会
+        静默忽略——与 repeat/yoyo 挂纯 set 同一类"写了等于没写"，契约层直接拒。"""
+        for extra in ({"draw": True}, {"count": {"from": 0, "to": 5}},
+                      {"type": {}}, {"morph": {"from": "M0 0 L1 0 L1 1 Z",
+                                               "to": "M0 0 L2 0 L2 1 Z"}}):
+            self._bad(dict({"at": 0, "target": "#a", "stagger": 0.12}, **extra),
+                      "却没有 from / to / set 补间")
+        # 带 from/to/set 的照放：错峰揭示本来就靠它
+        for step in ({"at": 0, "target": ".a", "to": {"opacity": 1}, "stagger": 0.12},
+                     {"at": 0, "target": ".a", "from": {"opacity": 0},
+                      "to": {"opacity": 1}, "stagger": {"each": 0.2, "from": "start"}},
+                     {"at": 0, "target": ".a", "set": {"opacity": 1}, "stagger": 0.1}):
+            self._ok(step)
         self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "yoyo": False})
 
     def test_repeat_must_be_an_integer_ge_minus_one(self):

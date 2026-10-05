@@ -274,6 +274,49 @@ class DirectorDraft(unittest.TestCase):
         spec = {"elements": [{"kind": "panel", "x": 60, "y": 60, "w": 400, "h": 400}]}
         self.assertEqual(self.fragment(spec), {"steps": []})
 
+    def test_repeat_and_yoyo_are_carried_into_the_draft(self):
+        """新特性要有脚手架出口：呼吸/脉动在 spec 里写一次，草稿原样带出。"""
+        spec = {"elements": [
+            {"kind": "circle", "id": "a", "cx": 100, "cy": 100, "r": 10,
+             "repeat": 3, "yoyo": True},
+            {"kind": "circle", "id": "b", "cx": 200, "cy": 100, "r": 10,
+             "repeat": -1},
+            {"kind": "circle", "id": "c", "cx": 300, "cy": 100, "r": 10,
+             "repeat": 0},
+        ]}
+        steps = self.fragment(spec)["steps"]
+        self.assertEqual(steps[0]["repeat"], 3)
+        self.assertEqual(steps[0]["yoyo"], True)
+        self.assertEqual(steps[1]["repeat"], -1)
+        self.assertNotIn("yoyo", steps[1])
+        # repeat:0 与缺省等价，不塞进去（与渲染端 _cycle_vars 同口径）
+        self.assertNotIn("repeat", steps[2])
+        # 真契约：带 repeat/yoyo 的草稿必须能直接过 images.json 的 director 校验
+        validate_images_json({"seg7": {"src": "images/seg7.svg",
+                                       "director": {"steps": steps}}})
+
+    def test_repeat_on_structure_element_is_refused(self):
+        """结构底不进 steps，写了等于没写；又没有"哪一拍"可反复，当场拒。"""
+        spec = {"elements": [{"kind": "panel", "x": 60, "y": 60, "w": 400, "h": 400,
+                              "role": "structure", "repeat": 2}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("不是内容元素", str(cm.exception))
+
+    def test_yoyo_without_repeat_is_refused(self):
+        spec = {"elements": [{"kind": "circle", "id": "a", "cx": 100, "cy": 100,
+                              "r": 10, "yoyo": True}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("yoyo", str(cm.exception))
+
+    def test_repeat_must_be_an_integer(self):
+        spec = {"elements": [{"kind": "circle", "id": "a", "cx": 100, "cy": 100,
+                              "r": 10, "repeat": 1.5}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("≥-1 的整数", str(cm.exception))
+
 
 class SpecContract(unittest.TestCase):
     def test_unknown_top_level_key_is_named(self):

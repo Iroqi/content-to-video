@@ -21,6 +21,10 @@
     且不报错；at 跟着 manifest 的句子走，改配音自动对得上。
   - **输出必须过 check_svg 的 canvas 门禁**：空带 / 对比度 / 字号三条都在它那里判，所以生成后
     照它同一口径自查一遍（判据不重抄一份——抄一份就会漂）。
+
+公共旋钮 duration / ease / stagger / repeat / yoyo 都能写进内容元素，草稿原样带出；
+repeat/yoyo 的取值与互斥校验跟 _images_schema 同一套（yoyo 必须带 repeat、只挂内容元素），
+跨键约束（如 morph 不能配 repeat:-1）由 selfcheck 过真契约时兜底。
 """
 import argparse
 import json
@@ -94,7 +98,8 @@ ELEMENT_KEYS = {
     "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count"),
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
-COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger")
+COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
+               "repeat", "yoyo")
 # 每个 kind 必填的纯数值键，进函数就按这张表统一查（报错口径全 kind 一致）。
 # polyline 没有数值标量，点在 points 数组里，由它自己那条结构校验管。
 REQUIRED_NUMS = {
@@ -211,6 +216,26 @@ def _validate_element(el, i):
         raise ValueError(f"{where} 的 ease 必须是字符串（GSAP 缓动名，如 power2.inOut）")
     if "stagger" in el:
         _validate_stagger(el["stagger"], f"{where} 的 stagger")
+    # repeat / yoyo 与 _images_schema 同一套判据（那里管 images.json 的 director，
+    # 这里管 spec）：整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
+    # 另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
+    if "repeat" in el:
+        v = el["repeat"]
+        if isinstance(v, bool) or not isinstance(v, int) or v < -1:
+            raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
+                             f"0=只演一遍；实际: {v!r}）")
+    if "yoyo" in el:
+        if not isinstance(el["yoyo"], bool):
+            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
+                             f"（实际: {el['yoyo']!r}）")
+        if not el.get("repeat"):
+            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP "
+                             "根本不会回头。要来回就写 repeat:1（奇数遍收尾在 to，"
+                             "偶数遍收尾回起点）")
+    if (el.get("repeat") is not None or el.get("yoyo")) and role_of(el) != "content":
+        raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
+                         "一起到位、不进 director steps，没有'哪一拍'可反复。"
+                         "要反复的是内容元素")
 
     if kind == "panel":
         _opt_num(el, "r", where, None, nonnegative=True)
@@ -664,6 +689,14 @@ def build_director(spec, sentences=None):
             step["to"] = {"opacity": 1}
         if "stagger" in el:
             step["stagger"] = el["stagger"]
+        # repeat / yoyo：新特性同样给脚手架出口（呼吸/脉动的"一条步"写法）。
+        # repeat:0 与缺省等价，不塞进去省字节（与渲染端 _cycle_vars 同口径）。
+        # 校验在 _validate_element 做（yoyo 必须有 repeat、只挂内容元素），
+        # 互斥与 morph:repeat:-1 那类跨键约束由 selfcheck 过真契约时兜底。
+        if el.get("repeat") not in (None, 0):
+            step["repeat"] = el["repeat"]
+        if el.get("yoyo"):
+            step["yoyo"] = True
         for key, dflt in (("duration", DIRECTOR_DEFAULT["duration"]),
                           ("ease", DIRECTOR_DEFAULT["ease"])):
             # 只在与模板缺省不同值时才印出来：与缺省相同的值写进 JSON 就是第二份真源，

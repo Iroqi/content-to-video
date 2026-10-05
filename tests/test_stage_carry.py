@@ -256,6 +256,33 @@ class RepeatAndYoyoCarry(unittest.TestCase):
         self.assertNotIn("data-ctv-stage", out)
         self.assertTrue(any("repeat:-1" in n and "#cam" in n for n in notes), notes)
 
+    def test_non_cam_infinite_loop_no_longer_claims_camera_skips(self):
+        """实测翻车回归：repeat:-1 打在非相机元素上，相机照常折，告警不得自相矛盾。
+
+        demo 里 #dot1 无限循环 + #cam 收尾推近，旧文案同时打印"相机…一律不折"和
+        "相机收尾位已折进本层"——_fold_camera 只认 target=="#cam" 的步，非相机
+        无限循环根本不进它的结算，旧那句是假话。
+        """
+        steps = [{"target": "#plate", "to": {"opacity": 0.5}, "duration": 0.6,
+                  "repeat": -1},
+                 {"target": "#cam", "to": {"scale": 1.2, "x": -20}, "duration": 1.0}]
+        out, notes = _bake(steps)
+        # 相机照常折了：data-ctv-stage 层在，且只有元素终态不搬
+        self.assertIn('data-ctv-stage="1"', out)
+        joined = " ".join(notes)
+        self.assertIn("#plate", joined)
+        self.assertNotIn("一律不折", joined)
+        self.assertNotIn("相机只要有一条这样的步", joined)
+        # 相机步单独出声的那条只会在相机自己无限循环时出现——这里没有
+        self.assertFalse(any("相机永不停下" in n for n in notes), notes)
+
+    def test_cam_infinite_loop_note_says_camera_not_folded(self):
+        """相机步无限循环：明确出声"相机不折"（旧版这层静默，作者以为镜头会带进下一页）。"""
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2},
+                             "duration": 0.6, "repeat": -1}])
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertTrue(any("相机永不停下" in n and "repeat:-1" in n for n in notes), notes)
+
     def test_camera_that_yoys_back_is_not_folded(self):
         out, notes = _bake([{"target": "#cam", "to": {"scale": "*=1.2", "y": "+=80"},
                              "repeat": 1, "yoyo": True}])

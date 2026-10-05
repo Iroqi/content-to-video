@@ -293,10 +293,10 @@ Prompt 先描述"讲什么"，再描述"怎么画"。不要先写一堆风格词
 
 - `type`：**打字机逐字揭示**（对象，只认空对象 `{}`）。把 `<text>` 里**现成的整段文本**按进度逐字打出来：运行时读该元素的 `textContent` 作源串，`onUpdate` 写 `slice(0, 已打字数)`。
 
-    所以"打什么字"完全由你在 SVG 里写好的 `<text>` 决定，**这里没有任何参数可配**——刻意如此：要改文字就改 SVG，要改快慢就用 step 级 `duration`/`ease`。`target` 要指一个**直接写文本的 `<text>`**（带子 `<tspan>` 排版的复杂文本会被压平成纯文本，别用在这类节点上）。`ease` 缺省取模板（多为 `power2.out`，打字会前快后慢）；**想要匀速打字的手感就写 `"ease": "none"`**。不能叠 `from`/`to`/`set`/`draw`/`morph`/`count`，且忽略 `stagger`。
+    所以"打什么字"完全由你在 SVG 里写好的 `<text>` 决定，**这里没有任何参数可配**——刻意如此：要改文字就改 SVG，要改快慢就用 step 级 `duration`/`ease`。`target` 要指一个**直接写文本的 `<text>`**（带子 `<tspan>` 排版的复杂文本会被压平成纯文本，别用在这类节点上）。`ease` 缺省取模板（多为 `power2.out`，打字会前快后慢）；**想要匀速打字的手感就写 `"ease": "none"`**。不能叠 `from`/`to`/`set`/`draw`/`morph`/`count`，且 `stagger` 会被契约层直接拒（type 负责整段、没有"错峰"可言）。
 
     与 `count` 复用同一条 `onUpdate` 代理补间路，所以同样 seek 可复现、console 探针同样 `tl.seek(t, false)`、零 DOM 改写、不引入新净化面。
-- `stagger`：可选，**配 class 目标做一组元素的错峰揭示**。数字（`0.12`=每个间隔秒）或对象（GSAP 原生配置 `each`/`amount`/`from`(`"start"`/`"center"`/`"edges"`/序号)/`grid`/`ease`）。`{"at_time":"+0.4","target":".row","from":{"opacity":0,"y":16},"to":{"opacity":1,"y":0},"stagger":0.12}` = 一组 `.row` 依次浮入。只对有补间的 step（`from`/`to`/`fromTo`/`set`）生效；`morph`/`count` 各自负责整段、忽略 `stagger`。
+- `stagger`：可选，**配 class 目标做一组元素的错峰揭示**。数字（`0.12`=每个间隔秒）或对象（GSAP 原生配置 `each`/`amount`/`from`(`"start"`/`"center"`/`"edges"`/序号)/`grid`/`ease`）。`{"at_time":"+0.4","target":".row","from":{"opacity":0,"y":16},"to":{"opacity":1,"y":0},"stagger":0.12}` = 一组 `.row` 依次浮入。只对有补间的 step（`from`/`to`/`fromTo`/`set`）生效；`morph`/`count`/`type`/`draw` 各自负责整段，`stagger` 会被契约层拒（静默失效与 `repeat`/`yoyo` 挂纯 `set` 同类）。
 - `duration` / `ease` / `delay`：可选。缺省 `duration`/`ease` 取模板 `animation.director`（视觉真源单一数据源，别在 JSON 里各处写死）。这三个旋钮连同 `stagger`/`repeat`/`yoyo` **只能写在 step 级**：塞进 `to`/`from`/`set` 的补间变量里会被契约层拒——那种写法要么被渲染端覆盖掉、要么让门禁算的跨度与补间真实跨度分家，两种都是静默的。
 
 - `ease`：缓动档。**这张表不是照 GSAP 文档抄的**，是拿技能实际钉固的那份 `gsap.min.js` 逐个 `gsap.parseEase()` 试出来的，所以**认不出的档当场报错**——不会留成"作者以为演的是弹一下落定、成片里是平稳落定"。
@@ -499,7 +499,7 @@ Prompt 先描述"讲什么"，再描述"怎么画"。不要先写一堆风格词
 - **图内可以有标题，字号按整页读**（槽位版式那条"图内文字只起指示作用、没有标题这一档"在这里不适用）：实测可用的量级是标题 72–76px、小标题 38–48px、正文 30–40px、kicker/图例 26–28px。字号越大越要自己复查对比度——**这一版的 `Contrast` 门禁数不到你**，取色表照上面那张用。字体名写死（`'Microsoft YaHei','PingFang SC',…`）：SVG 走 `<img>` 载入，读不到页面的 `--ctv-font-*` 变量。也正因如此，生成期会打一条 `[warn]` 报"该段 N 句旁白不会上画面 / 这张 SVG 里有 M 个 `<text>`"：要点有没有真的画进图里，机械判据只有这个数量，剩下的账要自己对。
 - **机械劳动可以交给脚手架**：`python scripts/canvas_kit.py --spec spec.json --aspect portrait -o images/seg1.svg` 吃一份元素清单（`{"aspect"?, "accent"?, "elements": [ … ]}`，kind 有 `panel`/`axis`/`polyline`/`bars`/`circle`/`text`/`rule`），吐一张**按画幅原生尺寸画的透明底画布** + 一份能直接塞进 images.json `director` 的 steps 草稿（`--emit-steps` 另存）。
 
-    **它收走的只是机械部分**：画布几何、三档字号取自模板 `layout.<画幅>.*.fontSize`、线宽跟进度条、取色过 `_theme` 的对比度压暗、结构底与内容元素的初始 `opacity` 分档（`draw`/`count`/`type` 那三种"起始态由渲染端自己配"的元素**不会**被写 `opacity="0"`，写了就永远不亮）。
+    **它收走的只是机械部分**：画布几何、三档字号取自模板 `layout.<画幅>.*.fontSize`、线宽跟进度条、取色过 `_theme` 的对比度压暗、结构底与内容元素的初始 `opacity` 分档（`draw`/`count`/`type` 那三种"起始态由渲染端自己配"的元素**不会**被写 `opacity="0"`，写了就永远不亮）。公共旋钮 `duration`/`ease`/`stagger`/`repeat`/`yoyo` 都能写进元素（`repeat`/`yoyo` 只挂内容元素，`yoyo` 必须带 `repeat`），草稿原样带出。
 
     **构图仍归人**——所有坐标由 spec 给，脚本不做任何自动布局。
 

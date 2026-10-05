@@ -38,7 +38,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 
 ## 动画
 
-动画参数全部来自 `_template.py` 的 `animation` 数据，生成器把它烘焙进数据胶；Remotion 组件按绝对帧从数据胶推导演出（同一 manifest 两后端应渲染出同构画面，差异以这里为口径排查）：
+动画参数全部来自 `_template.py` 的 `animation` 数据，生成器把它烘焙进数据胶；Remotion 组件按绝对帧从数据胶推导演出（同一 manifest 每次都应渲染出同一个画面）：
 
 - 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页（几何档时长与缓动取模板 `animation.segmentWipe`）；`style` 全片统一一档——`line`（**默认**，引导线：见下）、`vertical`（自下而上 inset 揭屏）、`diagonal`（顶边 30% 斜度、左角先行的斜向擦除）、`circle`（中心向外，71% = 圆心到角点的精确半径，任意画幅同值）；写错档生成期直接报错。wipe 三档旧卡**不淡出**，被新卡盖住后随 clip 窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布段除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布段」条）。
 - **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法）；线的辉光下偏，光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
@@ -50,7 +50,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   **求值器用 inline transform（`matrix()`）写补间几何**——样式表里对同一元素声明 `transform` 会与 inline 互斥（只能活一个），组件里统一走 `remotion/src/components/director.ts` 的 matrix 求值，别另加 CSS transform。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
-- 每段的 accent 会派生一组装饰：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`）；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
+- 每段的 accent 会派生一组装饰：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走模板 `image.glow`（渲染端现算，不再经 CSS 变量）；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
 ## 版式真源
 
@@ -115,11 +115,11 @@ npx remotion render src/index.ts ContentToVideo out.mp4 --codec h264 --crf 28 --
 
 ## 官方校验命令（优先于手搓探针）
 
-Remotion 后端没有独立于渲染的"官方门禁"CLI；合成本身即校验，交付前用下面两条命令替代旧 hyperframes check/snapshot/doctor 的职责：
+Remotion 后端没有独立于渲染的"官方门禁"CLI；合成本身即校验，交付前用下面两条命令把渲染依赖体检与组件类型这两件事做掉：
 
 ```bash
 cd remotion
-npx remotion compositions src/index.ts          # 校验合成/时长（等价于旧 doctor+check 的渲染依赖体检）
+npx remotion compositions src/index.ts          # 合成与总时长体检
 npx tsc --noEmit -p .                           # 组件类型（数据胶与组件契约失配在此暴露）
 ```
 

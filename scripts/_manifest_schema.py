@@ -95,16 +95,17 @@ def validate_timing_manifest(data):
     if degraded is not None and not isinstance(degraded, dict):
         raise ValueError("timing_manifest.json 的 degraded 必须是对象")
     if isinstance(degraded, dict):
-        # 降级项的键是一份跨模块词汇表：pipeline.py 写、渲染编排读、这里
-        # 验。三处各知一份时，写侧把键拼错（或多一档新降级没登记）就会让报告静默
-        # 少一条，只剩 status 兜底拦交付却说不清拦的是哪一项。收在这里，坏键在
-        # producer 侧（pipeline 写盘前自己会 validate 一遍）就炸，不等到渲染完。
+        # 降级项的键是一份跨模块词汇表：pipeline.py 写、这里验、_degraded.py 的
+        # reader 读出提示文案。各处各知一份时，写侧把键拼错（或多一档新降级没
+        # 登记）就会让人话提示静默少一条，只剩 status 兜底却说不清缺的是哪一项。
+        # 收在这里，坏键在 producer 侧（pipeline 写盘前自己会 validate 一遍）
+        # 就炸，不等到下游才发现。
         stray = sorted(str(k) for k in degraded if k not in DEGRADED_KEYS)
         if stray:
             raise ValueError(
                 f"timing_manifest.json 的 degraded 有未知键 {'、'.join(repr(k) for k in stray)}"
                 f"——只认 {'、'.join(repr(k) for k in DEGRADED_KEYS)}"
-                "（新增降级档要同时在这里登记，否则制作报告读不到它）")
+                "（新增降级档要同时在这里登记，否则人话提示读不到它）")
     if status == "degraded" and not degraded:
         raise ValueError("timing_manifest.json 标记为 degraded 时必须提供非空 degraded 详情")
 

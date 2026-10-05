@@ -22,6 +22,41 @@ def _clips(manifest):
     return compute_clips(manifest, load_template())
 
 
+def _write_real_clip(path):
+    """用 ffmpeg 写一段能被全解码探测通过的最小 mp4；没有 ffmpeg 退回占位字节。
+
+    生成器的素材门禁（`validate_images_files`）会用 ffmpeg 全解码探测拦下截断
+    与损坏的媒体——"扩展名对了就行"的占位字节在那道闸眼里就是损坏文件。测试用例
+    要代表真实工作流，不该靠门禁失活才能过。
+    """
+    ff = None
+    try:
+        from _audio import get_ffmpeg, ffmpeg_usable
+        cand = get_ffmpeg()
+        if ffmpeg_usable(cand):
+            ff = cand
+    except Exception:
+        ff = None
+    if ff:
+        import subprocess
+        # 编码器按普适性排队挑第一个能用的：CI runner 通常是 libx264，本机
+        # 这份自编译 ffmpeg 没有它（只有 mpeg4/libopenh264）。
+        for codec in ("libx264", "mpeg4", "libopenh264"):
+            try:
+                r = subprocess.run(
+                    [ff, "-v", "error", "-y", "-f", "lavfi",
+                     "-i", "testsrc=size=64x48:rate=10:duration=1",
+                     "-c:v", codec, "-pix_fmt", "yuv420p", path],
+                    capture_output=True, timeout=30)
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+            if r.returncode == 0 and os.path.isfile(path):
+                return True
+    with open(path, "wb") as f:
+        f.write(b"\x00" * 1024)
+    return False
+
+
 class ClipGeometryParity(unittest.TestCase):
     """compute_clips 的 clip 几何逐条对齐渲染端口径。"""
 
@@ -229,10 +264,11 @@ def _director_images(tmp, manifest):
     svg_path = os.path.join(imgs, "scene.svg")
     with open(svg_path, "w", encoding="utf-8") as f:
         f.write(DIRECTOR_SVG)
-    # 假 mp4：契约只认扩展名/路径，生成期不读内容（director_prepare 只读 SVG）
+    # 真的 mp4，不是"扩展名对了就行"的占位字节：生成器这道素材门禁会用 ffmpeg
+    # 全解码探测拦下截断/损坏的文件（`validate_images_files`），假字节过不去。
+    # 没有 ffmpeg 时退回占位字节——门禁那时也会降级为仅查存在性（见其源码）。
     vid_path = os.path.join(imgs, "clip.mp4")
-    with open(vid_path, "wb") as f:
-        f.write(b"not-a-real-mp4")
+    _write_real_clip(vid_path)
     segs = {seg["id"]: seg for seg in manifest["segments"]}
     images = {
         "seg-a": {"src": "imgs/scene.svg", "director": {
@@ -394,6 +430,178 @@ class DirectorKeepMedia(unittest.TestCase):
                     gen_main(["-m", m_path, "--out", os.path.join(tmp, "proj"),
                               "--images", images_path])
             self.assertIn("找不到或不可读", buf.getvalue())
+
+
+class OutDirGuardAndScaffoldSafety(unittest.TestCase):
+    """写盘边界：产物不得落进技能目录、脚手架不得无脑覆盖、素材不得只增不减。
+
+    这三条曾经都没有：文档教的是 `-o` 而 CLI 只认 `--out`（照抄即报错）；脚手架
+    用 copytree(dirs_exist_ok=True) 覆盖，用户改过的组件源码会被静默抹掉；
+    public/ 只增不减，换稿件后旧素材还躺在工程里。
+    """
+
+    def test_dash_o_is_an_accepted_alias(self):
+        """文档（SKILL.md / references/rendering.md）教的是 -o，CLI 必须认。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            m_path = os.path.join(tmp, "manifest.json")
+            with open(m_path, "w", encoding="utf-8") as f:
+                json.dump(H.make_manifest(), f, ensure_ascii=False)
+            out = os.path.join(tmp, "proj")
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            self.assertTrue(os.path.isfile(os.path.join(out, "src", "generated.ts")),
+                            "-o 应与 --out 等价")
+
+    def test_out_inside_skill_dir_is_refused(self):
+        """与 pipeline.py 同一道闸：产物落进技能目录会污染仓库。"""
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            m_path = os.path.join(tmp, "manifest.json")
+            with open(m_path, "w", encoding="utf-8") as f:
+                json.dump(H.make_manifest(), f, ensure_ascii=False)
+            bad_out = os.path.join(H.SKILL_DIR, "_test_should_never_exist")
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    gen_main(["-m", m_path, "-o", bad_out])
+                self.assertNotEqual(cm.exception.code, 0)
+            finally:
+                # 闸门要是没拦住，用例自己把垃圾扫掉，别污染仓库工作区
+                if os.path.isdir(bad_out):
+                    shutil.rmtree(bad_out, ignore_errors=True)
+                    self.fail(f"闸门没拦住：技能目录下被创建了 {bad_out}")
+
+    def test_existing_scaffold_edits_are_preserved(self):
+        """用户改过的组件源码不得被下一次生成静默覆盖。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            m_path = os.path.join(tmp, "manifest.json")
+            with open(m_path, "w", encoding="utf-8") as f:
+                json.dump(H.make_manifest(), f, ensure_ascii=False)
+            out = os.path.join(tmp, "proj")
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            card = os.path.join(out, "src", "components", "Card.tsx")
+            self.assertTrue(os.path.isfile(card))
+            with open(card, "a", encoding="utf-8") as f:
+                f.write("\n// 我改过这一行\n")
+            gen_main(["-m", m_path, "-o", out, "--aspect", "portrait", "--fps", "24"])
+            with open(card, encoding="utf-8") as f:
+                self.assertIn("我改过这一行", f.read(),
+                              "第二次生成把用户改过的 Card.tsx 覆盖了")
+
+    def test_stale_assets_pruned_but_inlined_svg_kept(self):
+        """上一轮的素材要清掉，但**正在用的内联 SVG 绝不能删**。
+
+        内联 SVG（director / stage:"keep"）在数据胶里是内联字符串、media 为 null，
+        只按 media.src 判"有没有被引用"就会把正在用的那张图当遗留删掉——画面直接
+        变成空白。这是本函数自己引入过的回归，用例钉住判据：既扫 media.src，也扫
+        原始 entry 的 src/poster。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            m_path = os.path.join(tmp, "manifest.json")
+            with open(m_path, "w", encoding="utf-8") as f:
+                json.dump(H.make_manifest(_director_source()), f, ensure_ascii=False)
+            images_path = _director_images(tmp, H.make_manifest(_director_source()))
+            out = os.path.join(tmp, "proj")
+            gen_main(["-m", m_path, "-o", out, "--images", images_path,
+                      "--aspect", "portrait", "--fps", "24"])
+            pub = os.path.join(out, "public", "images")
+            kept = os.listdir(pub)
+            self.assertTrue(any(n.endswith(".svg") for n in kept),
+                            f"正在用的内联 SVG 被当遗留删了，public/images={kept}")
+            # 塞一个没人引用的旧素材，下一次生成后应消失
+            stale = os.path.join(pub, "old-unused.png")
+            with open(stale, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+            gen_main(["-m", m_path, "-o", out, "--images", images_path,
+                      "--aspect", "portrait", "--fps", "24"])
+            after = os.listdir(pub)
+            self.assertNotIn("old-unused.png", after,
+                             "上一轮没人引用的素材应被清掉（public/ 只增不减会越攒越多）")
+            self.assertTrue(any(n.endswith(".svg") for n in after),
+                            f"清理时把正在用的内联 SVG 一起删了：{after}")
+
+
+class WipeStyleGuard(unittest.TestCase):
+    """模板把 segmentWipe.style 改成非 line 档时必须 fail-fast。
+
+    渲染端只实现了 line 档（引导线 + clip-path，ANIM.propLine）。模板改成别的值时
+    clip 几何会算出一段没有对应渲染实现的 wipe——画面照出、与模板意图对不上，
+    属于最难查的那类静默偏差。而且必须在**任何写盘之前**退出：否则素材已经复制进
+    用户目录了才报错。
+    """
+
+    def test_non_line_wipe_style_rejected(self):
+        tpl = load_template()
+        tpl = json.loads(json.dumps(tpl))          # 深拷贝，不污染模块级缓存
+        tpl["animation"]["segmentWipe"]["style"] = "fade"
+        with self.assertRaises(ValueError) as cm:
+            compute_clips(H.make_manifest(), tpl)
+        self.assertIn("line", str(cm.exception))
+
+    def test_guard_runs_before_any_write(self):
+        """模板档位不对时，不得已经在输出目录里铺过素材。"""
+        import gen_remotion_project as G
+        real_tpl = G.load_template
+        broken = json.loads(json.dumps(real_tpl()))
+        broken["animation"]["segmentWipe"]["style"] = "fade"
+
+        def fake_tpl():
+            return broken
+        G.load_template = fake_tpl
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                m_path = os.path.join(tmp, "manifest.json")
+                with open(m_path, "w", encoding="utf-8") as f:
+                    json.dump(H.make_manifest(), f, ensure_ascii=False)
+                out = os.path.join(tmp, "proj")
+                import io
+                from contextlib import redirect_stderr
+                buf = io.StringIO()
+                with redirect_stderr(buf):
+                    with self.assertRaises(SystemExit) as cm:
+                        gen_main(["-m", m_path, "-o", out])
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("line", buf.getvalue())
+                self.assertFalse(os.path.isdir(out),
+                                 "模板档位不对却已经写了输出目录（副作用不该早于校验）")
+        finally:
+            G.load_template = real_tpl
+
+
+class MediaDataGlue(unittest.TestCase):
+    """数据胶里只带渲染端真读的媒体字段。"""
+
+    def test_browser_only_flags_not_written_to_data_glue(self):
+        """autoplay/playsinline 逐帧渲染无意义，不该进数据胶装样子。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            imgs = os.path.join(tmp, "imgs")
+            os.makedirs(imgs)
+            _write_real_clip(os.path.join(imgs, "clip.mp4"))
+            src = H.sample_source()
+            src["segments"] = [{"id": "seg-a", "title": "视频页", "tagline": "v",
+                                "text": "这是视频页的第一句。这是视频页的第二句。"}]
+            m_path = os.path.join(tmp, "manifest.json")
+            with open(m_path, "w", encoding="utf-8") as f:
+                json.dump(H.make_manifest(src), f, ensure_ascii=False)
+            images = {"seg-a": {"src": "imgs/clip.mp4", "type": "video",
+                                "autoplay": False, "playsinline": False,
+                                "loop": True, "muted": True}}
+            images_path = os.path.join(tmp, "images.json")
+            with open(images_path, "w", encoding="utf-8") as f:
+                json.dump(images, f, ensure_ascii=False)
+            out = os.path.join(tmp, "proj")
+            gen_main(["-m", m_path, "-o", out, "--images", images_path,
+                      "--aspect", "portrait", "--fps", "24"])
+            gen_ts = H.read_text(os.path.join(out, "src", "generated.ts"))
+            body = gen_ts[gen_ts.index("{"): gen_ts.rindex("}") + 1]
+            data = json.loads(body)
+            seg = next(s for s in data["segments"] if s["id"] == "seg-a")
+            self.assertEqual(seg["imageMode"], "video")
+            media = seg["media"]
+            self.assertNotIn("autoplay", media,
+                             "autoplay 是浏览器播放语义，逐帧渲染不读，别写进数据胶")
+            self.assertNotIn("playsinline", media)
+            # 渲染端真读的三个仍在
+            for k in ("src", "loop", "muted"):
+                self.assertIn(k, media)
 
 
 if __name__ == "__main__":

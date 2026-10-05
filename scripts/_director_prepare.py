@@ -1,10 +1,9 @@
-"""Director 生成期体检与净化内联（两后端共享；自原 gen_hyperframes 拆出）。
+"""Director 生成期体检与净化内联。
 
-Remotion 生成器与 HTML 渲染共用同一份「导演编排的生成期逻辑」：at 越界/target
-落空/运镜裁切/节拍出窗四类体检、SVG 净化内联回填、stage:"keep" 跨段烘焙第二遍、
-媒体完整性校验与画布档按文件门禁。渲染端（remotion/src/components/director.ts
-或 Remotion 求值器）只负责逐帧求值，这里算的落点/烘焙副本/内联串
-是两边共同的输入。
+生成器在写数据胶之前对 director 指令做的四类体检（at 越界/target落空/运镜裁切/
+节拍出窗）、SVG 净化内联回填、stage:"keep" 跨段烘焙第二遍、媒体完整性校验与画布
+档按文件门禁都在这里。渲染端（remotion/src/components/director.ts）只负责逐帧
+求值，这里算的落点/烘焙副本/内联串是它共同的输入。
 """
 import os
 import re

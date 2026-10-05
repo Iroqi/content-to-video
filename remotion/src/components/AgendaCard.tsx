@@ -12,8 +12,6 @@ interface AgendaCardProps {
   seg: GenSegment;
   t: number;
   aspect: Aspect;
-  w: number;
-  h: number;
 }
 
 /** 开屏/结尾纯文字 agenda 卡：kicker + 大标题 + 章节/要点行 + verse。
@@ -231,7 +229,7 @@ export const AgendaCard: React.FC<AgendaCardProps> = ({seg, t, aspect}) => {
         <Verse seg={seg} t={t} aspect={aspect} placement="agenda" />
       </div>
 
-      <ProgressBar seg={seg} t={t} aspect={aspect} w={0} h={0} />
+      <ProgressBar seg={seg} t={t} aspect={aspect} />
     </AbsoluteFill>
   );
 };

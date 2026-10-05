@@ -53,7 +53,7 @@ agent 会先给你一个**在浏览器里就能打开的预览页**：默认停�
 
 > "没问题了，出成片。"
 
-agent 才做最后一步渲染，交给你 MP4。它同时附一份生产报告，写明每步耗时、配图覆盖率、有没有降级句。
+agent 才做最后一步渲染，交给你 MP4。跑完的每一步都会留下可查的东西：耗时日志、`timing_manifest.json`（含每句时长与降级明细）、生成的 Remotion 工程。出片前看一眼 manifest 的 `status`——不是 `ok` 就说明有句子或整段没能配音。
 
 ---
 
@@ -127,8 +127,8 @@ content-to-video/
 - `tests/`
 - `.env`（含密钥，漏进包就是泄密）
 - `.git/.venv/__pycache__`
-- 制作残渣目录：`audio_output/`、`out/`、`snapshots/`
-- 中间文件：`candidates.json`、`segments_source.json`、`timing_manifest.json`
+- 制作残渣目录：`audio_output/`、`out/`、`remotion/`（生成器输出）
+- 中间文件：`segments_source.json`、`timing_manifest.json`
 
 `scripts/check_svg.py` 要留着。它是第 4 步引用的生产工具，不是维护物。
 

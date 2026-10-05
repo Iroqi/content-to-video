@@ -669,7 +669,7 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
         # 最后一句超出 total_duration 至多 250ms，所以超出 250ms 就不是舍入
         # 问题，而是音频文件真被截断了。
         # 无条件按时间轴取值会把这种截断抹平成一份 status=ok 的 manifest：
-        # 片尾几秒没声音，没人知道。记进 degraded 让渲染编排的闸门拦得住。
+        # 片尾几秒没声音，没人知道。记进 degraded 让人话提示点出来。
         _deficit = _timeline_end - total_dur
         if _deficit > TIMELINE_TOLERANCE:
             degraded[D.AUDIO_SHORTER_THAN_TIMELINE] = round(_deficit, 3)
@@ -761,18 +761,24 @@ def _group_segments(seg_config, manifest_sentences, degraded):
 def _validate_and_write_manifest(args, manifest, degraded):
     """降级状态收口 → 写盘前自证 → 原子落盘。
 
-    产物不合格要在产出这一刻说：这些校验原本只在渲染编排/生成器
-    加载时跑——于是 pipeline 报"[done] 成功"、额度也花了，用户却在几秒后
-    收到一份"manifest 不合法"。
+    产物不合格要在产出这一刻说：这些校验原本只在下游加载 manifest 时跑——
+    于是 pipeline 报"[done] 成功"、额度也花了，用户却在几秒后收到一份
+    "manifest 不合法"。
     """
     # ── Write manifest ─────────────────────────────────────────────
     # 降级状态收口：上面任何一条"显式要了却没做到"都会把 status 翻成
-    # degraded，渲染编排的 --allow-degraded 闸门才有东西可拦。
+    # degraded。这条链路上没有自动放行的开关，所以只能在这里把话说到位。
     manifest["status"] = "degraded" if degraded else "ok"
     if degraded:
-        print(f"[degraded] 本次产物含降级项：{degraded}\n"
-              "           明细见 timing_manifest.json 的 degraded 字段；"
-              "默认会阻断正式渲染，确认接受后再加 --allow-degraded。",
+        # 走 _degraded.items() 而不是直接甩 degraded 字典：那一坨
+        # {'tts_silence_fallback_count': 2, ...} 是给机器看的，人话说明在
+        # 注册表的 reader 里，那里有"这意味着什么"的知识（少了整段 ≠ 少一句）。
+        print("[degraded] 本次产物含降级项：", file=sys.stderr, flush=True)
+        for _type, _n, _msg in D.items(manifest):
+            print(f"           · {_msg}", file=sys.stderr, flush=True)
+        print("           明细见 timing_manifest.json 的 degraded 字段。\n"
+              "           生成器不会替你放行、也不会拦你——请自己判断这些降级"
+              "能不能接受，不能接受就修掉对应原因后重跑。",
               file=sys.stderr, flush=True)
 
     # 自证：写盘前按下游同一份契约校一遍。
@@ -799,9 +805,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     """TTS 之后的收口编排：拼接 → 时长对账 → 组装 manifest → 校验落盘。
 
     任何"用户显式要了、但这次没做到"的事都记进 degraded 明细，最后统一翻成
-    status=degraded 交给渲染编排的 --allow-degraded 闸门。只打一行滚动过的
-    [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头看警告，
-    而少了一整段这些事实都已经丢了。
+    status=degraded 交给下游自证。只打一行滚动过的[warn] 就等于静默降级——链路
+    照样跑通、成片照样出，没人会回头看警告，而少了一整段这些事实都已经丢了。
     """
     degraded = {}
 
@@ -823,8 +828,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     # 每个 index 在 sentence_data 里恰好出现一次（缓存分支或合成分支各
     # append 一次），所以差额就是凭空消失的句子。这样任何一条"某句没进
     # manifest"的路径（含静音兜底自身也失败）都会把 status 翻成 degraded，
-    # 而不是只剩一行滚动过的 [warn]，下游渲染编排的 --allow-degraded 闸门
-    # 才有东西可拦。
+    # 而不是只剩一行滚动过的 [warn]：manifest 的 status 会被翻成 degraded，
+    # 下游自证与交付前的人工判断才有东西可依据。
     lost_count = max(0, total_sentences - len(sentence_data))
     if silence_fallback_count:
         degraded[D.SILENCE_FALLBACK_COUNT] = silence_fallback_count
@@ -860,7 +865,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     # （该路径必须保持独立守卫，避免单行输入触发假死）。
     # 计数按"有没有配音"算，不按行数算：--on-fail silence 的静音占位也在
     # sentence_data 里，整条 API 打不通时旧写法会打成 "6/6 sentences OK"，
-    # 紧接着三行就是 [degraded] 与渲染编排的阻断——自相矛盾的流水账会让
+    # 紧接着三行就是[degraded] 提示——自相矛盾的流水账会让
     # 人不信这条链，也就抵消了"降级显式化"的意义。
     _voiced = len(sentence_data) - silence_fallback_count
     print(f"[stats] {_voiced}/{total_sentences} sentences 有配音"

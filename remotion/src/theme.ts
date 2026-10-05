@@ -3,7 +3,8 @@
  * 注意：HTML 版以 Python 模板为唯一真源、CSS 变量派生；Remotion 版组件无法
  * 读 CSS 变量，所以把模板数值复刻成这份 TS 常量。改视觉参数时两边要同步改
  * （references/rendering.md「版式真源」的纪律在这里变成"py 与 theme.ts 各改
- * 一处"，README 已写明该代价）。
+ * 一处"，README 已写明该代价）。组件只允许写"两画幅同值、单值即终态"的
+ * 观感常量（字重、透明度、辉光浓度），其余一律走这里。
  */
 
 export type Aspect = "vertical" | "landscape";
@@ -33,6 +34,8 @@ export interface Layout {
   title: {top: number; fontSize: number; maxLines: number; glow: number; lineHeight: number};
   tagline: {fontSize: number; marginTop: number; lineHeight: number; indent: number; tickWidth: number};
   image: {width: number; height: number; top: number; borderRadius: number; marginSide: number; glow: number};
+  /** verse 句流的字号（Python 侧 layout.<画幅>.subtitle.fontSize）。 */
+  subtitle: {fontSize: number};
   progressBar: {height: number};
   grid: {size: number};
   ambience: {rx: number; ry: number; cx: number; cy: number; alpha: number; edge: number; agendaCx: number; agendaCy: number};
@@ -51,6 +54,7 @@ export const LAYOUTS: Record<Aspect, Layout> = {
     title: {top: 80, fontSize: 64, maxLines: 2, glow: 40, lineHeight: 1.45},
     tagline: {fontSize: 32, marginTop: 8, lineHeight: 1.25, indent: 16, tickWidth: 8},
     image: {width: 980, height: 735, top: 325, borderRadius: 12, marginSide: 0, glow: 40},
+    subtitle: {fontSize: 40},
     progressBar: {height: 4},
     grid: {size: 60},
     ambience: {rx: 58, ry: 42, cx: 50, cy: 50, alpha: 15, edge: 72, agendaCx: 50, agendaCy: 50},
@@ -67,6 +71,7 @@ export const LAYOUTS: Record<Aspect, Layout> = {
     title: {top: 0, fontSize: 62, maxLines: 0, glow: 40, lineHeight: 1.15},
     tagline: {fontSize: 28, marginTop: 16, lineHeight: 1.3, indent: 22, tickWidth: 8},
     image: {width: 1067, height: 800, top: 0, borderRadius: 12, marginSide: 0, glow: 40},
+    subtitle: {fontSize: 33},
     progressBar: {height: 5},
     grid: {size: 60},
     ambience: {rx: 46, ry: 52, cx: 68, cy: 50, alpha: 13, edge: 70, agendaCx: 50, agendaCy: 45},
@@ -80,23 +85,28 @@ export const LAYOUTS: Record<Aspect, Layout> = {
   },
 };
 
-export const LANDSCAPE_EXTRA = {
+/** 横屏专属：左文字栏几何（Python 侧 layout.landscape.{margin,textCol}）
+ * + 标题按字数降档（Remotion 独有——几何精确复刻需要布局引擎，按字数近似）。
+ * 单列导出：竖屏没有左文字栏，这些数在竖屏上没有对应物。 */
+export const LANDSCAPE_ONLY = {
   textCol: {width: 613, gap: 56},
   margin: 96,
   titleGuards: [
     {chars: 16, size: 54},
     {chars: 22, size: 48},
   ],
-  subtitleFont: 33,
 };
 
-/** 动画参数：与 _template.py 的 animation 块一一对应（line 档是默认 wipe 档，
- * propLine.ease 同时是 clip-path 与引导线的揭幕曲线，见 _wipe_ease 注释）。 */
+/** 动画参数：与 _template.py 的 animation 块一一对应。
+ *
+ * 揭幕曲线只有一档：line 档是模板默认（`segmentWipe.style == "line"`），引导线
+ * 与 clip-path 揭幕共用 propLine 这一组（ease 同为 power2.inOut）。生成期会
+ * 挡掉非 line 的 style（gen_remotion_project._is_line），所以这里不保留
+ * segmentWipe 那组从未被渲染端读过的参数。 */
 export const ANIM = {
   titleEntrance: {from: 0.5, duration: 0.5, ease: "back.out(1.7)" as const},
   entranceBudget: {minFactor: 0.45, normSeconds: 4.0},
   imageEntrance: {duration: 0.8, ease: "power2.out" as const, startDelay: 0.2, vertY: 40},
-  wipe: {style: "line" as const, duration: 0.28},
   propLine: {
     thickness: 6, duration: 0.4, ease: "power2.inOut" as const,
     peelFrac: 0.3, peelRotation: -4, peelTilt: 12, peelPerspective: 1000,

@@ -1,11 +1,10 @@
 /** 导演编排的逐帧求值器：把生成器展开的 DirectorStep 数据按绝对帧应用到
- * 净化内联的 SVG DOM 上（等价于 html_renderer._director_timeline_lines 的
- * GSAP 补间在逐帧 seek 下的效果）。
+ * 净化内联的 SVG DOM 上（相当于把一条 GSAP 时间线 seek 到这一帧）。
  *
- * 确定性契约（与 GSAP 同一语义）：
+ * 确定性契约：
  * - 节拍 pos/dur/ease/repeat/yoyo/stagger 全部由生成器算好，这里只做代数；
  * - repeat:-1 是"按时间解析的无限循环"——每一帧的值都是时间的确定函数，
- *   不存在"最后停在哪儿"；yoyo 在奇数次遍序上倒放（与 GSAP 一致）；
+ *   不存在"最后停在哪儿"；yoyo 在奇数次遍序上倒放；
  * - morph 用生成器采样的关键帧（fps×2），seek 取"最近一个已到的关键帧"；
  * - count/type 写 textContent：count 在节拍前显示 from 值（HTML 的 build
  *   f() 行为）、type 在节拍前为空串——两个都按帧重算，天然可复现；
@@ -20,73 +19,30 @@
  */
 
 import type {DirectorData, DirectorStep} from "../data";
+import type {EaseFn} from "../easing";
+import {clamp01, easeByName, lerp} from "../easing";
 
-type EaseFn = (x: number) => number;
-const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
-const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+/** 模板 animation.director.ease 的缺省手性：契约层已保证数据胶里的 ease 都在
+ * 目录内，这里兜的是"跨版本数据胶"那一类并不该发生的情况——兜而不默，
+ * 一帧清点一次。 */
+const DEFAULT_EASE = "power2.out";
+const warned = new Set<string>();
 
-const powEase = (p: number, exp: number, mode: "in" | "out" | "inOut"): number => {
-  if (mode === "in") return Math.pow(clamp01(p), exp);
-  if (mode === "out") return 1 - Math.pow(1 - clamp01(p), exp);
-  const t = clamp01(p);
-  return t < 0.5
-    ? Math.pow(2, exp - 1) * Math.pow(t, exp)
-    : 1 - Math.pow(-2 * t + 2, exp) / 2;
-};
+// ── 缓动：唯一实现在 ../easing.ts（口径与 scripts/_ease.py 对拍）──────────
 
-const backEase = (p: number, s: number, mode: "in" | "out" | "inOut"): number => {
-  const c1 = s;
-  const c3 = c1 + 1;
-  const x = clamp01(p);
-  if (mode === "out") return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
-  if (mode === "in") return c3 * Math.pow(x, 3) - c1 * Math.pow(x, 2);
-  const t = clamp01(p);
-  if (t < 0.5) return 0.5 * (c3 * Math.pow(2 * t - 1, 3) - c1 * Math.pow(2 * t - 1, 2) + 1);
-  return 0.5 * (c3 * Math.pow(2 * t - 2, 3) + c1 * Math.pow(2 * t - 2, 2) + 1);
-};
-
-const EASE_REGISTRY: Record<string, EaseFn> = {};
-type EaseMode = "in" | "out" | "inOut";
-const registerFamily = (names: string[], make: (fam: string, mode: EaseMode) => EaseFn): void => {
-  for (const mode of ["in", "out", "inOut"] as EaseMode[]) {
-    for (const fam of names) {
-      EASE_REGISTRY[`${fam}.${mode}`] = make(fam, mode);
-    }
+/** 缓动解析：解析不出就用缺省手性，并**出声一次**（认不出来就按线性演，是最难
+ * 排查的一类静默退化——成片看着"不太对"，说不清哪儿不对）。 */
+const easeFor = (name: string): EaseFn => {
+  const f = easeByName(name);
+  if (f) return f;
+  if (!warned.has(name)) {
+    warned.add(name);
+    // eslint-disable-next-line no-console
+    console.warn(`[director] ease ${name} 不在 scripts/_ease.py 的档名目录里，` +
+      `本帧按 ${DEFAULT_EASE} 演——请改住 images.json 的这条 ease`);
   }
+  return easeByName(DEFAULT_EASE)!;
 };
-registerFamily(["power1", "power2", "power3", "power4", "quad", "cubic", "quart", "quint"], (fam, mode) => {
-  const exp = {power1: 1, power2: 2, power3: 3, power4: 4, quad: 2, cubic: 3, quart: 4, quint: 5}[fam] ?? 2;
-  return (p: number) => powEase(p, exp, mode);
-});
-registerFamily(["expo"], (_, mode) => {
-  const f = (p: number): number => {
-    const t = clamp01(p);
-    if (mode === "in") return Math.pow(2, 10 * (t - 1));
-    if (mode === "out") return 1 - Math.pow(2, -10 * t);
-    return t < 0.5 ? Math.pow(2, 20 * t - 10) / 2 : (2 - Math.pow(2, -20 * t + 10)) / 2;
-  };
-  return f;
-});
-registerFamily(["sine"], (_, mode) => (p: number) => {
-  const t = clamp01(p);
-  if (mode === "in") return 1 - Math.cos((t * Math.PI) / 2);
-  if (mode === "out") return Math.sin((t * Math.PI) / 2);
-  return -(Math.cos(Math.PI * t) - 1) / 2;
-});
-registerFamily(["circ"], (_, mode) => (p: number) => {
-  const t = clamp01(p);
-  if (mode === "in") return 1 - Math.sqrt(1 - t * t);
-  if (mode === "out") return Math.sqrt(1 - Math.pow(t - 1, 2));
-  return t < 0.5 ? (1 - Math.sqrt(1 - 4 * t * t)) / 2 : (Math.sqrt(1 - Math.pow(-2 * t + 2, 2)) + 1) / 2;
-});
-registerFamily(["back"], (_, mode) => (p: number) => backEase(p, 1.70158, mode));
-["none", "linear", "power0.inOut"].forEach((k) => {
-  EASE_REGISTRY[k] = (p: number) => clamp01(p);
-});
-
-/** ease 名 → 曲线；未收录的族回退线性（契约层校验过的族名都在上面）。 */
-export const easeByName = (name: string): EaseFn =>
-  EASE_REGISTRY[name] ?? ((p: number) => clamp01(p));
 
 const hexToRgb = (hex: string): [number, number, number] | null => {
   let h = hex.trim().replace("#", "");
@@ -129,18 +85,43 @@ const interpValue = (from: unknown, to: unknown, u: number): unknown => {
 
 const camelToKebab = (k: string): string => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 
+/** 相对量（GSAP 的 `+=100` / `-=0.5`）→ 以自然态为基值的绝对值。
+ * 不认它就是静默变 0（`parseFloat("+=100")` 是 NaN，一路 `?? 0` 兜成 0），
+ * 作者写的是"再往右挪一点"，成片是"整体弹回原点"。 */
+const absRel = (el: Element, key: string, v: unknown): unknown => {
+  if (typeof v !== "string") return v;
+  const m = /^([+-])=\s*([-+eE\d.]+)$/.exec(v.trim());
+  if (!m) return v;
+  const base = parseNum(naturalFor(el, key)) ?? 0;
+  return m[1] === "+" ? base + Number.parseFloat(m[2]) : base - Number.parseFloat(m[2]);
+};
+
 // ── 自然态捕获（GSAP 的 current-value 语义）─────────────────────────────
 const naturalMemo = new WeakMap<Element, Map<string, unknown>>();
 
+/** transform 属性 → 位移/缩放/旋转的自然值。
+ * 按 SVG 语义合成，而不是取串里第一个 transform 函数：`translate(a) translate(b)`
+ * 是**累加**（等于 translate(a+b)）、`scale(a) scale(b)` 是**相乘**、多个 rotate
+ * 累加角度。单参形态也算：`translate(dx)` ≡ `translate(dx,0)`、`scale(s)` ≡
+ * `scale(s,s)`。接错一处，keep 页与运镜的起手式就整体偏出去一截。 */
 const parseTransformAttr = (el: Element): {x: number; y: number; sx: number; sy: number; r: number} => {
   const t = el.getAttribute("transform") ?? "";
   let x = 0, y = 0, sx = 1, sy = 1, r = 0;
-  const tr = /translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/.exec(t);
-  if (tr) { x = parseFloat(tr[1]); y = parseFloat(tr[2]); }
-  const sc = /scale\(\s*([-\d.]+)(?:[,\s]+([-\d.]+))?\s*\)/.exec(t);
-  if (sc) { sx = parseFloat(sc[1]); sy = sc[2] !== undefined ? parseFloat(sc[2]) : sx; }
-  const ro = /rotate\(\s*([-\d.]+)\s*\)/.exec(t);
-  if (ro) r = parseFloat(ro[1]);
+  const n = "[-+eE\\d.]";
+  const tr = new RegExp(`translate\\(\\s*(${n}+)(?:[,\\s]+(${n}+))?\\s*\\)`, "g");
+  for (let m = tr.exec(t); m !== null; m = tr.exec(t)) {
+    x += parseFloat(m[1]);
+    if (m[2] !== undefined) y += parseFloat(m[2]);
+  }
+  const sc = new RegExp(`scale\\(\\s*(${n}+)(?:[,\\s]+(${n}+))?\\s*\\)`, "g");
+  for (let m = sc.exec(t); m !== null; m = sc.exec(t)) {
+    const ax = parseFloat(m[1]);
+    const ay = m[2] !== undefined ? parseFloat(m[2]) : ax;
+    sx *= ax;
+    sy *= ay;
+  }
+  const ro = /rotate\(\s*([-+eE\d.]+)/g;
+  for (let m = ro.exec(t); m !== null; m = ro.exec(t)) r += parseFloat(m[1]);
   return {x, y, sx, sy, r};
 };
 
@@ -155,7 +136,11 @@ const naturalFor = (el: Element, key: string): unknown => {
     val = key === "x" ? t.x : key === "y" ? t.y : key === "scale" ? t.sx
       : key === "scaleX" ? t.sx : key === "scaleY" ? t.sy : t.r;
   } else if (key === "opacity") {
-    val = parseFloat(getComputedStyle(el).opacity) || 1;
+    // 读不到（NaN）才回落 1；读到 0 就是自然态 0 —— `|| 1` 会把"作者写了
+    // opacity=0 准备淡入"读成 1，于是 from 0→to 1 的淡入在每一帧都算出 1，
+    // 动画在第一帧就跳到终值，整段淡入静默失效。
+    const o = Number.parseFloat(getComputedStyle(el).opacity);
+    val = Number.isFinite(o) ? o : 1;
   } else if (key === "fill" || key === "stroke") {
     val = rgbToHex(getComputedStyle(el)[key] ?? "none");
   } else if (key.startsWith("attr.")) {
@@ -163,8 +148,8 @@ const naturalFor = (el: Element, key: string): unknown => {
     const av = el.getAttribute(k);
     val = av === null ? 0 : (Number.isNaN(parseFloat(av)) ? av : parseFloat(av));
   } else {
-    const cs = getComputedStyle(el).getPropertyValue(camelToKebab(key));
-    val = parseFloat(cs) || 0;
+    const n = Number.parseFloat(getComputedStyle(el).getPropertyValue(camelToKebab(key)));
+    val = Number.isFinite(n) ? n : 0;
   }
   m.set(key, val);
   return val;
@@ -323,29 +308,44 @@ const tweenVars = (
   if (attrKeys.size > 0) {
     const nested: Record<string, unknown> = {};
     for (const k of attrKeys) {
-      const from = attrFrom[k] ?? naturalFor(el, `attr.${k}`);
-      const to = attrTo[k];
+      const from = absRel(el, `attr.${k}`, attrFrom[k] ?? naturalFor(el, `attr.${k}`));
+      const to = absRel(el, `attr.${k}`, attrTo[k]);
       nested[k] = interpValue(from, to, u);
     }
     out["attr"] = nested;
   }
   for (const key of keys) {
     if (key === "attr") continue;
-    const from = fromVars?.[key] ?? naturalFor(el, key);
-    const to = toVars?.[key];
-    if (to === undefined) continue;      // 该键只在 from 侧（from 补间插回自然态时 to=自然）
-    out[key] = interpValue(from, to, u);
+    const rawTo = toVars?.[key];
+    if (rawTo === undefined) continue;      // 该键只在 from 侧（from 补间插回自然态时 to=自然）
+    const from = absRel(el, key, fromVars?.[key] ?? naturalFor(el, key));
+    out[key] = interpValue(from, absRel(el, key, rawTo), u);
   }
   // from 补间：to 侧为空，但键在 fromVars 里——插回自然态
   if (fromVars && !toVars) {
     for (const key of Object.keys(fromVars)) {
       if (key === "attr" || out[key] !== undefined) continue;
-      const from = fromVars[key];
+      const from = absRel(el, key, fromVars[key]);
       if (typeof from === "number" || isColor(from)) {
         out[key] = interpValue(from, naturalFor(el, key), u);
       } else if (typeof from === "string") {
         out[key] = u >= 1 ? naturalFor(el, key) : from;
       }
+    }
+  }
+  // transform 是**整条 matrix 覆写**：给了其中一个轴，其余轴必须沿用元素的自然值，
+  // 否则 applyVars 会把它们补成 0/1——表现是"我只动了 x，元素却整个跳回原点"。
+  // keep 页的 translate 前缀与 #cam 的取景矩阵都挂在这条上。放在最后：不能抢在
+  // from 补间之前，否则 `out[key] !== undefined` 会让那些轴停止插值。
+  const has = (k: string): boolean => out[k] !== undefined;
+  if (has("x") || has("y") || has("scale") || has("scaleX") || has("scaleY") || has("rotation")) {
+    if (!has("x")) out["x"] = naturalFor(el, "x");
+    if (!has("y")) out["y"] = naturalFor(el, "y");
+    if (!has("rotation")) out["rotation"] = naturalFor(el, "rotation");
+    // scale 与 scaleX/scaleY 互斥（applyVars 里前者优先），缺哪个补哪个
+    if (!has("scale") && !has("scaleX") && !has("scaleY")) {
+      out["scaleX"] = naturalFor(el, "scaleX");
+      out["scaleY"] = naturalFor(el, "scaleY");
     }
   }
   return out;
@@ -356,20 +356,28 @@ const stepProgress = (
   step: DirectorStep,
   t: number,
   delayOffset: number,
-): {u: number; before: boolean; ended: boolean} => {
+): {u: number; before: boolean; ended: boolean; endU: number} => {
   const start = step.pos + delayOffset;
-  const dur = Math.max(0.001, step.dur);
   const cycles = step.repeat < 0 ? Infinity : step.repeat + 1;
+  // duration:0 是"瞬时赋值"（契约层允许 ≥0）：不要闪一帧起始值，直接给终态。
+  if (step.dur <= 0) {
+    return {u: 1, before: t < start, ended: t >= start, endU: 1};
+  }
+  const dur = step.dur;
   const spanEnd = cycles === Infinity ? Infinity : start + dur * cycles;
-  if (t < start) return {u: 0, before: true, ended: false};
+  // yoyo 的偶数遍收尾停在**起点**（末遍是倒放），奇数遍停在 to —— 与
+  // scripts/_timeline.ends_at_start 同一口径；无限循环没有"收尾"，恒为 1。
+  const endU = step.yoyo && cycles !== Infinity && cycles % 2 === 0 ? 0 : 1;
+  if (t < start) return {u: 0, before: true, ended: false, endU};
   const phase = (t - start) / dur;
   const c = Math.floor(phase);
   let p = phase - c;
   if (step.yoyo && c % 2 === 1) p = 1 - p;
   return {
-    u: easeByName(step.ease)(p),
+    u: easeFor(step.ease)(p),
     before: false,
     ended: spanEnd !== Infinity && t >= spanEnd,
+    endU,
   };
 };
 
@@ -393,6 +401,21 @@ export const applyDirectorFrame = (
   // 数据胶的 camOrigin 来自 cam_default_origin 的 "%g %g" 串：归一成数值对
   // 再进 applyVars（组件里不解析字符串语义）。
   const camOrigin = parseOriginPair(director.camOrigin);
+
+  // 逐帧可复现的前提：**每一帧都从时间线的起点重算**，不留上一帧的残留。
+  // 但要先把它们全部清回自然态，再按 steps 顺序重放 —— 不能边遍历边清：
+  // 那样"数组里靠后、此刻尚未开始"的 step 会清掉前面已经演完的赋值
+  // （表现为"该隐藏的图元忽然全亮""打字机一个字都没打"）。
+  const touched = new Set<Element>();
+  for (const step of director.steps) {
+    try {
+      container.querySelectorAll(step.target).forEach((el) => touched.add(el));
+    } catch {
+      continue;
+    }
+  }
+  touched.forEach(clearOverrides);
+
   for (const step of director.steps) {
     let nodes: NodeListOf<Element>;
     try {
@@ -405,15 +428,16 @@ export const applyDirectorFrame = (
     const targetIsCam = step.target === "#cam";
     nodes.forEach((el, i) => {
       const off = staggerOffset(step, n, i);
-      const {u, before, ended} = stepProgress(step, t, off);
-      const inWindow = !before;
+      const {u, before, ended, endU} = stepProgress(step, t, off);
+      // 未开始的这一拍不做事：清场已经在上面统一做过了，这里再清就会
+      // 抹掉同元素上更早那几拍的成果。
+      if (before) return;
 
       if (step.kind === "morph") {
         const keys = step.morphKeys ?? [];
-        if (before) {
-          clearOverrides(el);
-        } else if (ended) {
-          const last = keys[keys.length - 1];
+        if (ended) {
+          // yoyo 的偶数遍收尾要落在**首帧**（末遍倒放回起点），不是末帧。
+          const last = endU === 0 ? keys[0] : keys[keys.length - 1];
           if (last) setAttr(el, "d", last.d);
         } else {
           let d = "";
@@ -428,7 +452,7 @@ export const applyDirectorFrame = (
 
       if (step.kind === "count") {
         const c = step.count!;
-        const v = before ? c.from : ended ? c.to : lerp(c.from, c.to, u);
+        const v = lerp(c.from, c.to, ended ? endU : u);
         el.textContent = `${c.prefix}${v.toFixed(c.decimals)}${c.suffix}`;
         return;
       }
@@ -436,44 +460,33 @@ export const applyDirectorFrame = (
       if (step.kind === "type") {
         const s = stateFor(el);
         if (s.origText === null) s.origText = el.textContent ?? "";
-        const k = before ? 0 : ended ? s.origText.length : Math.round(lerp(0, s.origText.length, u));
+        const k = Math.round(s.origText.length * (ended ? endU : u));
         el.textContent = s.origText.slice(0, k);
         return;
       }
 
       if (step.kind === "draw") {
-        if (t < director.segStart) {
-          clearOverrides(el);
-          return;
-        }
         setAttr(el, "pathLength", "1");
         setStyle(el, "stroke-dasharray", "1");
-        setStyle(el, "stroke-dashoffset",
-          before ? "1" : ended ? "0" : String(1 - u));
+        setStyle(el, "stroke-dashoffset", String(1 - (ended ? endU : u)));
         return;
       }
 
-      // set：瞬时赋值，节拍前自然态、节拍后持值
+      // set：瞬时赋值，节拍后一直持值
       if (step.kind === "set") {
-        if (before) {
-          clearOverrides(el);
-        } else {
-          applyVars(el, tweenVars(el, null, step.vars ?? null, 1), camOrigin, targetIsCam);
-        }
+        applyVars(el, tweenVars(el, null, step.vars ?? null, 1), camOrigin, targetIsCam);
         return;
       }
 
-      // to / from / fromTo
-      if (before) {
-        clearOverrides(el);
-        return;
-      }
       if (ended) {
+        // from 补间的终态：奇数遍收尾回到自然态、偶数遍收尾停在起点值
         if (step.kind === "from") {
-          clearOverrides(el);
+          if (endU === 1) clearOverrides(el);
+          else applyVars(el, tweenVars(el, step.fromVars ?? null, null, 0), camOrigin, targetIsCam);
         } else {
-          const toVars = step.toVars ?? null;
-          applyVars(el, tweenVars(el, null, toVars, 1), camOrigin, targetIsCam);
+          // fromTo 也要带上起点：endU=0 时收尾落在 fromVars 上，而不是自然态
+          const fromVars = step.kind === "fromTo" ? (step.fromVars ?? null) : null;
+          applyVars(el, tweenVars(el, fromVars, step.toVars ?? null, endU), camOrigin, targetIsCam);
         }
         return;
       }

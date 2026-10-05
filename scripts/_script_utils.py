@@ -15,15 +15,14 @@ import os
 import sys
 
 # 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——混进技能目录会污染
-# 仓库、多次制作串台。三个入口（pipeline / 生成器 / 渲染编排）共用这一处判定。
+# 仓库、多次制作串台。两个写盘入口（pipeline / 生成器）共用这一处判定。
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # ── 原子写────────────────────────────────────────────────────────
-# 制作产物（timing_manifest / index.html / production_report）被 Ctrl-C 或断电
-# 打断在写到一半时会留下截断文件：manifest 下次 --resume 直接崩在 json.load，
-# index.html 让 render 报莫名其妙的语法错——堆栈都不指向"上次中断了，重跑就好"。
-# 先写 .tmp 再 replace，要么完整要么不存在；三处产物共用这一个实现。
+# 制作产物（timing_manifest.json / 生成的数据胶）被 Ctrl-C 或断电打断在写到一
+# 半时会留下截断文件：manifest 下次 --resume 直接崩在 json.load，堆栈完全不指向
+# "上次中断了，重跑就好"。先写 .tmp 再 replace，要么完整要么不存在。
 def _atomic_replace(path, write_fn):
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
@@ -147,7 +146,7 @@ def guard_not_in_skill_dir(*labeled_paths):
     -o/--output 之类是相对 CWD 解析的，而文档示例命令用的正是相对路径
     （`-o audio_output`）——从技能目录照抄就会把产物建在技能目录里，正好
     踩中"不要在技能目录内生成任何文件"的禁令。这道守卫把约定变成机械
-    拦截，三个写盘入口（渲染编排/pipeline/生成器）共用。
+    拦截，两个写盘入口（pipeline / 生成器）共用。
     """
     offenders = [(label, p) for label, p in labeled_paths if is_inside(p, SKILL_DIR)]
     if not offenders:
@@ -157,4 +156,4 @@ def guard_not_in_skill_dir(*labeled_paths):
         f"[guard] 制作产物不能写在技能目录内（{SKILL_DIR}）：\n{lines}\n"
         f"产物混进技能目录会污染技能仓库，也容易在多次制作之间串台。\n"
         "请 cd 到你的项目目录后重跑（用脚本绝对路径调用即可），"
-        "或用 -o/--project 显式指定技能目录之外的绝对路径。")
+        "或用上面点名的那个参数显式指定技能目录之外的绝对路径。")

@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""timing_manifest.json → Remotion 渲染工程（html_renderer 的 Remotion 版桥）。
+"""timing_manifest.json → Remotion 渲染工程（数据胶生成器）。
 
-与 gen_hyperframes.py 同一条数据流、同一份契约（_manifest_schema 校验）与同一套
-clip 计时（wipe/win_start/vis/peel 逐条移植自 html_renderer.generate_html 的 clips
-预处理，见 references/rendering.md「动画」）。差别只在渲染后端：这里不产出
-HTML+GSAP，而是把 manifest + 已算好的 clip 几何 + 资产路径写进 remotion/src/
-generated.ts，再按需把音频/配图复制进 remotion/public/。remotion/ 里的 React
-组件按绝对帧推导画面（等价于 GSAP 单条时间线的逐帧 seek），组件代码本身是
-静态脚手架，生成期只换数据胶（generated.ts）。
+读 timing_manifest.json（契约由 _manifest_schema 校验），算好每段的 clip 几何
+（wipe/win_start/vis/peel 口径见 references/rendering.md「动画」），写进
+remotion/src/generated.ts，并把音频/配图复制进 remotion/public/。remotion/ 里的
+React 组件是静态脚手架，按绝对帧推导画面（每帧从时间线起点重算），生成期只换
+数据胶。
 
 用法示例：
     python scripts/gen_remotion_project.py -m audio_output/timing_manifest.json \
@@ -27,41 +25,56 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _segments import is_content_sid, seg_layout, STRUCTURAL_SIDS  # noqa: E402
 from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
-from _script_utils import setup_stdio, write_text_atomic  # noqa: E402
+from _script_utils import (setup_stdio, write_text_atomic,  # noqa: E402
+                           guard_not_in_skill_dir)
 from _images_schema import load_images_json, classify_media_path  # noqa: E402
 from _timeline import beat_positions, beat_span, beat_cycles  # noqa: E402
 from _path_morph import make_morph, interp as _morph_interp  # noqa: E402
 from _ease import curve as ease_curve  # noqa: E402
 from _cam_crop import cam_default_origin  # noqa: E402
-from _director_prepare import director_prepare, next_speech_start  # noqa: E402
+from _director_prepare import (director_prepare,  # noqa: E402
+                               canvas_layout_errors, validate_images_files)
 
 
 def segment_duration(seg):
-    """段落时长（秒）：末句 end − 首句 start（与 html_renderer 同一口径）。"""
+    """段落时长（秒）：末句 end − 首句 start。"""
     sents = seg["sentences"]
     return ((sents[-1].get("start_time", 0) + sents[-1].get("duration", 0))
             - sents[0].get("start_time", 0))
 
 
 def _fmt_mmss(seconds):
-    """秒 → 'm:ss'（agenda 行右侧时长列，与 html_renderer 同一份）。"""
+    """秒 → 'm:ss'（agenda 行右侧时长列）。"""
     total = max(0, int(round(float(seconds))))
     return f"{total // 60}:{total % 60:02d}"
 
 
-def compute_clips(manifest, tpl, images=None):
-    """逐条移植 html_renderer.generate_html 的 clips 预处理。
+def _line_only_guard(tpl):
+    """渲染端只实现了 line 档揭幕（引导线 + clip-path，ANIM.propLine）。
 
-    同一段注释也搬过来：引擎（这里是 Remotion 的逐帧渲染）按窗口硬切卡片可见性，
+    模板把 segmentWipe.style 改成别的值时，clip 几何会算出一段没有对应渲染
+    实现的 wipe——画面照出，但与模板意图对不上，属于"静默出片"。所以在任何
+    写盘之前就 fail-fast，把话说明白：改档要先补渲染端。
+    """
+    if tpl["animation"]["segmentWipe"]["style"] != "line":
+        raise ValueError(
+            "[template] animation.segmentWipe.style 只支持 \"line\"（渲染端目前"
+            "只实现了这一档）。改档需要先在 remotion/src/theme.ts 的 ANIM 里"
+            "补上对应实现，别只改模板。")
+
+
+def compute_clips(manifest, tpl, images=None):
+    """逐条算 clips 预处理：每段的可见窗口、揭幕时长、剥离归属。
+
+    同一段注释也搬过来：渲染引擎（本后端是 Remotion 逐帧）按窗口硬切卡片可见性，
     元素窗口必须精确覆盖"这张页在屏幕上"的全程——从擦除起点（本句音频起点 − 擦除
     时长）到下一页擦除完成把它盖住的时刻。
     """
     images = images or {}
     total_dur = float(manifest["total_duration"])
     segments = manifest["segments"]
-    _is_line = tpl["animation"]["segmentWipe"]["style"] == "line"
-    _wd = (tpl["animation"]["propLine"]["duration"] if _is_line
-           else tpl["animation"]["segmentWipe"]["duration"])
+    _line_only_guard(tpl)
+    _wd = tpl["animation"]["propLine"]["duration"]
     clips = []
     for seg in segments:
         start = round(float(seg["sentences"][0]["start_time"]), 2)
@@ -79,7 +92,7 @@ def compute_clips(manifest, tpl, images=None):
         # 整页画布段：模板转场（擦除/引导线/剥离）一律退场，在自己的音频起点整页出现，
         # 运动全由 director 驱动。接续页（stage:"keep"）同理且更要紧：这一页的画面是
         # 上一页演完的样子，擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry
-        # 烘焙的意义（口径与 html_renderer 的 clips 预处理逐条一致）。
+        # 烘焙的意义。
         if (seg_layout(clip["seg"]) == "canvas"
                 or (images.get(clip["seg"]["id"]) or {}).get("stage") == "keep"):
             clip["wipe"] = 0.0
@@ -87,9 +100,9 @@ def compute_clips(manifest, tpl, images=None):
         win_end = clips[i + 1]["start"] if i + 1 < len(clips) else round(total_dur, 2)
         clip["vis"] = round(win_end - clip["win_start"], 2)
         # line 档的剥离挂在被犁走的旧卡上（上一页被下一页的揭开窗口推走）。
-        # 上一页是画布段时也不剥（活 diagram 不翻页，见 html_renderer 同处注释）。
+        # 上一页是画布段时也不剥：活 diagram 不翻页。
         clip["peel"] = None
-        if (_is_line and i and clip["wipe"] > 0
+        if (i and clip["wipe"] > 0
                 and seg_layout(clips[i - 1]["seg"]) != "canvas"):
             prev_sid = clips[i - 1]["seg"]["id"]
             clip["peel"] = {"sid": prev_sid, "wipe": clip["wipe"]}
@@ -98,7 +111,7 @@ def compute_clips(manifest, tpl, images=None):
 
 
 def build_agenda_rows(seg_id, clips, manifest, ag, *, warn):
-    """开屏/结尾 agenda 行（移植 html_renderer._agenda_rows，口径与 warn 同步）。"""
+    """开屏/结尾 agenda 行（口径与 warn 同步）。"""
     trim = int(ag["nameTrim"])
     content_clips = [c for c in clips if is_content_sid(c["seg"]["id"])]
 
@@ -151,34 +164,102 @@ def _scaffold_project(out_dir):
 
     脚手架源与生成器同仓库（../remotion）；生成产物只覆盖数据胶与素材，
     组件代码是静态脚手架，两者分开。
+
+    **不覆盖已存在且与脚手架不同的文件**：用户在 -o 目录里改过组件源码是本分
+    （脚手架是起点不是终点），一把 copytree 盖回去等于把人家的活儿静默删掉。
+    这类文件按 [warn] 报出来让人自己处置，与上面的约定一致。
     """
     if not os.path.isdir(_SCAFFOLD_SRC):
         raise RuntimeError(f"找不到 Remotion 脚手架源: {_SCAFFOLD_SRC}")
     os.makedirs(out_dir, exist_ok=True)
-    for name in os.listdir(_SCAFFOLD_SRC):
-        if name in ("node_modules", "public") or (
-                name.startswith("out") and (name.endswith(".mp4")
-                                            or name.endswith(".webm"))):
+    skipped = []
+    _copy_scaffold(_SCAFFOLD_SRC, out_dir, out_dir, skipped, top=True)
+    for rel in sorted(set(skipped)):
+        print(f"[warn] {rel} 与脚手架不同，已保留你的版本（想整体重置就把这个"
+              "-o 目录删掉重生成）", file=sys.stderr)
+
+
+# 脚手架侧的产物/依赖不进输出目录：node_modules 由用户在 -o 里 npm install，
+# public 由生成器按本次素材重建，out*.mp4 是上一次的成片。
+_KEEP_OUT_OF_OUTPUT = ("node_modules", "public")
+# src 下由生成器产出的数据胶，不是脚手架的一部分
+_GENERATED = "generated.ts"
+
+
+def _prune_stale_assets(out_dir, data, images):
+    """删掉 public/ 下本次数据胶没引用到的素材，返回被清理的相对路径列表。
+
+    多次迭代会在 public 里攒下一堆不再被任何段落引用的旧图：它们不出现在画面
+    上，却照样进 bundle、照样花打包时间。用户手放的素材不属于"本次生成的产物"，
+    但那也属于"下一次生成时会被删"的一类——这条行为写在 remotion/README.md 里。
+    """
+    keep = {"images": set(), "audio": set()}
+    for entry in images.values():
+        # 注意：inline SVG（director / keep 档）在数据胶里是**内联字符串**，
+        # media 为 null——只看 media.src 会把在用的 .svg 当成遗留素材删掉。
+        for key in ("src", "poster"):
+            v = entry.get(key)
+            if v:
+                keep["images"].add(os.path.basename(v))
+    for seg in data["segments"]:
+        media = seg.get("media") or {}
+        for key in ("src", "poster"):
+            v = media.get(key)
+            if v:
+                keep["images"].add(os.path.basename(v))
+    if data.get("audioSrc"):
+        keep["audio"].add(os.path.basename(data["audioSrc"]))
+
+    removed = []
+    for sub, names in keep.items():
+        d = os.path.join(out_dir, "public", sub)
+        if not os.path.isdir(d):
             continue
-        src = os.path.join(_SCAFFOLD_SRC, name)
-        dst = os.path.join(out_dir, name)
-        if os.path.isdir(src):
-            if name == "src":
-                # 组件源码全量复制，跳过 generated.ts（本次生成物）
-                os.makedirs(dst, exist_ok=True)
-                for n2 in os.listdir(src):
-                    if n2 == "generated.ts":
-                        continue
-                    p2 = os.path.join(src, n2)
-                    d2 = os.path.join(dst, n2)
-                    if os.path.isdir(p2):
-                        shutil.copytree(p2, d2, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(p2, d2)
-            else:
-                shutil.copytree(src, dst, dirs_exist_ok=True)
+        for name in sorted(os.listdir(d)):
+            if name in names:
+                continue
+            p = os.path.join(d, name)
+            if not os.path.isfile(p):
+                continue
+            try:
+                os.remove(p)
+            except OSError:
+                continue
+            removed.append(f"{sub}/{name}")
+    return removed
+
+
+def _differs(dst, src):
+    """目标已存在且与源不同——别覆盖用户在 -o 里改过的东西。"""
+    if not os.path.exists(dst):
+        return False
+    try:
+        with open(src, "rb") as fs, open(dst, "rb") as fd:
+            return fs.read() != fd.read()
+    except OSError:
+        return False
+
+
+def _copy_scaffold(src, dst, out_root, skipped, top=False):
+    """把脚手架 src 复制进 dst：**只补缺失**，已存在且不同的记进 skipped。
+
+    整棵树都是"缺了才补"：连同 out_root 里用户自建的文件一并放过——删除用户
+    文件的活儿不该由生成器做。
+    """
+    os.makedirs(dst, exist_ok=True)
+    for n in sorted(os.listdir(src)):
+        if top and (n in _KEEP_OUT_OF_OUTPUT
+                    or (n.startswith("out") and n.endswith((".mp4", ".webm")))):
+            continue
+        if not top and n == _GENERATED:
+            continue
+        s2, d2 = os.path.join(src, n), os.path.join(dst, n)
+        if os.path.isdir(s2):
+            _copy_scaffold(s2, d2, out_root, skipped)
+        elif _differs(d2, s2):
+            skipped.append(os.path.relpath(d2, out_root))
         else:
-            shutil.copy2(src, dst)
+            shutil.copy2(s2, d2)
 
 
 def _stage_asset(src_path, out_dir, subdir):
@@ -247,10 +328,9 @@ def _stage_media(src_path, out_dir, staged_names):
 def _director_data(entry, seg, dflt, fps):
     """把 images.json 的 director.steps 展开成组件可逐帧求值的数据胶。
 
-    与 html_renderer._director_timeline_lines 同一条节拍解析（beat_positions，
-    同一函数：at 跟着 manifest 句子走、at_time 是段落绝对秒、delay 叠加）、
-    同一份缺省 duration/ease、同一套 morph 生成期采样（fps×2 关键帧 + 遍序
-    奇偶折 yoyo，逐帧 seek 可复现、无运行时依赖）。count/type/draw/set/from/
+    与渲染端同一套节拍解析（beat_positions：at 跟着 manifest 句子走、
+    at_time 是段落绝对秒、delay 叠加）、同一份缺省 duration/ease、同一套 morph
+    生成期采样（fps×2 关键帧 + 遍序奇偶折 yoyo，逐帧可复现、无运行时依赖）。count/type/draw/set/from/
     to/fromTo 只把校验过的标量搬进数据，组件端按帧求值（读的都是契约层过
     过的标量，不是信源回调）。
     """
@@ -328,8 +408,10 @@ def main(argv=None):
     )
     parser.add_argument("-m", "--manifest", required=True,
                         help="Path to timing_manifest.json")
-    parser.add_argument("--out", default="remotion",
-                        help="Output Remotion project directory (default: ./remotion)")
+    parser.add_argument("-o", "--out", default="remotion",
+                        help="Output Remotion project directory (default: "
+                             "./remotion)。-o 与 pipeline.py 同形状：两个入口都是"
+                             "-o，从文档里拷命令不会有一条 unrecognized")
     parser.add_argument("--images", default=None,
                         help="Path to images.json (maps segment ID -> image path)")
     parser.add_argument("--audio", default=None,
@@ -345,12 +427,14 @@ def main(argv=None):
     if not 1 <= args.fps <= 240:
         parser.error(f"--fps 必须在 1–240 之间，收到: {args.fps}")
 
-    try:
-        _scaffold_project(args.out)
-    except RuntimeError as e:
-        print(f"[error] {e}", file=sys.stderr)
-        sys.exit(1)
+    # 产物不得落进技能目录（与 pipeline.py 同一道闸，见 SKILL.md 安全边界）：
+    # 这一道闸必须在**任何写盘之前**跑——否则"这里不符合规范"的代价是用户的
+    # 输出目录已经被铺了一层脚手架。
+    out_abs = os.path.abspath(args.out)
+    guard_not_in_skill_dir(("--out", out_abs))
 
+    # 读 manifest / images / director 体检全在这一段：失败要能在**动手改工程
+    # 之前**退出去。副作用（复制脚手架、写数据胶、清理素材）统一放在最后。
     try:
         manifest = load_timing_manifest(args.manifest)
     except ValueError as e:
@@ -362,8 +446,18 @@ def main(argv=None):
     w, h = get_canvas(aspect)
     total_dur = float(manifest["total_duration"])
 
-    # ── 配图归一（移植 gen_hyperframes 的 images 处理：agenda 结构性页键弹出、
-    #    孤儿键忽略、媒体文件复制进 public/images、director 体检+净化内联+keep 烘焙）─
+    # 模板自检要在**任何写盘之前**：wipe 档位不匹配时退出，而不是先复制了
+    # 素材再报错（下面 _stage_asset 一跑，用户目录就已被铺过文件了）。
+    # 这里只验模板本身（clips 真几何要等 images 归一完，keep 页的 wipe 归零
+    # 依赖 stage，见下面第二次 compute_clips）。
+    try:
+        _line_only_guard(tpl)
+    except ValueError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── 配图归一（agenda 结构性页键弹出、孤儿键忽略、媒体文件复制进
+    #    public/images、director 体检+净化内联+keep 烘焙）──
     #    必须先于 clips 几何：keep 页要把 wipe 归零（compute_clips 读 stage）。
     images = {}
     images_dir = None
@@ -406,7 +500,7 @@ def main(argv=None):
                         sys.exit(1)
                     entry[key] = rel
             # director 体检 + 净化内联 + stage:"keep" 跨段烘焙（errs 即 fail-fast，
-            # 与 gen_hyperframes 同一口径；warns 打印）。此调用会原地改写 entry
+            # warns 打印）。此调用会原地改写 entry
             # 的 inline_svg：普通 SVG 仍是 <img>，只有 director/keep 走净化内联。
             # 循环变量不能叫 w：外层 w,h = get_canvas(aspect) 是画布宽，被这句
             # 覆盖后 data["width"] 会变成警告文本（实测踩过）。
@@ -419,6 +513,30 @@ def main(argv=None):
                     print(f"[error] {e}", file=sys.stderr)
                 sys.exit(1)
 
+            # ── 素材门禁：这两道闸是本支路唯一能拦住"整页空白 / 图元被裁掉"的
+            #    地方——不拦的话，缺图与坏图就会一路静默进成片。
+            public_dir = os.path.join(args.out, "public")
+            missing, corrupt = validate_images_files(images, public_dir)
+            for sid, path in missing:
+                print(f"[error] 段落 '{sid}' 的 {path} 在工程里找不到（--images "
+                      "指到了别处？）——拒绝生成，渲染会静默出空白裂图",
+                      file=sys.stderr)
+            for sid, path, why in corrupt:
+                print(f"[error] 段落 '{sid}' 的 {path} {why}——拒绝生成，"
+                      "渲染阶段才炸就白烧一整轮", file=sys.stderr)
+            if missing or corrupt:
+                sys.exit(1)
+            # 画布段专门的体检（无图、比例不对、字号被缩到读不出来）
+            c_errs, c_warns = canvas_layout_errors(
+                images, manifest["segments"], public_dir, w, h)
+            for warn_ in c_warns:
+                print(f"[warn] {warn_}", file=sys.stderr)
+            if c_errs:
+                for e in c_errs:
+                    print(f"[error] {e}", file=sys.stderr)
+                sys.exit(1)
+
+    # keep 页要在 wipe 归零后才算得对（compute_clips 读 stage），所以带 images 重算。
     clips = compute_clips(manifest, tpl, images)
 
     audio_src = None
@@ -447,13 +565,14 @@ def main(argv=None):
         if layout != "agenda" and entry:
             if classify_media_path(entry["src"], entry.get("type", "auto")) == "video":
                 image_mode = "video"
+                # autoplay/playsinline 不往下带：契约层仍收下这两个键（既有
+                # images.json 照旧过校验），但逐帧渲染里没有"自动播放"这回事，
+                # 传下去只会让人以为渲染端会读它。
                 media = {
                     "src": entry["src"],
                     "poster": entry.get("poster") or None,
                     "loop": entry.get("loop", True),
                     "muted": entry.get("muted", True),
-                    "autoplay": entry.get("autoplay", True),
-                    "playsinline": entry.get("playsinline", True),
                 }
             elif entry.get("inline_svg"):
                 # director / stage:"keep"：净化内联 SVG（keep 页的 inline_svg 是
@@ -509,6 +628,14 @@ def main(argv=None):
         "segments": segs_out,
     }
 
+    # ── 到这一步为止全是"算"：上面任何一处 sys.exit 都不会动工程一个字节。
+    #    从这儿开始才有副作用（脚手架 → 数据胶 → 素材清理）。
+    try:
+        _scaffold_project(args.out)
+    except RuntimeError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
+
     gen_path = os.path.join(args.out, "src", "generated.ts")
     os.makedirs(os.path.dirname(gen_path), exist_ok=True)
     body = json.dumps(data, ensure_ascii=False, indent=2)
@@ -521,11 +648,19 @@ def main(argv=None):
     )
     write_text_atomic(gen_path, ts)
 
+    # public/ 按本次素材重建（脚手架不动它）：上一次迭代留下的图会一直躺在
+    # bundle 里，看着像"我删了这张图它怎么还在"。
+    pruned = _prune_stale_assets(args.out, data, images)
+
     print(f"[OK] {gen_path}")
     print(f"     Duration: {total_dur}s @ {args.fps}fps")
     print(f"     Aspect: {aspect} ({w}x{h})")
     print(f"     Segments: {len(segs_out)}")
     print(f"     Audio: {audio_src or '无（成片将无声）'}")
+    if pruned:
+        print(f"     清理遗留素材 {len(pruned)} 个（本次数据胶没引用）："
+              f"{'、'.join(pruned[:5])}"
+              f"{'…' if len(pruned) > 5 else ''}")
     print(f"     Media: {sum(1 for s in segs_out if s['imageMode'])}"
           f"（其中 svgInline {sum(1 for s in segs_out if s['imageMode'] == 'svgInline')}"
           f" / video {sum(1 for s in segs_out if s['imageMode'] == 'video')}"

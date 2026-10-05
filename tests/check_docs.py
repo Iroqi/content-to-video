@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""维护者工具：检查文档里的「章节」交叉引用是否真实存在（只依赖标准库）。
+"""维护者工具：文档交叉引用 + 陈旧措辞双道检查（只依赖标准库）。
 
-形如 `SKILL.md「环境」`、`references/writing.md「字段规范」` 的引用，目标文件里
-必须有一个标题（# 开头的行）包含该章节名；另外扫描 scripts/*.py 与 templates/*
-里的同类引用（references 前缀可省略，裸文件名按 references/ → 根目录解析）。
-改标题、瘦身 SKILL.md 之后跑一次，能抓住"引用了已经不存在的章节"。
+第一道「悬空章节引用」：形如 `SKILL.md「环境」`、`references/writing.md「字段规范」`
+的引用，目标文件里必须有一个标题（# 开头的行）包含该章节名。扫描 SKILL.md、
+references/*.md、scripts/*.py 与 remotion/src/**（references 前缀可省略，裸文件名
+按 references/ → 根目录解析）。改标题、瘦身 SKILL.md 之后跑一次。
 
-用法：python tests/check_docs.py          # 有悬空引用时退出码 1
+第二道「陈旧措辞」：本技能从 HTML+GSAP 后端迁到 Remotion 后，大量注释、文档、
+docstring 还把**已删除的文件**当现役真源指路（"移植 html_renderer.generate_html
+的 clips"、"见 gen_hyperframes.py"），另有一批已删除的参数名。手工清一遍很快就
+漏，而且下次重构会重新长出来——所以做成机械拦截。
+
+有意保留的**历史说明**（讲清"为什么是这个公式/为什么曾经不是这样"）走 ALLOW 例外，
+例外必须逐条写出来，不靠模糊措辞开洞——豁免本身要可审查。
+
+用法：python tests/check_docs.py          # 两道检查任一不过时退出码 1
 """
 import glob
 import os
@@ -17,6 +25,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = re.compile(
     r"(SKILL\.md|references/[\w./]+\.md|[\w./]+\.md)`?"
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
+
+# ── 陈旧措辞禁用词 ─────────────────────────────────────────────────
+# 每条都对应一个**确已删除**的东西：后端迁移删掉的文件、以及随之消失的参数名。
+# 判据不是"看着过时"，而是"这句话指的东西不存在了"——照着它去找会一无所获。
+BANNED = (
+    "html_renderer", "gen_hyperframes", "_render_backend",
+    "production_report", "index.html",
+    "--allow-degraded", "--ctv-font",
+    "snapshot", "hyperframes",
+)
+
+# 例外：文件相对路径 → 该文件内允许出现的子串（每个都要是"讲历史"而非"指现役"）。
+ALLOW = {
+    "references/tts_pipeline.md": ("--allow-degraded",),
+}
 
 
 def _target_path(matched):
@@ -39,13 +62,38 @@ def headings(path):
                 for ln in f if ln.lstrip().startswith("#")]
 
 
+def _sources():
+    """参与扫描的文件：文档 + 脚本 + 渲染端源码（node_modules 已在 gitignore 里）。"""
+    out = [os.path.join(ROOT, "SKILL.md"), os.path.join(ROOT, "README.md")]
+    out += glob.glob(os.path.join(ROOT, "references", "*.md"))
+    out += glob.glob(os.path.join(ROOT, "scripts", "*.py"))
+    out += glob.glob(os.path.join(ROOT, "tests", "*.py"))
+    out += [f for f in glob.glob(os.path.join(ROOT, "remotion", "src", "**", "*"),
+                                 recursive=True) if os.path.isfile(f)]
+    return [f for f in out if os.path.isfile(f)]
+
+
+def _scan_stale(sources):
+    # 本文件自己跳过：它必须逐字写出这些禁用词（词表与 docstring 示例），
+    # 否则门禁会在自己身上开火，之后谁都不敢再加新词。
+    self_path = os.path.abspath(__file__)
+    bad = []
+    for src in sorted(sources):
+        if os.path.abspath(src) == self_path:
+            continue
+        rel = os.path.relpath(src, ROOT)
+        allowed = ALLOW.get(rel, ())
+        for lineno, ln in enumerate(open(src, encoding="utf-8"), 1):
+            for word in BANNED:
+                if word in ln and not any(a in ln for a in allowed):
+                    bad.append((rel, lineno, word, ln.strip()))
+                    break
+    return bad
+
+
 def main():
     cache, bad = {}, []
-    sources = [os.path.join(ROOT, "SKILL.md")]
-    sources += glob.glob(os.path.join(ROOT, "references", "*.md"))
-    sources += glob.glob(os.path.join(ROOT, "scripts", "*.py"))
-    sources += [f for f in glob.glob(os.path.join(ROOT, "remotion", "src", "**", "*"),
-                                       recursive=True) if os.path.isfile(f)]
+    sources = _sources()
     for src in sorted(sources):
         with open(src, encoding="utf-8") as f:
             text = f.read()
@@ -59,8 +107,14 @@ def main():
                 bad.append((src, os.path.relpath(target, ROOT), name, "没有标题包含该章节名"))
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
-    print(f"\n{len(bad)} 条悬空引用")
-    return 1 if bad else 0
+    print(f"{len(bad)} 条悬空引用")
+
+    stale = _scan_stale(sources)
+    for rel, lineno, word, line in stale:
+        print(f"[stale] {rel}:{lineno} 命中已删除的 {word!r} —— {line}")
+    print(f"{len(stale)} 条陈旧措辞")
+
+    return 1 if (bad or stale) else 0
 
 
 if __name__ == "__main__":

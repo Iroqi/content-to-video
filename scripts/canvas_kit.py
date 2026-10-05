@@ -758,8 +758,15 @@ def _line_visibility_notes(spec, ctx):
 # ── CLI ─────────────────────────────────────────────────────
 def _write(path, text):
     # newline="\n"：本仓库一律 LF，Windows 上默认换行会写出 CRLF 产物（diff 全是噪声）
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+    except OSError as exc:
+        # 输出目录没建是第一次用的常态，裸栈 FileNotFoundError 不会告诉人该做什么。
+        raise SystemExit(
+            f"[error] 写不出 {path}：{exc.strerror or exc}。"
+            "多半是目录还没建（先用 mkdir -p 建它的父目录）；同名已存在一个目录、"
+            "或没有写权限也会到这里") from exc
 
 
 def main(argv=None):

@@ -8,12 +8,9 @@ interface ProgressBarProps {
   seg: GenSegment;
   t: number;
   aspect: Aspect;
-  w: number;
-  h: number;
 }
 
-/** 底部进度条：段起点 0% → 段终点 100%，线性，与段落时间轴同步
- * （html_renderer 的 `tl.to("#prog-{sid}",{width:"100%"},s)` 同口径）。
+/** 底部进度条：段起点 0% → 段终点 100%，线性，与段落时间轴同步。
  * 轨道底轨（10% 文字色透明）垫在其下；辉光按模板高度 ×3 派生。 */
 export const ProgressBar: React.FC<ProgressBarProps> = ({seg, t, aspect}) => {
   const ph = LAYOUTS[aspect].progressBar.height;

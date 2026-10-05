@@ -14,7 +14,7 @@ class RegistryConsistency(unittest.TestCase):
 
     def test_no_duplicate_keys_or_types(self):
         self.assertEqual(len(set(D.KEYS)), len(D.KEYS))
-        types = [k.report_type for k in D.KINDS]
+        types = [k.type for k in D.KINDS]
         self.assertEqual(len(set(types)), len(types))
 
     def test_every_constant_is_registered(self):
@@ -51,7 +51,7 @@ class Items(unittest.TestCase):
             },
         }
         got = {t: (n, msg) for t, n, msg in D.items(tm)}
-        self.assertEqual(set(got), {k.report_type for k in D.KINDS})
+        self.assertEqual(set(got), {k.type for k in D.KINDS})
         self.assertEqual(got["tts_silence_fallback"][0], 1)
         self.assertEqual(got["tts_lost_sentences"][0], 2)
         self.assertEqual(got["segments_dropped"][0], 2)
@@ -64,7 +64,7 @@ class Items(unittest.TestCase):
         tm["degraded"][D.AUDIO_SHORTER_THAN_TIMELINE] = 1.0
         tm["degraded"][D.LOST_SENTENCE_COUNT] = 1
         types = [t for t, _, _ in D.items(tm)]
-        order = [k.report_type for k in D.KINDS]
+        order = [k.type for k in D.KINDS]
         self.assertEqual(types, [t for t in order if t in types])
 
     def test_corrupted_values_tolerated(self):

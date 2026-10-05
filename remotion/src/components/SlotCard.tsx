@@ -1,6 +1,9 @@
 import React from "react";
 import {AbsoluteFill} from "remotion";
-import {FONT_STACK, LAYOUTS, MONO_STACK, THEME, TYPO, rgba} from "../theme";
+import {
+  ANIM, FONT_STACK, LANDSCAPE_ONLY, LAYOUTS, MONO_STACK, THEME, TYPO,
+  ensureTextContrast, rgba,
+} from "../theme";
 import type {Aspect} from "../theme";
 import type {GenSegment} from "../data";
 import {entranceK} from "../data";
@@ -8,14 +11,11 @@ import {backOut, clamp01, lerp, power2Out} from "../easing";
 import {ProgressBar} from "./ProgressBar";
 import {Verse} from "./Verse";
 import {MediaBox} from "./MediaBox";
-import {ensureTextContrast as ensureTextContrastColor} from "../theme";
 
 interface SlotCardProps {
   seg: GenSegment;
   t: number;
   aspect: Aspect;
-  w: number;
-  h: number;
 }
 
 /** 槽位版式（默认内容段）：标题区 + 配图槽 + verse 句子流。
@@ -23,17 +23,15 @@ interface SlotCardProps {
  * 横屏是左文字栏（标题+tagline+verse 垂直居中成块）+ 右侧媒体卡。
  * 配图缺失时纯文字兜底（槽位版式缺图只是少一块画面）。
  */
-export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
+export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect}) => {
   const lay = LAYOUTS[aspect];
   const k = entranceK(seg);
-  const aTitle = ANIM_TITLE;
-  const titleDur = aTitle.duration * k;
-  const titleP = backOut(clamp01((t - seg.start) / titleDur));
-  const titleScale = lerp(aTitle.from, 1, titleP);
+  const titleP = backOut(clamp01((t - seg.start) / (ANIM.titleEntrance.duration * k)));
+  const titleScale = lerp(ANIM.titleEntrance.from, 1, titleP);
 
-  const aImg = ANIM_IMG;
+  const aImg = ANIM.imageEntrance;
   // 接续页（stage:"keep"）：画面是上一页演完的烘焙副本，入场补间退场
-  // （HTML 的 _card_timeline_lines 对 keep/canvas 同闸），配图从第一帧就位。
+  // （keep/canvas 同闸），配图从第一帧就位。
   const imgStart = seg.start + aImg.startDelay * k;
   const imgP = seg.keep ? 1 : power2Out(clamp01((t - imgStart) / (aImg.duration * k)));
   const imgY = seg.keep ? 0 : aImg.vertY * (1 - imgP);
@@ -42,12 +40,12 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
   // 横屏左文字栏：标题 + tagline + verse 成列垂直居中
   if (aspect === "landscape") {
     const lt = lay.title;
+    const ls = LANDSCAPE_ONLY;
     let titleSize = lt.fontSize;
-    for (const g of [{chars: 16, size: 54}, {chars: 22, size: 48}]) {
+    for (const g of ls.titleGuards) {
       if (seg.title.length > g.chars) titleSize = g.size;
     }
-    const margin = 96;
-    const textColW = 613;
+    const margin = ls.margin;
     return (
       <AbsoluteFill>
         <div
@@ -56,11 +54,11 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
             left: margin,
             top: margin,
             bottom: margin,
-            width: textColW,
+            width: ls.textCol.width,
             display: "flex",
             flexDirection: "column",
             justifyContent: "center",
-            gap: 56,
+            gap: ls.textCol.gap,
           }}
         >
           <div style={{fontFamily: FONT_STACK}}>
@@ -100,7 +98,7 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
         >
           <MediaBox seg={seg} t={t} style={{borderRadius: lay.image.borderRadius}} />
         </div>
-        <ProgressBar seg={seg} t={t} aspect={aspect} w={w} h={h} />
+        <ProgressBar seg={seg} t={t} aspect={aspect} />
       </AbsoluteFill>
     );
   }
@@ -165,13 +163,10 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect, w, h}) => {
         </div>
 
       <Verse seg={seg} t={t} aspect={aspect} placement="vertical-slot" />
-      <ProgressBar seg={seg} t={t} aspect={aspect} w={w} h={h} />
+      <ProgressBar seg={seg} t={t} aspect={aspect} />
     </AbsoluteFill>
   );
 };
-
-const ANIM_TITLE = {from: 0.5, duration: 0.5};
-const ANIM_IMG = {duration: 0.8, startDelay: 0.2, vertY: 40};
 
 /** tagline：mono 小字 + 左侧 accent 刻度条（不推挤文字）。 */
 const Tagline: React.FC<{seg: GenSegment; aspect: Aspect}> = ({seg, aspect}) => {
@@ -187,7 +182,7 @@ const Tagline: React.FC<{seg: GenSegment; aspect: Aspect}> = ({seg, aspect}) => 
         fontWeight: TYPO.taglineWeight,
         lineHeight: tg.lineHeight,
         letterSpacing: "0.05em",
-        color: ensureTaglineColor(seg),
+        color: ensureTextContrast(seg.accent),
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -209,10 +204,3 @@ const Tagline: React.FC<{seg: GenSegment; aspect: Aspect}> = ({seg, aspect}) => 
     </div>
   );
 };
-
-/** tagline 颜色：accent 在文字底色上压暗/提亮到达标档（HTML 走
- * --seg-accent-text 派生；这里用同一组对比度保底）。 */
-function ensureTaglineColor(seg: GenSegment): string {
-  // 直接复用 ensureTextContrast 的暗/亮两档推断：这里与 agenda idx 同口径
-  return ensureTextContrastColor(seg.accent);
-}

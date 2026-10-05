@@ -146,6 +146,11 @@ def curve(name, default):
         # GSAP 的 SteppedEase 把跳变放在 t=i/(n+1)（实测 steps(4) 在 0.2 就跳），
         # 不是直觉上的 floor(t·n)/n；带第二个参数（steps(4,true)）时整体提前一格。
         # 照实测写，morph 的停顿点才和同名补间那一拍对得上。
+        #
+        # 这里**直接 return、不走末尾的方向翻转**（阶梯是终态曲线）：`1-g(1-t)`
+        # 对阶梯函数不是恒等，steps(3,true) 在 t=0.2 处 g 已跳到 1/3，翻转后成
+        # 2/3，与渲染端逐帧求值的停顿点差整整一格。渲染侧 easing.ts 同样对
+        # steps 跳过 withMode，tests/test_ease_parity.py 逐点钉住这一条。
         if len(args) > 1 and args[1].lower() in ("true", "1"):
             return lambda t, n=n: 1.0 if t >= 1 else min(math.floor(t * n) + 1, n) / n
         return lambda t, n=n: 1.0 if t >= 1 else min(math.floor(t * (n + 1)), n) / n

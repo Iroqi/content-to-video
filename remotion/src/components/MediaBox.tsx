@@ -12,10 +12,10 @@ interface MediaBoxProps {
 
 /** 按 seg.imageMode 渲染媒体（img / video / svgInline 导演内联）。
  *
- * 与 html_renderer._media_html 对应：静态图/gif 走 <img>（objectFit cover）、
- * 视频走 <video>（loop/muted/poster 读 items 选项）、director / stage:"keep"
- * 走净化内联 SVG。Remotion 下 autoplay/playsinline 是浏览器语义、逐帧渲染
- * 无意义，这里只保留 loop/muted/poster（README 已声明）。
+ * 静态图/gif 走 <Img>（objectFit cover）、视频走 <Video>、director 与
+ * stage:"keep" 走净化内联 SVG。images.json 的 autoplay/playsinline 是浏览器
+ * 播放语义，逐帧渲染无意义，契约层收下但渲染端不读（README 已声明）；poster
+ * 则照原生 <video> 属性透传——视频首帧尚未解出时它就是画面，不接会露出空帧。
  */
 export const MediaBox: React.FC<MediaBoxProps> = ({seg, t, style}) => {
   const base: React.CSSProperties = {
@@ -37,6 +37,7 @@ export const MediaBox: React.FC<MediaBoxProps> = ({seg, t, style}) => {
         src={staticFile(m.src)}
         loop={m.loop !== false}
         muted={m.muted !== false}
+        poster={m.poster ? staticFile(m.poster) : undefined}
         style={{...base, objectFit: "cover"}}
       />
     );

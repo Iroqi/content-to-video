@@ -10,7 +10,7 @@ interface CardProps {
   seg: GenSegment;
   t: number;
   aspect: Aspect;
-  w: number;
+  /** 画幅高（px）：引导线扫过的距离与 peel 位移都按它算，不用 DOM 测量。 */
   h: number;
   peel: {wipe: number; winStart: number} | null;
   children: React.ReactNode;
@@ -30,12 +30,10 @@ const gridStyle = (aspect: Aspect): React.CSSProperties => {
 
 /** 段落卡的不透明外壳：卡片底色 + 网格 + 氛围光（按声明序压底），
  * clip-path 揭幕 + line 档引导线 + 被下一页推走时的剥离（peel）。
- * 等价于 html_renderer 的卡 DOM + wipe/line/peel 三条 GSAP 补间：
  * 揭幕几何与引导线共用同一条曲线（ANIM.propLine.ease），peel 是旧卡
  * 在下张卡揭幕窗口里的加速上移 + 底缘暗边（peel 由下一张卡的 clip 数据
- * 给出，见 data.peelFor）。
- */
-export const Card: React.FC<CardProps> = ({seg, t, aspect, w, h, peel, children}) => {
+ * 给出，见 data.peelFor）。 */
+export const Card: React.FC<CardProps> = ({seg, t, aspect, h, peel, children}) => {
   if (!visibleAt(seg, t)) return null;
   const lay = LAYOUTS[aspect];
   const wipe = seg.wipe;

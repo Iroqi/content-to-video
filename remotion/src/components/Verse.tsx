@@ -27,7 +27,7 @@ interface VerseProps {
 export const Verse: React.FC<VerseProps> = ({seg, t, aspect, placement}) => {
   const lay = LAYOUTS[aspect];
   const v = lay.verse;
-  const subFont = aspect === "vertical" ? 40 : 33;
+  const subFont = lay.subtitle.fontSize;
   const lineBox = v.linePad * 2 + subFont * v.lineHeight;
   const clipH = seg.sentences.length * lineBox + v.clipPad * 2;
   const winH = v.windowHeight;

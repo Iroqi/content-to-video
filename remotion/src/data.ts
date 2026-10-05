@@ -1,4 +1,5 @@
 import type {SegmentLayout, OpeningAnimation, Aspect} from "./theme";
+import {ANIM} from "./theme";
 import {DATA} from "./generated";
 
 export type {Aspect};
@@ -16,8 +17,7 @@ export interface GenRow {
   dur: string | null;
 }
 
-/** director.steps 的求值数据（生成器按帧采样/展开，组件只按绝对帧求值，
- * 等价于 html_renderer._director_timeline_lines 的 GSAP 补间逐帧 seek）。 */
+/** director.steps 的求值数据（生成器按帧采样/展开，组件只按绝对帧求值）。 */
 export interface DirectorStep {
   target: string;
   kind: "to" | "from" | "fromTo" | "set" | "draw" | "count" | "type" | "morph";
@@ -46,8 +46,6 @@ export interface GenMedia {
   poster?: string | null;
   loop?: boolean;
   muted?: boolean;
-  autoplay?: boolean;
-  playsinline?: boolean;
 }
 
 export interface GenSegment {
@@ -89,9 +87,10 @@ export const ASPECT: Aspect = WIDTH > HEIGHT ? "landscape" : "vertical";
 export const visibleAt = (seg: GenSegment, t: number): boolean =>
   t >= seg.winStart && t < seg.winStart + seg.vis;
 
-/** 段落入场动效预算随段长归一化（与 html_renderer 同一条公式）。 */
+/** 段落入场动效预算随段长归一化：段越长给入场动画的时间预算越足，
+ * 但不低于 ANIM.entranceBudget.minFactor（短段也不至于瞬间落定）。 */
 export const entranceK = (seg: GenSegment): number => {
-  const eb = {minFactor: 0.45, normSeconds: 4.0};
+  const eb = ANIM.entranceBudget;
   return Math.min(1, Math.max(eb.minFactor, seg.duration / eb.normSeconds));
 };
 

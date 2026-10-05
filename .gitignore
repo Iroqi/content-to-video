@@ -3,10 +3,8 @@
 # 制作产物（按路径约定应写在技能目录之外，这里兜底防手滑）
 audio_output/
 out/
-snapshots/
 segments_source.json
 timing_manifest.json
-candidates.json
 
 # Python 运行时
 __pycache__/

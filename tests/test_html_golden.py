@@ -356,5 +356,53 @@ class Injection(unittest.TestCase):
         self.assertIn("__CTV_GSAP__", evil)
 
 
+class AppleOpening(unittest.TestCase):
+    """opening_animation:"apple" 的蘋果風開場编排：halo + 模糊→锐利标题 + 逐行浮现，
+    取代通用标题入场；不写该键时开屏维持原状（回归网）。"""
+
+    def _render_apple(self):
+        s = dict(H.sample_source(), opening_animation="apple",
+                 opening_tagline="AI WEEKLY")
+        m = H.make_manifest(s)
+        with contextlib.redirect_stderr(io.StringIO()):
+            return generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
+
+    def test_apple_opening_emits_choreography(self):
+        html = self._render_apple()
+        # 光晕元素 + 编排标记
+        self.assertIn('class="apple-halo" id="halo-opening"', html)
+        self.assertIn('data-opening-anim="apple"', html)
+        # 光晕：淡入 + repeat:-1 呼吸
+        self.assertIn('tl.fromTo("#halo-opening",{opacity:0},{opacity:0.55', html)
+        self.assertIn('repeat:-1,yoyo:true', html)
+        # 标题：模糊→锐利 + 微缩放（值从模板 animation.opening.apple 取）
+        self.assertIn('filter:"blur(16px)",duration:1.60,ease:"power3.out"', html)
+        # kicker / agenda 行：短延迟跟上 + 逐行浮起
+        self.assertIn('#opening .agenda-kicker', html)
+        self.assertIn('#opening .agenda-row', html)
+        self.assertIn('stagger:0.12', html)
+
+    def test_apple_opening_replaces_generic_title_entrance(self):
+        html = self._render_apple()
+        # 苹果编排取代通用 back.out 标题入场（两条补间同元素会打架）
+        self.assertNotIn('tl.from("#title-opening",{scale:0.5', html)
+        # 非开屏卡照旧走通用入场；closing 不带苹果编排
+        self.assertIn('tl.from("#title-seg-a",{scale:0.5', html)
+        self.assertNotIn('tl.fromTo("#halo-closing"', html)
+
+    def test_static_opening_unchanged_without_the_key(self):
+        """不写 opening_animation = 静态開場：没有 halo 元素/编排，通用入场照旧。
+
+        样式骨架里的 .apple-halo 规则是静态 CSS（与 .reveal-line 同类：只在
+        对应特性启用时被 DOM 引用），所以这里查元素与编排、不查样式表。
+        """
+        html = render(**CASES["portrait_dark"])
+        self.assertNotIn('class="apple-halo"', html)
+        self.assertNotIn("data-opening-anim", html)
+        self.assertIn('tl.from("#title-opening",{scale:0.5', html)
+
+
 if __name__ == "__main__":
     unittest.main()

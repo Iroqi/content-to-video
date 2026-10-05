@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _degraded import KEYS as DEGRADED_KEYS  # noqa: E402  降级词汇表（注册表派生，单一来源）
 from _segments import (CONTENT_SID_PREFIX, STRUCTURAL_SIDS,  # noqa: E402
-                       _validate_layout, _validate_sid, is_content_sid)
+                       _validate_layout, _validate_opening_animation,
+                       _validate_sid, is_content_sid)
 from _timeline import TIMELINE_TOLERANCE  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                         _validate_finite_number, _validate_text)
@@ -29,7 +30,8 @@ from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 MANIFEST_SENTENCE_KEYS = ("index", "text", "start_time", "duration",
                           "speaker", "synth_failed")
 MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
-                         "speed", "layout", "voice_id", "voice_style",
+                         "speed", "layout", "opening_animation",
+                         "voice_id", "voice_style",
                          "takeaway", "turns")
 # 顶层也一起封闭：只封下面两层会留一半——combined_audio / closing_cta 都是可选键，
 # 拼错了读侧 .get() 兜默认值，一声不吭（清单在 17 份真实 manifest 上实测稳定）。
@@ -210,6 +212,17 @@ def validate_timing_manifest(data):
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
                          content=is_content_sid(sid))
+        # 開場動畫模式：只属于开屏。内容段/结尾带上它 = 渲染端根本不读（渲染按
+        # 段 id 分派），拼错的模式静默退回静态開場，与 layout 同族在契约层报对。
+        if sg.get("opening_animation") is not None:
+            if sid != "opening":
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sid}' 写了 opening_animation，"
+                    "但它只属于开屏（opening）——其他段落渲染端不读这个字段。"
+                    "要開場動畫请写在 opening 段上")
+            _validate_opening_animation(
+                sg["opening_animation"],
+                f"timing_manifest.json 的段落 'opening'")
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:

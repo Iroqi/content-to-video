@@ -37,6 +37,19 @@ class SourceValidation(unittest.TestCase):
         s["closing_text"] = "拼错的结尾键"
         bad(SRC.validate_segments_source, s, contains="closing_text")
 
+    def test_opening_animation_apple_accepted(self):
+        SRC.validate_segments_source(dict(H.sample_source(), opening_animation="apple"))
+
+    def test_opening_animation_unknown_value_rejected(self):
+        bad(SRC.validate_segments_source,
+            dict(H.sample_source(), opening_animation="glow"),
+            contains="opening_animation")
+
+    def test_opening_animation_bad_type_rejected(self):
+        bad(SRC.validate_segments_source,
+            dict(H.sample_source(), opening_animation=True),
+            contains="opening_animation")
+
     def test_unknown_segment_key_rejected(self):
         s = H.sample_source()
         s["segments"][0]["_note"] = "备注"
@@ -148,6 +161,26 @@ class LayoutDispatch(unittest.TestCase):
 class ManifestValidation(unittest.TestCase):
     def test_built_manifest_ok(self):
         MAN.validate_timing_manifest(H.make_manifest())
+
+    def test_manifest_opening_animation_flows_through_build_parts(self):
+        """source 的 opening_animation 应原样出现在 manifest 的 opening 段上。"""
+        m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
+        opening = next(s for s in m["segments"] if s["id"] == "opening")
+        self.assertEqual(opening.get("opening_animation"), "apple")
+        MAN.validate_timing_manifest(m)
+
+    def test_manifest_opening_animation_scoped_to_opening(self):
+        """内容段/结尾带 opening_animation = 渲染端根本不读，契约层报对。"""
+        for sid in ("seg-a", "closing"):
+            with self.subTest(sid=sid):
+                m = H.make_manifest()
+                self._seg(m, sid)["opening_animation"] = "apple"
+                bad(MAN.validate_timing_manifest, m, contains="只属于开屏")
+
+    def test_manifest_opening_animation_value_validated(self):
+        m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
+        self._seg(m, "opening")["opening_animation"] = "glow"
+        bad(MAN.validate_timing_manifest, m, contains="opening_animation")
 
     def _seg(self, m, sid="seg-a"):
         return next(s for s in m["segments"] if s["id"] == sid)

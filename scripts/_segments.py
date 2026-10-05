@@ -124,6 +124,24 @@ def _validate_layout(value, where, *, content=False):
             "不是这一段自己的文字——内容段用它在画面上印别人的目录")
 
 
+# 開場動畫模式（可選）：目前只收 "apple"（蘋果風開場：標題模糊→銳利 + 微縮放 +
+# 光暈呼吸 + 逐行浮現）。值清單與 _validate_layout 同屬"拼錯即報錯"一族：渲染端
+# 按值分派動畫模式，猜錯方向的那一次靜默退回靜態開場，比報錯難發現得多，所以
+# 嚴格匹配、不做大小寫歸一、不 strip。
+OPENING_ANIMATION_VALUES = ("apple",)
+
+
+def _validate_opening_animation(value, where):
+    """opening_animation 取值校验（可选字段）。"""
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in OPENING_ANIMATION_VALUES:
+        raise ValueError(
+            f"{where} 的 opening_animation={value!r} 不是合法開場動畫模式："
+            f"只接受 {'、'.join(repr(v) for v in OPENING_ANIMATION_VALUES)}，"
+            "或整個不寫（不寫 = 靜態開場）")
+
+
 def _validate_sid(sid, where, seen):
     """段落 id 校验：合法字符集 + 跨段唯一。
 

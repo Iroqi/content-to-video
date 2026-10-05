@@ -163,14 +163,20 @@ def _agenda_row_html(rows):
 
 
 def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
-                     title_size, bgs):
+                     title_size, bgs, apple_opening=False):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流（verse）后再闭合 .agenda-col——flex 列"题头在顶、
     agenda 垂直居中、句子流锚底"两画幅共用同一套 DOM，几何差异全在 CSS。
     kicker 取 opening/closing 的 tagline 字段（可选的一行小标题）。
+    apple_opening 时额外带一枚题头光晕（.apple-halo）与 data 标记——光晕在
+    DOM 最前、z-index:-1，衬在标题后面，由 _card_timeline_lines 编排淡入与
+    呼吸；data 标记供 CSS/调试识别人，不参与渲染路径。
     """
     sid = seg["id"]
+    halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n' % sid
+                 if apple_opening else "")
+    col_attr = (' data-opening-anim="apple"' if apple_opening else "")
     kicker_html = ""
     if seg.get("tagline"):
         # 深底起手色向白提亮，再统一过 ensure_text_contrast 的对比度保底。
@@ -182,7 +188,8 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
-    return (f'    <div class="agenda-col">\n'
+    return (f'    <div class="agenda-col"{col_attr}>\n'
+            f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'
             f'<div class="seg-title" id="title-{sid}" '
             f'style="font-size:{title_size};text-shadow:0 0 {ag["titleGlow"]}px {ac_attr}40">'
@@ -630,6 +637,10 @@ def _prepare_card(rc, clip):
     # 库调用方仍带映射时这里也强制忽略。
     layout = seg_layout(seg)
     is_agenda = layout == "agenda"
+    # 蘋果風開場：只对开屏 agenda 卡生效（opening_animation 取值已由契约层把守，
+    # 渲染端只认 "apple"）。其他段/其他值一律不进入这条编排——静态開場是缺省。
+    apple_opening = (sid == "opening" and is_agenda
+                     and seg.get("opening_animation") == "apple")
     has_image = (sid in rc.images) and not is_agenda
     # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
@@ -680,6 +691,7 @@ def _prepare_card(rc, clip):
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
+        apple_opening=apple_opening,
         is_keep=_is_keep_page(rc, sid),
         tagline_html=tagline_html, image_html=image_html,
         verse_html=verse_html, card_open=card_open,
@@ -693,7 +705,8 @@ def _assemble_card(rc, card, clips, manifest):
         # 进度条留在卡底部（col 之外，贴屏底）。
         return (card.card_open
                 + _agenda_col_html(card.seg, clips, manifest, rc.ag,
-                                   card.ac, card.ac_attr, card.title_size, rc.bgs)
+                                   card.ac, card.ac_attr, card.title_size,
+                                   rc.bgs, card.apple_opening)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html
                 + '  </div>')
@@ -1016,6 +1029,57 @@ def _director_timeline_lines(rc, card):
     return lines
 
 
+def _apple_opening_lines(rc, card):
+    """蘋果風開場编排（opening_animation:"apple"）。
+
+    苹果式开场的手感：不是"弹出来"，是"浮出来"——标题带一层高斯模糊由虚到实、
+    配一个 1.06→1 的微缩放落定（power3.out 的缓入缓出比 back.out 更"沉"），
+    光晕先随标题淡入、随后慢呼吸（repeat:-1 yoyo），kicker 短延迟跟上，agenda
+    行逐行浮起（y 24 → 0，stagger 0.12）。
+
+    全部锚在擦除起点 win_start：页面从 clip-path 被擦开的同时内容就在演化。
+    时长是编排的一部分，不随段长归一化（entranceBudget 只归一通用入场；
+    苹果开场是固定 choreography，段再短也是同一支舞）。模糊是短暂的（标题
+    1.6s 内收敛到 0），成片只有开头约 40 帧带 filter 开销，无头渲染可接受。
+    """
+    sid, t = card.sid, card.win_start
+    ap = rc.anim["opening"]["apple"]
+    lines = []
+    halo = ap["halo"]
+    lines.append(
+        f'tl.fromTo("#halo-{sid}",{{opacity:0}},'
+        f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"]:.2f},'
+        f'ease:"sine.out"}},{t:.2f})'
+    )
+    # 呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
+    # 与 director 的 repeat:-1 同一种确定性（无"最后停在哪儿"可争）。
+    lines.append(
+        f'tl.to("#halo-{sid}",{{opacity:{halo["breatheTo"]:.2f},'
+        f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
+        f'ease:"sine.inOut"}},{t + halo["in"]:.2f})'
+    )
+    a_t = ap["title"]
+    lines.append(
+        f'tl.from("#title-{sid}",{{opacity:0,scale:{a_t["scale"]},'
+        f'filter:"blur({a_t["blur"]}px)",duration:{a_t["duration"]:.2f},'
+        f'ease:"{a_t["ease"]}"}},{t:.2f})'
+    )
+    if card.seg.get("tagline"):
+        a_k = ap["kicker"]
+        lines.append(
+            f'tl.from("#{sid} .agenda-kicker",{{opacity:0,'
+            f'filter:"blur({a_k["blur"]}px)",duration:{a_k["duration"]:.2f},'
+            f'ease:"{a_k["ease"]}"}},{t + a_k["delay"]:.2f})'
+        )
+    a_r = ap["rows"]
+    lines.append(
+        f'tl.from("#{sid} .agenda-row",{{opacity:0,y:{a_r["y"]},'
+        f'duration:{a_r["duration"]:.2f},stagger:{a_r["stagger"]:.2f},'
+        f'ease:"{a_r["ease"]}"}},{t + a_r["delay"]:.2f})'
+    )
+    return lines
+
+
 def _card_timeline_lines(rc, card):
     """本卡的 GSAP 时间线：遮罩擦除入场、标题/配图入场、进度条。"""
     sid, s, d = card.sid, card.s, card.d
@@ -1040,13 +1104,19 @@ def _card_timeline_lines(rc, card):
     _eb = a_["entranceBudget"]
     _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
     # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
-    if not card.is_canvas:
+    if not card.is_canvas and not card.apple_opening:
         a_title = a_["titleEntrance"]
         lines.append(
             f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
+    # 蘋果風開場：整页编排取代通用标题入场（opening_animation:"apple"）。
+    # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
+    # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
+    # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。
+    if card.apple_opening:
+        lines.extend(_apple_opening_lines(rc, card))
     if card.has_image and not card.is_canvas and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。

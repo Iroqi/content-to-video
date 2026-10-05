@@ -732,6 +732,8 @@ def _group_segments(seg_config, manifest_sentences, degraded):
             seg_out["speed"] = seg["speed"]
         if seg.get("layout") is not None:
             seg_out["layout"] = seg["layout"]
+        if seg.get("opening_animation") is not None:
+            seg_out["opening_animation"] = seg["opening_animation"]
         if seg.get("voice_id") is not None:
             seg_out["voice_id"] = seg["voice_id"]
         if seg.get("voice_style") is not None:

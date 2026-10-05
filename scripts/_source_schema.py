@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
-                       is_content_sid)
+                       _validate_opening_animation, is_content_sid)
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                        _validate_display_text, _validate_text)
@@ -25,7 +25,8 @@ from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 # 结尾 agenda 卡压根不生成，而产物看起来完全正常（帧是两张槽位页，check 全绿）。
 # 清单必须与下面 validate_segments_source 里逐个 .get() 的字段同步。
 SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
-               "opening_speed", "opening_layout", "closing", "closing_title",
+               "opening_speed", "opening_layout", "opening_animation",
+               "closing", "closing_title",
                "closing_tagline", "closing_speed", "closing_layout", "cta",
                "speakers", "segments")
 SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
@@ -81,6 +82,11 @@ def validate_segments_source(data):
     # 整页海报。只有这两个去向，所以这里按取值分派、不看段 id（content=False）。
     for key in ("opening_layout", "closing_layout"):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
+
+    # 開場動畫模式（可选）：只影响开屏 agenda 卡，写 "apple" 走蘋果風開場编排。
+    _validate_opening_animation(
+        data.get("opening_animation"),
+        "segments_source.json 的 'opening_animation'")
 
     # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
     # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。

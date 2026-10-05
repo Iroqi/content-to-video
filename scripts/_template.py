@@ -247,6 +247,35 @@ _TEMPLATE_JSON = r'''
     "director": {
       "duration": 0.5,
       "ease": "power2.out"
+    },
+    "opening": {
+      "apple": {
+        "title": {
+          "blur": 16,
+          "scale": 1.06,
+          "duration": 1.6,
+          "ease": "power3.out"
+        },
+        "kicker": {
+          "blur": 8,
+          "delay": 0.4,
+          "duration": 1.2,
+          "ease": "power2.out"
+        },
+        "rows": {
+          "delay": 0.7,
+          "duration": 0.7,
+          "stagger": 0.12,
+          "y": 24,
+          "ease": "power2.out"
+        },
+        "halo": {
+          "in": 1.6,
+          "opacity": 0.55,
+          "breatheTo": 0.35,
+          "breatheDur": 1.2
+        }
+      }
     }
   },
   "typography": {

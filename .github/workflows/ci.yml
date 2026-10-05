@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feature]
+    # remotion 是当前的开发分支：漏了它，改 TS 渲染层时 Python 门禁不会跑，
+    # 双源分家（缓动幂次表那类）就又会在没人拦的情况下溜过去。
+    branches: [main, feature, remotion]
   pull_request:
 
 jobs:
@@ -32,3 +34,28 @@ jobs:
 
       - name: Doc cross-reference check
         run: python tests/check_docs.py
+
+  # 渲染端的门禁：组件与导演求值器是 TS，从前只有人手点开 npx tsc 才知道有没有
+  # 坏掉。tests/test_ease_parity.py 已经在 Python 侧钉住缓动双源一致，这里补上
+  # 类型检查那一半——两者合起来才等于"过门禁"。
+  typescript:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: remotion
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # generated.ts 是数据胶，由生成器按当次 manifest 产出、不进仓库；渲染端所有
+      # 组件都从它 import。先用测试夹具生成一份最小的，tsc 才有完整类型可查。
+      - name: Generate data glue for type checking
+        working-directory: .
+        run: |
+          python tests/make_stub_generated.py --out remotion/src/generated.ts
+
+      - run: npm ci
+      - run: npx tsc --noEmit -p .

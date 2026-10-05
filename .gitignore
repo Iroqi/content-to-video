@@ -2,7 +2,6 @@
 
 # 制作产物（按路径约定应写在技能目录之外，这里兜底防手滑）
 audio_output/
-hf-project/
 out/
 snapshots/
 segments_source.json

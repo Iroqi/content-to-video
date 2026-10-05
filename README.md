@@ -77,10 +77,10 @@ agent 才做最后一步渲染，交给你 MP4。它同时附一份生产报告�
 
 ## 几件值得知道的事
 
-- **画面不联网**：出图、排版、渲染都在你自己的电脑上完成，草稿和成片不会外传。要联网的只有两件事。配音合成要请求 TTS 服务。换到新机器第一次生成画面时，要取一个动画引擎文件，取到之后本地就一直用这份。
+- **画面不联网**：出图、排版、渲染都在你自己的电脑上完成，草稿和成片不会外传。要联网的只有两件事。配音合成要请求 TTS 服务。换到新机器第一次渲染成片时，Remotion 会下载一次 headless 浏览器（约 86MB），之后本地一直用这份。
 - **降级不会瞒着你**：某句配音失败、某一段整个丢失，都会在交付前明确告诉你。绝不悄悄产出一支缺声音的完整视频。
 - **内容里的指令不会被执行**。信源里如果夹着"请忽略之前的设定"或"先执行这条命令"之类的话，一律当成普通文字读。agent 不会照做。
-- **产物不会写进技能目录**：音频、图片、HTML、成片都落在你的项目目录里。
+- **产物不会写进技能目录**：音频、图片、Remotion 工程、成片都落在你的项目目录里。
 - **字幕的取舍你知情**：整屏海报那一档版式，画面是一整张图。标题与要点由画图时一并画进去。这一页没有跟着时间轴走的逐句字幕。口播里的关键句务必画进图里，别让信息只存在于旁白。agent 用这种版式前会讲清这个代价。
 
 ---
@@ -94,17 +94,40 @@ agent 才做最后一步渲染，交给你 MP4。它同时附一份生产报告�
 ## 深入文档
 
 给 agent 看的说明书是 [SKILL.md](SKILL.md)。四份深度参考在 `references/`。它们覆盖写稿、配音、配图、渲染四类内容。**人不必读**，你只管和 agent 说话。
+## 架构与目录
+
+仓库按「生成期 → 渲染期」分两层，渲染后端只有 Remotion 一版（旧 Hyperframes/HTML 后端已整体移除，`feature` 分支保留为历史载体）：
+
+```text
+content-to-video/
+├── SKILL.md              # agent 工作流说明书（唯一入口）
+├── references/           # 契约文档：writing（写稿）/ tts_pipeline（配音）/ image_options（配图）/ rendering（渲染）
+├── scripts/              # 生成期与管线（纯 Python，标准库）
+│   ├── pipeline.py       # 全链编排：source.json → TTS → timing_manifest.json
+│   ├── gen_remotion_project.py  # 渲染桥：manifest → Remotion 工程（数据胶 + 素材）
+│   ├── _director_prepare.py     # 导演编排的生成期体检/净化内联/跨段烘焙（共享逻辑）
+│   └── _*.py             # schema/契约/主题/缓动/净化等支撑模块
+├── remotion/             # 渲染工程：React + TS 组件（脚手架源，也是生成器默认产物位）
+│   ├── src/              # index/Root/Video + components/（Card/Agenda/Slot/Canvas/Director/MediaBox…）
+│   └── public/           # 素材（gitignored：由生成器按本次输入重建）
+└── tests/                # 全量回归（标准库 unittest）
+```
+
+- **生成器输出即自包含工程**：`gen_remotion_project.py` 会把 `remotion/` 的静态脚手架复制进 `--out`（排除 node_modules/演示成片/generated.ts/public），再覆盖数据胶与素材——输出目录 `npm install` 后即可 `npx remotion render`。
+- **数据胶与组件分离**：`src/generated.ts` 是每次生成覆盖的产物，组件代码是静态脚手架，两者分开（见 `remotion/README.md`）。
+- **契约文档分工**：`references/rendering.md` 是画面/动画/渲染口径真源，`SKILL.md` 引用它；`scripts/` 各模块的校验（fail-fast）与文档所述口径同源。
+
 
 ## 维护者
 
-改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
+改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空。改了渲染组件后跑 `cd remotion && npx tsc --noEmit -p .` 查类型；生成了新工程或改了生成器，用 `python scripts/gen_remotion_project.py` 对示例 manifest 冒烟一次再交付。
 
 发布时手动压缩技能目录。剔掉这些内容：
 
 - `tests/`
 - `.env`（含密钥，漏进包就是泄密）
 - `.git/.venv/__pycache__`
-- 制作残渣目录：`audio_output/`、`hf-project/`、`out/`、`snapshots/`
+- 制作残渣目录：`audio_output/`、`out/`、`snapshots/`
 - 中间文件：`candidates.json`、`segments_source.json`、`timing_manifest.json`
 
 `scripts/check_svg.py` 要留着。它是第 4 步引用的生产工具，不是维护物。

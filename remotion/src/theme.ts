@@ -30,7 +30,12 @@ export const TYPO = {
 };
 
 export interface Layout {
-  verse: {windowHeight: number; bottom: number; clipPad: number; linePad: number; lineHeight: number};
+  verse: {
+    windowHeight: number; bottom: number; clipPad: number; linePad: number;
+    lineHeight: number;
+    /** 当前句下方高亮规则的厚度（em，随字号缩放）。 */
+    activeRule: number;
+  };
   title: {top: number; fontSize: number; maxLines: number; glow: number; lineHeight: number};
   tagline: {fontSize: number; marginTop: number; lineHeight: number; indent: number; tickWidth: number};
   image: {width: number; height: number; top: number; borderRadius: number; marginSide: number; glow: number};
@@ -50,7 +55,7 @@ export interface Layout {
 
 export const LAYOUTS: Record<Aspect, Layout> = {
   vertical: {
-    verse: {windowHeight: 280, bottom: 50, clipPad: 40, linePad: 5, lineHeight: 1.5},
+    verse: {windowHeight: 280, bottom: 50, clipPad: 40, linePad: 5, lineHeight: 1.5, activeRule: 0.12},
     title: {top: 80, fontSize: 64, maxLines: 2, glow: 40, lineHeight: 1.45},
     tagline: {fontSize: 32, marginTop: 8, lineHeight: 1.25, indent: 16, tickWidth: 8},
     image: {width: 980, height: 735, top: 325, borderRadius: 12, marginSide: 0, glow: 40},
@@ -67,7 +72,7 @@ export const LAYOUTS: Record<Aspect, Layout> = {
     },
   },
   landscape: {
-    verse: {windowHeight: 260, bottom: 0, clipPad: 40, linePad: 5, lineHeight: 1.45},
+    verse: {windowHeight: 260, bottom: 0, clipPad: 40, linePad: 5, lineHeight: 1.45, activeRule: 0.12},
     title: {top: 0, fontSize: 62, maxLines: 0, glow: 40, lineHeight: 1.15},
     tagline: {fontSize: 28, marginTop: 16, lineHeight: 1.3, indent: 22, tickWidth: 8},
     image: {width: 1067, height: 800, top: 0, borderRadius: 12, marginSide: 0, glow: 40},

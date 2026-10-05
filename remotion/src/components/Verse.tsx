@@ -105,7 +105,10 @@ export const Verse: React.FC<VerseProps> = ({seg, t, aspect, placement}) => {
                     left: 0,
                     right: 0,
                     bottom: v.linePad * 0.4,
-                    height: "0.12em",
+                    // 当前句下方那道高亮规则：厚度读 template 的 verse.activeRule
+                    // （单位 em，随字号缩放）。此前这里硬编码 "0.12em"——两画幅
+                    // 同值所以看不出错，但改模板不动这里就是一处静默分家。
+                    height: `${v.activeRule}em`,
                     borderRadius: 999,
                     background: `linear-gradient(90deg,${rgba(seg.accent, 0.65)},transparent 62%)`,
                   }}

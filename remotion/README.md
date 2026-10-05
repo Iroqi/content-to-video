@@ -56,9 +56,19 @@ source.json ──► scripts/pipeline.py ──► timing_manifest.json（契�
 | `_template.py` `layout.landscape` | `LANDSCAPE_ONLY` | 横屏左文字栏（竖屏没有对应物） |
 | `_template.py` `animation` | `ANIM` | 动画参数 |
 
-改视觉参数时先改 Python 真源，再改 `theme.ts` 对应项。`tests/test_ease_parity.py`
-盯的是缓动那一份双源（幂次表 + 逐点采样）；版式这份目前靠人同步——两侧值
-对不上时 tsc 不会报、画面也不会坏，只会慢慢漂。
+改视觉参数时先改 Python 真源，再改 `theme.ts` 对应项。这份同步有两道机械
+保障：`tests/test_theme_parity.py` 逐字段对拍两侧数值（Node 缺失时退化为从
+源码抠字面量），`tests/test_ease_parity.py` 盯缓动那一份双源（幂次表 + 逐点
+采样）。两道都绿，才算真的同步了——只改一边会在 CI 上变红。
+
+三处**故意不对拍**，别误当成漏项去"修正"：
+
+- `ANIM.segmentWipe` 只在 Python 侧。渲染端只实现 line 档，非 line 档由生成期
+  `_line_only_guard` 在写盘前挡住；TS 留一份没人读的副本才是分家温床。
+- `animation.director`（steps 的缺省 duration/ease）只在 Python 侧。它是**生成期**
+  的值，由 `canvas_kit` 烘进 SVG 属性，渲染端从 DOM 读到已烘好的结果。
+- `ANIM.canvasAmbience`（canvas 档第三组氛围光）只在 TS 侧。Python 的
+  `layout.ambience` 是另外两画幅的值，canvas 用的是渲染端专属的一组。
 
 `theme.ts` 之外的组件里只允许写"两画幅同值、单值即终态"的观感常量（字重、
 透明度、辉光浓度）；其余一律回 `theme.ts`。
@@ -104,6 +114,7 @@ cd remotion && npx tsc --noEmit -p .
 | `_line_only_guard` | 生成期，任何写盘之前 | 模板的 wipe 档位渲染端没实现 |
 | `npx tsc --noEmit` | 改组件后 | 类型与字段 |
 | `tests/test_ease_parity.py` | CI | 缓动两份实现分家（幂次表、方向翻转） |
+| `tests/test_theme_parity.py` | CI | 版式/配色两份实现分家（`layout` 逐字段、字体栈、字重色值） |
 
 `--out` 指向技能目录会被拒（与 `pipeline.py` 同一道闸）。生成器不替你判断
 `status`/`degraded`——它照实渲染并把降级项打在 manifest 里，放不放行由你决定。

@@ -226,5 +226,72 @@ class DocRefChecker(unittest.TestCase):
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
 
 
+class StaleScanPathShape(unittest.TestCase):
+    """门禁自己的路径形状不能随平台变。
+
+    这不是洁癖：ALLOW 的键是手写的仓库内路径（"references/xxx.md"），拿
+    relpath 的结果直接去查表。Windows 上 relpath 给反斜杠，于是每一条例外都
+    查不中——"讲历史"的措辞被当成陈旧指路，门禁在 Windows 上恒红
+    （CI 的 3.9/3.12/3.14 全挂在 test_skill_docs_have_no_dangling_section_refs）。
+    Linux 全绿，所以这个洞在本地看不见，只能靠模拟 Windows 抓住。
+
+    模拟的**不是** `_rel` 的返回值（那等于把修复前的行为又塞回去，测的就不是
+    修复了），而是 Windows 环境本身：relpath 吐反斜杠、分隔符是 `\`。然后断言
+    `_rel` 仍然归一化成正斜杠。
+    """
+
+    def _as_windows(self):
+        """把 check_docs 看到的路径环境换成 Windows 的，返回还原器。"""
+        import ntpath
+        real_relpath = check_docs.os.path.relpath
+        real_sep = check_docs.os.sep
+
+        def fake_relpath(path, start=None):
+            p = ntpath.relpath(str(path).replace("/", "\\"),
+                               str(start).replace("/", "\\"))
+            return p
+
+        check_docs.os.path.relpath = fake_relpath
+        check_docs.os.sep = "\\"
+        return lambda: (setattr(check_docs.os.path, "relpath", real_relpath),
+                        setattr(check_docs.os, "sep", real_sep))
+
+    def test_rel_normalises_windows_separators(self):
+        restore = self._as_windows()
+        try:
+            src = os.path.join(check_docs.ROOT, "references", "tts_pipeline.md")
+            self.assertEqual(check_docs._rel(src), "references/tts_pipeline.md")
+        finally:
+            restore()
+
+    def test_allow_lookup_survives_on_windows_paths(self):
+        # 整个 _scan_stale 在 Windows 路径环境下跑：ALLOW 例外仍须命中
+        restore = self._as_windows()
+        try:
+            stale = check_docs._scan_stale(check_docs._sources())
+        finally:
+            restore()
+        offenders = [s for s in stale if s[0].replace("\\", "/")
+                     == "references/tts_pipeline.md"]
+        self.assertEqual(offenders, [], "ALLOW 例外在 Windows 路径下没生效")
+
+    def test_every_allow_key_is_a_repo_relative_posix_path(self):
+        # 键写错的话门禁不会报错，只会静默失效——所以正向断言键能落到真实文件
+        for key in check_docs.ALLOW:
+            self.assertNotIn("\\", key, f"ALLOW 键不该用反斜杠：{key}")
+            self.assertTrue(
+                os.path.isfile(os.path.join(check_docs.ROOT, key)),
+                f"ALLOW 键指向的文件不存在：{key}")
+
+    def test_stale_scan_still_flags_a_planted_word(self):
+        # 反向确认：归一化没把门禁改瞎。真造一个含禁用词的临时文件喂给它。
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "planted.md")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("这里的指路已失效：见 gen_hyperframes 生成\n")
+            stale = check_docs._scan_stale([p])
+        self.assertEqual([s[2] for s in stale], ["gen_hyperframes"])
+
+
 if __name__ == "__main__":
     unittest.main()

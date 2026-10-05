@@ -39,7 +39,21 @@ BANNED = (
 # 例外：文件相对路径 → 该文件内允许出现的子串（每个都要是"讲历史"而非"指现役"）。
 ALLOW = {
     "references/tts_pipeline.md": ("--allow-degraded",),
+    # 这个文件里必须逐字写出禁用词：它反过来测门禁本身（STALE 的边界）。
+    # 用词元拼出来而不在此豁免，等于给门禁造假——真出现那行字时反而抓不到。
+    "tests/test_check_tools.py": ("gen_hyperframes",),
 }
+
+
+def _rel(path):
+    """仓库内相对路径，**一律用正斜杠**。
+
+    这不只是为了打印好看：ALLOW 的键是手写的仓库内路径（"references/xxx.md"），
+    拿 relpath 的结果直接去查表。Windows 上 relpath 给的是反斜杠，于是每一条例外
+    都查不中——"讲历史"的措辞会被当成陈旧指路，门禁在 Windows 上恒红。CI 三个
+    Windows 版本全挂过这个。路径是标识符，不该随平台变形态。
+    """
+    return os.path.relpath(path, ROOT).replace(os.sep, "/")
 
 
 def _target_path(matched):
@@ -81,7 +95,7 @@ def _scan_stale(sources):
     for src in sorted(sources):
         if os.path.abspath(src) == self_path:
             continue
-        rel = os.path.relpath(src, ROOT)
+        rel = _rel(src)
         allowed = ALLOW.get(rel, ())
         for lineno, ln in enumerate(open(src, encoding="utf-8"), 1):
             for word in BANNED:
@@ -100,13 +114,13 @@ def main():
         for m in REF.finditer(text):
             target, name = _target_path(m.group(1)), re.sub(r"[`*]", "", m.group(2)).strip()
             if not os.path.isfile(target):
-                bad.append((src, os.path.relpath(target, ROOT), name, "目标文件不存在"))
+                bad.append((src, _rel(target), name, "目标文件不存在"))
                 continue
             hs = cache.setdefault(target, headings(target))
             if not any(name in h for h in hs):
-                bad.append((src, os.path.relpath(target, ROOT), name, "没有标题包含该章节名"))
+                bad.append((src, _rel(target), name, "没有标题包含该章节名"))
     for src, target, name, why in bad:
-        print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
+        print(f"[dangling] {_rel(src)}: {target}「{name}」 — {why}")
     print(f"{len(bad)} 条悬空引用")
 
     stale = _scan_stale(sources)

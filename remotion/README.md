@@ -54,7 +54,9 @@ source.json ──► scripts/pipeline.py ──► timing_manifest.json（契�
 MIMO_API_KEY=... MIMO_BASE_URL=... python3 scripts/pipeline.py \
     --source source.json -o audio_output
 
-# 2. 生成 Remotion 工程（默认 --out remotion；--images 可选，格式同 images.json）
+# 2. 生成 Remotion 工程（默认 --out remotion；--images 可选，格式同 images.json）。
+#    生成器会把本仓库 remotion/ 的静态脚手架（package.json/tsconfig/组件源码）
+#    复制进输出目录，--out 即自包含可渲染工程（生成物只覆盖数据胶与素材）。
 python3 scripts/gen_remotion_project.py -m audio_output/timing_manifest.json \
     --images images.json --out remotion --aspect portrait --fps 24
 

@@ -77,7 +77,9 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 ### 5. 生成 Remotion 工程、抽帧检查、渲染
 
 ```bash
-# 生成 Remotion 工程（数据胶 + 组件）：从 timing_manifest 推导出全部画面参数
+# 生成 Remotion 工程：从 timing_manifest 推导全部画面参数，并把仓库 remotion/ 的
+# 静态脚手架（package.json/tsconfig/组件源码）复制进 -o 目录——输出即自包含工程，
+# npm install 后即可渲染（生成物只覆盖数据胶与素材，组件代码不动）。
 python scripts/gen_remotion_project.py -m audio_output/timing_manifest.json \
     --images audio_output/images.json -o remotion --aspect portrait --fps 24
 # 渲染成片（2 核机器必须 --concurrency 2；静态资源走 staticFile()，勿改工程结构）

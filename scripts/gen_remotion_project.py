@@ -136,6 +136,51 @@ def build_agenda_rows(seg_id, clips, manifest, ag, *, warn):
     return rows, tail_rows
 
 
+_SCAFFOLD_SRC = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "remotion")
+
+
+def _scaffold_project(out_dir):
+    """把仓库 remotion/ 的静态工程文件复制进输出目录，使 --out 成为
+    自包含可渲染工程（npm install 后即可 npx remotion render）。
+
+    复制：package.json / package-lock.json / tsconfig.json / remotion.config.ts /
+    README.md / .gitignore / src/ 全部组件源码。
+    排除：node_modules、演示成片 out*.mp4、src/generated.ts（由本次生成物覆盖）、
+    public/（由生成器按本次素材重建，避免带进旧工程残留）。
+
+    脚手架源与生成器同仓库（../remotion）；生成产物只覆盖数据胶与素材，
+    组件代码是静态脚手架，两者分开。
+    """
+    if not os.path.isdir(_SCAFFOLD_SRC):
+        raise RuntimeError(f"找不到 Remotion 脚手架源: {_SCAFFOLD_SRC}")
+    os.makedirs(out_dir, exist_ok=True)
+    for name in os.listdir(_SCAFFOLD_SRC):
+        if name in ("node_modules", "public") or (
+                name.startswith("out") and (name.endswith(".mp4")
+                                            or name.endswith(".webm"))):
+            continue
+        src = os.path.join(_SCAFFOLD_SRC, name)
+        dst = os.path.join(out_dir, name)
+        if os.path.isdir(src):
+            if name == "src":
+                # 组件源码全量复制，跳过 generated.ts（本次生成物）
+                os.makedirs(dst, exist_ok=True)
+                for n2 in os.listdir(src):
+                    if n2 == "generated.ts":
+                        continue
+                    p2 = os.path.join(src, n2)
+                    d2 = os.path.join(dst, n2)
+                    if os.path.isdir(p2):
+                        shutil.copytree(p2, d2, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(p2, d2)
+            else:
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+
+
 def _stage_asset(src_path, out_dir, subdir):
     """把资产复制进 out_dir/<subdir>，返回 public 相对路径（Remotion 的静态资源
     一律放 public/ 下，组件用相对 src 引用）。同名同内容直接复用（只比大小会把
@@ -299,6 +344,12 @@ def main(argv=None):
 
     if not 1 <= args.fps <= 240:
         parser.error(f"--fps 必须在 1–240 之间，收到: {args.fps}")
+
+    try:
+        _scaffold_project(args.out)
+    except RuntimeError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
 
     try:
         manifest = load_timing_manifest(args.manifest)

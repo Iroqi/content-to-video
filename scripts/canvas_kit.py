@@ -52,8 +52,8 @@ ASPECTS = ("portrait", "landscape")
 
 # ── 尺寸真源：模板里已有的键，本模块一个 px 字面量都不写 ──────────────
 # 画布尺寸 = 那一页的原生分辨率（缩放凑不出来，见 check_svg 的比例校验）。
-# 三档字号 = layout.<画幅>.{title,subtitle,tagline}.fontSize：画布页没有 HTML 标题层，
-#   图内文字是唯一的字，主次就靠这三档拉开（title 档另有 HTML 层用，画布上归图内大标题）。
+# 三档字号 = layout.<画幅>.{title,subtitle,tagline}.fontSize：画布页没有模板标题层，
+#   图内文字是唯一的字，主次就靠这三档拉开（title 档另有模板层用，画布上归图内大标题）。
 # 线宽 = layout.<画幅>.progressBar.height：页面上唯一另一处"一条实线该多粗"的既有决定，
 #   跟着它走，画布上的轴线就和进度条同一份量；竖屏 4px / 横屏 5px 也都够过压缩。
 # 动画缺省 = animation.director：steps 里不写 duration/ease 时渲染端用的就是它，
@@ -228,8 +228,8 @@ def _validate_element(el, i):
             raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
                              f"（实际: {el['yoyo']!r}）")
         if not el.get("repeat"):
-            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP "
-                             "根本不会回头。要来回就写 repeat:1（奇数遍收尾在 to，"
+            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍谈不上 "
+                             "回头。要来回就写 repeat:1（奇数遍收尾在 to，"
                              "偶数遍收尾回起点）")
     if (el.get("repeat") is not None or el.get("yoyo")) and role_of(el) != "content":
         raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
@@ -355,7 +355,7 @@ def _target_of(el):
 
 
 def _check_ids_unique(els):
-    """id 必须唯一且字符集受限：它是 GSAP 选择器的一部分，撞车=一条 step 演两个地方。"""
+    """id 必须唯一且字符集受限：它是渲染端选择器的一部分，撞车=一条 step 演两个地方。"""
     seen = {}
     for i, el in enumerate(els, 1):
         if "id" not in el:

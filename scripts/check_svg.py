@@ -481,7 +481,7 @@ def check_file(path, layout, aspect, theme):
     if has_wallclock:
         warns.append("含墙钟动画（SMIL <animate*> / CSS animation / transition）：这类动画按页面墙上时钟自走，"
                      "无法与口播时间轴同步，只适合氛围循环。要"
-                     "「随某句话变化」的时间轴同步动画，改用 images.json 的 director（净化内联后由 GSAP 补间驱动；"
+                     "「随某句话变化」的时间轴同步动画，改用 images.json 的 director（净化内联后由渲染端补间驱动；"
                      "内联时这些墙钟动画会被剥离，见 references/image_options.md 方式 C「SVG 动画：两档」）")
     if layout == "canvas":
         warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"

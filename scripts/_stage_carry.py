@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """跨段场景延续（persistent stage）：把上一段"演完之后"的画面烘焙进本段这份内联副本。
 
-**要解决的问题**：整页画布每一页都是独立的一张图，GSAP 的主时间轴也按段落切。于是
+**要解决的问题**：整页画布每一页都是独立的一张图，渲染端的求值也按段落切。于是
 "镜头推近到局部 → 下一页继续在这个局部上讲"是演不出来的——下一页重新从原始 SVG 起
 跑，上一段画出来的状态（描边长出来的线、滚到 68 的数字、淡出的对照组、推近的相机）
 在页界处整体回弹。观众看到的不是"同一幕换了下一句台词"，而是"换了另一幅画"。
@@ -52,7 +52,7 @@ ET.register_namespace("", SVG_NS)
 # 相机烘焙层的标记：纯给人看的（成片 DOM 里一眼认得出哪层是接续带进来的），引擎不读它。
 STAGE_ATTR = "data-ctv-stage"
 
-# GSAP 的控制参数：不是视觉状态，收尾态里不该出现。
+# 补间的控制参数：不是视觉状态，收尾态里不该出现。
 _CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger"})
 # 变换类属性里**搬不动**的那些：见模块头"元素级 transform 只搬 x/y"那条理由。
 _TRANSFORM_KEYS = frozenset({
@@ -62,7 +62,7 @@ _TRANSFORM_KEYS = frozenset({
 })
 # 纯平移：跟原点无关，能精确搬进副本（_carry_translate）。
 _TRANSLATE_KEYS = frozenset({"x", "y"})
-# 这些键走 attribute，不走 style（GSAP 的 attr:{} 显式通道）。
+# 这些键走 attribute，不走 style（补间的 attr:{} 显式通道）。
 _ATTR_KEY = "attr"
 # 纯数字才认的样式：相对写法（"+=0.2"）要有基值可加。
 _NUMERIC_STYLE = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
@@ -71,9 +71,9 @@ _TEXT_TAGS = frozenset({"text", "tspan", "textPath"})
 
 
 def _kebab(prop):
-    """GSAP 的驼峰 CSS 名 → 写进静态 style 属性的小连字符名。
+    """补间的驼峰 CSS 名 → 写进静态 style 属性的小连字符名。
 
-    必须是这个方向：GSAP 运行期是 `el.style.strokeWidth = 3`（CSSOM 认驼峰，序列化成
+    必须是这个方向：渲染端求值器写 `el.style.strokeWidth = 3`（CSSOM 认驼峰，序列化成
     stroke-width），而我们写的是 `style="…"` 字符串——`strokeWidth:3` 在 CSS 里非法，
     会被浏览器整条丢掉，于是"烘焙了"等于"没烘焙"，且没有任何提示。
     """
@@ -127,7 +127,7 @@ def _set_style(el, prop, value):
         styles["visibility"] = "visible" if av > 0 else "hidden"
     else:
         key = _kebab(prop)
-        # 相对写法的基值：GSAP 读的是**计算值**，而 SVG 计算值的来源既可能是 inline
+        # 相对写法的基值：渲染端读的是**计算值**，而 SVG 计算值的来源既可能是 inline
         # style 也可能是呈现属性（opacity="0.2"）。只认 style 就会把基值当成 0，
         # 于是 "+=0.5" 烘焙出 0.5、运行期却是 0.7——两页之间静默跳一下。
         cur = _css_num(styles.get(key))
@@ -157,7 +157,7 @@ def _ordered(steps, beats):
     """按**时刻**排序的 (下标, step)：后演的说话，所以结算必须跟时间走、不跟数组走。
 
     作者完全可以把 steps 写成乱序（数组第 3 条的 at 比第 1 条早），渲染端照数组顺序发射
-    补间也没问题——因为每条都自带绝对时刻，GSAP 按时间求值。而"收尾态"是把时间轴折叠到
+    补间也没问题——因为每条都自带绝对时刻，渲染端按时间求值。而"收尾态"是把时间轴折叠到
     最后一帧，折叠顺序必须是时间顺序，否则后写先演的属性会被先写后演的覆盖掉。
     beats 缺省（调用方算不出落点）时退回数组序。
     """
@@ -169,7 +169,7 @@ def _ordered(steps, beats):
 def _carry_translate(el, moves):
     """把 x/y 的终值折成元素 transform 上的一层**外层平移**；搬不动返回 False。
 
-    能直接前缀在元素自己的 transform 上（不像相机那样另包一层 `<g>`）：GSAP 的 x/y 就是
+    能直接前缀在元素自己的 transform 上（不像相机那样另包一层 `<g>`）：补间的 x/y 就是
     元素 transform 矩阵的 e/f 分量（父空间里的外层平移），平移跟平移可交换，所以
     `translate(dx,dy) 原串` 与运行期演到的位置在几何上一字不差；而原串一个字都不动，
     本段自己的补间读到的基值仍是作者写的那些。

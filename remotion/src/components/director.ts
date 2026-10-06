@@ -1,5 +1,5 @@
 /** 导演编排的逐帧求值器：把生成器展开的 DirectorStep 数据按绝对帧应用到
- * 净化内联的 SVG DOM 上（相当于把一条 GSAP 时间线 seek 到这一帧）。
+ * 净化内联的 SVG DOM 上（相当于把一条已经排好的时间线 seek 到这一帧）。
  *
  * 确定性契约：
  * - 节拍 pos/dur/ease/repeat/yoyo/stagger 全部由生成器算好，这里只做代数；

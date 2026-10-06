@@ -28,7 +28,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 - **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
 - **整页画布（段落 `layout: "canvas"`，两画幅同一份规则）**：上面那三层塌成一层——配图拉满整个画面（1080×1440 / 1920×1080，圆角、外发光、1px 内描边全撤），标题层与句子流层由渲染器**不生成**（不是 `display:none`：不留死 DOM、不留死补间目标）。配图**不再生成任何入场补间**——wipe 揭开即要求画面到位，海报再自带淡入会演成"先擦出空页、再浮出画面"的两段式；整页就是画面，滑一下/淡一下都是穿帮。
 
-  画布页**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光（画布上换成近全屏的宽带柔光），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张，见 `references/image_options.md`「不铺满幅底」。
+  画布页**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变（`Video.tsx` 铺底的 `THEME.bgGradient`）、只在页缘显形的网格（`layout.<画幅>.grid` 与 `THEME.gridColor`）、本段 accent 的氛围光（`Card.tsx` 按 `ambience` 画的柔光椭圆，画布上换成近全屏的宽带柔光），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张，见 `references/image_options.md`「不铺满幅底」。
 
   这一版把文字对比度从版式责任变成**画布作者的责任**：渲染器不数 SVG 里的字（一张被 `cover` 裁掉标题的画布照样渲染成功）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。`check_svg.py --layout canvas` 会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度（画布档只 warn 不 error：压在作者自画的浅色局部底板上的字，按页底算出来的数对它不成立），但渐变底、`class` 里的色、局部底板上的字它都管不着。底部进度条与段落底轨抬到更上层：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
 
@@ -41,7 +41,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 动画参数全部来自 `_template.py` 的 `animation` 数据，生成器把它烘焙进数据胶；Remotion 组件按绝对帧从数据胶推导演出（同一 manifest 每次都应渲染出同一个画面）：
 
 - 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页。**揭幕档只有 `line` 一档**（引导线：见下）。模板 `animation.segmentWipe.style` 写成 `"line"` 以外的任何值都会在生成期 fail-fast（`_line_only_guard`）——渲染端只实现了这一档，改档要先在 `gen_theme_ts.py` 的 `_anim` 里补 `ANIM` 与组件，别只改模板。wipe 档旧卡**不淡出**，被新卡盖住后随 clip 窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布段除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布段」条）。
-- **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法）；线的辉光下偏，光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
+- **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法）；线的辉光下偏，光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡那一段的 accent），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(propLine.duration, gap)`，入场提前铺到 `winStart = s − wipe`，恰好在本段音频起点完成揭屏（线与剥离同窗同值）。字幕住在卡里，转场早于上一句念完就开始，等于下一段文字压着还在讲的话。
 - **揭屏能成立的前提是 clip 的可见窗口覆盖整个入场窗口**：数据胶按 `data-start`/`data-duration` 语义硬切 clip 可见性（`compute_clips` 在生成期一次算齐 `wipe`/`winStart`/`vis`/`peel`），补间排在窗口外等于没写（这正是旧 cross-fade 版查出的 bug：边界帧全黑）。窗口 `[winStart, next_start]` 与 `wipe`/`winStart` 在生成器一次算齐；末卡窗口铺到成片结束。（数据胶里的字段名是 `winStart`，见 SKILL.md「输出契约」；本文件正文写作 `win_start` 只是同一几何的 Python 侧变量名。）
 - 卡必须是不透明层：每卡自带背景三层（压在氛围光与内容之下）。透明卡做 wipe 时上一段文字会从新页底下透出，画面出现双影叠字（逐帧实拍复现）。
@@ -49,8 +49,8 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
   **求值器用 inline transform（`matrix()`）写补间几何**——样式表里对同一元素声明 `transform` 会与 inline 互斥（只能活一个），组件里统一走 `remotion/src/components/director.ts` 的 matrix 求值，别另加 CSS transform。
 - 底部 progress bar 与段落时间轴同步。
-- verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
-- 每段的 accent 会派生一组装饰：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走模板 `image.glow`（渲染端现算，不再经 CSS 变量）；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
+- verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里。给 verse 句子流加 CSS `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
+- 每段的 accent 会派生一组装饰：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走模板 `image.glow`（`SlotCard.tsx` 现算成 `boxShadow`，不经过 CSS 变量），它对位图与 SVG 一视同仁；`references/image_options.md`「不铺满幅底」讲的"撤掉框"指的是**别自铺底板**，不是渲染端会替你撤发光。
 
 ## 版式真源
 

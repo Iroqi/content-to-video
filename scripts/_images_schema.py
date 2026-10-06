@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """images.json 与媒体路径的契约。
 
-配图由 agent/人工产出、渲染端按这份映射消费；坏路径会让 HTML 静默产出
+配图由 agent/人工产出、渲染端按这份映射消费；坏路径会让成片静默产出
 空白裂图，所以引用完整性在 load_images_json / validate_images_json
 fail-fast，路径语义（禁绝对路径/越出项目根）由 validate_relative_project_path
 统一收口。媒体类型判定（扩展名 → image/video/gif）也在这里，与
@@ -74,8 +74,8 @@ MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 def is_svg_path(path):
     """这条路径是不是 SVG（"能不能被净化内联、有没有图内命名元素"那一问）。
 
-    生成端有三处各自问过它（缺图探测跳过、画布段必须 SVG、渲染端加 bare-media
-    类），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
+    生成端有三处各自问过它（缺图探测跳过、画布段必须 SVG、渲染端按 svgInline
+    分支内联），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
     endswith/splitext 就是五份真源：将来认一个 .svgz、或把大小写规则改一下，
     只改到的一处会和其他四处分家，症状是"契约说能挂 director、渲染端却不内联"。
     """
@@ -97,7 +97,7 @@ def classify_media_path(path, explicit_type="auto"):
         return "gif"
     return "image"
 
-# director 的 target 只认单个 id / class 选择器，且字符集受限——它会被拼进 GSAP
+# director 的 target 只认单个 id / class 选择器，且字符集受限——它会被拼进渲染端
 # 选择器字符串（`#img-{sid} {target}`），带引号/空格/逗号/伪类的写法轻则选择器失配、
 # 动画静默丢失，重则破坏脚本。与段 id 同一条收口思路（见 _segments._SID_RE）。
 # class 选择器（`.marker`）专为 stagger 开：一条 step 命中一组同类元素、按递增
@@ -108,7 +108,7 @@ _DIRECTOR_STEP_KEYS = frozenset({"at", "at_time", "target", "from", "to", "set",
                                  "draw", "morph", "count", "type", "stagger",
                                  "duration", "ease", "delay", "repeat", "yoyo"})
 # 写在 from/to/set **里面**的旋钮：一律拒，指回 step 级。理由是这些键渲染端会自己覆盖或
-# 根本不读——`ease` 会被 step 级顶掉（写了等于没写），`duration`/`delay` 却会被 GSAP 真的
+# 根本不读——`ease` 会被 step 级顶掉（写了等于没写），`duration`/`delay` 却会被渲染端真的
 # 吃掉，于是补间实际跨度与门禁拿去判窗的那个数分家（`beat_positions` 只读 step 级）。
 # 一处两个真源正是最坏形状：门禁的判词就成了谎话。
 _PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
@@ -120,19 +120,19 @@ _RELATIVE_AT_TIME_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 
 
 def _validate_tween_vars(vars_, where):
-    """GSAP 补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
+    """补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
 
     这些字典会被 json.dumps 成 JS 对象字面量注入内联脚本——JSON 转义挡住了
     字符串注入，但回调键（onStart/onUpdate/…）本身不是注入而是"在渲染页里
     执行任意 JS 逻辑"的入口，且信源不可信（SKILL.md 核心规则），一律不收。
-    允许嵌套 dict（GSAP 的 attr:{} 等非 CSS 属性走它），逐层校验叶子是标量。
+    允许嵌套 dict（attr:{} 等非 CSS 属性走它），逐层校验叶子是标量。
 
     控制旋钮（_PAYLOAD_CONTROL_KEYS）判在这里而不是调用点判一次：调用点只认顶层，
     `{"to": {"attr": {"duration": 2}}}` 就漏过去，把 duration="2" 写进 SVG 元素——
     递归的这一层才是"每一层都不许有"的正确位置。
     """
     if not isinstance(vars_, dict):
-        raise ValueError(f"{where} 必须是对象（GSAP 补间变量）")
+        raise ValueError(f"{where} 必须是对象（补间变量）")
     clash = sorted(_PAYLOAD_CONTROL_KEYS & set(vars_))
     if clash:
         raise ValueError(
@@ -317,7 +317,7 @@ def _validate_director(key, dirval):
             raise ValueError(
                 f"{where} 的 target 必须是单个 id 或 class 选择器"
                 "（# 或 . 开头，后接字母/数字/-/_，字母或下划线起头）"
-                f"——它会被拼进 GSAP 选择器（实际: {target!r}）")
+                f"——它会被拼进渲染端的选择器（实际: {target!r}）")
         draw = step.get("draw", False)
         if not isinstance(draw, bool):
             raise ValueError(f"{where} 的 draw 必须是 JSON 布尔 true/false（实际: {draw!r}）")
@@ -389,7 +389,7 @@ def _validate_director(key, dirval):
             raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
                              f"（实际: {step['yoyo']!r}）")
         # 反复必须挂在真会"演"的步上。纯 set 是瞬时赋值：门禁按"瞬时"推进相对链的游标，
-        # 而 GSAP 会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
+        # 而渲染端会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
         # 在单遍上更是直接被忽略。静默失效的那一类宁可在契约层就说不通。
         replayable = bool(draw or morph is not None or count is not None or typ is not None
                           or "from" in step or "to" in step)
@@ -400,10 +400,10 @@ def _validate_director(key, dirval):
                 "只会让门禁算的落点和渲染端用的落点分家")
         if step.get("yoyo") and not step.get("repeat"):
             raise ValueError(
-                f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP 根本不会回头。"
+                f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍谈不上回头。"
                 "要来回就写 repeat:1（奇数遍收尾在 to，偶数遍收尾回起点）")
         # morph 的形变是生成期采样成离散关键帧的：无限循环没有"最后一帧"可采，采样器只能
-        # 猜。补间/count/type 走运行期，GSAP 按时间解析求值，无限循环反而是确定的。
+        # 猜。补间/count/type 走运行期，渲染端按时间解析求值，无限循环反而是确定的。
         if morph is not None and step.get("repeat", 0) < 0:
             raise ValueError(
                 f"{where} 的 morph 不能配 repeat:-1——形变是生成期按帧率采样成离散关键帧的，"
@@ -431,8 +431,8 @@ def validate_images_json(data):
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
     for key, value in data.items():
-        # key 与 manifest 段 id 同一口径（is_valid_sid 包住 _SID_RE）：这些键会拼进 HTML 的
-        # id/选择器链路，"seg 3"、"seg.png" 之类在渲染端静默失联。
+        # key 与 manifest 段 id 同一口径（is_valid_sid 包住 _SID_RE）：这些键会拼进
+        # DOM 的 id/选择器链路，"seg 3"、"seg.png" 之类在渲染端静默失联。
         if not is_valid_sid(key):
             raise ValueError(
                 f"images.json 的段落 key 必须是合法段 id"
@@ -496,7 +496,7 @@ def validate_images_json(data):
                 f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
                 "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
         # director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
-        # 没有可被 GSAP 逐帧驱动的图内命名元素）。
+        # 没有可被渲染端逐帧驱动的图内命名元素）。
         if "director" in value:
             if not is_svg_path(src):
                 raise ValueError(

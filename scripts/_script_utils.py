@@ -49,7 +49,7 @@ def write_json_atomic(path, data, indent=2):
 
 
 def write_text_atomic(path, text):
-    """原子写文本（HTML 等）：写 <path>.tmp → fsync → os.replace 覆盖。"""
+    """原子写文本（数据胶 / SVG 等）：写 <path>.tmp → fsync → os.replace 覆盖。"""
     def _write(tmp):
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)

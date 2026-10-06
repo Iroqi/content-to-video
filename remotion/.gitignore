@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 out*.mp4
 out*.webm
 public/audio/

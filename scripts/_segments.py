@@ -33,7 +33,7 @@ CONTENT_SID_PREFIX = "seg"
 def is_valid_sid(sid):
     """sid 是否是合法段 id（规则见 SID_RULE）。
 
-    这些 id 会拼进 HTML 属性、JS 对象键与 GSAP 选择器（见 _SID_RE 注释）。
+    这些 id 会拼进 DOM 属性、JS 对象键与 CSS 选择器（见 _SID_RE 注释）。
     校验收口在契约层（_validate_sid / validate_images_json，即"契约先校验"
     的入口），生成器直接信任已校验的数据，不再各处补一道。
     """
@@ -76,7 +76,7 @@ def sids_needing_image(manifest):
 
 
 # 段落版式三档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
-# 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
+# 整页画布（配图拉满全屏，模板的标题层与句子流层都不渲染，标题与文字由画布自己
 # 画）；"agenda" = 开屏/结尾那张纯文字页。只有 agenda 绑段 id：它是结构性页专属
 # 的投影卡（行来自全片其它段——作者能选这一档，选不了它印什么，见 seg_layout）；
 # canvas 两段通用——内容段用它换整页画布，结构性页用它把整页让给一张海报。
@@ -103,7 +103,7 @@ def seg_layout(seg):
 def _validate_layout(value, where, *, content=False):
     """layout 取值校验（可选字段）。严格匹配：不做大小写归一、不 strip。
     放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式
-    渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
+    渲染，画布自己画的标题和模板标题层并排出现在同一帧。宁可在这里报错。
 
     两个显式值里只有 agenda 绑段 id：它是结构性页那张投影卡，内容段借用它等于在
     画面上印别人的目录。canvas 反过来谁都能用，包括 opening/closing——那条路的
@@ -153,7 +153,7 @@ def _validate_sid(sid, where, seen):
         raise ValueError(
             f"{where} 的 id={sid!r} 含非法字符或格式不对——id 的合法形态是"
             f"{SID_RULE}（如 seg1、opening），"
-            f"因为它会被拼进 HTML 属性与 GSAP 选择器")
+            f"因为它会被拼进 DOM 属性与 CSS 选择器")
     if sid in seen:
         raise ValueError(f"{where} 的 id={sid!r} 与前面的段落重复"
                          f"（选择器会互相串台）")

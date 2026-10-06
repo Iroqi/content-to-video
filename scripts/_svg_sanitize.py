@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""把 SVG 净化成可安全内联进成片 HTML 的活 DOM。
+"""把 SVG 净化成可安全内联进渲染页的活 DOM。
 
 背景：`references/image_options.md`「图内文字的对比度」记的那条老规矩是
-"交付 HTML 必须保持 `<img>`"——理由是 `<img>` 载入的 SVG 按 data 处理，
+"交付页必须保持 `<img>`"——理由是 `<img>` 载入的 SVG 按 data 处理，
 浏览器不执行它的 `<script>`；一旦内联进 DOM 它就成了同源活 SVG，脚本照跑。
 "导演"（时间轴同步的 SVG 动画，见 image_options.md 方式 C）必须内联才能让
-GSAP 逐帧驱动图内元素，所以内联不再是禁区，但**必须先净化**：这一层就是把
+渲染端求值器逐帧驱动图内元素，所以内联不再是禁区，但**必须先净化**：这一层就是把
 "内联会执行脚本"的风险拆掉，让内联回到和 `<img>` 同样安全的水位。
 
 同时服务第二个不变量——**逐帧 seek 的决定性**（见 rendering.md「动画」）：
@@ -38,8 +38,8 @@ _WALLCLOCK_CSS = re.compile(
     r"(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
     re.I)
 # 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
-# url() 上下文一并拦 file:/data:——CSS 里 url(file:…) 同样会把本地文件拉进
-# 成片（HTML 以 file:// 打开时可达本机磁盘）。
+# url() 上下文一并拦 file:/data:——渲染由本机 headless Chrome 加载工程，
+# CSS 里 url(file:…) 会把本机文件拉进成片。
 # 匹配一直吃到收尾的 `)`：替换是"整颗 url() 换成 about:blank"，只吃 scheme 那一截
 # 会留下半截（`url(about:blank//evil.com/x.png)` 既不成语法、URL 也还看得见）。
 _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re.I)
@@ -48,8 +48,8 @@ _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re
 # 当成 @keyframes 的规则体吃掉。注释无语义，剥掉不损失任何东西。
 _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # href 的 scheme 判定：任何 "scheme:" 开头都算外部资源（file:/data:/blob:/
-# chrome:/javascript: 等一律不收——内联 SVG 是同源活节点，且产物 HTML 常以
-# file:// 打开，file: 引用会触及本机磁盘）。内部片段 "#id" 与相对路径除外。
+# chrome:/javascript: 等一律不收——内联 SVG 是同源活节点，渲染跑在本机
+# headless Chrome 里，file: 引用会触及本机磁盘）。内部片段 "#id" 与相对路径除外。
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 # @keyframes 规则（含厂商前缀）的起始标记：剥定义用的，见 _strip_keyframes。
 # 前缀组 [a-z]* 可为零字符，纯 @keyframes 也要命中（@-webkit-keyframes 靠 -? 接上）。

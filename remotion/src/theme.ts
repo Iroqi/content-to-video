@@ -122,8 +122,8 @@ const contrastRatio = (a: string, b: string): number => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-/** --seg-accent-text 的 TS 版：accent 在主题背景上对比度不足 4.5 时朝黑/白
- * 推移到位（移植 _theme.ensure_text_contrast，背景取主题渐变最坏一档）。 */
+/** accent 文字色的取值：accent 在主题背景上对比度不足 4.5 时朝黑/白
+ * 推移到位（与 _theme.ensure_text_contrast 同一口径，背景取主题渐变最坏一档）。 */
 export const ensureTextContrast = (accent: string): string => {
   const backgrounds = THEME.bgStops;
   const worst = Math.min(...backgrounds.map((b) => contrastRatio(accent, b)));

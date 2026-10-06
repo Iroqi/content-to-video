@@ -1,4 +1,4 @@
-"""导演节拍 ↔ 旁白对轴：解析收口、窗外 warn、--beat-report 的回归。
+"""导演节拍 ↔ 旁白对轴：解析收口、窗外 warn。
 
 这里锁的是三件事：
 1. 落点解析只有一份实现（_timeline.beat_positions），渲染端与门禁共用；
@@ -150,35 +150,18 @@ class WindowWarningsRepeat(unittest.TestCase):
                                    "to": {"opacity": 1}, "repeat": -1}]), [])
 
 
-class Landing(unittest.TestCase):
-    """五类落点：只有 before/after 是"看不见"。"""
-
-    def classify(self, pos, seg=0, next_start=5.0):
-        sents = SEGS[seg]["sentences"]
-        start = sents[0]["start_time"]
-        end = sents[-1]["start_time"] + sents[-1]["duration"]
-        return G._beat_landing(pos, sents, start, end, next_start)[0]
-
-    def test_inside_a_sentence(self):
-        self.assertEqual(self.classify(2.4), "in")
-        self.assertEqual(self.classify(3.9), "in")     # 末句结束点算句内（边界同闭区间）
-
-    def test_between_sentences_is_gap_not_out(self):
-        self.assertEqual(self.classify(2.2), "gap")
-
-    def test_tail_silence_is_visible_so_not_out(self):
-        # 4.5 > 末句结束 3.9，但下一页 5.0 才盖过来，这一拍照样演
-        self.assertEqual(self.classify(4.5), "tail")
-
-    def test_before_and_after(self):
-        self.assertEqual(self.classify(-0.2), "before")
-        self.assertEqual(self.classify(5.1), "after")
-
-    def test_last_segment_has_no_right_bound(self):
-        self.assertEqual(self.classify(30.0, next_start=None), "tail")
-
-
 class WindowWarnings(unittest.TestCase):
+    def test_window_edges_are_not_outside(self):
+        """压在窗口两端的那一帧：左端页面已挂出、右端还没被盖，都不算"看不见"。
+
+        末段（next_start=None）没有右界——它一直挂到成片结束，宁漏不误报。
+        """
+        self.assertIsNone(G._beat_outside(0.0, 0.0, 5.0))
+        self.assertIsNone(G._beat_outside(5.0, 0.0, 5.0))
+        self.assertIsNone(G._beat_outside(30.0, 0.0, None))
+        self.assertEqual(G._beat_outside(-0.2, 0.0, 5.0), "before")
+        self.assertEqual(G._beat_outside(5.1, 0.0, 5.0), "after")
+
     def _w(self, steps, seg=SEGS[0], next_start=5.0):
         return G._beat_window_warnings(steps, seg["sentences"],
                                        seg["sentences"][0]["start_time"],
@@ -254,25 +237,6 @@ class PrepareIntegration(unittest.TestCase):
         errs, warns = self._prepare(2.5)
         self.assertEqual(errs, [])
         self.assertEqual([w for w in warns if "落点" in w], [])
-
-
-class Report(unittest.TestCase):
-    def test_table_lists_each_beat_with_landing_and_tally(self):
-        images = {"seg-a": {"src": "images/seg-a.svg", "director": {"steps": [
-            {"at_time": 1.0, "target": "#a1", "to": {"opacity": 1}},
-            {"at_time": 2.2, "target": "#a2", "to": {"opacity": 1}},
-            {"at_time": 6.0, "target": "#t1", "to": {"opacity": 1}}]}}}
-        lines = G.beat_report_lines(images, SEGS, 0.5)
-        body = "\n".join(lines)
-        self.assertIn("[beat] seg-a  旁白 0.00–3.90s（2 句），下一页 5.00s 起", body)
-        self.assertIn("in     第1句", body)
-        self.assertIn("gap    句间静音", body)
-        self.assertIn("after  下一页起点之后（看不见）", body)
-        self.assertIn("— 3 拍：in 1 · gap 1 · after 1", lines[-1])
-
-    def test_segments_without_director_are_skipped(self):
-        images = {"seg-a": {"src": "images/seg-a.svg"}, "seg-z": {"src": "x.svg"}}
-        self.assertEqual(G.beat_report_lines(images, SEGS, 0.5), [])
 
 
 if __name__ == "__main__":

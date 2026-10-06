@@ -24,7 +24,7 @@ def _reject_unknown_keys(obj, allowed, where):
 
 
 def _validate_text(value, where, *, required=False):
-    """Validate a user-facing text field before any downstream ``.strip()``/HTML use."""
+    """Validate a user-facing text field before any downstream ``.strip()``/DOM use."""
     if value is None:
         if required:
             raise ValueError(f"{where} 必须是字符串")
@@ -66,7 +66,7 @@ def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
 
 
 # accent 的合法形态见 _theme.is_safe_css_color（hex 或 CSS 标准颜色名），
-# 白名单之外不进生成 HTML。
+# 白名单之外不进渲染页。
 def _validate_accent(value, where):
     """accent 取值校验（可选字段）：必须是浏览器认得的颜色（hex 或 CSS 标准色名）。
 
@@ -83,4 +83,4 @@ def _validate_accent(value, where):
         raise ValueError(
             f"{where} 的 accent={value!r} 不是合法颜色：只接受 #rgb / #rrggbb "
             f"十六进制（如 #2dd4bf）或浏览器标准色名（如 red、tomato）。"
-            f"accent 会拼进成片 HTML，不接受 rgb()/var() 这类函数式写法")
+            f"accent 会拼进渲染页的属性，不接受 rgb()/var() 这类函数式写法")

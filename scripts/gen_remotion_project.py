@@ -367,7 +367,7 @@ def _director_data(entry, seg, dflt, fps):
                 c = int(phase)
                 p = phase - c
                 if p == 0.0 and c > 0:
-                    # 正好踩在遍与遍的分界：GSAP 在这一瞬间报的是上一遍的末尾
+                    # 正好踩在遍与遍的分界：这一瞬间求的是上一遍的末尾
                     c -= 1
                     p = 1.0
                 if yoyo and c % 2:
@@ -606,7 +606,7 @@ def main(argv=None):
             elif entry.get("inline_svg"):
                 # director / stage:"keep"：净化内联 SVG（keep 页的 inline_svg 是
                 # 上一页演完画面烘焙出的副本，见 _stage_carry）；导演编排按步
-                # 采样成数据胶，组件只按帧求值（morph 与 HTML 一样在生成期采样）。
+                # 采样成数据胶，组件只按帧求值（形状在生成期算好，运行时只查表）。
                 image_mode = "svgInline"
                 svg = entry["inline_svg"]
                 director = _director_data(entry, seg, dflt_director, args.fps)

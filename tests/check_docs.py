@@ -27,13 +27,28 @@ REF = re.compile(
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
 # ── 陈旧措辞禁用词 ─────────────────────────────────────────────────
-# 每条都对应一个**确已删除**的东西：后端迁移删掉的文件、以及随之消失的参数名。
-# 判据不是"看着过时"，而是"这句话指的东西不存在了"——照着它去找会一无所获。
+# 每条都对应一个**确已删除**的东西：后端迁移删掉的文件、随之消失的参数名，以及
+# 不再存在的运行时（GSAP）与交付物（HTML 页面）。判据不是"看着过时"，而是
+# "这句话指的东西不存在了"——照着它去找会一无所获。
+#
+# GSAP / HTML 这一组收得比文件名那组更窄：只禁**把已移除的东西当成现役主语**的
+# 说法（"GSAP 按时间求值"、"拼进 HTML 属性"）。讲命名沿革的那些不在禁列——
+# `autoAlpha` 是 GSAP 专名、缓动档名照 GSAP core 抄、stagger 语义来自 GSAP，
+# 它们指向的是代码里真实实现了的东西，不是找不到的东西。
 BANNED = (
     "html_renderer", "gen_hyperframes", "_render_backend",
     "production_report", "index.html",
     "--allow-degraded", "--ctv-font",
     "snapshot", "hyperframes",
+    # 运行时：改成 Remotion 自写求值器后，"GSAP 在跑"这句话就已经是假话
+    "GSAP 补间", "GSAP 选择器", "GSAP 时间线", "GSAP 运行期", "GSAP 逐帧",
+    "GSAP 会把", "GSAP 的主时间轴", "GSAP 缓存", "GSAP 根本不会",
+    # 交付物：产物是 Remotion 工程，不再有一个 HTML 页面文件
+    "HTML 标题层", "成片 HTML", "交付 HTML", "HTML 属性", "HTML 文本流",
+    "HTML 生成", "HTML 项目目录", "HTML 预览",
+    # 上面那个 HTML 页面自带的 CSS 类名与自定义属性。渲染端全走内联 style +
+    # TS 常量，这些名字在仓库里一个都不存在——照着它们去找只能找到一段历史。
+    "--seg-accent", "--theme", "bare-media", "seg-card", "peel-shade",
 )
 
 # 例外：文件相对路径 → 该文件内允许出现的子串（每个都要是"讲历史"而非"指现役"）。

@@ -87,7 +87,7 @@ def validate_images_files(images, out_dir, seg_durs=None):
             continue
         if not is_inside(p, out_dir):
             corrupt_imgs.append((sid, media_path,
-                                 "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
+                                 "媒体路径通过软链接或绝对路径越出项目目录"))
             continue
         poster = entry.get("poster")
         # poster 的问题只记录、不提前 continue：同一条目的 src 若也有毛病，必须
@@ -99,7 +99,7 @@ def validate_images_files(images, out_dir, seg_durs=None):
                 missing_imgs.append((sid, poster))
             elif not is_inside(poster_path, out_dir):
                 corrupt_imgs.append((sid, poster,
-                                     "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
+                                     "poster 路径通过软链接或绝对路径越出项目目录"))
         # 视频用 ffmpeg 解码探测（只查存在性不够：
         # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
         if media_type == "video":
@@ -285,28 +285,17 @@ def _beat_anchor(step):
     return "at=%s" % (step["at"],)
 
 
-def _beat_landing(pos, sentences, seg_start, seg_end, next_start):
-    """beat 落在旁白的哪儿：返回 (类别, 说明)。before/after 两类就是门禁要报的"窗外"。
+def _beat_outside(pos, seg_start, next_start):
+    """这一拍的起点是否在成片里根本看不见：是则返回 "before" / "after"，否则 None。
 
     段尾（末句说完到下一页盖过来之间）**不算窗外**：这一页还挂在屏幕上，落在那里的
     补间照样演。所以右界取"下一段起点"而不是"末句结束"——只有过了它才真的看不见。
     """
-    for i, s in enumerate(sentences):
-        st = float(s["start_time"])
-        if st - _BEAT_EPS <= pos <= st + float(s.get("duration", 0.0)) + _BEAT_EPS:
-            return "in", "第%d句" % (i + 1)
     if pos < seg_start - _BEAT_EPS:
-        return "before", "本段旁白之前（看不见）"
+        return "before"
     if next_start is not None and pos > next_start + _BEAT_EPS:
-        return "after", "下一页起点之后（看不见）"
-    if pos > seg_end + _BEAT_EPS:
-        return "tail", "段尾静音（页面仍在）"
-    for i in range(len(sentences) - 1):
-        a = float(sentences[i]["start_time"]) + float(sentences[i].get("duration", 0.0))
-        b = float(sentences[i + 1]["start_time"])
-        if a < pos < b:
-            return "gap", "句间静音（第%d句末 %.2f→第%d句起 %.2f）" % (i + 1, a, i + 2, b)
-    return "gap", "静音"
+        return "after"
+    return None
 
 
 def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, keep=False):
@@ -327,10 +316,9 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
         beats = beat_positions(steps, sentences, round(seg_start, 2), dflt_dur)
     except ValueError:
         return []   # at 越界由 director_prepare 的句序检查按步报错，这里不重复
-    seg_end = float(sentences[-1]["start_time"]) + float(sentences[-1].get("duration", 0.0))
     out = []
     for i, ((pos, dur), step) in enumerate(zip(beats, steps)):
-        kind, _where = _beat_landing(pos, sentences, seg_start, seg_end, next_start)
+        kind = _beat_outside(pos, seg_start, next_start)
         anchor = _beat_anchor(step)
         if kind == "before":
             out.append(f"director.steps[{i}]（{step['target']}，{anchor}）落点 {pos:.2f}s "
@@ -375,49 +363,6 @@ def next_speech_start(segments, sid):
     cands = [float(s["sentences"][0]["start_time"]) for s in segments
              if float(s["sentences"][0]["start_time"]) > mine + _BEAT_EPS]
     return min(cands) if cands else None
-
-
-def beat_report_lines(images, segments, dflt_dur):
-    """每个导演段一张对轴表（生成器默认不打，免得盖过 warn；维护者在测试里调它）。
-
-    它回答"每一拍到底踩在话的哪儿"：in=句内、gap=句间静音、tail=段尾静音、
-    before/after=窗外（就是门禁 warn 的那两类）。**in 也不等于准**：句内 frac 是
-    "语速均匀"的线性假设，实测一个标点停顿就能让它偏 0.2–1s——这里给的是机械能判的
-    那一层，词级对轴要么听一遍，要么换带 word timestamps 的配音。
-    """
-    seg_by_id = {seg["id"]: seg for seg in segments}
-    lines = []
-    for sid in (images or {}):
-        director = (images[sid] or {}).get("director")
-        seg = seg_by_id.get(sid)
-        if not director or not seg:
-            continue
-        sents = seg["sentences"]
-        seg_start = float(sents[0]["start_time"])
-        seg_end = float(sents[-1]["start_time"]) + float(sents[-1].get("duration", 0.0))
-        nxt = next_speech_start(segments, sid)
-        try:
-            beats = beat_positions(director["steps"], sents, round(seg_start, 2), dflt_dur)
-        except ValueError as e:
-            lines.append(f"[beat] {sid}: 解析中断 — {e}")
-            continue
-        lines.append(f"[beat] {sid}  旁白 {seg_start:.2f}–{seg_end:.2f}s（{len(sents)} 句）"
-                     + (f"，下一页 {nxt:.2f}s 起" if nxt is not None else "，末段无右界"))
-        tally = {}
-        for (pos, _dur), step in zip(beats, director["steps"]):
-            kind, where = _beat_landing(pos, sents, seg_start, seg_end, nxt)
-            n = beat_cycles(step)
-            if n is None:
-                where += "（无限循环，没有收尾）"
-            elif n > 1:
-                where += f"（演 {n} 遍）"
-            tally[kind] = tally.get(kind, 0) + 1
-            lines.append("       %-12s %8.2fs  %-6s %-30s %s" % (
-                step["target"], pos, kind, where, _beat_anchor(step)))
-        lines.append("       — %d 拍：%s" % (
-            len(beats), " · ".join("%s %d" % (k, tally[k]) for k in
-                                   ("in", "gap", "tail", "before", "after") if tally.get(k))))
-    return lines
 
 
 def director_prepare(images, segments, out_dir):

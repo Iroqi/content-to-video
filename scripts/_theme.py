@@ -96,15 +96,15 @@ def hex_to_rgb01(hex_color):
 
 
 def is_safe_css_color(color):
-    """颜色值是否是浏览器真正认得的 hex / CSS 颜色名（且可安全嵌入 HTML 属性）。
+    """颜色值是否是浏览器真正认得的 hex / CSS 颜色名（且可安全嵌入 DOM 属性）。
 
     accent 来自稿件（信源内容经模型写入），本项目把它当**不可信数据**：
-    它会被拼进 `data-accent="..."` 与 `style="background:..."` 两处 HTML
-    上下文（GSAP 补间只写 opacity/scale/width，颜色经 CSS 变量派生，不进 JS
+    它会被拼进 `data-accent="..."` 与 `style="background:..."` 两处
+    DOM 上下文（补间只写 opacity/scale/width，颜色经 CSS 变量派生，不进 JS
     字面量）。只放行两种形态——`#rgb`/`#rrggbb`
     十六进制，或 CSS 标准颜色名（`red` / `tomato`）——从而排除引号、
-    分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片 HTML 会被
-    渲染端打开、被 headless Chrome 渲染，所以
+    分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片由
+    headless Chrome 渲染，所以
     `x"><script>...</script>` 这类值必须在契约层就挡下，不能指望下游转义。
 
     色名要求**查得到表**而不是"纯字母"：`hazyblue` 这种拼错的色名如果只按

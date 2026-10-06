@@ -89,7 +89,7 @@ def validate_segments_source(data):
         "segments_source.json 的 'opening_animation'")
 
     # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
-    # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。
+    # 进画面文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。
     # 单行是硬约束（writing.md）：agenda 的行数预算按"一行"计，含换行的 cta
     # 会挤爆预算、让"先丢 cta 再裁正文"的截断优先级失效。
     if data.get("cta") is not None:
@@ -136,7 +136,7 @@ def validate_segments_source(data):
                 f"segments[{i}]（title={seg.get('title')!r}）的 '{key}'（上墙一行）")
         # 可选的稳定 id：SKILL.md 承诺"给段稳定 id，改稿顺序不乱时间轴锚点"。
         # 必须是内容段前缀（seg…），否则下游配图覆盖率/统计把它当结构性页；
-        # 必须跨段唯一，否则 HTML 选择器串台。
+        # 必须跨段唯一，否则渲染端的选择器串台。
         seg_id = seg.get("id")
         if seg_id is not None and str(seg_id).strip() != "":
             _validate_sid(seg_id, f"segments[{i}]（title={seg.get('title')!r}）",

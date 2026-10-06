@@ -39,7 +39,7 @@ MANIFEST_TOP_KEYS = ("schema_version", "status", "degraded", "sentences",
                      "segments", "total_duration", "gap", "voice_id",
                      "combined_audio", "closing_cta")
 # 对话轮的键集（build_from_structured.turns 的产出形状）。它在 manifest 里，
-# 但只服务人工回查、不进 HTML——所以拼错的键同样是"静默忽略"，一并封。
+# 但只服务人工回查、不上画面——所以拼错的键同样是"静默忽略"，一并封。
 _TURN_KEYS = ("start", "end", "speaker", "label", "voice_id", "voice_style")
 
 
@@ -203,7 +203,7 @@ def validate_timing_manifest(data):
             raise ValueError(
                 f"segments[{i}].id={sid!r} 必须是 opening/closing 或以 "
                 f"{CONTENT_SID_PREFIX} 开头")
-        # id 会拼进 HTML 属性与 GSAP 选择器字符串（见 _SID_RE 注释），
+        # id 会拼进 DOM 属性与 CSS 选择器字符串（见 _SID_RE 注释），
         # 手写 manifest 里坏 sid 的失败模式是"动画静默丢失/整段脚本
         # 语法错误"，必须在契约层报对人
         _validate_sid(sg.get("id"), f"segments[{i}]", _seen_sids)
@@ -272,7 +272,7 @@ def validate_timing_manifest(data):
                 where_turn = f"timing_manifest.json 的段落 '{sid}' 的 turns[{j}]"
                 _reject_unknown_keys(turn, _TURN_KEYS, where_turn)
                 # 轮次区间是段内 0-based 的 [start, end)：坏了不会炸在渲染端
-                # （它不进 HTML），只让人工回查看错说话人归属，值域一起封。
+                # （它不上画面），只让人工回查看错说话人归属，值域一起封。
                 for edge in ("start", "end"):
                     if edge in turn:
                         _validate_finite_number(turn[edge], f"{where_turn} 的 {edge!r}",

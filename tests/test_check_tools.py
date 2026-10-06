@@ -5,6 +5,7 @@ import unittest
 import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
 import check_docs
+import find_full_bleed
 import _director_prepare as _DP
 
 
@@ -381,6 +382,99 @@ class StaleScanPathShape(unittest.TestCase):
             f.write("这里的指路已失效：见 gen_hyperframes 生成\n")
         stale = check_docs._scan_stale([p])
         self.assertEqual([s[2] for s in stale], ["gen_hyperframes"])
+
+
+class FindFullBleed(unittest.TestCase):
+    """find_full_bleed.py：只读的定位器。它必须与 check_svg 判出同一批底板，
+    且**不改文件**——试过带 --fix 自动注释，实测产出非法 XML（XML 注释不能含
+    `--` 或嵌套 `<!--`，而满幅 rect 恰恰常写成「<!-- 背景 --><rect/>」）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, name, body, root=""):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+               f'viewBox="0 0 1080 1440"{root}>\n' + body + "\n</svg>\n")
+        p = os.path.join(self.tmp.name, name)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(svg)
+        return p
+
+    def test_points_at_the_plate_line_and_leaves_a_local_plate_alone(self):
+        # 一张图里同时有满幅与局部两张 rect：只该报前者，且行号指向它那一行
+        p = self.put("a.svg",
+                     '  <!-- 满幅底板 -->\n'
+                     '  <rect x="0" y="0" width="1056" height="1440" fill="#0b1020"/>\n'
+                     '  <rect x="140" y="300" width="800" height="500" fill="#16233a"/>')
+        r = find_full_bleed.scan(p)
+        self.assertEqual(len(r["plates"]), 1)
+        self.assertEqual(r["plates"][0]["line"], 3)
+        self.assertIn('width="1056"', r["plates"][0]["source"])
+
+    def test_single_line_inline_reports_the_rect_not_the_svg_tag(self):
+        # 退化路径：单行内联时定位落在根节点那行。若照抄那行，报出来的原文会是
+        # `<svg ...`——行号对、原文错，等于没报。
+        p = os.path.join(self.tmp.name, "d.svg")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                    'viewBox="0 0 1080 1440"><rect width="100%" height="100%" fill="#fff"/></svg>')
+        r = find_full_bleed.scan(p)
+        self.assertEqual(len(r["plates"]), 1)
+        self.assertTrue(r["plates"][0]["source"].startswith("<rect"))
+
+    def test_exempt_and_unparsable_are_reported_not_crashed(self):
+        r = find_full_bleed.scan(self.put("c.svg", '<rect width="1080" height="1440" fill="#eee"/>',
+                                          root=' data-ctv-full-bleed="1"'))
+        self.assertTrue(r["exempt"])
+        self.assertEqual(r["plates"], [])
+        p = os.path.join(self.tmp.name, "e.svg")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("not xml at all")
+        r = find_full_bleed.scan(p)
+        self.assertIn("解析失败", r["note"])
+
+    def test_exempt_needs_a_true_value_not_just_the_attribute(self):
+        """`data-ctv-full-bleed="0"` / `"false"` 不算豁免：属性在但没给 1 等于没写。
+
+        只测 `1` 的话，把真值表放宽成"认任何属性值"照样全绿——这条门禁会变摆设。
+        """
+        body = '  <rect width="1080" height="1440" fill="#0b1020"/>'
+        for val, exempt in (("1", True), ("true", True), ("YES", True),
+                            ("0", False), ("false", False), ("", False),
+                            ("maybe", False)):
+            with self.subTest(value=val):
+                r = find_full_bleed.scan(self.put("c.svg", body,
+                                                  root=f' data-ctv-full-bleed="{val}"'))
+                self.assertEqual(r["exempt"], exempt, val)
+                self.assertEqual(len(r["plates"]), 0 if exempt else 1, val)
+
+    def test_it_never_writes_the_file(self):
+        # 这条是它存在的理由：改了文件就可能改坏 XML。整轮扫描后逐字节比对。
+        p = self.put("a.svg", '  <rect width="1080" height="1440" fill="#0b1020"/>\n'
+                               '  <!-- 尾部注释 -->')
+        with open(p, "rb") as f:
+            before = f.read()
+        find_full_bleed.scan(p)
+        with open(p, "rb") as f:
+            self.assertEqual(f.read(), before)
+        # 扫完还能被 check_svg 正常解析（注释里的 `--` 是上一版 --fix 的坑）
+        check_svg.check_file(p, "canvas", "portrait", "dark")
+
+    def test_agrees_with_check_svg_on_the_same_file(self):
+        """定位器与门禁必须判出同一批底板——它调的就是同一个判据，这里钉住。"""
+        for body, want in (
+                ('<rect width="1080" height="1440" fill="#0b1020"/>', 1),
+                ('<rect x="0" y="0" width="1056" height="1440" fill="#0b1020"/>', 1),
+                ('<rect x="60" y="60" width="960" height="1320" fill="#16233a"/>', 0),
+                ('<rect x="140" y="300" width="800" height="500" fill="#16233a"/>', 0)):
+            with self.subTest(body=body):
+                p = self.put("x.svg", "  " + body)
+                errs, _ = check_svg.check_file(p, "canvas", "portrait", "dark")
+                self.assertEqual(bool([e for e in errs if "满幅" in e]), bool(want))
+                self.assertEqual(len(find_full_bleed.scan(p)["plates"]), want)
 
 
 if __name__ == "__main__":

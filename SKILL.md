@@ -66,7 +66,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 - **导演层（先排这个）**：方式 C 的 SVG 有两档——纯氛围循环（`<img>`+墙钟 CSS/SMIL，不同步）与「导演」（images.json 写 `director`，净化内联后由 Remotion 求值器按旁白时间轴逐拍驱动）。导演档九类能力（`at` / `at_time` / `draw` / `morph` / `count` / `type` / `stagger` / 运镜 / `repeat`+`yoyo`）的写法、缺省值与各自约束都在 `references/image_options.md`「SVG 动画：两档」。两条会影响取舍的结论留在这里：`at_time` **与语音无绑定**，重配音就整体错位（跟旁白走的节拍该用 `at`）；相机停在"把内容推出画幅"的姿态、或节拍落在本页可见窗口外，都在生成期打 `[warn]`。配合 `layout:"canvas"`（整页只有这张图，标题层与句子流层都不生成）就是一整个自由编排的舞台。**一个舞台演不完就跨页接续**：下一条目写 `"stage": "keep"` 并指向同一张 SVG，起点即上一页演完的那幅画面（口径见同文件「跨段场景延续」）。机械部分有脚手架 `scripts/canvas_kit.py`（按 spec 出图 + `director` 草稿，构图仍归人）。
 
 - 默认 agenda 版式的开屏/结尾不配图，`images.json` 里的 `opening` / `closing` 键会被忽略并打 `[warn]`。
-- **画 SVG 前先读** `references/image_options.md` 的「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节，第一版就按约束画——管线与渲染都看不见图里画得对不对，画错不会有任何报错。**画布档（`layout:"canvas"`）再加一节**「整页画布的密度与层次」：槽位有模板兜构图，画布没有，暂停一帧还成立才是及格。背景那三层归模板，画布 SVG **别自铺满幅底板**（判据与例外在「不铺满幅底」）。画完可跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`）；它查什么、查不到什么，写在「画布几何」一节末尾。
+- **画 SVG 前先读** `references/image_options.md` 的「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节，第一版就按约束画——管线与渲染都看不见图里画得对不对，画错不会有任何报错。**画布档（`layout:"canvas"`）再加一节**「整页画布的密度与层次」：槽位有模板兜构图，画布没有，暂停一帧还成立才是及格。背景那三层归模板，画布 SVG **别自铺满幅底板**（判据与例外在「不铺满幅底」）。画完可跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`）；它查什么、查不到什么，写在「画布几何」一节末尾。已确认报了满幅底板但不知道是哪一张，用只读的 `python scripts/find_full_bleed.py images/` 给行号。
 
 素材落盘与选型（放在编排之后，因为它是"演"用什么的问题）：素材写入生成器输出目录（`-o`，默认 `remotion/`）的 `public/images/`，并通过 `images.json` 映射到 segment（`src` 写相对项目根的路径，如 `images/seg1.png`）。配图按 4:3 出图（整页画布按当前画幅出图）。provenance 字段（来源记账）按 `references/image_options.md`「images.json」的清单保留，二次整理时不要覆盖。
 

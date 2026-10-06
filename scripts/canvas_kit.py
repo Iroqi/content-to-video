@@ -77,10 +77,9 @@ DIM_FRAC = 0.6       # 次要文字 = 文字色往页底压一档，再按 7:1 �
 LINE_FRAC = 0.45     # 轴线/刻度线 = 比次要文字再暗一档（线要的是"在"，不是"抢眼"）
 TICK_FRAC = 0.5      # 刻度线长 = label 档字号的一半
 TEXT_BASE_FRAC = 0.35  # 竖排刻度 label 的基线修正：让字身中线对齐刻度而不是基线对齐
-FULL_BLEED_FRAC = 0.98  # 与 check_svg 判"满幅底板"同一条阈值（宽或高越过它就该问一句）
-# 满幅判据的"贴边"容差，与 check_svg 的 `<= 1` 同一条：留 1px 是让 x=0/y=0 与 x=1 同判，
-# 不是给内容让路。
-FULL_BLEED_EDGE = 1.0
+# 「满幅」的判据不在这里定义：check_svg.is_full_bleed 是唯一一份，本模块调它。
+# 这一版之前这里是手抄的 0.98 字面量，两处已经漂移过一次（那边注释写"宽或高"，
+# 两边代码都是 and），而 97.8% 宽的底板能静默溜过去。
 # 次要文字的对比度目标：check_svg 的门禁线是 4.5，但画布页的小字还要经两画幅缩放和成片
 # 压缩编码，取色表那条"次要说明按 ≥7:1 取"就是为了留出这两档损耗。
 DIM_CONTRAST_TARGET = 7.0
@@ -475,10 +474,11 @@ def _emit_panel(el, ctx, where):
     w = _need_num(el, "w", where, positive=True)
     h = _need_num(el, "h", where, positive=True)
     cw, ch = ctx["canvas"]
-    # 与 check_svg 判"满幅底板"同一条阈值，但在这里就报而不是留一条 warn：本模块的
-    # 立身之本就是"生成物一定过门禁"，而满幅 rect 唯一的后果是把模板那三层背景盖死。
-    if (x <= FULL_BLEED_EDGE and y <= FULL_BLEED_EDGE
-            and w >= cw * FULL_BLEED_FRAC and h >= ch * FULL_BLEED_FRAC):
+    # 满幅判据直接调门禁那一份（判据只有一份，见模块顶部 FULL_BLEED 那条注释）：
+    # 在这里就报而不是留一条 warn——本模块的立身之本就是"生成物一定过门禁"，
+    # 而满幅 rect 唯一的后果是把模板那三层背景盖死。
+    if check_svg.is_full_bleed({"x": _num(x), "y": _num(y), "width": _num(w),
+                                 "height": _num(h)}, cw, ch):
         raise ValueError(f"{where} 的 panel 铺满了整页（{int(w)}×{int(h)} 起于 "
                          f"{int(x)},{int(y)}）：画布页必须留透明，让模板的渐变/网格/"
                          "accent 氛围光三层从内容背后透出来。要局部层次就缩进边距、"

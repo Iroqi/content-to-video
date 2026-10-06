@@ -85,9 +85,9 @@ class SvgChecker(unittest.TestCase):
         self.assertEqual(errs, [])
         self.assertTrue(any("26px" in w for w in warns))   # 28 × 0.75 = 21
 
-    def _canvas_svg(self, body):
+    def _canvas_svg(self, body, root_attrs=""):
         return ('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
-                'viewBox="0 0 1080 1440">' + body + '</svg>')
+                f'viewBox="0 0 1080 1440"{root_attrs}>' + body + '</svg>')
 
     def _opacity_warns(self, body, layout):
         _, warns = self.run_check(self._canvas_svg(body), layout=layout, aspect="portrait")
@@ -117,18 +117,73 @@ class SvgChecker(unittest.TestCase):
         self.assertTrue(any("对比度" in e for e in errs))
 
     def test_canvas_full_bleed_plate_hides_the_templates_three_layers(self):
-        # 模板本来就在画布页底下画了渐变/网格/氛围光三层，满幅 rect 把它们整个盖掉
+        # 模板本来就在画布页底下画了渐变/网格/氛围光三层，满幅 rect 把它们整个盖掉。
+        # 这条从 warn 升成 error：warn 不改退出码，检查器在流水线里就成了摆设，
+        # 而"SVG 融不进背景"正是本该被拦下的失败。
         body = ('<rect width="1080" height="1440" fill="#0b1020"/>'
                 '<circle cx="540" cy="700" r="300" fill="#38bdf8"/>'
                 '<text x="90" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>')
-        _, warns = self.run_check(self._canvas_svg(body), layout="canvas", aspect="portrait")
-        got = [w for w in warns if "满幅底板" in w]
+        errs, warns = self.run_check(self._canvas_svg(body), layout="canvas", aspect="portrait")
+        got = [e for e in errs if "满幅底板" in e]
         self.assertEqual(len(got), 1)
         self.assertIn("氛围光", got[0])
+        self.assertIn("data-ctv-full-bleed", got[0])     # 错误信息要直接给出出路
+        self.assertEqual([w for w in warns if "满幅底板" in w], [])
         # 槽位那条各说各的理由，措辞不共用
-        _, sw = self.run_check(self._canvas_svg(body), layout="slot")
-        self.assertTrue(any("色差框" in w for w in sw))
-        self.assertEqual([w for w in sw if "满幅底板" in w], [])
+        se, _ = self.run_check(self._canvas_svg(body), layout="slot")
+        self.assertTrue(any("色差框" in e for e in se))
+        self.assertEqual([e for e in se if "满幅底板" in e], [])
+        # 局部底板（真的需要的那种）不该被牵连
+        errs, _ = self.run_check(
+            self._canvas_svg('<rect x="140" y="300" width="800" height="500" fill="#16233a"/>'
+                             '<text x="200" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>'),
+            layout="canvas", aspect="portrait")
+        self.assertEqual([e for e in errs if "满幅" in e], [])
+
+    def test_almost_full_bleed_is_still_full_bleed(self):
+        """97.8% 宽的底板在画面上和满幅没区别，必须照样拦下。
+
+        判据原来要求宽和高各自越过 0.98，这张 1056×1440（宽 97.8%、高 100%）就
+        能静默溜过去——模板三层被盖掉 97.8%，剩下的 2.2% 只够让页缘露条细网格，
+        层次一点都回不来。现在按面积判，这类"差一点点"一并归到满幅。
+        """
+        errs, _ = self.run_check(
+            self._canvas_svg('<rect x="0" y="0" width="1056" height="1440" fill="#0b1020"/>'
+                             '<text x="90" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>'),
+            layout="canvas", aspect="portrait")
+        self.assertTrue(any("满幅底板" in e for e in errs), errs)
+        # 百分比写法与面积同判
+        errs, _ = self.run_check(
+            self._canvas_svg('<rect width="100%" height="100%" fill="#0b1020"/>'
+                             '<text x="90" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>'),
+            layout="canvas", aspect="portrait")
+        self.assertTrue(any("满幅底板" in e for e in errs), errs)
+        # 贴边才算满幅：同样大的 rect 缩进边距就是局部底板，正当画法
+        errs, _ = self.run_check(
+            self._canvas_svg('<rect x="60" y="60" width="960" height="1320" fill="#16233a"/>'
+                             '<text x="90" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>'),
+            layout="canvas", aspect="portrait")
+        self.assertEqual([e for e in errs if "满幅" in e], [])
+
+    def test_full_bleed_opt_out_is_explicit_and_still_visible(self):
+        """豁免开关：`data-ctv-full-bleed="1"` 放行，但留一条 warn 说明代价。
+
+        没有开关的话，满幅底升 error 就等于把"确实该换底色"的场景逼到删掉正确的
+        东西，门禁下一轮必然被绕开——而绕开的成本远低于这里多留一条 warn。
+        假值（`0` / `false` / 空 / 乱写）不算豁免：属性在但没给 1，等于没写。
+        """
+        body = ('<rect width="1080" height="1440" fill="#0b1020"/>'
+                '<text x="90" y="1300" font-size="40" font-family="s" fill="#e5e7eb">ok</text>')
+        for val, exempt in (("1", True), ("true", True), ("yes", True), ("TRUE", True),
+                            ("0", False), ("false", False), ("", False), ("maybe", False)):
+            with self.subTest(value=val):
+                errs, warns = self.run_check(
+                    self._canvas_svg(body, f' {check_svg.FULL_BLEED_ATTR}="{val}"'),
+                    layout="canvas", aspect="portrait")
+                got = [e for e in errs if "满幅底板" in e]
+                self.assertEqual(bool(got), not exempt, val)
+                self.assertEqual(bool([w for w in warns if check_svg.FULL_BLEED_ATTR in w]),
+                                 exempt, val)
 
 
 class CanvasDensity(unittest.TestCase):

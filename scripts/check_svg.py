@@ -69,6 +69,20 @@ def _safe_margins():
 SAFE_MARGIN = _safe_margins()
 MIN_PX = 26
 RATIO_TOL = 0.01
+# 根节点上声明"这一页就是要自铺满幅底色"的豁免开关。满幅底从 warn 升成 error
+# 之后，这个开关是必须的：否则"确实该换底色"的场景只能被逼着删掉正确的东西，
+# 门禁下一轮就会被绕开。
+FULL_BLEED_ATTR = "data-ctv-full-bleed"
+# 「满幅」的判据真源。canvas_kit 的 panel 自查原来抄了一份 0.98 字面量，两处
+# 漂移过一次注释（这里写"宽或高"，代码是 and）。抽成函数是有理由的：判据本身
+# 有三处逻辑（贴边、占满、百分比单位），复制出去必然有一处忘了同步。
+#
+# 为什么判"面积"而不是"宽和高各自越过 0.98"：一张 1056×1440 的底板宽只有
+# 97.8%，双阈值下它能静默溜过去，而它在画面上和满幅没有区别——模板那三层照样
+# 被盖死。三层只要被盖掉 97.8%，剩下的 2.2% 也只是让页缘露出条更细的网格，
+# 并不会让层次回来。面积判据一次性覆盖这类"差一点点"。
+FULL_BLEED_AREA = 0.92
+FULL_BLEED_EDGE = 1.0
 BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
 # 整页画布的文字真正落在主题背景渐变的中段（45% 位），底色从 _theme 注册表
 # 派生而不是抄一份字面量——上一版手抄的 dark 底色是旧主题遗留，与真实页底
@@ -78,6 +92,33 @@ PAGE_BG = {t: theme_bg_stops(t)[1] for t in list_theme_names()}
 # 只有家族判定能抓；单一深色主题（dark）下始终启用。家族集合并入当前主题渐变
 # stop：手抄族会与注册表漂移（上一版 PAGE_BG 的注释记的就是这类漂移）。
 _BG_BY_THEME = {}
+
+
+def is_full_bleed(el, vb_w, vb_h):
+    """这张 rect 是不是"铺了满幅底板"：贴边 + 面积占比越线。
+
+    只判面积不判宽高各别：贴边 + 覆盖九成以上的画幅就已经把模板那三层背景盖死了，
+    剩下那一成边距露出的网格细到看不出层次，按面积判既更严也更少一条分支。
+    `width="100%" height="100%"` 这种写法按面积与画幅相同处理。
+
+    调用方（canvas_kit）直接调它而不是重算——判据只有这一份。
+    """
+    def num(v, pct_of):
+        if str(v).strip().endswith("%"):
+            try:
+                return pct_of * float(str(v).strip().rstrip("%")) / 100.0
+            except ValueError:
+                return None
+        return _parse_num(v)
+
+    w = num(el.get("width"), vb_w)
+    h = num(el.get("height"), vb_h)
+    x = _parse_num(el.get("x")) or 0.0
+    y = _parse_num(el.get("y")) or 0.0
+    if w is None or h is None:
+        return False
+    return (x <= FULL_BLEED_EDGE and y <= FULL_BLEED_EDGE
+            and w * h >= vb_w * vb_h * FULL_BLEED_AREA)
 
 
 def _bg_family(theme):
@@ -247,6 +288,15 @@ def check_file(path, layout, aspect, theme):
     if _local(root.tag) != "svg":
         return ["根节点不是 <svg>"], []
 
+    # 显式豁免：作者声明"这一页就是要自铺满幅底色"（等于主动放弃模板那三层背景）。
+    # 有了这个开关，满幅底才能升成 error——否则"确实该铺"的场景就只能被逼着
+    # 删掉正确的东西，门禁立刻会被绕开。
+    full_bleed_ok = str(root.get(FULL_BLEED_ATTR, "")).strip().lower() in ("1", "true", "yes")
+    if full_bleed_ok:
+        warns.append(f"已声明 {FULL_BLEED_ATTR}=\"1\"：这一页自铺满幅底色，模板的主题渐变 / "
+                     f"页缘网格 / accent 氛围光三层被盖掉，画布页会退回一片死平（这是你"
+                     f"主动换来的，确认过即可）")
+
     # ── 根节点几何 ──
     w, h, note = _root_size(root)
     if note:
@@ -393,19 +443,28 @@ def check_file(path, layout, aspect, theme):
             has_font_family = True
 
         # 满幅背景 rect
-        if tag == "rect" and vb_w and vb_h and layout in ("slot", "canvas"):
-            rw = _parse_num(el.get("width")) if not str(el.get("width", "")).endswith("%") else None
-            rh = _parse_num(el.get("height")) if not str(el.get("height", "")).endswith("%") else None
-            pct = str(el.get("width", "")) == "100%" and str(el.get("height", "")) == "100%"
-            if pct or (rw and rh and rw >= vb_w * 0.98 and rh >= vb_h * 0.98
-                       and (_parse_num(el.get("x")) or 0) <= 1 and (_parse_num(el.get("y")) or 0) <= 1):
-                if layout == "slot":
-                    warns.append("疑似铺满 viewBox 的背景 <rect>：槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）")
-                else:
-                    warns.append("整页画布铺了一张满幅底板 <rect>：模板本来就在这一页底下画好了三层"
-                                 "（主题渐变 / 只在页缘显形的网格 / 本段 accent 氛围光），满幅 rect 把三层"
-                                 "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 image_options.md"
-                                 "「整页画布的密度与层次」）。确实要把整页换成另一种底色时可忽略本条")
+        #
+        # 这里曾是 warn，结果它一路跟着出了片：主视觉自带一张满幅底板把模板在底下
+        # 画好的三层背景（主题渐变 / 页缘网格 / 本段 accent 氛围光）整个盖掉，
+        # 画布页退化成一片死平，SVG 也就"融不进背景"——而这正是本该被拦下的失败。
+        # warn 的问题是它不改变退出码，检查器在流水线里就成了摆设。
+        # 现在升 error：要么删掉那张 rect，要么显式声明"这一页就是要换底色"。
+        if tag == "rect" and vb_w and vb_h and layout in ("slot", "canvas") \
+                and is_full_bleed(el, vb_w, vb_h):
+            if full_bleed_ok:
+                continue
+            hint = (f"在根 <svg> 上加 {FULL_BLEED_ATTR}=\"1\" 表示这一页确实要"
+                    f"换底色（等于放弃模板那三层背景），本条即豁免。")
+            if layout == "slot":
+                errors.append("槽位 SVG 铺满了 viewBox：不要铺满幅底（会在页面上形成"
+                              f"一圈色差框，图也融不进背景）。删掉这张 <rect>；"
+                              f"确需自铺局部底板请缩小到远小于画幅。{hint}")
+            else:
+                errors.append("整页画布铺了一张满幅底板 <rect>：模板本来就在这一页底下"
+                              "画好了三层（主题渐变 / 只在页缘显形的网格 / 本段 accent "
+                              "氛围光），满幅 rect 把三层整个盖掉，画布页就退回一片"
+                              "死平，SVG 也融不进页面背景。删掉它让三层透出来（见 "
+                              "image_options.md「整页画布的密度与层次」）。" + hint)
 
         # 竖向占位登记（只有画布档用得上：整页构图没有模板兜底，空带得自己发现）
         if layout == "canvas" and w and h:

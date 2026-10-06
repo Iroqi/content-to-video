@@ -140,13 +140,14 @@ class Gate(unittest.TestCase):
                 self.assertEqual(actionable(warns), [])
 
     def test_no_full_bleed_rect_is_ever_emitted(self):
+        # 判据调 check_svg 那一份，不在测试里再抄一份 0.98——这份源码当初
+        # 就是"抄了一份阈值"才漂移的，测试自己也抄就会把漂移照抄一遍。
         for aspect in ("portrait", "landscape"):
             w, h = get_canvas(aspect)
             root = ET.fromstring(K.render_svg(K.validate_spec(spec_for(aspect))))
             for el in root.iter():
                 if local(el.tag) == "rect":
-                    self.assertFalse(float(el.get("width")) >= w * 0.98
-                                     and float(el.get("height")) >= h * 0.98,
+                    self.assertFalse(check_svg.is_full_bleed(el, w, h),
                                      "画布页铺了满幅底板，模板那三层背景会被盖掉")
 
     def test_full_bleed_panel_is_refused_before_it_is_emitted(self):
@@ -155,6 +156,40 @@ class Gate(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             K.render_svg(K.validate_spec(spec))
         self.assertIn("铺满了整页", str(cm.exception))
+
+    def test_almost_full_panel_is_refused_too(self):
+        """差两成的 panel 同样盖死三层，且这条只有"真调共用判据"才拦得住。
+
+        这一条同时钉住两件事：canvas_kit 的判据确实是共享的那份（0.98 宽高双阈值
+        会让这张溜过去），以及判据本身按面积而不是宽高各别。前一版这里手抄了一个
+        0.98 字面量，两处漂移过一次注释，而测试只测「恰好铺满」——换成自算的 0.999
+        照样过，于是"判据只有一份"这条约定实际上没有任何测试在守。
+        """
+        w, h = get_canvas("portrait")
+        spec = {"elements": [{"kind": "panel", "x": 0, "y": 0,
+                               "w": round(w * 0.978), "h": h}]}
+        with self.assertRaises(ValueError) as cm:
+            K.render_svg(K.validate_spec(spec))
+        self.assertIn("铺满了整页", str(cm.exception))
+        # 缩进边距的 panel 是正当画法，不该被这条拦住
+        spec = {"elements": [{"kind": "panel", "x": 60, "y": 60,
+                               "w": round(w * 0.978), "h": round(h * 0.978)}]}
+        K.render_svg(K.validate_spec(spec))
+
+    def test_panel_gate_calls_the_shared_predicate_instead_of_recomputing_it(self):
+        """结构门禁：canvas_kit 不许自己重算「满幅」，必须调 check_svg 那一份。
+
+        行为测试有个盲区——把自算的阈值调得比共用判据更严，行为测试照样全绿
+        （"恰好铺满"两边都拦），于是"判据只有一份"这条约定没人守。真出现过一次：
+        canvas_kit 手抄 0.98 字面量，两处注释漂移过一次。
+        """
+        with open(os.path.join(H.SCRIPTS_DIR, "canvas_kit.py"), encoding="utf-8") as f:
+            src = re.sub(r"#.*", "", f.read())        # 剥注释，注释里提判据不算调用
+        self.assertIn("check_svg.is_full_bleed", src)
+        # 满幅判据里出现画幅乘法 = 就是在本地重算一份
+        self.assertNotRegex(src, r"\b\w+\s*[&*]=\s*[\w.]+\s*\*\s*0\.\d+",
+                            "canvas_kit 里出现了本地阈值字面量：满幅判据只有 "
+                            "check_svg.is_full_bleed 一份")
 
     def test_sparse_page_fails_the_gate_with_the_empty_band(self):
         """只有上 1/4 有东西的页就是"暂停是空页"的形状：脚手架要拦，不能默默交出去。"""

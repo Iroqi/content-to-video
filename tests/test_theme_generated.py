@@ -147,6 +147,91 @@ class ComponentDiscipline(unittest.TestCase):
                       f"——改模板的 verse.activeRule 不会生效。应当读 v.activeRule。")
 
 
+class TextIsNeverLeftToBrowserDefault(unittest.TestCase):
+    """渲染文字的组件文件里必须显式写 color，不许依赖祖先兜底。
+
+    **这条来自一个真实的可见故障**：横屏左栏标题的 `div` 只有 `fontFamily`、
+    没有 `color`，而从 `Root → Video → Card → AbsoluteFill` 整条链路都不设
+    `color`（氛围光只是一层 radial-gradient 背景，不参与 color 继承），于是
+    浏览器默认的黑字落在近黑渐变上——实测对比度 **1.32:1**，标题整行看不见。
+    竖屏标题有 `color: THEME.textColor` 所以没事；截图里 tagline 与 verse 也
+    正常（各自显式取了色），只有标题"融进背景里"。
+
+    为什么不能用 tsc 兜：`color` 不是必填属性，少写不报错——这类漏只有门禁
+    或人眼截图能发现，而截图太贵。
+
+    判据只认一条：**排文字的那个 style 块自己必须写 color**。
+
+    试过并否掉的两种更宽的写法：
+      - "文件里至少有一处 color"——SlotCard 的竖屏标题有，横屏标题漏了照样绿。
+        这个 bug 当初就是这么溜进去的。
+      - "同文件内任一祖先块有 color 就算过"——同样漏：SlotCard 的竖屏有
+        color 会替横屏顶罪。
+      AgendaCard 那种"容器设色、内层继承"确实是对的，但它每块字自己的 style
+      已经有 color（title/kicker/idx 行），无需靠继承兜底。所以判据收紧到
+      块级反而更贴合现有代码，也不会逼人给纯容器塞样式。
+
+    为什么不用 tsc：`color` 不是必填属性，少写不报错。
+    """
+
+    # 渲染可见文字的组件。Card/ProgressBar/MediaBox/DirectorImage 不在列：
+    # 它们只画外壳、网格、进度条与图，不吐字。
+    TEXT_FILES = ("SlotCard.tsx", "AgendaCard.tsx", "Verse.tsx")
+    _COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+    _STYLE = re.compile(r"style=\{\{(.*?)\}\}", re.S)
+
+    def test_text_blocks_always_set_their_own_color(self):
+        """排文字的块（带字号）必须自带 color，不许指望继承。"""
+        for name in self.TEXT_FILES:
+            path = os.path.join(ROOT, "remotion", "src", "components", name)
+            with open(path, encoding="utf-8") as f:
+                code = self._COMMENTS.sub("", f.read())
+            blocks = self._STYLE.findall(code)
+            # 真正在排文字的块：设了字号的那些（标题 / 正文 / 名单行）
+            text_blocks = [b for b in blocks if "fontSize" in b]
+            self.assertTrue(text_blocks,
+                            f"{name} 里没找到排文字的 style 块——门禁失效了？")
+            missing = [b for b in text_blocks if "color:" not in b]
+            detail = ""
+            if missing:
+                first = re.sub(r"\s+", " ", missing[0].strip())[:70]
+                detail = (f"{name} 有 {len(missing)} 处排文字的块没写 color——"
+                          f"文字会落回浏览器默认黑色，压在近黑背景上（横屏标题"
+                          f"曾这样，实测对比度 1.32:1）。给每处加 "
+                          f"color: THEME.textColor。首处：{first}")
+            self.assertEqual(missing, [], detail)
+
+    def test_shell_never_sets_color(self):
+        """外壳（Card/ProgressBar）必须**不设** color，让漏写测得出来。
+
+        反向锁：一旦外壳兜了底，上面那条检查就会对所有组件失效——那正是本门禁
+        唯一存在的理由。这条把它锁成永远不成立。
+        """
+        src = os.path.join(ROOT, "remotion", "src", "components")
+        for name in ("Card.tsx", "ProgressBar.tsx"):
+            with open(os.path.join(src, name), encoding="utf-8") as f:
+                code = self._COMMENTS.sub("", f.read())
+            self.assertNotRegex(
+                code, r"\bcolor:",
+                f"{name} 设了 color——外壳一旦兜底，子组件漏写 color 就再也测不出来了"
+                f"（本门禁会整体失效）。要改颜色请在渲染文字的组件里显式写。")
+
+    def test_no_ancestor_shields_a_missing_color(self):
+        """外壳（Card/Video）必须**不设** color，让"某组件漏写"测得出来。
+
+        反向锁：一旦外壳兜了底，子组件漏写 color 就再也测不出来——那正是本门禁
+        唯一存在的理由。这条把它锁成永远不成立。
+        """
+        src = os.path.join(ROOT, "remotion", "src", "components")
+        for name in ("Card.tsx", "ProgressBar.tsx"):
+            with open(os.path.join(src, name), encoding="utf-8") as f:
+                code = self._COMMENTS.sub("", f.read())
+            self.assertNotRegex(
+                code, r"\bcolor:",
+                f"{name} 设了 color——外壳一旦兜底，子组件漏写 color 就再也测不出来了"
+                f"（本门禁会整体失效）。要改颜色请在渲染文字的组件里显式写。")
+
+
 def _first_diff(committed, fresh):
     """逐行比出第一处不同，并说清是哪一侧的什么。"""
     a = committed.splitlines()

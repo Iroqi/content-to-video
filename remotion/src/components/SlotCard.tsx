@@ -68,6 +68,10 @@ export const SlotCard: React.FC<SlotCardProps> = ({seg, t, aspect}) => {
                 fontWeight: TYPO.titleWeight,
                 lineHeight: lt.lineHeight,
                 letterSpacing: TYPO.titleTracking,
+                // 与竖屏标题同一个显式取值：Card.tsx 从不设 color（氛围光只是
+                // 一层 radial-gradient 背景，不参与继承），所以不写这一行会落到
+                // 浏览器默认黑色——黑字压在近黑渐变上，横屏标题整行看不见。
+                color: THEME.textColor,
                 textShadow: `0 0 ${lt.glow}px ${rgba(seg.accent, 0.25)}`,
                 transform: titleScale !== 1 ? `scale(${titleScale})` : undefined,
                 textWrap: "balance",

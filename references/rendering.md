@@ -8,7 +8,7 @@
 
 - `dark`：默认，近黑极客风（终端绿网格 + 青绿点缀）；适合技术突破、发布、工程、前沿 AI、安全事件。
 
-配色在 `scripts/_theme.py` 单一真源；生成器把它烘焙进 `src/theme.ts`，Remotion 组件只消费这份 TS 副本（改视觉参数需双写，见 `remotion/README.md`「主题」）。
+配色在 `scripts/_theme.py` 单一真源；`python scripts/gen_theme_ts.py` 把它烘焙进 `src/theme.generated.ts`，Remotion 组件只消费这份生成物（改视觉参数见「版式真源」）。
 
 ## 画面结构
 
@@ -40,7 +40,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 
 动画参数全部来自 `_template.py` 的 `animation` 数据，生成器把它烘焙进数据胶；Remotion 组件按绝对帧从数据胶推导演出（同一 manifest 每次都应渲染出同一个画面）：
 
-- 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页。**揭幕档只有 `line` 一档**（引导线：见下）。模板 `animation.segmentWipe.style` 写成 `"line"` 以外的任何值都会在生成期 fail-fast（`_line_only_guard`）——渲染端只实现了这一档，改档要先补 `remotion/src/theme.ts` 的 `ANIM` 与组件，别只改模板。wipe 档旧卡**不淡出**，被新卡盖住后随 clip 窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布段除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布段」条）。
+- 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页。**揭幕档只有 `line` 一档**（引导线：见下）。模板 `animation.segmentWipe.style` 写成 `"line"` 以外的任何值都会在生成期 fail-fast（`_line_only_guard`）——渲染端只实现了这一档，改档要先在 `gen_theme_ts.py` 的 `_anim` 里补 `ANIM` 与组件，别只改模板。wipe 档旧卡**不淡出**，被新卡盖住后随 clip 窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布段除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布段」条）。
 - **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法）；线的辉光下偏，光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(propLine.duration, gap)`，入场提前铺到 `winStart = s − wipe`，恰好在本段音频起点完成揭屏（线与剥离同窗同值）。字幕住在卡里，转场早于上一句念完就开始，等于下一段文字压着还在讲的话。
 - **揭屏能成立的前提是 clip 的可见窗口覆盖整个入场窗口**：数据胶按 `data-start`/`data-duration` 语义硬切 clip 可见性（`compute_clips` 在生成期一次算齐 `wipe`/`winStart`/`vis`/`peel`），补间排在窗口外等于没写（这正是旧 cross-fade 版查出的 bug：边界帧全黑）。窗口 `[winStart, next_start]` 与 `wipe`/`winStart` 在生成器一次算齐；末卡窗口铺到成片结束。（数据胶里的字段名是 `winStart`，见 SKILL.md「输出契约」；本文件正文写作 `win_start` 只是同一几何的 Python 侧变量名。）
@@ -54,7 +54,14 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 
 ## 版式真源
 
-画布尺寸、标题区、句子流、圆角、动画等版式数值都从 `scripts/_template.py` 派生，配色由 `scripts/_theme.py` 派生；生成器把它们烘焙进 `remotion/src/theme.ts` 与数据胶（`src/generated.ts`），Remotion 组件只消费这两份产物。新增视觉参数一律先加进这两个 py，再同步 `remotion/src/theme.ts` 的 TS 副本；哪些常量允许留在模板/组件里（以及两处与模板值的联动代价）写在各自文件头与块注释里。
+画布尺寸、标题区、句子流、圆角、动画等版式数值都从 `scripts/_template.py` 派生，配色由 `scripts/_theme.py` 派生。Remotion 组件只消费两份产物，**都由生成器烘焙、没有手抄副本**：
+
+| 产物 | 由谁生成 | 何时生成 |
+| --- | --- | --- |
+| `remotion/src/theme.generated.ts` | `python scripts/gen_theme_ts.py` | 改完版式/配色后手动跑一次 |
+| `remotion/src/generated.ts`（数据胶） | `python scripts/gen_remotion_project.py` | 每次 `pipeline.py` |
+
+新增视觉参数一律先加进那两个 py：`theme.generated.ts` 不用手写，`--check` 与 `tests/test_theme_generated.py` 会挡住忘记重生成。留在 `theme.ts` 手写的只有类型标注与颜色数学（WCAG 对比度保底），那是算法不是数据，生成不出来。哪些观感常量允许留在组件里写在各自文件头与块注释里。
 
 模板改动后重跑生成器，抽帧目检关键帧（版式问题在这一步发现最便宜）。
 

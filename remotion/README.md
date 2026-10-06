@@ -25,7 +25,8 @@ source.json ──► scripts/pipeline.py ──► timing_manifest.json（契�
               ├─ src/components/CanvasCard.tsx 整页画布
               ├─ src/components/Verse.tsx      歌词式句子流
               ├─ src/components/ProgressBar.tsx
-              ├─ src/theme.ts       主题/版式/动画数值（_theme.py/_template.py 的 TS 副本）
+              ├─ src/theme.generated.ts 主题/版式/动画数值（gen_theme_ts.py 生成）
+              ├─ src/theme.ts       类型标注 + 颜色数学（WCAG 对比度保底）
               └─ src/easing.ts      缓动曲线（_ease.py 的 TS 逐点对拍版）
                                           ▼
               npx remotion render src/index.ts ContentToVideo out.mp4
@@ -45,33 +46,36 @@ source.json ──► scripts/pipeline.py ──► timing_manifest.json（契�
 ## 主题
 
 配色与版式数值真源在 `scripts/_theme.py` / `scripts/_template.py`（Python）。
-组件读不到 CSS 变量，所以这些数值在 `src/theme.ts` 有一份 TS 副本，两份
-**要人同步**：
+组件读不到 CSS 变量，所以这些数值由 `python scripts/gen_theme_ts.py` 生成到
+`src/theme.generated.ts`——**生成物，不是手抄副本**：
 
-| Python 真源 | TS 副本 | 内容 |
+| Python 真源 | 生成物里的常量 | 内容 |
 |---|---|---|
-| `_theme.py` | `THEME` / `rgba` / `mixColors` / `ensureTextContrast` | 配色、对比度保底 |
+| `_theme.py` | `THEME` | 配色（含从渐变里抠出的 `bgStops`） |
 | `_template.py` `typography` | `FONT_STACK` / `MONO_STACK` / `TYPO` | 字体栈、字重、行高 |
 | `_template.py` `layout.<画幅>` | `LAYOUTS` | 版式几何（两画幅） |
 | `_template.py` `layout.landscape` | `LANDSCAPE_ONLY` | 横屏左文字栏（竖屏没有对应物） |
-| `_template.py` `animation` | `ANIM` | 动画参数 |
+| `_template.py` `animation` + `canvasAmbience` | `ANIM` | 动画参数 |
 
-改视觉参数时先改 Python 真源，再改 `theme.ts` 对应项。这份同步有两道机械
-保障：`tests/test_theme_parity.py` 逐字段对拍两侧数值（Node 缺失时退化为从
-源码抠字面量），`tests/test_ease_parity.py` 盯缓动那一份双源（幂次表 + 逐点
-采样）。两道都绿，才算真的同步了——只改一边会在 CI 上变红。
+改视觉参数：只改 Python → 跑一次 `gen_theme_ts.py` → 提交生成物。门禁
+`tests/test_theme_generated.py` 重跑生成器与仓库文件逐字节比对，忘了重生成会在
+CI 上变红；`npx tsc --noEmit` 再兜一层"Python 改了字段名而生成物没跟上"。
 
-三处**故意不对拍**，别误当成漏项去"修正"：
+`src/theme.ts` 里手写的是**算法**不是数据：类型标注（`Aspect` / `Layout` /
+`SegmentLayout`）与颜色数学（`rgba` / `mixColors` / `ensureTextContrast` 的 WCAG
+对比度保底）。这些生成不出来——要在浏览器里逐帧跑。
 
-- `ANIM.segmentWipe` 只在 Python 侧。渲染端只实现 line 档，非 line 档由生成期
-  `_line_only_guard` 在写盘前挡住；TS 留一份没人读的副本才是分家温床。
-- `animation.director`（steps 的缺省 duration/ease）只在 Python 侧。它是**生成期**
-  的值，由 `canvas_kit` 烘进 SVG 属性，渲染端从 DOM 读到已烘好的结果。
-- `ANIM.canvasAmbience`（canvas 档第三组氛围光）只在 TS 侧。Python 的
-  `layout.ambience` 是另外两画幅的值，canvas 用的是渲染端专属的一组。
+两处**故意不进生成物**，别误当成漏项去"补上"：
 
-`theme.ts` 之外的组件里只允许写"两画幅同值、单值即终态"的观感常量（字重、
-透明度、辉光浓度）；其余一律回 `theme.ts`。
+- `ANIM.segmentWipe` 与 `animation.director` 只在 Python 侧。渲染端只实现 line 档，
+  非 line 档由生成期 `_line_only_guard` 挡住；`director` 是生成期的值，由
+  `canvas_kit` 烘进 SVG 属性。留一份没人读的副本才是分家温床。
+- `ANIM.*.ease` **不存在**。组件调的是 `src/easing.ts` 的具名导出
+  （`backOut()` / `power2Out()`），ANIM 里再存一份字符串副本，改了不会有任何画面
+  变化——两处都以为自己在管，不如一处都没有。
+
+`theme.ts` / `theme.generated.ts` 之外的组件里只允许写"两画幅同值、单值即终态"
+的观感常量（字重、透明度、辉光浓度）；其余一律回常量表。
 
 ## 用法
 
@@ -114,7 +118,7 @@ cd remotion && npx tsc --noEmit -p .
 | `_line_only_guard` | 生成期，任何写盘之前 | 模板的 wipe 档位渲染端没实现 |
 | `npx tsc --noEmit` | 改组件后 | 类型与字段 |
 | `tests/test_ease_parity.py` | CI | 缓动两份实现分家（幂次表、方向翻转） |
-| `tests/test_theme_parity.py` | CI | 版式/配色两份实现分家（`layout` 逐字段、字体栈、字重色值） |
+| `tests/test_theme_generated.py` | CI | `theme.generated.ts` 与 Python 真源分家（重跑生成器逐字节比对），以及死字段（`ease` / `segmentWipe`）回潮 |
 
 `--out` 指向技能目录会被拒（与 `pipeline.py` 同一道闸）。生成器不替你判断
 `status`/`degraded`——它照实渲染并把降级项打在 manifest 里，放不放行由你决定。

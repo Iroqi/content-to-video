@@ -1,33 +1,34 @@
-/** 视觉真源：与 scripts/_theme.py / scripts/_template.py 一一对应的 TS 副本。
+/** 视觉真源的单一出口：数据在 theme.generated.ts，类型与颜色数学在这里。
  *
- * 注意：HTML 版以 Python 模板为唯一真源、CSS 变量派生；Remotion 版组件无法
- * 读 CSS 变量，所以把模板数值复刻成这份 TS 常量。改视觉参数时两边要同步改
- * （references/rendering.md「版式真源」的纪律在这里变成"py 与 theme.ts 各改
- * 一处"，README 已写明该代价）。组件只允许写"两画幅同值、单值即终态"的
- * 观感常量（字重、透明度、辉光浓度），其余一律走这里。
+ * 主题数值（版式 / 字体 / 动画参数 / 配色）原本是这个文件里的一份**手工复刻**，
+ * 靠 tests/test_theme_parity.py 341 行逐字段盯着 Python 侧别改。现在数值由
+ * `python scripts/gen_theme_ts.py` 从 scripts/_template.py + scripts/_theme.py
+ * 生成到 theme.generated.ts，本文件不再有第二份真源：
+ *
+ *   改视觉参数 → 只改 Python → 跑一次 gen_theme_ts.py → 连同生成物一起提交。
+ *
+ * 剩下留在这里的只有生成器投影不出来的东西：段类型标注，以及 WCAG 对比度
+ * 保底的颜色数学（_theme.py 的 TS 移植）。
+ *
+ * 组件只允许写"两画幅同值、单值即终态"的观感常量（字重、透明度、辉光浓度），
+ * 其余一律走这里。
  */
 
+import {
+  ANIM,
+  FONT_STACK,
+  LANDSCAPE_ONLY,
+  LAYOUTS as LAYOUTS_RAW,
+  MONO_STACK,
+  THEME,
+  TYPO,
+} from "./theme.generated";
+
+export {ANIM, FONT_STACK, MONO_STACK, THEME, TYPO};
+
 export type Aspect = "vertical" | "landscape";
-
-export const THEME = {
-  bgGradient: "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
-  // 主题渐变里的 hex 色标（文字对比度保底按最坏一档算，见 ensureTextContrast）
-  bgStops: ["#060709", "#0d0f13", "#080a0c"],
-  gridColor: "rgba(0,220,150,0.055)",
-  textColor: "#eef2ee",
-};
-
-export const FONT_STACK =
-  '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif';
-export const MONO_STACK =
-  'ui-monospace, "SF Mono", Consolas, "Courier New", monospace';
-
-export const TYPO = {
-  titleWeight: 900,
-  taglineWeight: 600,
-  titleLineHeight: 1.45,
-  titleTracking: "-0.02em",
-};
+export type SegmentLayout = "slot" | "canvas" | "agenda";
+export type OpeningAnimation = "apple" | null;
 
 export interface Layout {
   verse: {
@@ -53,81 +54,27 @@ export interface Layout {
   };
 }
 
-export const LAYOUTS: Record<Aspect, Layout> = {
-  vertical: {
-    verse: {windowHeight: 280, bottom: 50, clipPad: 40, linePad: 5, lineHeight: 1.5, activeRule: 0.12},
-    title: {top: 80, fontSize: 64, maxLines: 2, glow: 40, lineHeight: 1.45},
-    tagline: {fontSize: 32, marginTop: 8, lineHeight: 1.25, indent: 16, tickWidth: 8},
-    image: {width: 980, height: 735, top: 325, borderRadius: 12, marginSide: 0, glow: 40},
-    subtitle: {fontSize: 40},
-    progressBar: {height: 4},
-    grid: {size: 60},
-    ambience: {rx: 58, ry: 42, cx: 50, cy: 50, alpha: 15, edge: 72, agendaCx: 50, agendaCy: 50},
-    agenda: {
-      insetX: 72, insetTop: 88, insetBottom: 96,
-      titleSize: 84, titleLineHeight: 1.1, titleMarginTop: 18,
-      listMarginTop: 16, kickerSize: 24, idxSize: 30, idxMinWidth: 52,
-      nameSize: 42, durSize: 26, rowGap: 10, rowPad: 20,
-      verseMaxWidth: 936, maxRows: 7, nameTrim: 20, titleGlow: 48,
-    },
-  },
-  landscape: {
-    verse: {windowHeight: 260, bottom: 0, clipPad: 40, linePad: 5, lineHeight: 1.45, activeRule: 0.12},
-    title: {top: 0, fontSize: 62, maxLines: 0, glow: 40, lineHeight: 1.15},
-    tagline: {fontSize: 28, marginTop: 16, lineHeight: 1.3, indent: 22, tickWidth: 8},
-    image: {width: 1067, height: 800, top: 0, borderRadius: 12, marginSide: 0, glow: 40},
-    subtitle: {fontSize: 33},
-    progressBar: {height: 5},
-    grid: {size: 60},
-    ambience: {rx: 46, ry: 52, cx: 68, cy: 50, alpha: 13, edge: 70, agendaCx: 50, agendaCy: 45},
-    agenda: {
-      insetX: 96, insetTop: 80, insetBottom: 72,
-      titleSize: 96, titleLineHeight: 1.12, titleMarginTop: 12,
-      listMarginTop: 16, kickerSize: 26, idxSize: 34, idxMinWidth: 60,
-      nameSize: 40, durSize: 24, rowGap: 6, rowPad: 8,
-      verseMaxWidth: 900, maxRows: 7, nameTrim: 26, titleGlow: 48,
-    },
-  },
-};
+/** 少一个画幅、或某画幅少一个字段，这里就红——也就是 Python 侧真源改字段名
+ * 却忘了重新生成。多一个字段这里不红：`marginSide` / `clipPad` 这类值组件
+ * 虽不读，但它们是 Python 版式的真实参数，投影过来就该在。真正的死字段不是
+ * 「组件没读」，而是「改了不会有任何画面变化」（已删掉的 ANIM.*.ease 就是）。 */
+export const LAYOUTS: Record<Aspect, Layout> = LAYOUTS_RAW;
 
 /** 横屏专属：左文字栏几何（Python 侧 layout.landscape.{margin,textCol}）
  * + 标题按字数降档（Remotion 独有——几何精确复刻需要布局引擎，按字数近似）。
  * 单列导出：竖屏没有左文字栏，这些数在竖屏上没有对应物。 */
-export const LANDSCAPE_ONLY = {
-  textCol: {width: 613, gap: 56},
-  margin: 96,
-  titleGuards: [
-    {chars: 16, size: 54},
-    {chars: 22, size: 48},
-  ],
-};
+export {LANDSCAPE_ONLY};
 
 /** 动画参数：与 _template.py 的 animation 块一一对应。
  *
  * 揭幕曲线只有一档：line 档是模板默认（`segmentWipe.style == "line"`），引导线
  * 与 clip-path 揭幕共用 propLine 这一组（ease 同为 power2.inOut）。生成期会
  * 挡掉非 line 的 style（gen_remotion_project._is_line），所以这里不保留
- * segmentWipe 那组从未被渲染端读过的参数。 */
-export const ANIM = {
-  titleEntrance: {from: 0.5, duration: 0.5, ease: "back.out(1.7)" as const},
-  entranceBudget: {minFactor: 0.45, normSeconds: 4.0},
-  imageEntrance: {duration: 0.8, ease: "power2.out" as const, startDelay: 0.2, vertY: 40},
-  propLine: {
-    thickness: 6, duration: 0.4, ease: "power2.inOut" as const,
-    peelFrac: 0.3, peelRotation: -4, peelTilt: 12, peelPerspective: 1000,
-    peelShadeFrac: 0.08, peelEase: "power2.in" as const,
-  },
-  canvasAmbience: {rx: 135, ry: 85, cx: 50, cy: 42, alpha: 13, edge: 82},
-  apple: {
-    title: {blur: 16, scale: 1.06, duration: 1.6, ease: "power3.out" as const},
-    kicker: {blur: 8, delay: 0.4, duration: 1.2, ease: "power2.out" as const},
-    rows: {delay: 0.7, duration: 0.7, stagger: 0.12, y: 24, ease: "power2.out" as const},
-    halo: {in: 1.6, opacity: 0.55, breatheTo: 0.35, breatheDur: 1.2},
-  },
-};
-
-export type SegmentLayout = "slot" | "canvas" | "agenda";
-export type OpeningAnimation = "apple" | null;
+ * segmentWipe 那组从未被渲染端读过的参数。
+ *
+ * 这里**没有** ease 字段：渲染端的缓动真源是 easing.ts 的具名导出，组件直接
+ * 调 backOut() / power2Out()。ANIM 里再存一份字符串副本，改了不会有任何画面
+ * 变化——两处都以为自己在管，不如一处都没有。 */
 
 // ── 颜色数学（_theme.py 的 TS 移植：hex 解析 / 混合 / WCAG 对比度保底）────
 

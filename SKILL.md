@@ -16,7 +16,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 - **时间轴单一来源**：`timing_manifest.json` 的句子时间轴同时驱动字幕、段落和动画，不要在渲染数据或组件里另维护一份时长。
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，此时 manifest 的 `status` 会是 `degraded`、`degraded` 对象（键 → 计数）列出降级项——生成前先看一眼它，别让静音句悄悄混进成片（渲染端不认退化闸门，也没有可再开的开关）。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
-- **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`，配色在 `scripts/_theme.py`，两处都是 Python；渲染端的 TS 副本（`remotion/src/theme.ts`）由人同步——改视觉参数要双写，这一条的代价与操作见 `remotion/README.md`「主题」。结构与选择器在 `remotion/src/components/*.tsx`；只有**两画幅同值、单值即终态**的观感常量（字重、透明度、辉光浓度）允许写死在组件样式里。
+- **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`，配色在 `scripts/_theme.py`，两处都是 Python。渲染端常量由 `python scripts/gen_theme_ts.py` 生成到 `remotion/src/theme.generated.ts`（不是手抄副本），改视觉参数只改 Python 再跑一次生成器——忘了跑会被 `tests/test_theme_generated.py` 与 `tsc` 拦下。结构与选择器在 `remotion/src/components/*.tsx`；只有**两画幅同值、单值即终态**的观感常量（字重、透明度、辉光浓度）允许写死在组件样式里。
 
 ## 环境
 

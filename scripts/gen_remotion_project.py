@@ -59,8 +59,8 @@ def _line_only_guard(tpl):
     if tpl["animation"]["segmentWipe"]["style"] != "line":
         raise ValueError(
             "[template] animation.segmentWipe.style 只支持 \"line\"（渲染端目前"
-            "只实现了这一档）。改档需要先在 remotion/src/theme.ts 的 ANIM 里"
-            "补上对应实现，别只改模板。")
+            "只实现了这一档）。改档需要先在 scripts/gen_theme_ts.py 的 _anim 里"
+            "补上对应实现并实现组件，别只改模板。")
 
 
 def compute_clips(manifest, tpl, images=None):

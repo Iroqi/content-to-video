@@ -24,6 +24,10 @@ DEFAULT_ACCENT = get_default_accent()
 # 超长句提醒阈值：一句念完要憋一口气，字幕也会折成好几行占掉句子流窗口；
 # 根治方式是写稿时控制在一句一口气能念完的长度。
 LONG_SENTENCE_CHARS = 45
+# 第二档：32 字 ≈ 20 个英文词的当量，是一条指令念完不丢主语的边界。落在
+# 32–45 字之间的句子只按段落汇总打一条 [hint]（不逐句刷屏，也不拦截），
+# 提醒"还能再断一句"。超过 45 字仍走原来的逐句 [warn]。
+LONG_SENTENCE_HINT_CHARS = 32
 
 
 # ── 内部数据结构 ────────────────────────────────────────────────
@@ -133,7 +137,11 @@ def _collect_blocks(source):
                    # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
                    # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
                    # 自描述的（见 _segments.seg_layout）。
-                   "layout": source.get("opening_layout") or "agenda"},
+                   "layout": source.get("opening_layout") or "agenda",
+                   # 開場動畫模式（可选，取值由 _segments._validate_opening_
+                   # animation 把守）：pipeline 原样透传进 manifest，渲染端按
+                   # 它给开屏 agenda 卡编排蘋果風開場（不写 = 靜態開場）。
+                   "opening_animation": source.get("opening_animation")},
             turns=[],
         ))
 
@@ -256,6 +264,10 @@ def build_parts(source):
     字幕、由 CSS 折行数行，念出来也偏喘不过气，根治方式是写稿时拆成两句
     ——warn 就是提醒 agent 这么做。
 
+    介于 LONG_SENTENCE_HINT_CHARS 和 LONG_SENTENCE_CHARS 之间的句子走第二档：
+    按段落汇总打一条 [hint]。这一档同样不拦截，只把"还能再断一句"这件事
+    说一次；逐句刷屏会让人跳过整份日志。
+
     Returns:
         sentences: list[str]，按段落顺序排列的全部句子
         segments: 段落分组（id/title/tagline/accent/start/end/
@@ -271,4 +283,12 @@ def build_parts(source):
             print(f"[warn] 第 {idx} 句长达 {len(s)} 字（>{LONG_SENTENCE_CHARS}），"
                   f"念稿易喘不过气、字幕也需要切多行：{s[:24]}…"
                   "建议写稿时在逗号处拆成两句", file=sys.stderr)
+    for blk in blocks:
+        lengths = [len(s) for s in blk.sentences
+                   if LONG_SENTENCE_HINT_CHARS < len(s) <= LONG_SENTENCE_CHARS]
+        if lengths:
+            print(f"[hint] {blk.id} 有 {len(lengths)} 句在 "
+                  f"{LONG_SENTENCE_HINT_CHARS}–{LONG_SENTENCE_CHARS} 字"
+                  f"（最长 {max(lengths)} 字）：一句一个事实更好念，"
+                  "可以在逗号处再断一句", file=sys.stderr)
     return sentences, segments

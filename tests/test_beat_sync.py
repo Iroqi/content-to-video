@@ -9,8 +9,9 @@ import os
 import tempfile
 import unittest
 
-import _helpers as H          # 必须最先导入：它把 scripts/ 挂上 sys.path
-from _timeline import beat_positions, _beat_spans_time
+import _helpers as H  # noqa: F401  必须最先导入：它把 scripts/ 挂上 sys.path
+from _timeline import (beat_positions, beat_span, beat_cycles, ends_at_start,
+                       _beat_spans_time)
 import gen_hyperframes as G
 
 
@@ -87,6 +88,66 @@ class Resolve(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             beat_positions([{"at": 2, "target": "#a1"}], SEGS[0]["sentences"], 0.0, 0.5)
         self.assertIn("越界", str(cm.exception))
+
+
+class CycleSpan(unittest.TestCase):
+    """`repeat` / `yoyo` 的跨度与收尾：三处判据（游标、出窗、接续）共用的那一份数。"""
+
+    def test_span_and_cycles_match_gsap_repeat_semantics(self):
+        # GSAP 的 repeat=N 是"再演 N 遍"，共 N+1 遍（实测 timeline.duration()=2.0 于 repeat:1）
+        self.assertEqual(beat_cycles({"repeat": 3}), 4)
+        self.assertEqual(beat_span({"repeat": 3}, 0.5), 2.0)
+        self.assertEqual(beat_cycles({}), 1)
+        self.assertEqual(beat_span({}, 0.5), 0.5)
+
+    def test_infinite_repeat_has_no_span_and_no_cycle_count(self):
+        self.assertIsNone(beat_cycles({"repeat": -1}))
+        self.assertIsNone(beat_span({"repeat": -1}, 0.5))
+
+    def test_yoyo_ends_back_at_start_only_for_even_cycles(self):
+        # 实测 gsap@3.14.2：repeat:1+yoyo 收尾 v=0，repeat:2+yoyo 收尾 v=1
+        self.assertTrue(ends_at_start({"repeat": 1, "yoyo": True}))
+        self.assertFalse(ends_at_start({"repeat": 2, "yoyo": True}))
+        self.assertFalse(ends_at_start({"repeat": 1}))       # 无 yoyo 每遍都停在 to
+        self.assertFalse(ends_at_start({"yoyo": True}))      # 单遍无从来回
+        self.assertIsNone(ends_at_start({"repeat": -1, "yoyo": True}))
+
+    def test_relative_chain_advances_by_the_whole_loop(self):
+        steps = [{"at_time": 0.1, "target": "#a1", "duration": 0.7,
+                  "to": {"opacity": 1}, "repeat": 1},
+                 {"at_time": "+0.25", "target": "#a2", "to": {"opacity": 1}}]
+        got = [p for p, _ in beat_positions(steps, SEGS[0]["sentences"], 10.0, 0.5)]
+        self.assertEqual(got, [10.1, 11.75])     # 10.1 + 0.7×2 + 0.25，不是 0.7×1
+
+    def test_infinite_repeat_does_not_block_the_chain(self):
+        """无限循环没有终点，游标退回"算它演了一遍"——后面的 "+N" 至少还有个落点。"""
+        steps = [{"at_time": 0.0, "target": "#a1", "duration": 0.6,
+                  "to": {"opacity": 1}, "repeat": -1},
+                 {"at_time": "+0.4", "target": "#a2", "to": {"opacity": 1}}]
+        got = [p for p, _ in beat_positions(steps, SEGS[0]["sentences"], 0.0, 0.5)]
+        self.assertEqual(got, [0.0, 1.0])
+
+
+class WindowWarningsRepeat(unittest.TestCase):
+    """出窗判定必须拿"总跨度"，只按单遍 duration 判就是把门禁算的时刻差四倍。"""
+
+    def _w(self, steps, next_start=5.0):
+        return G._beat_window_warnings(steps, SEGS[0]["sentences"], 0.0,
+                                       next_start, 0.5)
+
+    def test_repeated_beat_cut_by_next_page_is_warned_with_its_loop_count(self):
+        # 单遍只越过页界 0.1s，演 4 遍就是 6.6s—— warn 要说清它要演几遍
+        warns = self._w([{"at_time": 4.6, "target": "#a1", "duration": 0.5,
+                          "to": {"opacity": 1}, "repeat": 3}])
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("被切在半路", warns[0])
+        self.assertIn("演 4 遍", warns[0])
+        self.assertIn("6.60", warns[0])
+
+    def test_infinite_repeat_is_not_reported_as_cut_in_half(self):
+        """它本来就要被页界切掉，报出来是噪声；warn 留给"作者以为演完了"那一类。"""
+        self.assertEqual(self._w([{"at_time": 4.6, "target": "#a1", "duration": 0.5,
+                                   "to": {"opacity": 1}, "repeat": -1}]), [])
 
 
 class Landing(unittest.TestCase):

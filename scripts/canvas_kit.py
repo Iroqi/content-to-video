@@ -7,7 +7,7 @@
 所有坐标由 spec 给，脚本不做任何自动布局——那是版式引擎，不是脚手架。
 
 用法：
-    python scripts/canvas_kit.py --spec spec.json --aspect portrait --theme dark -o seg1.svg [--emit-steps steps.json]
+    python scripts/canvas_kit.py --spec spec.json --aspect portrait -o seg1.svg [--emit-steps steps.json]
 
 两份产物配套消费：
   - seg1.svg：透明底（绝不自铺满幅底板；模板的渐变/网格/氛围光三层要从内容背后透出来）
@@ -21,6 +21,10 @@
     且不报错；at 跟着 manifest 的句子走，改配音自动对得上。
   - **输出必须过 check_svg 的 canvas 门禁**：空带 / 对比度 / 字号三条都在它那里判，所以生成后
     照它同一口径自查一遍（判据不重抄一份——抄一份就会漂）。
+
+公共旋钮 duration / ease / stagger / repeat / yoyo 都能写进内容元素，草稿原样带出；
+repeat/yoyo 的取值与互斥校验跟 _images_schema 同一套（yoyo 必须带 repeat、只挂内容元素），
+跨键约束（如 morph 不能配 repeat:-1）由 selfcheck 过真契约时兜底。
 """
 import argparse
 import json
@@ -39,8 +43,7 @@ from _script_utils import read_json_file  # noqa: E402
 from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
-                    get_default_accent, get_theme_colors, list_theme_names,
-                    mix, theme_bg_stops)
+                    get_default_accent, get_theme_colors, mix, theme_bg_stops)
 from _validate import _reject_unknown_keys, _validate_accent  # noqa: E402
 from _validate import _validate_finite_number  # noqa: E402
 
@@ -95,7 +98,8 @@ ELEMENT_KEYS = {
     "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count"),
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
-COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger")
+COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
+               "repeat", "yoyo")
 # 每个 kind 必填的纯数值键，进函数就按这张表统一查（报错口径全 kind 一致）。
 # polyline 没有数值标量，点在 points 数组里，由它自己那条结构校验管。
 REQUIRED_NUMS = {
@@ -212,6 +216,26 @@ def _validate_element(el, i):
         raise ValueError(f"{where} 的 ease 必须是字符串（GSAP 缓动名，如 power2.inOut）")
     if "stagger" in el:
         _validate_stagger(el["stagger"], f"{where} 的 stagger")
+    # repeat / yoyo 与 _images_schema 同一套判据（那里管 images.json 的 director，
+    # 这里管 spec）：整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
+    # 另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
+    if "repeat" in el:
+        v = el["repeat"]
+        if isinstance(v, bool) or not isinstance(v, int) or v < -1:
+            raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
+                             f"0=只演一遍；实际: {v!r}）")
+    if "yoyo" in el:
+        if not isinstance(el["yoyo"], bool):
+            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
+                             f"（实际: {el['yoyo']!r}）")
+        if not el.get("repeat"):
+            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP "
+                             "根本不会回头。要来回就写 repeat:1（奇数遍收尾在 to，"
+                             "偶数遍收尾回起点）")
+    if (el.get("repeat") is not None or el.get("yoyo")) and role_of(el) != "content":
+        raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
+                         "一起到位、不进 director steps，没有'哪一拍'可反复。"
+                         "要反复的是内容元素")
 
     if kind == "panel":
         _opt_num(el, "r", where, None, nonnegative=True)
@@ -625,11 +649,17 @@ def render_svg(spec):
 
 
 # ── director 草稿：一份能直接进 images.json 的 {"steps": […]} ──────
-def build_director(spec):
+def build_director(spec, sentences=None):
     """结构底不进 steps（它和页面一起到位），内容元素按文档顺序一拍一个 at 锚点。
 
     句序锚点只在"这一拍跟着某句话"的意义上成立，具体秒数由渲染端按 manifest 的句子算——
     所以草稿不需要知道配音时长，也不会因为重配音而漂移。这就是本模块只用 at 的理由。
+
+    `sentences` 是该段旁白句数。给了它，自动拍的游标就按它取模回绕，让"内容元素比句子多"
+    的稿子也产出一份**能直接生成**的草稿：多出来的元素与前面的同拍一起亮，而不是把 at
+    顶到句序之外、被生成期当 error 拒掉（实测一个 3 句段配 5 个内容元素，自动拍到 at=4
+    就整条管线 exit 1）。    不给时游标只增不减——那份草稿的 at 是否越界由 `--sentences` 的
+    告警和生成期兜底，脚本不替作者猜段里有几句。
     """
     steps = []
     cursor = 0
@@ -640,7 +670,10 @@ def build_director(spec):
             at = float(el["beat"])
             cursor = max(cursor, at + 1)   # 显式钉拍也把游标推过去，后面的自动拍不会插到它前面
         else:
-            at, cursor = cursor, cursor + 1
+            # 显式钉拍是作者意图，越界要照实报（见 main 的告警）；自动拍是机械分配，
+            # 已知句数时按句数回绕，产出的草稿才真的能直接用。
+            at = cursor % sentences if sentences else cursor
+            cursor += 1
         at = int(at) if at == int(at) else at
         step = OrderedDict([("at", at), ("target", _target_of(el))])
         if el.get("draw"):
@@ -656,6 +689,14 @@ def build_director(spec):
             step["to"] = {"opacity": 1}
         if "stagger" in el:
             step["stagger"] = el["stagger"]
+        # repeat / yoyo：新特性同样给脚手架出口（呼吸/脉动的"一条步"写法）。
+        # repeat:0 与缺省等价，不塞进去省字节（与渲染端 _cycle_vars 同口径）。
+        # 校验在 _validate_element 做（yoyo 必须有 repeat、只挂内容元素），
+        # 互斥与 morph:repeat:-1 那类跨键约束由 selfcheck 过真契约时兜底。
+        if el.get("repeat") not in (None, 0):
+            step["repeat"] = el["repeat"]
+        if el.get("yoyo"):
+            step["yoyo"] = True
         for key, dflt in (("duration", DIRECTOR_DEFAULT["duration"]),
                           ("ease", DIRECTOR_DEFAULT["ease"])):
             # 只在与模板缺省不同值时才印出来：与缺省相同的值写进 JSON 就是第二份真源，
@@ -666,14 +707,14 @@ def build_director(spec):
     return {"steps": steps}
 
 
-def selfcheck_fragment(spec, sid="seg1"):
+def selfcheck_fragment(spec, sid="seg1", sentences=None):
     """把草稿套成一份 images.json 过一遍真契约。
 
     为什么不自己判 steps 的形状：_images_schema 才是那份契约的正文，它改一个键集，
     这里就该同时报错——否则脚手架印出的草稿要等 run.py 在渲染前才拒掉。
     sid 用一个合法段 id 当壳（真实段 id 由作者替换）。
     """
-    frag = build_director(spec)
+    frag = build_director(spec, sentences=sentences)
     if not frag["steps"]:
         return frag
     validate_images_json({sid: {"src": "images/{}.svg".format(sid), "director": frag}})
@@ -727,23 +768,31 @@ def main(argv=None):
     ap.add_argument("--spec", required=True, help="画布页元素清单 JSON")
     ap.add_argument("-o", "--out", required=True, help="输出 SVG 路径")
     ap.add_argument("--aspect", choices=list(ASPECTS), help="画幅（覆盖 spec 顶层；默认 portrait）")
-    ap.add_argument("--theme", choices=list_theme_names(),
-                    help=f"主题（覆盖 spec 顶层；默认 {DEFAULT_THEME}）")
     ap.add_argument("--accent", help="本页强调色（覆盖 spec 顶层；默认取段落缺省 accent）")
     ap.add_argument("--emit-steps", help="把 director 草稿另写一份 JSON 到该路径")
-    ap.add_argument("--sentences", type=int, help="该段旁白句数（用来提前告警 at 越界）")
+    ap.add_argument("--sentences", type=int,
+                    help="该段旁白句数。给了它，自动拍按句数回绕（内容元素多于句子时产出的"
+                         "草稿仍可直接生成），并对显式钉拍的 at 越界提前告警")
     ap.add_argument("--no-check", action="store_true",
                     help="跳过 check_svg 门禁自查（有意为之的极简页才用）")
     args = ap.parse_args(argv)
+    # 句数不是"给不给"，是"给的一定是正整数"。这里不拦有两个后果：0 会让自动拍的取模
+    # 回绕静默退化成顺序递增（`if sentences` 对 0 为假），草稿看着像给过句数、其实没回绕；
+    # 负数更直接——at 被顶成负数，契约校验抛的是裸 Python 栈（实测 `--sentences -3` 打印
+    # ValueError traceback）而不是本模块口径里那句人话。两种都是"参数错了却报不清"。
+    if args.sentences is not None and args.sentences < 1:
+        print("[error] --sentences 必须是正整数（该段旁白句数），实际: {}"
+              .format(args.sentences), file=sys.stderr)
+        return 2
 
     try:
-        spec = load_spec(args.spec, aspect=args.aspect, theme=args.theme, accent=args.accent)
+        spec = load_spec(args.spec, aspect=args.aspect, accent=args.accent)
         svg = render_svg(spec)
     except ValueError as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
 
-    frag = selfcheck_fragment(spec)
+    frag = selfcheck_fragment(spec, sentences=args.sentences)
     _write(args.out, svg)
     if args.emit_steps:
         _write(args.emit_steps, json.dumps(frag, ensure_ascii=False, indent=2) + "\n")
@@ -753,12 +802,23 @@ def main(argv=None):
         print(f"[hint] {note}", file=sys.stderr)
     n_struct = sum(1 for e in spec["elements"] if role_of(e) == "structure")
     if args.sentences is not None:
-        out_of_range = [s["at"] for s in frag["steps"] if s["at"] >= args.sentences]
-        if out_of_range:
-            print("[warn] director 草稿里有 {} 拍 at 越界（该段只有 {} 句旁白，越界的 at：{}）"
-                  "——生成期会按 error 拦，请先补旁白或把 beat 收回来".format(
-                      len(out_of_range), args.sentences,
-                      "、".join(str(a) for a in out_of_range)), file=sys.stderr)
+        # 自动拍已按句数回绕，这里只会剩显式钉拍越界——那是作者意图，照实报。
+        pinned = [el.get("beat") for el in spec["elements"]
+                  if role_of(el) == "content" and "beat" in el
+                  and float(el["beat"]) >= args.sentences]
+        if pinned:
+            print("[warn] {} 个显式 beat 超出该段句数（只有 {} 句旁白，越界的 beat：{}）"
+                  "——生成期会按 error 拦，请补旁白或把 beat 收回来".format(
+                      len(pinned), args.sentences,
+                      "、".join(str(b) for b in pinned)), file=sys.stderr)
+    elif len(frag["steps"]) > 1:
+        # 实例实测的摩擦：不给 --sentences 时自动拍的 at 从 0 一路递增，内容元素多于
+        # 该段旁白句数时，生成期把越界拍整条管线 error 拒。这里提前出声，让作者在
+        # 写稿阶段就对好句数，而不是等 gen_hyperframes 那一声报错。
+        n = len(frag["steps"])
+        print("[hint] 未给 --sentences：自动拍 at 从 0 递增到 {}（草稿共 {} 拍）。"
+              "若该段旁白不足 {} 句，生成期会把越界拍当 error 拒——"
+              "给上 --sentences N 让草稿按句数回绕".format(n - 1, n, n), file=sys.stderr)
 
     rc = 0
     if not args.no_check:

@@ -75,6 +75,40 @@ class MimoRequestShape(unittest.TestCase):
                 client.synthesize("你好。", "茉莉", None, "m", 30)
         self.assertTrue(T.is_non_retryable(cm.exception))
 
+    def test_malformed_payloads_are_deterministic_failures(self):
+        """畸形 body 必须收敛成 BadAudioResponseError，不能漏成裸异常。
+
+        裸的 AttributeError/TypeError/binascii.Error 不带 status_code，
+        is_non_retryable 会放它进重试队列——同一个错配的端点重试 3 次结果
+        一模一样，白烧 3 次计费调用。逐个 case 钉住这里的类型防线。
+        """
+        cases = {
+            "顶层是数组": ["a", "b"],
+            "顶层是字符串": "plain text",
+            "顶层是数字": 42,
+            "choices 是字符串": {"choices": "x"},
+            "choices[0] 是字符串": {"choices": ["hello"]},
+            "choices[0] 是 null": {"choices": [None]},
+            "data 是整数": {"choices": [{"message": {"audio": {"data": 123}}}]},
+            "data 不是 base64": {"choices": [{"message": {"audio": {"data": "@@not-b64@@"}}}]},
+            "data 是列表": {"choices": [{"message": {"audio": {"data": ["a"]}}}]},
+        }
+        for name, payload in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(T.BadAudioResponseError) as cm:
+                    T._audio_from_response(payload)
+                self.assertTrue(T.is_non_retryable(cm.exception),
+                                f"{name} 应判为确定性失败（不该进重试队列）")
+
+    def test_valid_payload_still_decodes(self):
+        """类型防线不能误伤正常响应。"""
+        self.assertEqual(T._audio_from_response(_audio_payload(b"RIFFx")), b"RIFFx")
+        # 空 choices 是"端点返回了空结果"，同样没有音频
+        with self.assertRaises(T.BadAudioResponseError):
+            T._audio_from_response({"choices": []})
+        with self.assertRaises(T.BadAudioResponseError):
+            T._audio_from_response({})
+
 
 class RetryVerdict(unittest.TestCase):
     def test_status_code_table(self):
@@ -112,8 +146,10 @@ class SynthSentenceThroughProtocol(unittest.TestCase):
                     client, "你好。", "茉莉", None, out,
                     ffmpeg_path="ffmpeg", speed=speed, model="m",
                     api_timeout=30, max_retries=max_retries)
-            content = (open(out, "rb").read()
-                       if os.path.exists(out) else None)
+            content = None
+            if os.path.exists(out):
+                with open(out, "rb") as f:
+                    content = f.read()
         return ok, applied, client, content
 
     def test_success_writes_audio_and_passes_domain_args(self):
@@ -134,6 +170,26 @@ class SynthSentenceThroughProtocol(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(len(client.calls), 3)
         self.assertIsNone(content)
+
+    def test_last_failure_logged_as_giveup_not_retry(self):
+        """最后一次失败要说"放弃"，不能还打 retry 3/3。
+
+        打 retry 会让人以为后面还排着一次重试，排障时去找并不存在的第 4 次，
+        真正的原因（已经重试到头了）被这条误导盖住。
+        """
+        import io as _io
+        import contextlib as _cl
+        buf = _io.StringIO()
+        with _cl.redirect_stdout(buf):
+            ok, _, client, _ = self._run([ConnectionResetError("boom")] * 3,
+                                        max_retries=3)
+        self.assertFalse(ok)
+        log = buf.getvalue()
+        self.assertIn("[retry 1/3]", log)
+        self.assertIn("[retry 2/3]", log)
+        self.assertIn("[giveup]", log)
+        self.assertNotIn("[retry 3/3]", log,
+                         "最后一次失败仍打 retry N/N，会让人以为还有下一次")
 
 
 if __name__ == "__main__":

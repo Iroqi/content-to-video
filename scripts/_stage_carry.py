@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
                        decompose_transform, resolve_num)
+from _timeline import beat_cycles, ends_at_start
 
 SVG_NS = "http://www.w3.org/2000/svg"
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
@@ -114,7 +115,14 @@ def _set_style(el, prop, value):
     if prop.lower() == "autoalpha":        # GSAP 专有：opacity + visibility 的合写
         # 必须在 _kebab 之前认出它：驼峰一转成 auto-alpha 就不是合法 CSS 属性，
         # 浏览器整条丢掉，于是"烘焙了"等于"没烘焙"。
-        av = resolve_num(value, 1.0) or 0.0
+        # 基值与下面 else 分支同一口径：先 inline style、再呈现属性，都没有才落到
+        # 1.0（opacity 的 CSS 初值）。原先这里无条件按 1.0 起算，于是 "+=0.5" 在一个
+        # opacity="0.2" 的元素上烘焙出 1、运行期却是 0.7——同一元素的两条等价写法烘
+        # 焙出两个值，接续页就在页界静默跳一下，正是本模块要消灭的阶跃。
+        cur = _css_num(styles.get("opacity"))
+        if cur is None:
+            cur = _css_num(el.get("opacity"))
+        av = resolve_num(value, 1.0 if cur is None else cur) or 0.0
         styles["opacity"] = _fmt(min(av, 1.0))
         styles["visibility"] = "visible" if av > 0 else "hidden"
     else:
@@ -265,7 +273,7 @@ def _fold_camera(root, steps, center=None):
     `bake_settled_state`）；省略则按当前树现算——只有不关心与渲染器对齐的场合才该省。
     """
     pose = cam_resting_pose(steps)
-    if pose is None:
+    if pose is None or not pose.get("rests", True):
         return None
     cam = root.find(".//*[@id='%s']" % CAM_ID)
     if cam is None or not len(cam):
@@ -313,10 +321,34 @@ def bake_settled_state(markup, steps, beats=None):
     pre_center = cam_projection_origin(root, pose) if pose else None
     notes = []
     transforms, misfires = [], []
+    loops, cam_loops = [], []
     for _i, step in _ordered(steps or [], beats):
+        # 没有收尾态的两种一步都不搬：`repeat:-1` 永远演不完（终点无从谈起），`yoyo` 走
+        # 偶数遍的元素回到它原来的样子（搬了等于凭空挪走一个从没出现过的状态）。前者必须
+        # 出声，后者什么都不必说。相机步单独记账：它决定 _fold_camera 折不折（见下）。
+        if beat_cycles(step) is None:
+            (cam_loops if step.get("target") == "#" + CAM_ID else loops) \
+                .append(step["target"])
+            continue
+        if ends_at_start(step):
+            continue
         t, m = _settle_step(root, step)
         transforms += t
         misfires += m
+    if loops:
+        # 只有非相机元素：它们各自的终态不搬，但相机照常折（_fold_camera 只认
+        # target=="#cam" 的步）——旧文案把两件事混成一句话，实测打印出"相机一律
+        # 不折"的同时相机层照常折进去了，自相矛盾。
+        notes.append("这些步写了 repeat:-1，永远演不完，也就没有'最后停在哪儿'：" 
+                    + "、".join(sorted(set(loops)))
+                    + "。接续页不搬它们的终态；要接续就写明确遍数 repeat:N")
+    if cam_loops:
+        # 相机步无限循环：整台相机没有收尾位，_fold_camera 照例不折（这层静默没有
+        # 别的出口，必须在这里说清，不然作者以为推近的镜头会带进下一页）。
+        notes.append("相机步 " + "、".join(sorted(set(cam_loops)))
+                     + " 写了 repeat:-1，相机永不停下——整台相机的收尾位不作数，"
+                       "本页不折 <g data-ctv-stage>（那一页的镜头没有'最后停在哪儿'；"
+                       "要接续就把 repeat 改成明确遍数）")
     if transforms:
         notes.append("接续搬不动元素级 transform 属性 " + "、".join(sorted(set(transforms)))
                      + "——它们要么要以元素自己的 bbox 中心为原点折算（scale/rotation/"

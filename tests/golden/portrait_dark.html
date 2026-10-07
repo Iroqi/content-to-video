@@ -1,7 +1,5 @@
 <!DOCTYPE html>
-<!-- class 由 run.py --alpha 填成 ctv-alpha（关掉页面背景/网格/氛围光三层，
-     见 composition.css 末尾）；正常出片时是空串。 -->
-<html lang="zh-CN" class="">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1080,height=1440">
@@ -49,8 +47,23 @@ body{font-family:var(--ctv-font-family)}
    让不同段落各有色彩氛围，破除整片米白的单调。
    isolation 写在无属性限定的 .seg-card 上：两画幅都要它，且 hyperframes 的
    negative_z_index 检查只看静态声明、不解析 [data-aspect] 作用域，写成属性
-   选择器会被误报成"祖先没有层叠上下文"。 */
-[data-aspect="vertical"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(58% 42% at 50% 50%,color-mix(in srgb,var(--seg-accent) 15%,transparent),transparent 72%)}
+   选择器会被误报成"祖先没有层叠上下文"。
+   几何（椭圆半轴、圆心、浓度、截止点）随画幅变——竖屏那团居中且宽大于高，
+   横屏偏媒体区中心且高大于宽——所以全部走 var(--ctv-amb-*)，值在
+   _template.py 的 layout.<画幅>.ambience。**别在这里写死第二份**：改模板
+   不会带着 CSS 里的字面量走。 */
+.seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-cx) var(--ctv-amb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 纯文字 agenda 卡（opening/closing，与 .seg-card 同时挂在同一元素上）把圆心从媒体
+   区拨回文字重心：横屏是 50% 45%，竖屏本来就是 50% 50%、与 .seg-card 相同。
+   椭圆半轴/浓度/截止点两画幅共用，只圆心有第二种取值。注意这条**不带画幅限定**，
+   两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
+   把开场/收尾那两页的氛围光挪位。 */
+.agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 蘋果風開場（opening_animation:"apple"）的题头光晕：一枚放在标题身后的软光斑，
+   模拟苹果发布会的"产品光"。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
+   不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
+   交给 GSAP 编排（淡入 + repeat:-1 呼吸），CSS 只负责形状与颜色。 */
+.apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
 .seg-card{position:absolute;inset:0;isolation:isolate}
 /* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
    页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
@@ -166,10 +179,7 @@ body{font-family:var(--ctv-font-family)}
 
 /* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
    仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
-   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。
-   氛围光偏媒体区中心（68% 50%），纯文字 agenda 卡则回正（50% 45%）。 */
-[data-aspect="landscape"] .seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(46% 52% at 68% 50%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
-[data-aspect="landscape"] .agenda-card::after{background:radial-gradient(46% 52% at 50% 45%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 70%)}
+   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。 */
 [data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
 [data-aspect="landscape"] .seg-title-wrap{position:static}
 /* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
@@ -196,7 +206,7 @@ body{font-family:var(--ctv-font-family)}
    打光。所以这里取近全屏的宽高、把中心略抬到主视觉一带、并把截止点推到 82% 让边界消失。
    抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
    网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
-[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(135% 85% at 50% 42%,color-mix(in srgb,var(--seg-accent) 13%,transparent),transparent 82%)}
+[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
 /* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
    的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
    段进度整个盖掉。 */
@@ -227,8 +237,12 @@ body{font-family:var(--ctv-font-family)}
 .agenda-tail .agenda-row:first-child{border-top:0}
 .ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
 /* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
-   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。 */
-.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.25;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。
+   行高 1.4 = Noto Sans CJK Bold 实测墨迹下限（hyperframes 判 clipped_text 的
+   阈值是墨迹 ≤ 行盒 − 2px，42px 时 1.32 仍超 3px、1.4 才装下）；微软雅黑在
+   此行高下同样有余量，且两画幅 maxRows 预算都放得下（横屏 40px×1.4 的 7 行
+   仍低于定高列预算）。1.25 时字形墨迹溢出被 overflow:hidden 裁掉。 */
+.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.4;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
 /* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
    与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让
@@ -249,17 +263,6 @@ body{font-family:var(--ctv-font-family)}
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
-/* ── 透明底导出（run.py --alpha → <html class="ctv-alpha">）───────────────
-   页面渐变、网格、段落氛围光这三层是"底"：叠到别的素材上就是一团掀不掉的雾，
-   所以 --alpha 整层关掉它们，只留内容（标题、句子流、配图、进度条）。
-   写在全表最末尾（变量表之前）：氛围光那三条按画幅/画布各有各的选择器，其中
-   [data-aspect] .seg-card.seg-canvas::after 与本表最后这组同为 0,3,1，只能靠
-   源序决胜；变量注入点会随渲染参数变化，位置在这里是唯一稳定的"后面"。
-   :root.ctv-alpha 压过末尾注入的 :root 变量表靠的是优先级（0,2,0 > 0,1,0），
-   与源序无关 —— 光写 html{--ctv-bg-gradient:...} 是盖不住的。 */
-:root.ctv-alpha{--ctv-bg-gradient:transparent;--ctv-grid-color:transparent}
-:root.ctv-alpha .seg-card::after,:root.ctv-alpha .seg-canvas::after{background:none}
-
 :root{
   --ctv-w:1080px;--ctv-h:1440px;
   --ctv-bg-gradient:linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%);
@@ -269,7 +272,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-text-color:#eef2ee;
   --ctv-img-glow:40px;
   --ctv-title-weight:900;
-  --ctv-title-lh:1.32;--ctv-title-tracking:-0.02em;
+  --ctv-title-lh:1.45;--ctv-title-tracking:-0.02em;
   --ctv-tagline-font:32px;--ctv-tagline-mt:8px;
   --ctv-tagline-lh:1.25;--ctv-tagline-weight:600;
   --ctv-tagline-indent:16px;--ctv-tagline-tick:8px;
@@ -284,9 +287,16 @@ body{font-family:var(--ctv-font-family)}
   --ctv-ag-idx-min:52px;--ctv-ag-name:42px;
   --ctv-ag-dur:26px;--ctv-ag-gap:10px;
   --ctv-ag-row-pad:20px;--ctv-ag-verse-w:936px;--ctv-ag-list-mt:16px;
+  --ctv-amb-rx:58%;--ctv-amb-ry:42%;
+  --ctv-amb-cx:50%;--ctv-amb-cy:50%;
+  --ctv-amb-alpha:15%;--ctv-amb-edge:72%;
+  --ctv-amb-agenda-cx:50%;--ctv-amb-agenda-cy:50%;
+  --ctv-camb-rx:135%;--ctv-camb-ry:85%;
+  --ctv-camb-cx:50%;--ctv-camb-cy:42%;
+  --ctv-camb-alpha:13%;--ctv-camb-edge:82%;
   --ctv-v-pad-left:50px;
   --ctv-v-title-top:80px;
-  --ctv-v-title-area:238.08px;--ctv-v-title-lines:2;
+  --ctv-v-title-area:233.60px;--ctv-v-title-lines:2;
   --ctv-v-img-w:980px;--ctv-v-img-ms:0px;
   --ctv-v-img-top:325px;--ctv-v-img-height:735px;--ctv-v-img-radius:12px;
   --ctv-v-verse-bottom:50px;
@@ -310,7 +320,7 @@ body{font-family:var(--ctv-font-family)}
       <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
     
-    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="0">大家好，今天聊两件事。</div></div></div>
+    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="0" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>大家好，今天聊两件事。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-opening" style="height:6px"></div>
@@ -320,7 +330,7 @@ body{font-family:var(--ctv-font-family)}
     <div class="bg"></div>
     <div class="grid"></div>
     <div class="seg-title-wrap">
-      <div class="seg-title" id="title-seg-a" style="font-size:72px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
+      <div class="seg-title" id="title-seg-a" style="font-size:64px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
       <div class="tagline" id="tag-seg-a" style="color:#ffefbc">背景</div>
     </div>
     <div class="seg-image bare-media" id="img-seg-a">
@@ -328,7 +338,7 @@ body{font-family:var(--ctv-font-family)}
     </div>
     <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
     
-    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f"><div class="verse-line" data-i="1">这是第一段的第一句。</div><div class="verse-line" data-i="2">这是第一段的第二句，稍微长一点点。</div></div></div>
+    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f"><div class="verse-line" data-i="1" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第一句。</div><div class="verse-line" data-i="2" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第二句，稍微长一点点。</div></div></div>
       <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
 </div>
   <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
@@ -347,7 +357,7 @@ body{font-family:var(--ctv-font-family)}
       <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
     
-    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="5">谢谢观看，下期再见。</div></div></div>
+    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="5" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>谢谢观看，下期再见。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-closing" style="height:6px"></div>

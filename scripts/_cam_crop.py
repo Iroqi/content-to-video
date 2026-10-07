@@ -12,6 +12,8 @@ director steps，所以它没有判据；唯一同时握着 SVG 原文和运镜�
 
 - 只查**收尾位**——所有运镜步骤走完、画面静止时的那个姿态。途中出画是合法演法
   （GSAP 用 `from` 把元素摆在画外再滑进来是标准入场），报它就是造噪声。
+- `repeat:-1` 的运镜没有收尾位（相机永不停下），这一页就无从判定：这里出声说"没查"，
+  绝不说"一切在幅内"——后者在这一页上是假话。
 - `from` 不算收尾，`to`/`set` 才算：`from` 是"从这些值动回原值"，结束态是补间前的姿态；
   `to`/`set` 写的是终值，同一条属性后写的说话（GSAP 缓存 scale/x/y 三个组件，每条
   补间改的就是这三个数，所以这里也在组件空间里逐条结算）。
@@ -39,6 +41,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from _path_morph import x_span, y_span
+from _timeline import beat_cycles, ends_at_start
 
 CAM_ID = "cam"
 # 一条运镜步骤里能改变姿态的属性：scale 各向同性地放大，x/y 是平移（用户单位）。
@@ -246,20 +249,30 @@ def _walk(cam, vb_w, vb_h):
 
 
 def cam_resting_pose(steps):
-    """走完全部运镜后 `#cam` 静止在什么姿态：{scale, x, y, origin} 或 None（没运镜）。
+    """走完全部运镜后 `#cam` 静止在什么姿态：{scale, x, y, origin, rests} 或 None（没运镜）。
 
     只认 target == "#cam" 的步骤。同一条属性后写的说话（GSAP 缓存 scale/x/y 三个组件，
     每条补间改的就是这三个数），值可以是绝对数也可以是 `+=`/`*=` 相对写法——后者跟着
     已结算到的组件值累加，与 GSAP 自己的处理同构。`from` 不动它（`from` 的值是瞬态
     起始态，结束态是补间前的姿态）。origin 例外：`svgOrigin` 是一次性设定，出现在任何
     一类步骤里都留下来，所以最后写的那个说话。
+
+    `repeat` 的两类要按 GSAP 的真实收尾处理，不能按"演过就算"：`yoyo` 且遍数为偶数的
+    那条走回起点，对静止位没有净贡献，跳过；`repeat:-1` 那条**永不停下**，于是整页没有
+    收尾位可言——这里只把 `rests` 标成 False，绝不替它编一个姿态（出画自查与跨段烘焙都
+    读这个标记，各自出声）。
     """
-    pose = {"scale": 1.0, "x": 0.0, "y": 0.0, "origin": None}
+    pose = {"scale": 1.0, "x": 0.0, "y": 0.0, "origin": None, "rests": True}
     seen = False
     for step in steps or []:
         if step.get("target") != "#cam":
             continue
         seen = True
+        if beat_cycles(step) is None:
+            pose["rests"] = False
+            continue
+        if ends_at_start(step):
+            continue
         for key in ("from", "to", "set"):
             payload = step.get(key)
             if not isinstance(payload, dict):
@@ -392,6 +405,10 @@ def crop_warnings(svg_text, steps):
     pose = cam_resting_pose(steps)
     if pose is None:
         return []
+    if not pose.get("rests", True):
+        return ["这一页有 repeat:-1 的运镜，相机不会停在任何一处——出画自查按'收尾位'判定，"
+                "这一页没有收尾位可查。要它演完就写明确遍数（repeat:N），或按最大推近"
+                "幅度自己核一遍"]
     try:
         root = ET.fromstring(svg_text)
     except ET.ParseError:

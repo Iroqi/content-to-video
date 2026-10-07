@@ -7,7 +7,6 @@
 整期统一使用一个主题：
 
 - `dark`：默认，近黑极客风（终端绿网格 + 青绿点缀）；适合技术突破、发布、工程、前沿 AI、安全事件。
-- `cream`：米白科技风；适合教学、故事、历史、人文、日常。
 
 命令行只在 `run.py` / `gen_hyperframes.py` 选择主题，不提供逐段主题切换。
 
@@ -29,7 +28,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 - **landscape**：左文字栏（标题 + tagline）固定 613px 宽，右侧图栏 1067×800。**没有行数钳制**——标题随长度自由折行，守卫只降字号：超过 16 字降到 54px、超过 22 字降到 48px；只要超过 16 字就打一条 `[warn]`（两档都报，不是只有 48px 那档）。
 - **整页画布（段落 `layout: "canvas"`，两画幅同一份规则）**：上面那三层塌成一层——配图拉满整个画面（1080×1440 / 1920×1080，圆角、外发光、1px 内描边全撤），标题层与句子流层由渲染器**不生成**（不是 `display:none`：不留死 DOM、不留死补间目标，`check` 的文本普查也如实少两项）。配图**不再生成任何入场补间**——wipe 揭开即要求画面到位，海报再自带淡入会演成"先擦出空页、再浮出画面"的两段式；整页就是画面，滑一下/淡一下都是穿帮。
 
-  画布页**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光 `::after`（画布上换成近全屏的宽带柔光，见 `templates/composition.css` 画布块），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张、以及对比度门禁怎么跟着 `--theme` 变，见 `references/image_options.md`「不铺满幅底」。
+  画布页**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光 `::after`（画布上换成近全屏的宽带柔光，见 `templates/composition.css` 画布块），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张，见 `references/image_options.md`「不铺满幅底」。
 
   这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/image_options.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，照 `references/image_options.md`「图内文字的对比度」的内联副本 + `check` 程序办（"交付 HTML 必须保持 `<img>`"的安全理由也写在那份里）。`check_svg.py --layout canvas` 现在会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度（画布档只 warn 不 error：压在作者自画的浅色局部底板上的字，按页底算出来的数对它不成立），但渐变底、`class` 里的色、局部底板上的字它都管不着，那一次真测仍然要做。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
 
@@ -51,7 +50,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
   **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`（曾因此让竖屏配图的 y 滑入整条失效，实测过程见 `git log`）。
 - 底部 progress bar 与段落时间轴同步。
-- verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动；cream 浅底下高亮字与 agenda 序号自动改用同色相压暗一档的文本色（`--seg-accent-text`），装饰氛围光/进度条仍用原色。
+- verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
 - 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
@@ -64,9 +63,8 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 ## 配图
 
 - 内容段画布：尺寸与配图规格见 `references/image_options.md`（第 4 步的配图规则以它为准）；素材一律 `cover` 铺满画布。
-- 视频素材按 `loop muted autoplay playsinline` 播放，播放进度与段落时间轴**不做逐帧同步**：段落显示多久由时间轴决定，视频只是循环填充；比段落长的视频渲染只显示前段（生成时有 warn 提示）。代价是同一秒的画面不保证可复现——`<video>` 走页面墙钟，多 worker 各自从 0 起播，抓到的帧可能不同；对"必须对上某句话"的画面改用剪好的静态poster序列或换段落，别指望视频帧同步。是否观感正确仍以预览和成片为准。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片），工具不会替代内容判断。
-- **方式 C SVG 的「导演」（时间轴同步动画）**：images.json 给该段写 `director` 时，这张 SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（见 image_options.md 方式 C「SVG 动画：两档」）。与视频那条相反——导演是**逐帧可复现的属性补间**（挂在同一条时间线上，位置 = `seg.sentences[at].start_time`），seek 到同一时刻必然同一帧，正因为如此内联时会剥掉 SMIL / CSS 动画这类墙钟运动。安全代价（内联=同源活节点）由净化兜住：`<script>`/`on*`/`<foreignObject>`/外链一律删除。要时间轴同步的状态变化用它，纯氛围循环仍走 `<img>`+墙钟。
+- **方式 C SVG 的「导演」（时间轴同步动画）**：images.json 给该段写 `director` 时，这张 SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（见 image_options.md 方式 C「SVG 动画：两档」）。导演是**逐帧可复现的属性补间**（挂在同一条时间线上，位置 = `seg.sentences[at].start_time`），seek 到同一时刻必然同一帧，正因为如此内联时会剥掉 SMIL / CSS 动画这类墙钟运动。安全代价（内联=同源活节点）由净化兜住：`<script>`/`on*`/`<foreignObject>`/外链一律删除。要时间轴同步的状态变化用它，纯氛围循环仍走 `<img>`+墙钟。
 
 ## HTML 预览与渲染
 
@@ -102,46 +100,10 @@ hf-project/
 
 渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
 
-### 4. 单段快渲（`--only`）
-
-改完一页想立刻看成片效果，不必重跑整条管线：`run.py --only seg3 ...` 复用上次 TTS 的 `timing_manifest.json` 与 `combined.wav`（**不重跑配音**），把这一页切成子 manifest，渲成项目目录里的 `preview_seg3.mp4`。
-
-- **产出的都是 `preview_*` 前缀**：`preview_seg3.html` / `.wav` / `.manifest.json` / `.images.json` / `.report.json` / 成片。`index.html`、`out.mp4`、`production_report.json` 一个都不碰（实测跑完再核对，正式产物仍是上一次完整管线的结果），所以预览和定稿可以并排放。
-- **窗口从下一句开口往回切**：这一页在片中的可见窗口一直铺到下一段开始说话，不是铺到本段最后一个字结束——切出来的音频和成片边界与整片一致，才看得出"下一句压上来"的实际观感。
-- **`stage: "keep"` 的接续链从链首渲**：`--only seg3` 遇到 seg3 接续 seg2，会自动把 seg2 一起装进子 manifest 并从 seg2 的音频起点切片，否则预览片里只有半截画面、接续效果根本看不见（日志会打一条"接续"说明带上了哪几页）。
-- **该拦的照拦**：没有 `timing_manifest.json`/配音 → exit 2；这一页缺配图 → exit 2（连 `--until html` 也拦，预览只服务定稿的页）。**TTS 参数直接拒绝而不是静默忽略**（`--speed`/`--voice-id`/`--bgm` 等）：这一档不重跑配音，静默吃掉参数等于让你以为预览片反映了你刚改的语速。`--dry-run` 与 `--until tts|images` 同样拒。
-- 实测：21.7s 双页链、`--fps 12 --quality draft --workers 4` → 32s 出片（其中渲染 32.0s，含上面说的约 8.5s 固定开销）。比整片重渲便宜得多，但比 `--until html` + 浏览器预览贵——**先看版式再渲这一档**，别拿它当代替预览。
-
-### 5. 透明底导出（`--alpha`，只认 mov）
-
-`run.py --alpha --format mov` 出带 alpha 通道的 ProRes 4444 成片，用来叠在别的素材上（剪映/AE/直播贴片）。`--alpha` 只做画面侧的一件事：给 `<html>` 挂 `ctv-alpha` 类，让模板那三层"底"（主题渐变 `.bg`、页缘网格 `.grid`、本段 accent 氛围光 `::after`）不画，成片只剩内容层——标题、句子流、配图/导演层、进度条。选择器写法与两处决胜代价写在 `templates/composition.css` 的 `ctv-alpha` 段。
-
-**容器只有 `mov` 认这件事**，`run.py` 在跑任何一步之前就把 `--alpha` 配 `mp4`/`webm` 的组合 exit 2：
-
-- `mp4`：容器压根没有 alpha 通道，透明处渲成黑底。
-- `webm`：**实测丢平面**。hyperframes 0.8.114 / Windows 会把透明页渲成不带 alpha 的 webm——渲染日志照样打 `"needsAlpha":true`，容器元数据照样写 `alpha_mode=1`，但成片逐帧 `pix_fmt=yuv420p`，透明处压成纯黑。**别信那两条声明，只信逐帧像素格式**。哪天渲染器修好了，判据就是下面这两条命令，实测通过再放开 `run.py` 里那条校验。
-
-判据（本项目自己的产物实测，1080×1440 / 21.7s / 261 帧）：
-
-```bash
-# ① 逐帧像素格式：透明底必须有 a 平面。同一份 HTML：
-#    mov  → 261 帧全是 yuva444p12le
-#    webm → 261 帧全是 yuv420p（这一条就是丢平面的直接证据）
-ffprobe -v error -select_streams v:0 -show_entries frame=pix_fmt -of csv=p=0 out.mov | sort | uniq -c
-
-# ② alpha 值真的分布两端：抽一帧转 rgba 数一下。实测第 200 帧
-#    alpha=0 占 83.9%（三层底）、alpha=255 占 3.7%（内容），中间是字形抗锯齿
-ffmpeg -v error -i out.mov -vf "select=eq(n\,200)" -frames:v 1 -pix_fmt rgba f.png
-```
-
-`-show_entries stream=pix_fmt` 那种流级读法不能当证据——它报的是声明，与逐帧实测可以不一致（webm 那侧就是声明带 alpha、帧里没平面）。最直观的一验是叠到纯色底上看：`ffmpeg -f lavfi -i color=magenta:s=1080x1440 -i f.png -filter_complex overlay out.png`，透明底正确时洋红只被内容层挡住，整片背景全是洋红。
-
-代价是体积：同一条 21.7s 竖屏，mp4/webm 各 1.2MB，mov **185.7MB**（约 8.5MB/s，`--fps 24` 还要翻倍）。所以透明底是**交付格式**而不是迭代格式——迭代照旧 `--fps 12 --quality draft` 渲 mp4 看，定稿要叠轨了再单独出一版 mov。`--only` 也吃这两面旗（`--only seg3 --alpha --format mov` 出 `preview_seg3.mov`），单页试叠就靠它。
-
 ## 性能参数
 
 - `fps`：默认 24；抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
-- `workers`：默认 4，`run.py` 字面透传给 `hyperframes render --workers`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；含视频素材或遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
+- `workers`：默认 4，`run.py` 字面透传给 `hyperframes render --workers`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
 - `quality`：`draft` / `standard` / `high`；draft 约省 15%，预览够用。
 - **固定开销**：每调用一次渲染约白付 8.5s（与帧数无关），冷跑第一次还多约 6s。所以"改一处重渲一次"很不划算：先 `--until html` + 快照看够，再整片渲一次。
 
@@ -156,7 +118,14 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 ```
 
 - `check` 会真报问题：字体栈里出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`，判定基于名字而非解析结果）——`composition.css` 因此为 CJK 兜底名 `Noto Sans CJK SC/JP` 也补了 `local()` 声明。同一处还有条静默代价：家族名必须是它字体映射表认识的写法，CSS 惯例名 `SFMono-Regular` 不在表内（表里认 `"SF Mono"`），命中不了只打一条 `[WARN] No deterministic font mapping`，那一族就拿不到注入的 `@font-face`。`_template.py` 的 `monoStack` 已按映射表写，改字体栈要对着这条 WARN 改。
-- 一份干净产物的 `check` 基线（竖横各跑一次实测）：Lint 只有下面四条固定噪声，Runtime / Layout / Motion / Contrast 全 0 error。四条已知可接受：`gsap_callback_dom_measurement`（verse 滚动测量是懒缓存 + seek 幂等，见 `templates/runtime.js` 注释）、`nested_structure_needs_subcomposition`（每段一条）、`timeline_track_too_dense`（同一合成根下 7 段就是 7 个 timed element，是上一条的另一种说法）、`negative_z_index`（两画幅各一条 `.seg-card::after`）。不拆 sub-composition 是刻意的：单文件便于 `--until html` 后人工审阅，且分段渲染实测更慢（见上文「性能参数」）。`negative_z_index` 是误报——浏览器实测 `getComputedStyle(.seg-card).isolation` 为 `isolate`，氛围光确实压在卡片内容之下、页面背景之上，检查器不认 `isolation` 建的层叠上下文，而它自己给的 Fix 就是"加 `isolation: isolate`"（`composition.css` 已加）。基线之外的新增条目一律当真读。
+- 一份干净产物的 `check` 基线（7 段稿竖屏实测，2026-10）：**Lint 12 条 warning 全部是下面这 5 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看的是**类型**不是条数——其中两条按段数增长，写死条数会自己吓自己：
+  - `gsap_callback_dom_measurement`（1 条）：verse 滚动测量是懒缓存 + seek 幂等，见 `templates/runtime.js` 注释。
+  - `nested_structure_needs_subcomposition`（**每段一条**，7 段 = 7 条）：不拆 sub-composition 是刻意的——单文件便于 `--until html` 后人工审阅，且分段渲染实测更慢（见上文「性能参数」）。
+  - `timeline_track_too_dense`（1 条）：同一合成根下 7 段就是 7 个 timed element，是上一条的另一种说法。
+  - `composition_file_too_large`（1 条）：单文件行数超阈，是上面两条的单文件取舍的代价，同源。
+  - `negative_z_index`（**每条 `z-index:-1/-2` 规则一条**）：氛围光 `.seg-card::after` + 背景两层 `.seg-card>.bg,.grid`。`negative_z_index` 是误报——浏览器实测 `getComputedStyle(.seg-card).isolation` 为 `isolate`，氛围光确实压在卡片内容之下、页面背景之上，检查器不认 `isolation` 建的层叠上下文，而它自己给的 Fix 就是"加 `isolation: isolate`"（`composition.css` 已加）。
+  - **判据**：这 5 类之外的任何新增条目一律当真读。条数对不上不用慌（段数变了就变），**类型多出一类就要查**。反过来，Layout 段出现的 `✗` 要当真——它量的是真实版面重叠，`check_svg` 查不到图内两行文字压字（见 `image_options.md`「画布几何」末条）；已知唯一的例外是 `text_occluded`，见下条。
 - Runtime 的 `clip_media_fit` 和 Layout 的 `clipped_text` **不在噪声之列**：前者是音频实际时长短于 `data-duration`（成片被截到音频长度、字幕时间轴对不上），真实 pipeline 产物的 `total_duration` 就是量出来的音频时长，正常不该出现，手写/裁剪 manifest 时它是"manifest 与音频不同步"的唯一信号（实测把 `total_duration` 对齐音频后该条消失）；后者是某行文本被自己的盒子裁掉，竖屏 agenda 行的 `nameTrim` 只能挡字数超限，挡不住半角/混排的实际字宽（Python 侧 warn 与它两道闸各管一头，见 `references/writing.md`「开场/结尾专用顶层字段」）。
+- Layout 的 `text_occluded` **曾经误报，现在不会再报**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。豁免靠 `data-layout-allow-occlusion` 等三个属性，而**检查器只认元素自己身上的标记、不继承祖先的**——原先只打在 `.verse` 上，检查器照样去量它下面的每一行。模板已在**每一行 `.verse-line`** 上也打上（`html_renderer.py`），实测 7 段竖屏稿：只打 `.verse` 时报 1 error，每行补齐后 0 error 且 warning 条数不变。**再见到 `text_occluded` 先别当版面 bug**——先用 `snapshot --at <时刻>` 看画面：文字真被遮（配图压住句子流）就调版式，画面正常则是这个漏判回来了。
 - `snapshot --at` 精确取时刻帧并自动拼 contact sheet，比"复制 HTML + 注入 `tl.pause(t)` + Chrome `--screenshot`"省事且不会踩 vendor 相对路径的坑；手搓探针只在需要同一页连取多帧、或 `snapshot` 不可用时作后备。
 - 渲染前判断本机依赖齐不齐，用 `npx -y hyperframes doctor`：全绿就可以直接跑真渲染，不必止步于 HTML 预览（Chrome headless shell 由 Hyperframes 自己下载并缓存在 `~/.cache/hyperframes/chrome/`，FFmpeg 走第 3 步那条查找链）。

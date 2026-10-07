@@ -7,7 +7,6 @@ remain outside this module.
 """
 import html
 import json
-import math
 import re
 import sys
 from pathlib import Path
@@ -15,16 +14,16 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 from _theme import (
-    get_theme_colors, get_default_accent, darken,
-    relative_luminance, mix, normalize_accent, theme_bg_stops,
-    ensure_text_contrast, DEFAULT_THEME,
+    get_theme_colors, get_default_accent, mix, normalize_accent,
+    theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import load_template, get_canvas, normalize_aspect
-from _images_schema import (classify_media_path, unknown_media_keys,
-                            MEDIA_ENTRY_KEYS)
+from _images_schema import (unknown_media_keys, MEDIA_ENTRY_KEYS,  # noqa: E402
+                            classify_media_path, is_svg_path)
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
-from _timeline import beat_positions
+from _ease import curve as ease_curve
+from _timeline import beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 
 
@@ -163,21 +162,25 @@ def _agenda_row_html(rows):
         for idx, name, dur in rows)
 
 
-def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
-                     title_size, bgs):
+def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
+                     title_size, bgs, apple_opening=False):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流（verse）后再闭合 .agenda-col——flex 列"题头在顶、
     agenda 垂直居中、句子流锚底"两画幅共用同一套 DOM，几何差异全在 CSS。
     kicker 取 opening/closing 的 tagline 字段（可选的一行小标题）。
+    apple_opening 时额外带一枚题头光晕（.apple-halo）与 data 标记——光晕在
+    DOM 最前、z-index:-1，衬在标题后面，由 _card_timeline_lines 编排淡入与
+    呼吸；data 标记供 CSS/调试识别人，不参与渲染路径。
     """
     sid = seg["id"]
+    halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n' % sid
+                 if apple_opening else "")
+    col_attr = (' data-opening-anim="apple"' if apple_opening else "")
     kicker_html = ""
     if seg.get("tagline"):
-        # 深浅底的起手色与内容段 tagline 同方向（深底提亮、浅底压暗），
-        # 再统一过 ensure_text_contrast 的对比度保底。
-        _kc = ensure_text_contrast(
-            mix(ac, "#ffffff", 0.55) if dark_theme else darken(ac, 0.75), bgs)
+        # 深底起手色向白提亮，再统一过 ensure_text_contrast 的对比度保底。
+        _kc = ensure_text_contrast(mix(ac, "#ffffff", 0.55), bgs)
         kicker_html = (f'<div class="agenda-kicker" style="color:{_kc}">'
                        f'{esc(seg["tagline"])}</div>')
     rows, tail_rows = _agenda_rows(sid, clips, manifest, ag)
@@ -185,7 +188,8 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
-    return (f'    <div class="agenda-col">\n'
+    return (f'    <div class="agenda-col"{col_attr}>\n'
+            f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'
             f'<div class="seg-title" id="title-{sid}" '
             f'style="font-size:{title_size};text-shadow:0 0 {ag["titleGlow"]}px {ac_attr}40">'
@@ -194,11 +198,13 @@ def _agenda_col_html(seg, clips, manifest, ag, dark_theme, ac, ac_attr,
 
 
 def _normalize_images(images):
-    """把媒体条目归一成渲染器的单一形状 {src, media_type, opts}。
+    """把媒体条目归一成渲染器的单一形状 {src, opts}。
 
     入参必须是过 _images_schema.validate_images_json 的数据（契约先校验是本
     技能的入口规则：gen_hyperframes 经 load_images_json 进来，键合法性、
     媒体对象形状、src 非空都在那里拦下），这里只做归一与丢键提醒。
+    素材类型分两档：静态图（image/svg/gif 走 <img>）与视频（video 走 <video>
+    自动循环静音播放）。gif 与 image 同档——它就是一张会自己动的静态图。
     """
     normalized = {}
     for sid, media in (images or {}).items():
@@ -218,7 +224,7 @@ def _normalize_images(images):
         media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
         normalized[sid] = {
             "src": media_path,
-            "media_type": media_type,
+            "type": media_type,
             "opts": media_opts,
         }
     return normalized
@@ -266,10 +272,6 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
     rc.theme_colors = get_theme_colors(theme)
-    # 按主题主文字色亮度判深浅底（_theme._THEMES 是唯一权威，
-    # 新增主题无需改这里的枚举）——tagline 的"同色相只调明度"在深色
-    # 底下方向要反过来（提亮而不是压暗）。
-    rc.dark = relative_luminance(rc.theme_colors["text_color"]) > 0.5
     # 背景渐变的十六进制色标集合：accent 派生文字色的对比度保底按其中最坏
     # 一档判定（theme_bg_stops 只解析自家 _THEMES 的渐变串）。
     rc.bgs = theme_bg_stops(theme)
@@ -282,9 +284,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 从模板提取 CSS 变量值
     _tl = rc.tl = tpl_layout["title"]
     _ag = rc.ag = tpl_layout["agenda"]
-    _vv = rc.vv = tpl_layout["verse"]
-    _il = rc.il = tpl_layout["image"]
-    _tgl = rc.tgl = tpl_layout["tagline"]
+    _vv = tpl_layout["verse"]
+    _il = tpl_layout["image"]
+    _tgl = tpl_layout["tagline"]
 
     _sl = tpl_layout["subtitle"]
     # 字幕字号是唯一被消费的 subtitle 参数（两画幅各读各的 subtitle 块）
@@ -295,7 +297,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 都消费的键才两边都写。竖屏独有的定位键（segCard.padding、verse.bottom、
     # image.marginSide/bottomGapToVerse）只存在于 vertical 块——横屏是弹性
     # 列，没有这些概念，放一个 0 值占位只会让人以为改得动。
-    _v_verse_clip = rc.verse_clip = _vv["clipPad"]
+    rc.verse_clip = _vv["clipPad"]
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         _v_pad = tpl_layout["segCard"]["padding"]
@@ -361,6 +363,11 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
     # 其余 CSS 变量（网格/进度条/字体排印）也从模板读取
     _grid = tpl_layout["grid"]
     css_grid_size = _grid["size"]
+    # 段落氛围光（.seg-card::after 的径向渐变几何）。它是随画幅变的——竖屏那团
+    # 居中、宽大于高；横屏偏媒体区中心（68% 50%）且高大于宽。所以几何进模板，
+    # CSS 只拿 var(--ctv-amb-*) 拼字符串，不在 [data-aspect] 分支里存第二份。
+    _amb = tpl_layout["ambience"]
+    _camb = tpl["canvasAmbience"]
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -398,12 +405,26 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
   --ctv-ag-kicker:{_ag["kickerSize"]}px;--ctv-ag-idx:{_ag["idxSize"]}px;
   --ctv-ag-idx-min:{_ag["idxMinWidth"]}px;--ctv-ag-name:{_ag["nameSize"]}px;
   --ctv-ag-dur:{_ag["durSize"]}px;--ctv-ag-gap:{_ag["rowGap"]}px;
-  --ctv-ag-row-pad:{_ag["rowPad"]}px;--ctv-ag-verse-w:{_ag["verseMaxWidth"]}px;--ctv-ag-list-mt:{_ag["listMarginTop"]}px;"""
+  --ctv-ag-row-pad:{_ag["rowPad"]}px;--ctv-ag-verse-w:{_ag["verseMaxWidth"]}px;--ctv-ag-list-mt:{_ag["listMarginTop"]}px;
+  --ctv-amb-rx:{_amb["rx"]}%;--ctv-amb-ry:{_amb["ry"]}%;
+  --ctv-amb-cx:{_amb["cx"]}%;--ctv-amb-cy:{_amb["cy"]}%;
+  --ctv-amb-alpha:{_amb["alpha"]}%;--ctv-amb-edge:{_amb["edge"]}%;
+  --ctv-amb-agenda-cx:{_amb["agendaCx"]}%;--ctv-amb-agenda-cy:{_amb["agendaCy"]}%;
+  --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
+  --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
+  --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区
         # 各自固定定位）：算小了会把 tagline 静默切掉一截，算大了会往画布上压，
         # 两头都不报错——所以放不进时在这里直接 raise。
+        # 行高与字号成对定（template.layout.vertical.title.fontSize=64 +
+        # typography.titleLineHeight=1.45）：行高是下限不是口味——竖屏标题带
+        # line-clamp + overflow:hidden，CJK 墨迹必须装进行盒。微软雅黑度量盒
+        # ≈1.32em 刚好不裁，但 Linux headless 回退 Noto Sans CJK Black 时墨迹
+        # ≈1.39em，1.32 会被官方门禁 hyperframes check 报 clipped_text
+        # （references/rendering.md「官方校验命令」：不在噪声之列）。64×1.45
+        # 两行 + tagline 一行的预算 = 原 72×1.32 几乎不变，两画幅都够装。
         _v_title_area = (_tl["maxLines"] * _tl["fontSize"] * css_title_lh
                          + _tgl["marginTop"]
                          + _tgl["fontSize"] * _tgl["lineHeight"])
@@ -446,11 +467,10 @@ def _card_colors(rc, seg):
     # 属性闭合仍不可能）。GSAP 补间只写 opacity/scale/width，颜色一律经
     # CSS 变量派生，所以 accent 没有"进 JS 字符串字面量"的那条路。
     ac_attr = esc(ac)
-    # 文本安全 accent：cream 浅底上原色 accent 做正文色对比度不足、字面发糊，
-    # 与 tagline 同法压暗（同色相只降明度）；dark 底从原色起步。两条路径最后
-    # 都过 ensure_text_contrast 兜到 check 门禁的最严一档。只喂给"写在底上的
-    # 字"（活动句着色 / .ag-idx），装饰仍走原色 --seg-accent。
-    ac_text = ensure_text_contrast(ac if rc.dark else darken(ac), rc.bgs)
+    # 文本安全 accent：accent 从原色起步，过 ensure_text_contrast 兜到 check
+    # 门禁的最严一档。只喂给"写在底上的字"（活动句着色 / .ag-idx），装饰
+    # 仍走原色 --seg-accent。
+    ac_text = ensure_text_contrast(ac, rc.bgs)
     return ac, ac_attr, esc(ac_text)
 
 
@@ -499,23 +519,24 @@ def _tagline_html(rc, seg, sid, ac):
     """段落 tagline 行（可空）。缩进与对齐归 CSS（--ctv-tagline-indent）。"""
     if not seg.get("tagline"):
         return ""
-    # 深色主题向白提亮（无差别 _darken 在 dark 下对比度只有 ~3.3，不达
-    # WCAG AA）；浅色主题压暗一档后仍由 ensure_text_contrast 兜到门禁最
-    # 严档。
-    _tag_color = ensure_text_contrast(
-        mix(ac, "#ffffff", 0.62) if rc.dark else darken(ac), rc.bgs)
+    # 深色主题向白提亮（无差别压暗在 dark 下对比度只有 ~3.3，不达
+    # WCAG AA），再由 ensure_text_contrast 兜到门禁最严档。
+    _tag_color = ensure_text_contrast(mix(ac, "#ffffff", 0.62), rc.bgs)
     return (f'<div class="tagline" id="tag-{sid}" '
             f'style="color:{_tag_color}">{esc(seg["tagline"])}</div>')
 
 
 def _media_html(rc, sid, s, d):
-    """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。"""
+    """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。
+
+    静态图与动图统一走 <img>（gif 也 <img>），视频走 <video> 自动循环静音播放。
+    SVG 按 C3 规范不铺满幅底，外面再套描边和发光就等于给一片空白画框，
+    挂 bare-media 让 CSS 撤掉这两层装饰。
+    """
     media_info = rc.images[sid]
     media_path = media_info["src"]
-    media_type = media_info["media_type"]
     media_opts = media_info["opts"]
-    if media_type == "video":
-        # 视频配图：<video> 自动循环静音播放
+    if media_info.get("type") == "video":
         loop = "loop" if media_opts.get("loop", True) else ""
         muted = "muted" if media_opts.get("muted", True) else ""
         playsinline = "playsinline" if media_opts.get("playsinline", True) else ""
@@ -532,13 +553,11 @@ def _media_html(rc, sid, s, d):
             f'      </video>\n'
             f'    </div>'
         )
-    # 静态图 / 动图走 <img>。SVG 按 C3 规范不铺满幅底，外面再套描边和
-    # 发光就等于给一片空白画框，挂 bare-media 让 CSS 撤掉这两层装饰。
-    _bare = " bare-media" if media_path.lower().endswith(".svg") else ""
     # 导演模式（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
+    _bare = " bare-media" if is_svg_path(media_path) else ""
     inline_svg = media_opts.get("inline_svg")
     if inline_svg:
         return (
@@ -555,20 +574,26 @@ def _media_html(rc, sid, s, d):
 
 def _verse_html(seg, sid, ac_text_attr):
     """句子流（歌词式 verse）DOM：该段全部句子按序渲染成静态行。"""
+    # 三个 layout 豁免属性打在 .verse 与**每一行**上，两处都要，缺一不可：
+    # 检查器只认元素自己身上的标记，**不继承祖先的**。只打 .verse 的话它照样
+    # 去量每行，而被 .verse-clip 裁在窗口外的半截行 rect 仍在原位 → 判
+    # text_occluded 报 error。实测（7 段竖屏稿）：只打 .verse 报 1 error，
+    # 连每行一起打则 0 error、warning 条数不变。快照确认画面本身没问题。
     _vlines = [
         # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
         # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
         # 永久失灵或错行——宁可都不高亮，也不错误高亮
-        f'<div class="verse-line" data-i="{_s2.get("index", -1)}">'
+        f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
+        f' data-layout-allow-overflow data-layout-allow-overlap'
+        f' data-layout-allow-occlusion>'
         f'{esc(_s2["text"])}</div>'
         for _s2 in seg["sentences"]
     ]
     return (
-        # 三个 layout 豁免属性源于同一误报机制：滚出窗口的行视觉上被
-        # overflow:hidden 裁掉，但静态 DOM rect 仍在原位——上越标题区
-        # （allow-overlap）、下碰底部元素如进度条（allow-occlusion）、
-        # 整体越出卡片（allow-overflow）。活动行锚定在窗口内 clipPad
-        # 处，真实重叠不可能发生。
+        # 豁免的成因：滚出窗口的行视觉上被 overflow:hidden 裁掉，但静态 DOM
+        # rect 仍在原位——上越标题区（allow-overlap）、下碰底部元素如进度条
+        # （allow-occlusion）、整体越出卡片（allow-overflow）。活动行锚定在
+        # 窗口内 clipPad 处，真实重叠不可能发生。
         f'\n    <div class="verse" id="verse-{sid}" '
         f'data-layout-allow-overflow data-layout-allow-overlap '
         f'data-layout-allow-occlusion>'
@@ -612,6 +637,10 @@ def _prepare_card(rc, clip):
     # 库调用方仍带映射时这里也强制忽略。
     layout = seg_layout(seg)
     is_agenda = layout == "agenda"
+    # 蘋果風開場：只对开屏 agenda 卡生效（opening_animation 取值已由契约层把守，
+    # 渲染端只认 "apple"）。其他段/其他值一律不进入这条编排——静态開場是缺省。
+    apple_opening = (sid == "opening" and is_agenda
+                     and seg.get("opening_animation") == "apple")
     has_image = (sid in rc.images) and not is_agenda
     # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
@@ -662,6 +691,7 @@ def _prepare_card(rc, clip):
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
+        apple_opening=apple_opening,
         is_keep=_is_keep_page(rc, sid),
         tagline_html=tagline_html, image_html=image_html,
         verse_html=verse_html, card_open=card_open,
@@ -674,8 +704,9 @@ def _assemble_card(rc, card, clips, manifest):
         # agenda 卡：head+列表在 .agenda-col 内，verse 收在列尾（锚底），
         # 进度条留在卡底部（col 之外，贴屏底）。
         return (card.card_open
-                + _agenda_col_html(card.seg, clips, manifest, rc.ag, rc.dark,
-                                   card.ac, card.ac_attr, card.title_size, rc.bgs)
+                + _agenda_col_html(card.seg, clips, manifest, rc.ag,
+                                   card.ac, card.ac_attr, card.title_size,
+                                   rc.bgs, card.apple_opening)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html
                 + '  </div>')
@@ -805,53 +836,24 @@ def _line_timeline_lines(rc, card):
     return lines
 
 
-def _morph_ease(name, default):
-    """morph 采样的缓动曲线：给定 GSAP 风格 ease 名，返回 f:[0,1]→[0,1]。
+def _cycle_vars(step):
+    """step 上的 repeat / yoyo → 要塞进 GSAP 补间变量的那几项（没写就不塞）。
 
-    因为 morph 是**生成期烘焙成离散 tl.set**、GSAP 不会对 set 再缓动，所以这里的曲线
-    就是最终成片里形状随时间的变化——不追求与 GSAP 逐字节同式，只要是一条合理的
-    in/out/inOut 曲线即可（认得的档用 GSAP 的标准公式，认不出的档退回线性，绝不 raise）。
-    default 取模板 animation.director.ease，让 morph 默认和无痕补间的兄弟 tween 同手性。
+    跨度由 `_timeline.beat_span` 算，门禁、接续烘焙和这里读的都是同一个数；这里只负责
+    把它变成 GSAP 听得懂的写法。`repeat:0` 与缺省等价，不塞进去省字节。
     """
-    spec = (name or default or "none").strip()
-    base, _, mod = spec.partition(".")
-    if not mod:
-        mod = "out"           # GSAP 裸名（power2）默认 .out
-    if base.startswith("back"):
-        mod = mod or "out"
-    elif base in ("none", "linear"):
-        return lambda t: t
+    out = {}
+    if step.get("repeat"):
+        out["repeat"] = int(step["repeat"])
+    if step.get("yoyo"):
+        out["yoyo"] = True
+    return out
 
-    # "in" 曲线 g(t)：单调、g(0)=0、g(1)=1（back 会轻微越界，interp 可外推）。
-    if base.startswith("power"):
-        try:
-            exp = int(base[5:] or "2") + 1   # power1=quad(t^2)…power4=quint(t^5)
-        except ValueError:
-            exp = 3
-        g = lambda t, e=exp: t ** e
-    else:
-        exp = {"quad": 2, "cubic": 3, "quart": 4, "quint": 5}.get(base)
-        if exp is not None:
-            g = lambda t, e=exp: t ** e
-        elif base == "sine":
-            g = lambda t: 1 - math.cos(t * math.pi / 2)
-        elif base == "expo":
-            g = lambda t: (2 ** (10 * (t - 1))) if t else 0.0
-        elif base == "circ":
-            g = lambda t: 1 - math.sqrt(max(0.0, 1 - t * t))
-        elif base.startswith("back"):
-            c1 = 1.70158
-            c3 = c1 + 1
-            g = lambda t: c3 * t ** 3 - c1 * t ** 2
-        else:
-            return lambda t: t        # 未知档：线性兜底
 
-    if mod == "in":
-        return g
-    if mod == "out":
-        return lambda t, g=g: 1 - g(1 - t)
-    # inOut：由 in 曲线拼标准对称型（t=.5 处连续，端点 0/1 不动）
-    return lambda t, g=g: (0.5 * g(2 * t)) if t < 0.5 else (1 - 0.5 * g(2 - 2 * t))
+def _cycle_js(step):
+    """count / type 的手写代理补间要的那段 JS（含尾逗号）；无循环时是空串。"""
+    vars_ = _cycle_vars(step)
+    return "".join(f'{k}:{json.dumps(v)},' for k, v in vars_.items())
 
 
 def _director_timeline_lines(rc, card):
@@ -925,21 +927,37 @@ def _director_timeline_lines(rc, card):
             out["ease"] = ease
             if stagger is not None:
                 out["stagger"] = stagger
+            out.update(_cycle_vars(step))
             return _pin(out)
 
         if "morph" in step:
             # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
-            # 时间均匀推进（t=pos+u·dur），形状进度 k=ease(u)——因为 GSAP 不会对 set 再
-            # 缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与兄弟 tween 同手性）。
-            # 逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是时间的确定函数、跨平台
-            # 可复现，不需要任何运行时 morph 库。拓扑相符性在契约层已校验。
+            # 时间均匀推进（t=pos+u·span），形状进度 k=ease(每一遍内的位置)——因为 GSAP
+            # 不会对 set 再缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与
+            # 兄弟 tween 同手性）。逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是
+            # 时间的确定函数、跨平台可复现，不需要任何运行时 morph 库。拓扑相符性在契约层
+            # 已校验。repeat/yoyo 折进采样：整段跨度 = dur×遍数，遍序号奇偶决定这一遍正放
+            # 还是倒放（倒放喂 ease(1-p)，实测与 GSAP 的 yoyo 一字不差）。
             pf, pt = make_morph(step["morph"]["from"], step["morph"]["to"])
-            ease_fn = _morph_ease(step.get("ease"), dflt["ease"])
-            n = max(2, min(240, round(dur * rc.fps * 2)))
+            ease_fn = ease_curve(step.get("ease"), dflt["ease"])
+            cycles = beat_cycles(step) or 1
+            yoyo = bool(step.get("yoyo"))
+            span = beat_span(step, dur)
+            n = max(2, min(240, round(span * rc.fps * 2)))
             for i in range(n + 1):
                 u = i / n
-                d = _morph_interp(pf, pt, ease_fn(u))
-                t = round(pos + u * dur, 2)
+                phase = u * cycles
+                c = int(phase)
+                p = phase - c
+                if p == 0.0 and c > 0:
+                    # 正好踩在遍与遍的分界：GSAP 在这一瞬间报的是**上一遍的末尾**
+                    # （实测 t=1.000 处 v=1，1.001 才回到 0），下一遍从 0 重放。
+                    c -= 1
+                    p = 1.0
+                if yoyo and c % 2:
+                    p = 1.0 - p             # GSAP 的 yoyo 是"拿倒放的进度去查同一条缓动"
+                d = _morph_interp(pf, pt, ease_fn(p))
+                t = round(pos + u * span, 2)
                 lines.append(
                     f"tl.set({sel_js}, {json.dumps({'attr': {'d': d}})}, {t:.2f})")
             continue
@@ -964,7 +982,8 @@ def _director_timeline_lines(rc, card):
                 "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
                 "f();"
                 "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if "type" in step:
@@ -979,7 +998,8 @@ def _director_timeline_lines(rc, card):
                 "var p={k:0};"
                 "var f=function(){e.textContent=s.slice(0,Math.round(p.k));};"
                 "f();tl.to(p,{k:s.length,duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + ",onUpdate:f}," + f"{pos:.2f}" + ");})();")
+                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if step.get("draw"):
@@ -987,10 +1007,10 @@ def _director_timeline_lines(rc, card):
                 f"tl.set({sel_js}, "
                 f"{json.dumps({'attr': {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
                 f"{card.s:.2f})")
+            draw_vars = {"strokeDashoffset": 0, "duration": dur, "ease": ease}
+            draw_vars.update(_cycle_vars(step))
             lines.append(
-                f"tl.to({sel_js}, "
-                f"{json.dumps({'strokeDashoffset': 0, 'duration': dur, 'ease': ease})}, "
-                f"{pos:.2f})")
+                f"tl.to({sel_js}, {json.dumps(draw_vars)}, {pos:.2f})")
         if "set" in step:
             set_vars = _pin(dict(step["set"]))
             if stagger is not None:
@@ -1006,6 +1026,57 @@ def _director_timeline_lines(rc, card):
         elif "from" in step:
             lines.append(
                 f"tl.from({sel_js}, {json.dumps(_with_timing(step['from']))}, {pos:.2f})")
+    return lines
+
+
+def _apple_opening_lines(rc, card):
+    """蘋果風開場编排（opening_animation:"apple"）。
+
+    苹果式开场的手感：不是"弹出来"，是"浮出来"——标题带一层高斯模糊由虚到实、
+    配一个 1.06→1 的微缩放落定（power3.out 的缓入缓出比 back.out 更"沉"），
+    光晕先随标题淡入、随后慢呼吸（repeat:-1 yoyo），kicker 短延迟跟上，agenda
+    行逐行浮起（y 24 → 0，stagger 0.12）。
+
+    全部锚在擦除起点 win_start：页面从 clip-path 被擦开的同时内容就在演化。
+    时长是编排的一部分，不随段长归一化（entranceBudget 只归一通用入场；
+    苹果开场是固定 choreography，段再短也是同一支舞）。模糊是短暂的（标题
+    1.6s 内收敛到 0），成片只有开头约 40 帧带 filter 开销，无头渲染可接受。
+    """
+    sid, t = card.sid, card.win_start
+    ap = rc.anim["opening"]["apple"]
+    lines = []
+    halo = ap["halo"]
+    lines.append(
+        f'tl.fromTo("#halo-{sid}",{{opacity:0}},'
+        f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"]:.2f},'
+        f'ease:"sine.out"}},{t:.2f})'
+    )
+    # 呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
+    # 与 director 的 repeat:-1 同一种确定性（无"最后停在哪儿"可争）。
+    lines.append(
+        f'tl.to("#halo-{sid}",{{opacity:{halo["breatheTo"]:.2f},'
+        f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
+        f'ease:"sine.inOut"}},{t + halo["in"]:.2f})'
+    )
+    a_t = ap["title"]
+    lines.append(
+        f'tl.from("#title-{sid}",{{opacity:0,scale:{a_t["scale"]},'
+        f'filter:"blur({a_t["blur"]}px)",duration:{a_t["duration"]:.2f},'
+        f'ease:"{a_t["ease"]}"}},{t:.2f})'
+    )
+    if card.seg.get("tagline"):
+        a_k = ap["kicker"]
+        lines.append(
+            f'tl.from("#{sid} .agenda-kicker",{{opacity:0,'
+            f'filter:"blur({a_k["blur"]}px)",duration:{a_k["duration"]:.2f},'
+            f'ease:"{a_k["ease"]}"}},{t + a_k["delay"]:.2f})'
+        )
+    a_r = ap["rows"]
+    lines.append(
+        f'tl.from("#{sid} .agenda-row",{{opacity:0,y:{a_r["y"]},'
+        f'duration:{a_r["duration"]:.2f},stagger:{a_r["stagger"]:.2f},'
+        f'ease:"{a_r["ease"]}"}},{t + a_r["delay"]:.2f})'
+    )
     return lines
 
 
@@ -1033,13 +1104,19 @@ def _card_timeline_lines(rc, card):
     _eb = a_["entranceBudget"]
     _k = min(1.0, max(_eb["minFactor"], d / _eb["normSeconds"]))
     # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
-    if not card.is_canvas:
+    if not card.is_canvas and not card.apple_opening:
         a_title = a_["titleEntrance"]
         lines.append(
             f'tl.from("#title-{sid}",{{scale:{a_title["from"]},'
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
+    # 蘋果風開場：整页编排取代通用标题入场（opening_animation:"apple"）。
+    # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
+    # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
+    # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。
+    if card.apple_opening:
+        lines.extend(_apple_opening_lines(rc, card))
     if card.has_image and not card.is_canvas and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
@@ -1064,8 +1141,7 @@ def _card_timeline_lines(rc, card):
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme=DEFAULT_THEME, fps=24,
-                  alpha=False):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=24):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -1074,15 +1150,10 @@ def generate_html(manifest, audio_src, images=None,
         aspect: portrait/vertical（3:4）或 landscape（16:9）；data-aspect 与默认
             画布尺寸都按它取，归一化在函数体内完成。
         theme: 只改背景渐变/网格/正文，不改每段 accent 彩色；
-            可选值见 _theme 的主题注册表。
+            当前只有 "dark"（见 _theme 的主题注册表）。
         gsap_src: 默认指向 composition 项目内的 vendor/，不访问 CDN。
         fps: 写进 data-fps 的渲染提示（渲染命令 --fps 可覆盖）；24 比 30 少抓
             20% 帧、出片更快。
-        alpha: 透明底导出。只做一件事——往 <html> 挂 ctv-alpha 类；被关掉的三层
-            （页面渐变 / 网格 / 段落氛围光）连同"为什么这样写"都在
-            templates/composition.css 末尾。这一面旗只管画面：alpha 平面落不落得
-            进文件是渲染端的事，实测只有 mov（ProRes 4444）带得出，mp4 无通道、
-            webm 丢平面，所以 run.py 侧要求 --alpha 配 mov。
 
         字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
     """
@@ -1129,7 +1200,7 @@ def generate_html(manifest, audio_src, images=None,
     _wd = (rc.anim["propLine"]["duration"] if _is_line
            else rc.anim["segmentWipe"]["duration"])
     for i, clip in enumerate(clips):
-        s_i, d_i = clip["start"], clip["duration"]
+        s_i = clip["start"]
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)
@@ -1204,7 +1275,6 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_SCRIPT__": script,
         "__CTV_SEG_CARDS__": chr(10).join(seg_cards),
         "__CTV_ASPECT__": aspect,
-        "__CTV_HTML_CLASS__": "ctv-alpha" if alpha else "",
         "__CTV_DURATION__": f"{total_dur:.2f}",
         "__CTV_WIDTH__": str(width),
         "__CTV_HEIGHT__": str(height),

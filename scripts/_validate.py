@@ -35,6 +35,24 @@ def _validate_text(value, where, *, required=False):
         raise ValueError(f"{where} 不能为空字符串")
 
 
+# 上墙文字 = 会直接印在一行里的字段：卡片标题、小字、要点、结尾尾行。
+def _validate_display_text(value, where):
+    """上墙文字比口播稿多一条：一行只承载一个事实，所以不收分号。
+
+    分号出现意味着两件事被挤进同一行。agenda 行与标题区的行数预算都是死的，
+    第二件事要么被 nameTrim 裁掉，要么把整行压成小字号，两种都是静默丢信息，
+    所以这里直接拒，让写稿的人当场改。
+    口播稿（opening / closing / text / dialogue）不受这条限制：分句器把分号
+    当终止标点，念出来本来就是两次停顿。
+    """
+    if value is None:
+        return
+    if isinstance(value, str) and ("；" in value or ";" in value):
+        raise ValueError(
+            f"{where} 里有分号：{value!r}。上墙的一行只放一个事实，"
+            "把分号改成句号拆成两行，或者删掉后半句")
+
+
 def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):

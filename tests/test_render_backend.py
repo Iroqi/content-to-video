@@ -16,26 +16,15 @@ class Commands(unittest.TestCase):
         self.assertEqual(cmd[-9:], ["render", "-o", "o.mp4", "--quality", "draft",
                                     "--fps", "12", "--workers", "4"])
 
-    def test_fmt_writes_the_flag_only_when_not_mp4(self):
-        # 渲染器本来按 -o 后缀推断容器，mp4 是默认值：多写一面旗会把"默认命令"
-        # 变成两条不同的命令行，快照与实测就分叉了。
+    def test_build_render_command_has_no_format_flag(self):
+        # 输出容器固定由 -o 后缀（mp4）决定：透明底/mov/webm 已从技能移除，
+        # 不写 --format，渲染器按后缀推断容器。
         base = [sys.executable, "hf"]
-        for fmt in (None, "mp4"):
-            self.assertEqual(
-                RB.build_render_command("o.mp4", "draft", 24, 4, base, fmt=fmt),
-                RB.build_render_command("o.mp4", "draft", 24, 4, base))
-        webm = RB.build_render_command("o.webm", "draft", 24, 4, base, fmt="webm")
-        self.assertEqual(webm[webm.index("--format") + 1], "webm")
-        # --format 紧跟 -o，且仍在 --quality 之前
-        self.assertEqual(webm[len(base):],
-                         ["render", "-o", "o.webm", "--format", "webm",
+        cmd = RB.build_render_command("o.mp4", "draft", 24, 4, base)
+        self.assertEqual(cmd[len(base):],
+                         ["render", "-o", "o.mp4",
                           "--quality", "draft", "--fps", "24", "--workers", "4"])
-
-    def test_composition_flag_sits_between_render_and_output(self):
-        # hyperframes 把 render 后第一个非选项参数当项目目录，-c 放后面就换根了
-        cmd = RB.build_render_command("p.html.mp4", "draft", 24, 4,
-                                      [sys.executable, "hf"], composition="p.html")
-        self.assertEqual(cmd[:5], [sys.executable, "hf", "render", "-c", "p.html"])
+        self.assertNotIn("--format", cmd)
 
     def test_resolve_command_is_idempotent_for_strings(self):
         self.assertEqual(RB.resolve_command("cmd /c x"), "cmd /c x")

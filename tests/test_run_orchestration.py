@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import _helpers as H
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 import _degraded as D
 import run as R
 from _script_utils import write_json_atomic
@@ -118,32 +118,25 @@ class FlagPassthrough(unittest.TestCase):
         self.assertIn("--voice-id", self.h.tts_argv)
         self.assertIn("--on-fail", self.h.tts_argv)
         # 显式给出才透传：不给由 pipeline 用自己的默认值
-        for opt in ("--gap", "--bgm", "--bgm-volume", "--voice-style",
-                    "--loudness"):
+        for opt in ("--gap", "--voice-style"):
             self.assertNotIn(opt, self.h.tts_argv)
 
-    def test_no_resume_omits_flag(self):
-        self.h.invoke(["--until", "tts", "--no-resume"])
-        self.assertNotIn("--resume", self.h.tts_argv)
-
     def test_optional_flags_forward(self):
-        self.h.invoke(["--until", "tts", "--gap", "0.7", "--bgm", "b.mp3",
-                       "--bgm-volume", "0.2", "--voice-style", "轻快",
-                       "--loudness", "-16"])
-        for pair in (("--gap", "0.7"), ("--bgm", "b.mp3"),
-                     ("--bgm-volume", "0.2"), ("--voice-style", "轻快"),
-                     # argparse type=float 后 str() 透传：-16 → "-16.0"
-                     # （与拆分前的旧拼接命令同一形态，非本次改动）
-                     ("--loudness", "-16.0")):
+        self.h.invoke(["--until", "tts", "--gap", "0.7", "--voice-style", "轻快"])
+        for pair in (("--gap", "0.7"), ("--voice-style", "轻快")):
             self.assertIn(pair[0], self.h.tts_argv)
             self.assertEqual(self.h.tts_argv[self.h.tts_argv.index(pair[0]) + 1],
                              pair[1])
 
-    def test_bgm_volume_without_bgm_rejected_before_tts(self):
-        with self.assertRaises(SystemExit) as cm:
-            self.h.invoke(["--until", "tts", "--bgm-volume", "0.2"])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIsNone(self.h.tts_argv, "校验必须先于 TTS 步骤")
+    def test_gap_help_default_matches_the_single_source(self):
+        """--gap 的 help 不许自己抄一份默认值：DEFAULT_GAP 一改，help 就漂。
+
+        证伪：原先这句写死"默认 0.4"，而真源是 _timeline.DEFAULT_GAP——隔壁 --speed
+        用 f-string 引 DEFAULT_SPEED，这一条却是抄下来的字面量，改默认值时只有
+        --speed 跟着变。
+        """
+        from _timeline import DEFAULT_GAP
+        self.assertIn("默认 {:g}".format(DEFAULT_GAP), R._build_parser().format_help())
 
     def test_nan_speed_rejected(self):
         with self.assertRaises(SystemExit) as cm:
@@ -222,19 +215,23 @@ class Gates(unittest.TestCase):
     def _degrade(self):
         self.h.make_images_complete()
         self.h.manifest["status"] = "degraded"
-        self.h.manifest["degraded"] = {D.BGM_MIX_FAILED: True}
+        self.h.manifest["degraded"] = {D.LOST_SENTENCE_COUNT: 1}
 
     def test_degraded_blocks_render_exit3(self):
         self._degrade()
         with self.assertRaises(SystemExit) as cm:
             self.h.invoke([])
         self.assertEqual(cm.exception.code, 3)
+        # 阻断信息必须附上可执行的补录路径——降级句带指纹缓存，会被
+        # --resume 一直复用，没有这条提示，隔天重跑仍会卡在同一处静音。
+        self.assertIn("补录", self.h.last_err)
+        self.assertIn(os.path.join(self.h.out, "sentences"), self.h.last_err)
 
     def test_degraded_allowed_until_html_marks_report(self):
         self._degrade()
         self.h.invoke(["--until", "html", "--allow-degraded"])
         rep = self.h.report()
-        self.assertEqual(rep["degraded"][0]["type"], "bgm_mix_failed")
+        self.assertEqual(rep["degraded"][0]["type"], "tts_lost_sentences")
 
 
 class FailurePropagation(unittest.TestCase):
@@ -296,191 +293,6 @@ class HappyPath(unittest.TestCase):
         self.assertEqual(os.path.basename(call["out"]), "out.mp4")
         self.assertGreaterEqual(call["max_wait"], 1800.0)
         self.assertIn("fakehf", call["cmd"])
-
-
-class OnlyPreview(unittest.TestCase):
-    """--only 单段快渲：复用假 TTS 产物，走独立分支，正式产物一个都不碰。"""
-
-    def setUp(self):
-        self.h = Harness()
-        self.addCleanup(self.h.cleanup)
-        os.makedirs(os.path.join(self.h.out, "audio"), exist_ok=True)
-        with open(os.path.join(self.h.out, "audio", "combined.wav"), "wb") as f:
-            f.write(b"RIFF")
-        self.h.make_images_complete()
-        self.write_manifest(self.h.manifest)
-        self.trimmed = []
-
-    def write_manifest(self, manifest):
-        write_json_atomic(os.path.join(self.h.out, "timing_manifest.json"),
-                          manifest)
-
-    def _trim(self, ffmpeg, src, dst, start, duration):
-        self.trimmed.append({"src": src, "dst": dst, "start": start,
-                             "duration": duration})
-        with open(dst, "wb") as f:
-            f.write(b"RIFF")
-
-    def invoke(self, sid, extra=()):
-        # ffmpeg 三件套全换掉：本文件测编排，切片与量时长是 _audio 自己的题。
-        with mock.patch.object(R, "trim_audio", self._trim), \
-             mock.patch.object(R, "get_ffmpeg", lambda: "fakeffmpeg"), \
-             mock.patch.object(R, "measure_duration",
-                               lambda *a: self.trimmed[-1]["duration"]):
-            return self.h.invoke(["--only", sid] + list(extra))
-
-    def _preview(self, name):
-        return os.path.join(self.h.project, name)
-
-    def test_tts_never_reruns_and_official_outputs_untouched(self):
-        self.invoke("seg-a")
-        self.assertIsNone(self.h.tts_argv, "--only 复用上次配音，不重跑 TTS")
-        call = self.h.render_calls[0]
-        self.assertEqual(os.path.basename(call["out"]), "preview_seg-a.mp4")
-        # -c 必须紧跟 render：hyperframes 把第一个非选项参数当项目目录
-        self.assertEqual(call["cmd"][call["cmd"].index("-c") + 1],
-                         "preview_seg-a.html")
-        self.assertFalse(os.path.exists(self._preview("index.html")))
-        self.assertFalse(os.path.exists(self._preview("out.mp4")))
-        self.assertFalse(os.path.exists(os.path.join(
-            self.h.out, "production_report.json")), "预览不能覆盖正式生产报告")
-        self.assertTrue(os.path.exists(self._preview("preview_seg-a.report.json")))
-
-    def test_subset_manifest_and_images_feed_the_html_step(self):
-        self.invoke("seg-a")
-        sub_manifest = self._preview("preview_seg-a.manifest.json")
-        sub_images = self._preview("preview_seg-a.images.json")
-        self.assertEqual(self.h.gen_argv[self.h.gen_argv.index("-m") + 1],
-                         sub_manifest)
-        with open(sub_manifest, encoding="utf-8") as f:
-            subset = json.load(f)
-        self.assertEqual([s["id"] for s in subset["segments"]], ["seg-a"])
-        self.assertEqual([s["start_time"] for s in subset["sentences"]],
-                         [0.0, 2.4])
-        with open(self._preview("preview_seg-a.images.json"),
-                  encoding="utf-8") as f:
-            self.assertEqual(list(json.load(f)), ["seg-a"])
-
-    def test_window_cuts_from_next_speech_backwards(self):
-        # seg-a 播到 6.8s，但这一页在片中的窗口一直留到 seg-b 开口（7.2s）
-        self.invoke("seg-a")
-        cut = self.trimmed[0]
-        self.assertEqual((cut["start"], cut["duration"]), (2.4, 4.8))
-        self.assertTrue(cut["src"].endswith(os.path.join("audio", "combined.wav")))
-
-    def test_carry_chain_is_rendered_from_its_head(self):
-        path = os.path.join(self.h.project, "images.json")
-        with open(path, encoding="utf-8") as f:
-            mapping = json.load(f)
-        mapping["seg-b"]["stage"] = "keep"
-        mapping["seg-b"]["src"] = mapping["seg-a"]["src"]
-        write_json_atomic(path, mapping)
-        out, _ = self.invoke("seg-b")
-        self.assertIn("接续", out)
-        self.assertEqual(self.trimmed[0]["start"], 2.4, "切片起点要退到链首")
-        with open(self._preview("preview_seg-b.manifest.json"),
-                  encoding="utf-8") as f:
-            self.assertEqual([s["id"] for s in json.load(f)["segments"]],
-                             ["seg-a", "seg-b"])
-
-    def test_missing_tts_product_blocks(self):
-        os.remove(os.path.join(self.h.out, "timing_manifest.json"))
-        with self.assertRaises(SystemExit) as cm:
-            self.invoke("seg-a")
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIn("timing_manifest.json", self.h.last_err)
-
-    def test_tts_flags_are_rejected_not_ignored(self):
-        with self.assertRaises(SystemExit) as cm:
-            self.h.invoke(["--only", "seg-a", "--speed", "1.2"])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIn("--speed", self.h.last_err)
-
-    def test_dry_run_and_early_until_are_rejected(self):
-        for extra in (["--dry-run"], ["--until", "tts"], ["--until", "images"]):
-            with self.assertRaises(SystemExit):
-                self.h.invoke(["--only", "seg-a"] + extra)
-
-    def test_missing_image_blocks_even_with_until_html(self):
-        path = os.path.join(self.h.project, "images.json")
-        with open(path, encoding="utf-8") as f:
-            mapping = json.load(f)
-        mapping.pop("seg-a")
-        write_json_atomic(path, mapping)
-        with self.assertRaises(SystemExit) as cm:
-            self.invoke("seg-a", ["--until", "html"])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIsNone(self.h.gen_argv, "预览只服务定稿的页")
-
-    def test_alpha_container_applies_to_the_preview_too(self):
-        # 预览片同样要能出透明底：AE 里叠一版单页动画就靠这条
-        _, _ = self.invoke("seg-a", ["--format", "mov", "--alpha"])
-        call = self.h.render_calls[0]
-        self.assertEqual(os.path.basename(call["out"]), "preview_seg-a.mov")
-        self.assertEqual(call["cmd"][call["cmd"].index("--format") + 1], "mov")
-        self.assertIn("--alpha", self.h.gen_argv)
-
-    def test_degraded_product_warns_but_ships_the_preview(self):
-        self.h.manifest["status"] = "degraded"
-        self.h.manifest["degraded"] = {D.BGM_MIX_FAILED: True}
-        self.write_manifest(self.h.manifest)
-        _, err = self.invoke("seg-a", ["--until", "html"])
-        self.assertIn("degraded", err)
-        self.assertIsNotNone(self.h.gen_argv)
-        with open(self._preview("preview_seg-a.report.json"),
-                  encoding="utf-8") as f:
-            self.assertEqual([d["type"] for d in json.load(f)["degraded"]],
-                             [D.BGM_MIX_FAILED])
-
-
-class FormatAndAlpha(unittest.TestCase):
-    """--format / --alpha：容器透传 + 透明底的入参校验。
-
-    透明本身由 hyperframes 与 CSS 保证（各自有题），这里只锁编排层的两件事：
-    --alpha 只允许配 mov（实测另两个容器都拿不到 alpha 平面，交付一片黑底），
-    以及两面旗各自落到哪一步。
-    """
-
-    def setUp(self):
-        self.h = Harness()
-        self.addCleanup(self.h.cleanup)
-        self.h.make_images_complete()
-
-    def test_alpha_with_mp4_is_rejected_before_any_step(self):
-        with self.assertRaises(SystemExit) as cm:
-            self.h.invoke(["--alpha"])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIn("mov", self.h.last_err)
-        self.assertIsNone(self.h.tts_argv, "入参校验必须早于 TTS")
-
-    def test_alpha_with_webm_is_rejected_too(self):
-        # 2026-10 实测：hyperframes 渲 webm 时不落 alpha 平面，透明处压成纯黑。
-        # 拦下比让交付方自己发现黑底便宜。
-        with self.assertRaises(SystemExit) as cm:
-            self.h.invoke(["--format", "webm", "--alpha"])
-        self.assertEqual(cm.exception.code, 2)
-        self.assertIn("丢平面", self.h.last_err)
-        self.assertIsNone(self.h.tts_argv)
-
-    def test_mov_plus_alpha_reaches_both_steps(self):
-        self.h.invoke(["--format", "mov", "--alpha"])
-        self.assertIn("--alpha", self.h.gen_argv)
-        call = self.h.render_calls[0]
-        self.assertEqual(os.path.basename(call["out"]), "out.mov")
-        self.assertEqual(call["cmd"][call["cmd"].index("--format") + 1], "mov")
-        rep = self.h.report()
-        self.assertEqual(rep["params"]["format"], "mov")
-        self.assertTrue(rep["params"]["alpha"])
-
-    def test_default_flow_sends_neither_flag(self):
-        self.h.invoke([])
-        self.assertNotIn("--alpha", self.h.gen_argv)
-        self.assertNotIn("--format", self.h.render_calls[0]["cmd"])
-
-    def test_format_only_gives_opaque_video_in_that_container(self):
-        # 只换容器不关底：--alpha 是画面开关，不是容器开关，两者互不隐含
-        self.h.invoke(["--format", "webm"])
-        self.assertNotIn("--alpha", self.h.gen_argv)
 
 
 class ArchitecturePin(unittest.TestCase):

@@ -162,6 +162,26 @@ class SettleElementState(unittest.TestCase):
         self.assertIn("opacity:0", style)
         self.assertIn("visibility:hidden", style)
 
+    def test_auto_alpha_relative_amount_starts_from_the_computed_base(self):
+        """autoAlpha 的相对量也按计算值起算，与 opacity 那条同一口径。
+
+        证伪：基值原先无条件按 1.0 起算，于是 opacity="0.2" 的元素上
+        `autoAlpha:"+=0.5"` 烘焙出 1、`opacity:"+=0.5"` 却烘焙出 0.7（实测）——同一
+        元素的两条等价写法烘焙出两个值，接续页就在页界静默跳一下，正是本模块要消灭
+        的那个阶跃。
+        """
+        svg = ('<svg xmlns="%s" viewBox="0 0 1080 1440">'
+               '<rect id="plate" x="60" y="300" width="960" height="500" opacity="0.2"/>'
+               "</svg>") % NS
+        for prop in ("autoAlpha", "opacity"):
+            with self.subTest(prop=prop):
+                out, _ = _bake([{"target": "#plate", "to": {prop: "+=0.5"}}],
+                               markup=svg)
+                self.assertIn("opacity:0.7", _find(out, "plate").get("style"))
+        # autoAlpha 还要顺带把 visibility 带上：0.7 > 0，所以是 visible。
+        out, _ = _bake([{"target": "#plate", "to": {"autoAlpha": "+=0.5"}}], markup=svg)
+        self.assertIn("visibility:visible", _find(out, "plate").get("style"))
+
 
 class FoldCamera(unittest.TestCase):
     def test_resting_pose_becomes_one_static_layer(self):
@@ -201,6 +221,73 @@ class FoldCamera(unittest.TestCase):
         self.assertEqual(crop_warnings(raw, own), [])
         warns = crop_warnings(carried, own)
         self.assertTrue(any("#num" in w and "下边" in w for w in warns), warns)
+
+
+class RepeatAndYoyoCarry(unittest.TestCase):
+    """`repeat` / `yoyo` 的收尾态：接续烘焙按"最后真的停在哪一头"搬。"""
+
+    def test_yoyo_even_cycles_is_not_carried(self):
+        # 呼吸一拍：偶数遍收在起点，下一页接手时它本来就是那个样子，没什么可搬
+        out, notes = _bake([{"target": "#plate", "to": {"opacity": 1},
+                             "repeat": 1, "yoyo": True}])
+        self.assertNotIn("style", _find(out, "plate").attrib)
+        self.assertEqual(notes, [])
+
+    def test_yoyo_odd_cycles_carries_the_target(self):
+        out, _ = _bake([{"target": "#plate", "to": {"opacity": 1},
+                         "repeat": 2, "yoyo": True}])
+        self.assertIn("opacity:1", _find(out, "plate").get("style"))
+
+    def test_repeat_without_yoyo_carries_the_target(self):
+        out, _ = _bake([{"target": "#plate", "to": {"opacity": 1}, "repeat": 5}])
+        self.assertIn("opacity:1", _find(out, "plate").get("style"))
+
+    def test_infinite_repeat_is_skipped_and_named(self):
+        """永远演不完就没有"最后停在哪儿"：跳过必须出声，静默少搬一样查不出来。"""
+        out, notes = _bake([{"target": "#plate", "to": {"opacity": 1}, "repeat": -1}])
+        self.assertNotIn("style", _find(out, "plate").attrib)
+        self.assertTrue(any("repeat:-1" in n and "#plate" in n for n in notes), notes)
+
+    def test_infinite_camera_step_blocks_the_whole_fold(self):
+        """一条永不停下的相机步就让整台相机的收尾位不作数：宁可不折，也不折编出来的姿态。"""
+        steps = [{"target": "#cam", "to": {"scale": "*=1.2"}},
+                 {"target": "#cam", "to": {"y": "+=80"}, "repeat": -1, "yoyo": True}]
+        out, notes = _bake(steps)
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertTrue(any("repeat:-1" in n and "#cam" in n for n in notes), notes)
+
+    def test_non_cam_infinite_loop_no_longer_claims_camera_skips(self):
+        """实测翻车回归：repeat:-1 打在非相机元素上，相机照常折，告警不得自相矛盾。
+
+        demo 里 #dot1 无限循环 + #cam 收尾推近，旧文案同时打印"相机…一律不折"和
+        "相机收尾位已折进本层"——_fold_camera 只认 target=="#cam" 的步，非相机
+        无限循环根本不进它的结算，旧那句是假话。
+        """
+        steps = [{"target": "#plate", "to": {"opacity": 0.5}, "duration": 0.6,
+                  "repeat": -1},
+                 {"target": "#cam", "to": {"scale": 1.2, "x": -20}, "duration": 1.0}]
+        out, notes = _bake(steps)
+        # 相机照常折了：data-ctv-stage 层在，且只有元素终态不搬
+        self.assertIn('data-ctv-stage="1"', out)
+        joined = " ".join(notes)
+        self.assertIn("#plate", joined)
+        self.assertNotIn("一律不折", joined)
+        self.assertNotIn("相机只要有一条这样的步", joined)
+        # 相机步单独出声的那条只会在相机自己无限循环时出现——这里没有
+        self.assertFalse(any("相机永不停下" in n for n in notes), notes)
+
+    def test_cam_infinite_loop_note_says_camera_not_folded(self):
+        """相机步无限循环：明确出声"相机不折"（旧版这层静默，作者以为镜头会带进下一页）。"""
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2},
+                             "duration": 0.6, "repeat": -1}])
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertTrue(any("相机永不停下" in n and "repeat:-1" in n for n in notes), notes)
+
+    def test_camera_that_yoys_back_is_not_folded(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": "*=1.2", "y": "+=80"},
+                             "repeat": 1, "yoyo": True}])
+        self.assertNotIn("data-ctv-stage", out)
+        self.assertEqual(notes, [])
 
 
 def _stage_pose(markup):

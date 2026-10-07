@@ -10,7 +10,6 @@
     python scripts/check_svg.py images/seg1.svg images/seg2.svg
     python scripts/check_svg.py images/                       # 目录：检查其中全部 .svg
     python scripts/check_svg.py images/seg3.svg --layout canvas --aspect landscape
-    python scripts/check_svg.py images/ --theme cream
 
 检查项（error 让退出码为 1，warn 只提示）：
   - 根节点：纯数字 width/height 或 viewBox；槽位版式必须 4:3，整页画布必须与
@@ -21,8 +20,8 @@
     写成 em/%/class 读不出绝对值的文字数量                              [warn]
   - 对比度：文字用字面 hex 填充时，对**主题渐变的最坏一档** stop 算 WCAG 对比度；
     低于 3:1 为 error，低于 4.5:1 为 warn；背景族（深蓝 #0c1320/#16233a/#1a2536 加上
-    当前主题渐变的各档 stop）当文字色为 error——只在深色页底主题（默认 dark）下查，
-    cream 页底下深蓝恰是推荐正文色系，而且只查槽位。整页画布只 warn 不 error：画布上
+    当前主题渐变的各档 stop）当文字色为 error——只在深色页底主题（dark，唯一主题）下查，
+    且只查槽位。整页画布只 warn 不 error：画布上
     的字可能压着自己画的浅色局部底板，按页底算出来的数对它不成立
   - 透明度：文字带 opacity / fill-opacity < 0.8                          [warn]
     （整页画布上的 opacity=0 除外：那是导演逐拍点亮的起始态，终帧才亮）
@@ -76,9 +75,8 @@ BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
 # 已漂移，对比度门禁一直在拿不存在的颜色当基准。
 PAGE_BG = {t: theme_bg_stops(t)[1] for t in list_theme_names()}
 # BG_FAMILY 抓的失败模式是"深蓝文字待在浅色局部底板上"——对页底对比度正常、
-# 只有家族判定能抓；浅色页底（cream）下深蓝族恰是推荐正文色系（#27405f 同族），
-# 检查只剩假阳性，故只在深色页底主题下启用。家族集合并入当前主题渐变 stop：
-# 手抄族会与注册表漂移（上一版 PAGE_BG 的注释记的就是这类漂移）。
+# 只有家族判定能抓；单一深色主题（dark）下始终启用。家族集合并入当前主题渐变
+# stop：手抄族会与注册表漂移（上一版 PAGE_BG 的注释记的就是这类漂移）。
 _BG_BY_THEME = {}
 
 
@@ -309,11 +307,18 @@ def check_file(path, layout, aspect, theme):
             lk = _local(k).lower()
             if lk.startswith("on"):
                 errors.append(f"<{tag}> 带事件属性 {lk}")
-            if lk == "href" and v.strip().lower().startswith(("http://", "https://", "//")):
-                errors.append(f"<{tag}> 引用外链资源 {v[:60]}")
-        if tag == "style" and el.text and re.search(r"@import|url\(\s*['\"]?https?:", el.text, re.I):
+            _lv = v.strip().lower()
+            if lk == "href" and (
+                    _lv.startswith("//")
+                    or re.match(r"^[a-z][a-z0-9+.-]*:", _lv)):
+                # 与净化器同一口径：任何 scheme 都算外部资源（file:/data:/
+                # blob:/javascript: …），内部片段 "#id" 与相对路径放行。
+                errors.append(f"<{tag}> 引用外链/脚本/本地文件资源 {v[:60]}")
+        if tag == "style" and el.text and re.search(
+                r"@import|url\(\s*['\"]?(?:https?:|//|file:|data:)", el.text, re.I):
             errors.append("<style> 里有 @import 或外链 url()")
-        if el.get("style") and re.search(r"url\(\s*['\"]?https?:", el.get("style"), re.I):
+        if el.get("style") and re.search(
+                r"url\(\s*['\"]?(?:https?:|//|file:|data:)", el.get("style"), re.I):
             errors.append(f"<{tag}> 的 style 里有外链 url()")
         if (tag == "style" and el.text and re.search(r"\b(animation|transition)\b", el.text, re.I)) \
                 or (el.get("style") and re.search(r"\b(animation|transition)\b", el.get("style"), re.I)):
@@ -456,8 +461,6 @@ def main():
                     help="slot = 4:3 槽位配图（默认）；canvas = 整页画布")
     ap.add_argument("--aspect", choices=list(CANVAS), default="portrait",
                     help="画幅（仅 --layout canvas 用到，默认 portrait）")
-    ap.add_argument("--theme", choices=list(PAGE_BG), default=DEFAULT_THEME,
-                    help=f"按哪个主题的页底色算对比度（默认 {DEFAULT_THEME}）")
     args = ap.parse_args()
 
     files = collect(args.paths)
@@ -466,7 +469,7 @@ def main():
         return 2
     n_err = n_warn = 0
     for f in files:
-        errors, warns = check_file(f, args.layout, args.aspect, args.theme)
+        errors, warns = check_file(f, args.layout, args.aspect, DEFAULT_THEME)
         status = "FAIL" if errors else ("WARN" if warns else "OK")
         print(f"[{status}] {f}")
         for e in dict.fromkeys(errors):

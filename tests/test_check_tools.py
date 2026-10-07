@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-import _helpers as H
+import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
 import check_docs
 import gen_hyperframes
@@ -42,6 +42,26 @@ class SvgChecker(unittest.TestCase):
         self.assertTrue(any("<script>" in e for e in errs))
         self.assertTrue(any("外链" in e for e in errs))
 
+    def test_file_and_data_scheme_hrefs_are_errors(self):
+        """写图门禁与净化器同一口径：file:/data: 这类 scheme 也是外部资源。"""
+        for bad in ('file:///etc/passwd', 'data:text/plain,abc',
+                    'javascript:alert(1)'):
+            with self.subTest(href=bad):
+                errs, _ = self.run_check(
+                    GOOD.replace("</svg>", f'<image href="{bad}"/></svg>'))
+                self.assertTrue(any("外链" in e for e in errs), errs)
+
+    def test_fragment_and_relative_hrefs_are_allowed(self):
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>", '<use href="#t"/><image href="images/p.png"/></svg>'))
+        self.assertFalse(any("外链" in e for e in errs), errs)
+
+    def test_css_url_file_scheme_is_error(self):
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         '<style>.a{background:url(file:///etc/motd)}</style></svg>'))
+        self.assertTrue(any("外链 url()" in e for e in errs), errs)
+
     def test_entity_declaration_refused(self):
         errs, _ = self.run_check('<!DOCTYPE svg [<!ENTITY a "b">]><svg xmlns="http://www.w3.org/2000/svg"/>')
         self.assertTrue(errs)
@@ -49,15 +69,6 @@ class SvgChecker(unittest.TestCase):
     def test_background_family_as_text_fill(self):
         errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"))
         self.assertTrue(any("背景色族" in e for e in errs))
-
-    def test_background_family_not_checked_on_light_page(self):
-        # cream 页底下深蓝族恰是推荐正文色系，家族判定只剩假阳性
-        errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"), theme="cream")
-        self.assertFalse(any("背景色族" in e for e in errs))
-
-    def test_theme_mixup_caught(self):
-        errs, _ = self.run_check(GOOD, theme="cream")
-        self.assertTrue(any("对比度" in e for e in errs))
 
     def test_small_font_warns(self):
         _, warns = self.run_check(GOOD.replace('font-size="36"', 'font-size="18"'))
@@ -178,29 +189,6 @@ class CanvasDensity(unittest.TestCase):
         self.assertEqual(check_svg._largest_empty_band([(0, 10), (5, 20), (100, 120)], 200),
                          (20.0, 100.0))
         self.assertEqual(check_svg._largest_empty_band([], 200), (0.0, 200.0))
-
-
-class SvgIntrinsicSize(unittest.TestCase):
-    """gen_hyperframes 读 SVG 根尺寸：门禁端要与 check_svg 同一口径。"""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.path = os.path.join(self.tmp.name, "a.svg")
-
-    def size(self, attrs):
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write('<svg xmlns="http://www.w3.org/2000/svg" ' + attrs + "></svg>")
-        return gen_hyperframes._svg_intrinsic_size(self.path)
-
-    def test_px_suffix_accepted_like_check_svg(self):
-        self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0))
-
-    def test_other_unit_and_prefixed_attr_not_misread(self):
-        self.assertIsNone(self.size('width="50%" height="50%"'))
-        # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
-        self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
-                         (980.0, 735.0))
 
 
 class SvgIntrinsicSize(unittest.TestCase):

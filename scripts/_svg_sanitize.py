@@ -38,7 +38,22 @@ _WALLCLOCK_CSS = re.compile(
     r"(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
     re.I)
 # 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
-_EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|data:text/html)", re.I)
+# url() 上下文一并拦 file:/data:——CSS 里 url(file:…) 同样会把本地文件拉进
+# 成片（HTML 以 file:// 打开时可达本机磁盘）。
+# 匹配一直吃到收尾的 `)`：替换是"整颗 url() 换成 about:blank"，只吃 scheme 那一截
+# 会留下半截（`url(about:blank//evil.com/x.png)` 既不成语法、URL 也还看得见）。
+_EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re.I)
+# CSS 注释：下面每条判定（@import / 外链 / 墙钟 / @keyframes）都只看真 CSS，所以注释
+# 先剥。不剥的后果实测过：`/* 用 @keyframes 做循环 */ .a{fill:red}` 里那条 .a 会被
+# 当成 @keyframes 的规则体吃掉。注释无语义，剥掉不损失任何东西。
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# href 的 scheme 判定：任何 "scheme:" 开头都算外部资源（file:/data:/blob:/
+# chrome:/javascript: 等一律不收——内联 SVG 是同源活节点，且产物 HTML 常以
+# file:// 打开，file: 引用会触及本机磁盘）。内部片段 "#id" 与相对路径除外。
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+# @keyframes 规则（含厂商前缀）的起始标记：剥定义用的，见 _strip_keyframes。
+# 前缀组 [a-z]* 可为零字符，纯 @keyframes 也要命中（@-webkit-keyframes 靠 -? 接上）。
+_KEYFRAMES_AT = re.compile(r"@-?[a-z]*-?keyframes\b", re.I)
 
 
 def _local(tag):
@@ -47,25 +62,80 @@ def _local(tag):
 
 def _is_external_href(value):
     v = (value or "").strip().lower()
-    return (v.startswith(("http://", "https://", "//", "javascript:"))
+    if not v or v.startswith("#"):
+        # 空值 / 内部片段引用（<use href="#id"> 同文档引用）合法。
+        return False
+    return (_SCHEME_RE.match(v) is not None
+            or v.startswith("//")
             or _EXT_URL.search(v) is not None)
 
 
+def _strip_keyframes(css):
+    """剥掉 @keyframes（含厂商前缀）规则体：墙钟动画的定义本身。
+
+    声明剥掉后规则体还留在 <style> 里，等于把作者写死的旧动画原样带进
+    成片——@keyframes 本身不驱动任何元素（惰性），但"墙钟动画已剥净"的
+    不变量应该连定义一起兑现。用括号配平扫：规则体里每个 keyframe 选择器
+    各带一层 {}（总深度 2），配平到 0 就是规则结束。遇到未闭合的残缺规则
+    就保留剩余文本（解析器对坏 CSS 的容忍，净化不越权去修它）。
+
+    存在性判定用 `_KEYFRAMES_AT`（唯一真源）而不是再写一遍 "@keyframes" 子串：
+    子串认不出厂商前缀（实测 `@-webkit-keyframes` 整块留下不剥），而前缀形式正是
+    它存在的理由。
+    """
+    m0 = _KEYFRAMES_AT.search(css)
+    if not m0:
+        return css
+    out = []
+    i, n = 0, len(css)
+    while i < n:
+        m = _KEYFRAMES_AT.search(css, i)
+        if not m:
+            out.append(css[i:])
+            break
+        out.append(css[i:m.start()])
+        j, depth = m.start(), 0
+        while j < n:
+            ch = css[j]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        if depth != 0:
+            # 没配平到 0 = 残缺规则。按上面那条口径保留剩余文本：硬删会把
+            # @keyframes 之后**所有**合法规则一起吞掉（实测注释里提一句就把
+            # 下一条规则吃掉），净化不越权替作者修坏 CSS。
+            out.append(css[m.start():])
+            break
+        i = j
+    return "".join(out)
+
+
 def _clean_style_text(css, notes):
-    """从 <style> 文本里剥掉墙钟动画声明与外链 url()/@import。"""
+    """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）与外链 url()/@import。"""
     if not css:
         return css
-    out = css
+    out = _CSS_COMMENT.sub("", css)
     if re.search(r"@import", out, re.I):
         out = re.sub(r"@import[^;]*;?", "", out, flags=re.I)
         notes.append("<style> 里的 @import 已删除（外链资源不进成片）")
     if _EXT_URL.search(out):
-        out = _EXT_URL.sub("url(about:blank", out)
+        out = _EXT_URL.sub("url(about:blank)", out)
         notes.append("<style> 里的外链 url() 已中和")
     if _WALLCLOCK_CSS.search(out):
         out = _WALLCLOCK_CSS.sub("", out)
-        notes.append("<style> 里的 CSS animation/transition 已剥离"
+        notes.append("<style> 里的 CSS animation/transition 声明已剥离"
                      "（墙钟动画在逐帧渲染里不可复现；要动请用 director 补间）")
+    if _KEYFRAMES_AT.search(out):
+        out = _strip_keyframes(out)
+        notes.append("<style> 里的 @keyframes 规则已剥离"
+                     "（墙钟动画的定义；要动请用 director 补间）")
+    # 声明被剥掉后留下的空壳选择器（.a{}）一并清掉，不留死规则。
+    out = re.sub(r"[^{}]*\{\s*\}", "", out)
     return out
 
 
@@ -75,7 +145,7 @@ def _clean_style_attr(el, notes):
         return
     new = st
     if _EXT_URL.search(new):
-        new = _EXT_URL.sub("url(about:blank", new)
+        new = _EXT_URL.sub("url(about:blank)", new)
         notes.append(f"<{_local(el.tag)}> 的 style 外链 url() 已中和")
     if _WALLCLOCK_CSS.search(new):
         new = _WALLCLOCK_CSS.sub("", new)

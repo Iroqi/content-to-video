@@ -68,7 +68,7 @@ _TEMPLATE_JSON = r'''
       },
       "title": {
         "top": 80,
-        "fontSize": 72,
+        "fontSize": 64,
         "maxLines": 2,
         "glow": 40
       },
@@ -95,6 +95,16 @@ _TEMPLATE_JSON = r'''
       },
       "grid": {
         "size": 60
+      },
+      "ambience": {
+        "rx": 58,
+        "ry": 42,
+        "cx": 50,
+        "cy": 50,
+        "alpha": 15,
+        "edge": 72,
+        "agendaCx": 50,
+        "agendaCy": 50
       },
       "agenda": {
         "insetX": 72,
@@ -162,6 +172,16 @@ _TEMPLATE_JSON = r'''
       "grid": {
         "size": 60
       },
+      "ambience": {
+        "rx": 46,
+        "ry": 52,
+        "cx": 68,
+        "cy": 50,
+        "alpha": 13,
+        "edge": 70,
+        "agendaCx": 50,
+        "agendaCy": 45
+      },
       "agenda": {
         "insetX": 96,
         "insetTop": 80,
@@ -183,6 +203,14 @@ _TEMPLATE_JSON = r'''
         "titleGlow": 48
       }
     }
+  },
+  "canvasAmbience": {
+    "rx": 135,
+    "ry": 85,
+    "cx": 50,
+    "cy": 42,
+    "alpha": 13,
+    "edge": 82
   },
   "animation": {
     "titleEntrance": {
@@ -219,6 +247,35 @@ _TEMPLATE_JSON = r'''
     "director": {
       "duration": 0.5,
       "ease": "power2.out"
+    },
+    "opening": {
+      "apple": {
+        "title": {
+          "blur": 16,
+          "scale": 1.06,
+          "duration": 1.6,
+          "ease": "power3.out"
+        },
+        "kicker": {
+          "blur": 8,
+          "delay": 0.4,
+          "duration": 1.2,
+          "ease": "power2.out"
+        },
+        "rows": {
+          "delay": 0.7,
+          "duration": 0.7,
+          "stagger": 0.12,
+          "y": 24,
+          "ease": "power2.out"
+        },
+        "halo": {
+          "in": 1.6,
+          "opacity": 0.55,
+          "breatheTo": 0.35,
+          "breatheDur": 1.2
+        }
+      }
     }
   },
   "typography": {
@@ -226,7 +283,7 @@ _TEMPLATE_JSON = r'''
     "monoStack": "ui-monospace, \"SF Mono\", Consolas, \"Courier New\", monospace",
     "titleWeight": 900,
     "taglineWeight": 600,
-    "titleLineHeight": 1.32,
+    "titleLineHeight": 1.45,
     "titleTracking": "-0.02em"
   }
 }

@@ -14,6 +14,7 @@ MiMo 实现细节。第二个提供方到达时：在本文件（或新模块）
 签名的类即可，synth_sentence 一行不动。
 """
 import base64
+import binascii
 import json
 import urllib.error
 import urllib.request
@@ -98,9 +99,19 @@ def _audio_from_response(payload):
     显式检查结构而不是直接下钻 data：端点/模型配错时 message.audio 不存在，
     裸 KeyError 不带 status_code 会被归为可重试——每句白烧满 3 次 billable
     调用才放弃。这里转成确定性失败（见 BadAudioResponseError），首次即整句放弃。
+
+    类型也要查：网关返回畸形 body（顶层是数组、choices[0] 是字符串、data 不是
+    base64）时，下钻会抛 AttributeError/TypeError/binascii.Error。这些同样是
+    确定性失败——同一个错配的端点重试 100 次还是那个响应，而每句要白烧 3 次
+    计费调用。裸异常不带 status_code，is_non_retryable 会放它进重试队列。
     """
+    if not isinstance(payload, dict):
+        raise BadAudioResponseError(
+            f"TTS 响应是 {type(payload).__name__} 而不是对象——检查 "
+            f"--base-url 是否指向 OpenAI 兼容的 chat/completions 端点")
     choices = payload.get("choices") or []
-    message = choices[0].get("message") if choices else None
+    message = choices[0].get("message") if isinstance(choices, list) and choices \
+        and isinstance(choices[0], dict) else None
     audio = message.get("audio") if isinstance(message, dict) else None
     data = audio.get("data") if isinstance(audio, dict) else None
     if not data:
@@ -108,7 +119,13 @@ def _audio_from_response(payload):
             "TTS 响应不含音频（chat.completions 返回了纯文本）——"
             "检查 --model/--base-url 是否指向支持 audio 参数的"
             f" TTS 模型（默认 {DEFAULT_MODEL}），不要指向普通对话模型")
-    return base64.b64decode(data)
+    try:
+        return base64.b64decode(data)
+    except (binascii.Error, TypeError, ValueError) as e:
+        raise BadAudioResponseError(
+            f"TTS 响应的 audio.data 不是合法 base64（{e}）——端点返回了"
+            "非音频内容，检查 --base-url 是否指向支持 audio 参数的 TTS 模型"
+        ) from None
 
 
 def is_non_retryable(exc):

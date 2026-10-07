@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
+from _ease import validate_ease  # noqa: E402
 
 
 def validate_relative_project_path(src, where):
@@ -65,6 +66,37 @@ MEDIA_ENTRY_KEYS = frozenset({
     "inline_svg",
 })
 
+# 扩展名 → 媒体类型。gif 与 image 同档（都走 <img>，语义上 gif 就是一张会自己
+# 动的静态图），单列出来只为让 images.json 能显式写 type:"gif" 而不被拒。
+MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+
+
+def is_svg_path(path):
+    """这条路径是不是 SVG（"能不能被净化内联、有没有图内命名元素"那一问）。
+
+    生成端有三处各自问过它（缺图探测跳过、画布段必须 SVG、渲染端加 bare-media
+    类），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
+    endswith/splitext 就是五份真源：将来认一个 .svgz、或把大小写规则改一下，
+    只改到的一处会和其他四处分家，症状是"契约说能挂 director、渲染端却不内联"。
+    """
+    return os.path.splitext(str(path).lower())[1] == ".svg"
+
+
+def classify_media_path(path, explicit_type="auto"):
+    """根据文件扩展名和显式 type 判断媒体类型。
+
+    Returns:
+        "video" | "image" | "gif"
+    """
+    if explicit_type != "auto":
+        return explicit_type
+    ext = os.path.splitext(path.lower())[1]
+    if ext in MEDIA_VIDEO_EXTS:
+        return "video"
+    if ext == ".gif":
+        return "gif"
+    return "image"
+
 # director 的 target 只认单个 id / class 选择器，且字符集受限——它会被拼进 GSAP
 # 选择器字符串（`#img-{sid} {target}`），带引号/空格/逗号/伪类的写法轻则选择器失配、
 # 动画静默丢失，重则破坏脚本。与段 id 同一条收口思路（见 _segments._SID_RE）。
@@ -74,7 +106,13 @@ MEDIA_ENTRY_KEYS = frozenset({
 _DIRECTOR_TARGET_RE = re.compile(r"^([#.])[A-Za-z_][A-Za-z0-9_-]*$")
 _DIRECTOR_STEP_KEYS = frozenset({"at", "at_time", "target", "from", "to", "set",
                                  "draw", "morph", "count", "type", "stagger",
-                                 "duration", "ease", "delay"})
+                                 "duration", "ease", "delay", "repeat", "yoyo"})
+# 写在 from/to/set **里面**的旋钮：一律拒，指回 step 级。理由是这些键渲染端会自己覆盖或
+# 根本不读——`ease` 会被 step 级顶掉（写了等于没写），`duration`/`delay` 却会被 GSAP 真的
+# 吃掉，于是补间实际跨度与门禁拿去判窗的那个数分家（`beat_positions` 只读 step 级）。
+# 一处两个真源正是最坏形状：门禁的判词就成了谎话。
+_PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
+                                   "repeat", "yoyo"})
 # at_time 的相对写法：以 "+0.5" / "-0.2" 出现，含义是"上一条 beat 结束之后再过
 # 这么多秒"（首条则从段落音频起点算）。让整页画布的自由时间线能顺次链接节奏，
 # 不必每步手算绝对秒——重配音后绝对秒会整体漂移，相对链则跟着上一条走。
@@ -82,15 +120,25 @@ _RELATIVE_AT_TIME_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 
 
 def _validate_tween_vars(vars_, where):
-    """GSAP 补间变量：只允许 JSON 可序列化的值，禁任何 on* 回调键。
+    """GSAP 补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
 
     这些字典会被 json.dumps 成 JS 对象字面量注入内联脚本——JSON 转义挡住了
     字符串注入，但回调键（onStart/onUpdate/…）本身不是注入而是"在渲染页里
     执行任意 JS 逻辑"的入口，且信源不可信（SKILL.md 核心规则），一律不收。
     允许嵌套 dict（GSAP 的 attr:{} 等非 CSS 属性走它），逐层校验叶子是标量。
+
+    控制旋钮（_PAYLOAD_CONTROL_KEYS）判在这里而不是调用点判一次：调用点只认顶层，
+    `{"to": {"attr": {"duration": 2}}}` 就漏过去，把 duration="2" 写进 SVG 元素——
+    递归的这一层才是"每一层都不许有"的正确位置。
     """
     if not isinstance(vars_, dict):
         raise ValueError(f"{where} 必须是对象（GSAP 补间变量）")
+    clash = sorted(_PAYLOAD_CONTROL_KEYS & set(vars_))
+    if clash:
+        raise ValueError(
+            f"{where} 里写了 {clash}——这些旋钮只在 step 级有定义，"
+            "放在补间变量里要么被渲染端覆盖、要么让补间的真实跨度与门禁算的"
+            "那个数分家。把它们提到这一 step 上")
     for k, v in vars_.items():
         if not isinstance(k, str) or not k.strip():
             raise ValueError(f"{where} 的键必须是非空字符串（实际: {k!r}）")
@@ -205,8 +253,7 @@ def _validate_stagger(stagger, where):
             if not (isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))):
                 raise ValueError(f"{where} 的 from 必须是字符串或数字（实际: {v!r}）")
         elif k == "ease":
-            if not isinstance(v, str):
-                raise ValueError(f"{where} 的 ease 必须是字符串（实际: {v!r}）")
+            validate_ease(v, f"{where} 的 ease")
         else:  # each / amount
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
                 raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
@@ -309,18 +356,58 @@ def _validate_director(key, dirval):
                     "morph 做 path 形变、count 做数字滚动、type 做逐字揭示"
                     "（补间起止/瞬时赋值/描边生长/形状互变/数值递增/打字机）")
             for k in kinds:
+                # 控制旋钮（duration/ease/…）的拦截在 _validate_tween_vars 里，跟着
+                # 它一起递归——这里只查顶层的话，attr:{} 那类嵌套层就是漏网。
                 _validate_tween_vars(step[k], f"{where} 的 {k}")
-        # stagger 只对命中一组元素、且逐帧补间的 step 有意义（from/to/fromTo/set）；
-        # morph/count/type 各自负责整段、忽略 stagger。这里统一验形，渲染端按 kind 决定。
+        # stagger 只对"命中一组元素、逐帧补间"的 step 有意义（from/to/fromTo/set）。
+        # morph/count/type 各自负责整段、draw 是单条描边，渲染端会静默忽略 stagger——
+        # 与 repeat/yoyo 挂在纯 set 上同一类"写了等于没写"，契约层直接拒，别留成
+        # 作者以为在错峰、成片里全齐步的静默失效。
         if "stagger" in step:
             _validate_stagger(step["stagger"], f"{where} 的 stagger")
+            if not kinds:
+                raise ValueError(
+                    f"{where} 写了 stagger 却没有 from / to / set 补间——stagger 只对"
+                    "命中一组元素的逐帧补间有意义，morph / count / type / draw 各自负责"
+                    "整段，渲染端会忽略它。要么去掉 stagger，要么改写成 from/to/set 补间")
         for k in ("duration", "delay"):
             if k in step:
                 v = step[k]
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
                     raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
-        if "ease" in step and not isinstance(step["ease"], str):
-            raise ValueError(f"{where} 的 ease 必须是字符串（实际: {step['ease']!r}）")
+        if "ease" in step:
+            validate_ease(step["ease"], f"{where} 的 ease")
+        # repeat / yoyo：这一拍演完再演几遍、以及来回（GSAP 的同名补间变量）。整数而非
+        # 小数是故意的：GSAP 吃 0.5 这种"半遍"，而跨段接续与出画自查都要按"最后停在
+        # 哪一头"说话，半遍收尾在两者里都是猜。
+        if "repeat" in step:
+            v = step["repeat"]
+            if isinstance(v, bool) or not isinstance(v, int) or v < -1:
+                raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
+                                 f"0=只演一遍；实际: {v!r}）")
+        if "yoyo" in step and not isinstance(step["yoyo"], bool):
+            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
+                             f"（实际: {step['yoyo']!r}）")
+        # 反复必须挂在真会"演"的步上。纯 set 是瞬时赋值：门禁按"瞬时"推进相对链的游标，
+        # 而 GSAP 会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
+        # 在单遍上更是直接被忽略。静默失效的那一类宁可在契约层就说不通。
+        replayable = bool(draw or morph is not None or count is not None or typ is not None
+                          or "from" in step or "to" in step)
+        if (step.get("repeat") or step.get("yoyo")) and not replayable:
+            raise ValueError(
+                f"{where} 写了 repeat / yoyo 却没有可重放的补间（from / to / draw / morph /"
+                " count / type 一个都没有）——纯 set 是瞬时赋值，重放它在成片里看不出区别，"
+                "只会让门禁算的落点和渲染端用的落点分家")
+        if step.get("yoyo") and not step.get("repeat"):
+            raise ValueError(
+                f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP 根本不会回头。"
+                "要来回就写 repeat:1（奇数遍收尾在 to，偶数遍收尾回起点）")
+        # morph 的形变是生成期采样成离散关键帧的：无限循环没有"最后一帧"可采，采样器只能
+        # 猜。补间/count/type 走运行期，GSAP 按时间解析求值，无限循环反而是确定的。
+        if morph is not None and step.get("repeat", 0) < 0:
+            raise ValueError(
+                f"{where} 的 morph 不能配 repeat:-1——形变是生成期按帧率采样成离散关键帧的，"
+                "无限循环没有终点可采。要循环就写明确遍数（repeat:N）")
     return dirval
 
 
@@ -333,12 +420,19 @@ def unknown_media_keys(entry):
 def validate_images_json(data):
     """images.json：{segment_id: 媒体对象}。
 
-    唯一写法（图片/视频统一）：
+    两种写法：
         {"seg1": {"src": "images/seg1.png"},
-         "seg2": {"src": "images/seg2.mp4", "type": "video", "loop": true,
+         "seg2": {"src": "images/seg2.svg", "director": {...}},
+         "seg3": {"src": "images/seg3.mp4", "type": "video", "loop": true,
                   "muted": true, "autoplay": true, "poster": "...png"}}
       "type" 可选（auto=按扩展名判断；image/video/gif 显式指定），其余字段均为
-      可选（静态图只需 src）。不接受裸字符串路径。
+      可选（静态图只需 src）。不接受裸字符串路径。gif 也走 <img>，与 image 同档。
+
+    契约层只校验**结构**（路径 / 类型 / 锚点 / 尺寸这类），不读图像像素，因此
+    **不要求图片不透明**——带 alpha 通道的透明 PNG/WEBP 与 SVG 等价，渲染端当 <img>
+    放进同一 scene 后透明处透出主题渐变与 accent 辉光，可直接叠在画布背景上（无需抠图）；
+    "本该透明却被出图端填了不透明底色"这种信源问题不在本层拦截（见 image_options.md
+    「透明通道」一节）。别为"防盖背景"而在契约层加 opacity 校验，那会误伤合法的透明前景图。
     """
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
@@ -365,6 +459,23 @@ def validate_images_json(data):
                     + ("——图表 / 公式卡已从本技能移除，数据图和公式改走手绘 SVG"
                        "（需要整页表达时给段落 layout: \"canvas\"）"
                        if _t in ("chart", "formula") else ""))
+            # poster 与 src 同一校验口径：禁绝对路径/越出项目根。键存在就必须是
+            # 非空字符串——旧写法 `if poster:` 让空串 "" 与 None 同判，坏空串原样
+            if "poster" in value:
+                poster = value["poster"]
+                if not isinstance(poster, str) or not poster:
+                    raise ValueError(
+                        f"images.json 的 '{key}' 的 poster 必须是非空字符串"
+                        f"（不用封面就删掉这个键；实际: {poster!r}）")
+                value["poster"] = validate_relative_project_path(
+                    poster, f"images.json 的 '{key}' 的 poster")
+            # video 播放开关必须是 JSON 布尔：渲染端按 `opts.get("loop", True)`
+            # 取值，字符串 "false" 是真值——写成字符串会让"关掉循环"变成"永远循环"。
+            for _flag in ("loop", "muted", "autoplay", "playsinline"):
+                if _flag in value and not isinstance(value[_flag], bool):
+                    raise ValueError(
+                        f"images.json 的 '{key}' 的 {_flag} 必须是 JSON 布尔 true/false"
+                        f"（实际: {value[_flag]!r}）")
             if "src" not in value:
                 raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
         else:
@@ -378,24 +489,7 @@ def validate_images_json(data):
         # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
         value["src"] = validate_relative_project_path(
             src, f"images.json 的 '{key}' 的 src")
-        # poster 与 src 同一校验口径：禁绝对路径/越出项目根。键存在就必须是
-        # 非空字符串——旧写法 `if poster:` 让空串 "" 与 None 同判，坏空串原样
-        # 流到渲染端当封面路径用。
-        if "poster" in value:
-            poster = value["poster"]
-            if not isinstance(poster, str) or not poster:
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 poster 必须是非空字符串"
-                    f"（不用封面就删掉这个键；实际: {poster!r}）")
-            value["poster"] = validate_relative_project_path(
-                poster, f"images.json 的 '{key}' 的 poster")
-        # video 播放开关必须是 JSON 布尔：渲染端按 `opts.get("loop", True)`
-        # 判真值，字符串 "false" 是 truthy，会画出意外的循环/静音行为。
-        for field in ("loop", "muted", "autoplay", "playsinline"):
-            if field in value and not isinstance(value[field], bool):
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 {field} 必须是 JSON 布尔"
-                    f"true/false（实际: {value[field]!r}）")
+        # provenance 记账字段必须是字符串。
         for field in ("source_url", "license", "attribution", "query", "provider"):
             if field in value and not isinstance(value[field], str):
                 raise ValueError(f"images.json 的 '{key}' 的 {field} 必须是字符串")
@@ -410,7 +504,7 @@ def validate_images_json(data):
         # director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
         # 没有可被 GSAP 逐帧驱动的图内命名元素）。
         if "director" in value:
-            if not src.lower().endswith(".svg"):
+            if not is_svg_path(src):
                 raise ValueError(
                     f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
                     "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
@@ -425,7 +519,7 @@ def validate_images_json(data):
                 raise ValueError(
                     f"images.json 的 '{key}' 的 stage 只认字符串 \"keep\""
                     f"（实际: {value['stage']!r}）——keep=接着上一页演，不写=每页独立成片")
-            if not src.lower().endswith(".svg"):
+            if not is_svg_path(src):
                 raise ValueError(
                     f"images.json 的 '{key}' 写了 stage，但 src={src!r} 不是 SVG"
                     "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")
@@ -436,22 +530,3 @@ def validate_images_json(data):
 def load_images_json(path):
     """读取并校验 images.json（读取失败统一成带路径的 ValueError）。"""
     return validate_images_json(read_json_file(path))
-
-
-MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
-
-
-def classify_media_path(path, explicit_type="auto"):
-    """根据文件扩展名和显式 type 判断媒体类型。
-
-    Returns:
-        "video" | "image" | "gif"
-    """
-    if explicit_type != "auto":
-        return explicit_type
-    ext = os.path.splitext(path.lower())[1]
-    if ext in MEDIA_VIDEO_EXTS:
-        return "video"
-    if ext == ".gif":
-        return "gif"
-    return "image"

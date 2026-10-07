@@ -12,10 +12,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
-                       is_content_sid)
+                       _validate_opening_animation, is_content_sid)
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
-                       _validate_text)
+                       _validate_display_text, _validate_text)
 from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 
 # segments_source.json 的封闭字段集：顶层 / 段落 / 对话轮次 / speakers 条目四层
@@ -25,7 +25,8 @@ from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 # 结尾 agenda 卡压根不生成，而产物看起来完全正常（帧是两张槽位页，check 全绿）。
 # 清单必须与下面 validate_segments_source 里逐个 .get() 的字段同步。
 SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
-               "opening_speed", "opening_layout", "closing", "closing_title",
+               "opening_speed", "opening_layout", "opening_animation",
+               "closing", "closing_title",
                "closing_tagline", "closing_speed", "closing_layout", "cta",
                "speakers", "segments")
 SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
@@ -34,6 +35,12 @@ SPEAKER_KEYS = ("voice_id", "voice_style", "label")
 # 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
 # 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
 TURN_KEYS = ("speaker", "text")
+
+# 会上墙的文字：一行一个去向，行数与列宽都是死的，所以比口播稿多一道约束
+# （不收分号，见 _validate._validate_display_text）。口播稿不在这张表里。
+ON_SCREEN_TOP_KEYS = ("title", "opening_title", "closing_title",
+                      "opening_tagline", "closing_tagline")
+ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway")
 
 
 def validate_segments_source(data):
@@ -58,6 +65,11 @@ def validate_segments_source(data):
                 "opening_tagline", "closing_tagline", "opening", "closing"):
         _validate_text(data.get(key), f"segments_source.json 的 '{key}'")
 
+    # 上墙文字比口播稿多一道：一行只放一个事实，所以不收分号。
+    for key in ON_SCREEN_TOP_KEYS:
+        _validate_display_text(data.get(key),
+                               f"segments_source.json 的 '{key}'（上墙一行）")
+
     # ── 值校验：speed / voice_id ───────────────────────────────────
     for key in ("opening_speed", "closing_speed"):
         if data.get(key) is not None:
@@ -71,6 +83,11 @@ def validate_segments_source(data):
     for key in ("opening_layout", "closing_layout"):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
 
+    # 開場動畫模式（可选）：只影响开屏 agenda 卡，写 "apple" 走蘋果風開場编排。
+    _validate_opening_animation(
+        data.get("opening_animation"),
+        "segments_source.json 的 'opening_animation'")
+
     # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
     # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。
     # 单行是硬约束（writing.md）：agenda 的行数预算按"一行"计，含换行的 cta
@@ -82,6 +99,8 @@ def validate_segments_source(data):
         if "\n" in data["cta"] or "\r" in data["cta"]:
             raise ValueError("segments_source.json 的 'cta' 必须是单行文字"
                              "（结尾 agenda 尾行只占一行，不要含换行符）")
+        _validate_display_text(data["cta"],
+                               "segments_source.json 的 'cta'（上墙一行）")
 
     speakers = data.get("speakers")
     if speakers is not None and not isinstance(speakers, dict):
@@ -111,6 +130,10 @@ def validate_segments_source(data):
                              f"segments[{i}]（title={seg.get('title')!r}）")
         _validate_text(seg.get("title"), f"segments[{i}].title", required=True)
         _validate_text(seg.get("tagline"), f"segments[{i}].tagline")
+        for key in ON_SCREEN_SEGMENT_KEYS:
+            _validate_display_text(
+                seg.get(key),
+                f"segments[{i}]（title={seg.get('title')!r}）的 '{key}'（上墙一行）")
         # 可选的稳定 id：SKILL.md 承诺"给段稳定 id，改稿顺序不乱时间轴锚点"。
         # 必须是内容段前缀（seg…），否则下游配图覆盖率/统计把它当结构性页；
         # 必须跨段唯一，否则 HTML 选择器串台。

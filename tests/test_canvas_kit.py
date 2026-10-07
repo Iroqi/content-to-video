@@ -12,7 +12,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-import _helpers as H
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 import _svg_sanitize
 import canvas_kit as K
 import check_svg
@@ -123,7 +123,7 @@ class Gate(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def _write_svg(self, spec, theme):
+    def _write_svg(self, spec, theme="dark"):
         p = os.path.join(self.tmp.name, "seg1.svg")
         # theme 必须走 validate_spec：画布页的取色就是照主题派生的，
         # 用默认主题渲染再按别的主题判对比度，量的是一页根本不存在的颜色。
@@ -133,12 +133,11 @@ class Gate(unittest.TestCase):
 
     def test_generated_page_passes_canvas_gate_for_both_aspects(self):
         for aspect in ("portrait", "landscape"):
-            for theme in ("dark", "cream"):
-                with self.subTest(aspect=aspect, theme=theme):
-                    p = self._write_svg(spec_for(aspect), theme)
-                    errors, warns = check_svg.check_file(p, "canvas", aspect, theme)
-                    self.assertEqual(errors, [])
-                    self.assertEqual(actionable(warns), [])
+            with self.subTest(aspect=aspect):
+                p = self._write_svg(spec_for(aspect))
+                errors, warns = check_svg.check_file(p, "canvas", aspect, "dark")
+                self.assertEqual(errors, [])
+                self.assertEqual(actionable(warns), [])
 
     def test_no_full_bleed_rect_is_ever_emitted(self):
         for aspect in ("portrait", "landscape"):
@@ -275,6 +274,49 @@ class DirectorDraft(unittest.TestCase):
         spec = {"elements": [{"kind": "panel", "x": 60, "y": 60, "w": 400, "h": 400}]}
         self.assertEqual(self.fragment(spec), {"steps": []})
 
+    def test_repeat_and_yoyo_are_carried_into_the_draft(self):
+        """新特性要有脚手架出口：呼吸/脉动在 spec 里写一次，草稿原样带出。"""
+        spec = {"elements": [
+            {"kind": "circle", "id": "a", "cx": 100, "cy": 100, "r": 10,
+             "repeat": 3, "yoyo": True},
+            {"kind": "circle", "id": "b", "cx": 200, "cy": 100, "r": 10,
+             "repeat": -1},
+            {"kind": "circle", "id": "c", "cx": 300, "cy": 100, "r": 10,
+             "repeat": 0},
+        ]}
+        steps = self.fragment(spec)["steps"]
+        self.assertEqual(steps[0]["repeat"], 3)
+        self.assertEqual(steps[0]["yoyo"], True)
+        self.assertEqual(steps[1]["repeat"], -1)
+        self.assertNotIn("yoyo", steps[1])
+        # repeat:0 与缺省等价，不塞进去（与渲染端 _cycle_vars 同口径）
+        self.assertNotIn("repeat", steps[2])
+        # 真契约：带 repeat/yoyo 的草稿必须能直接过 images.json 的 director 校验
+        validate_images_json({"seg7": {"src": "images/seg7.svg",
+                                       "director": {"steps": steps}}})
+
+    def test_repeat_on_structure_element_is_refused(self):
+        """结构底不进 steps，写了等于没写；又没有"哪一拍"可反复，当场拒。"""
+        spec = {"elements": [{"kind": "panel", "x": 60, "y": 60, "w": 400, "h": 400,
+                              "role": "structure", "repeat": 2}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("不是内容元素", str(cm.exception))
+
+    def test_yoyo_without_repeat_is_refused(self):
+        spec = {"elements": [{"kind": "circle", "id": "a", "cx": 100, "cy": 100,
+                              "r": 10, "yoyo": True}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("yoyo", str(cm.exception))
+
+    def test_repeat_must_be_an_integer(self):
+        spec = {"elements": [{"kind": "circle", "id": "a", "cx": 100, "cy": 100,
+                              "r": 10, "repeat": 1.5}]}
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("≥-1 的整数", str(cm.exception))
+
 
 class SpecContract(unittest.TestCase):
     def test_unknown_top_level_key_is_named(self):
@@ -362,7 +404,7 @@ class CommandLine(unittest.TestCase):
 
     def test_writes_svg_and_steps_and_prints_the_draft(self):
         rc, out, err = run_cli(["--spec", self.spec, "--aspect", "portrait",
-                                "--theme", "dark", "-o", self.out,
+                                "-o", self.out,
                                 "--emit-steps", self.steps])
         self.assertEqual(rc, 0, err)
         self.assertTrue(os.path.isfile(self.out))
@@ -394,19 +436,111 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("[error]", err)
 
-    def test_beats_beyond_the_narration_are_warned(self):
-        spec = write_json(self.tmp.name, "few.json", {
-            "elements": [{"kind": "panel", "x": 60, "y": 60, "w": 900, "h": 700},
-                         {"kind": "text", "id": "t", "x": 100, "y": 120,
-                          "tier": "title", "content": "标题"},
-                         {"kind": "circle", "id": "c", "cx": 200, "cy": 600, "r": 40},
-                         {"kind": "circle", "id": "d", "cx": 400, "cy": 600, "r": 40}]})
-        out = os.path.join(self.tmp.name, "few.svg")
-        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--sentences", "2"])
+    def test_auto_beats_wrap_so_the_draft_is_always_usable(self):
+        """内容元素多于旁白句子时，自动拍按句数回绕，草稿仍能直接生成。
+
+        这是实测翻过的车：3 句段配 5 个内容元素，自动拍一路排到 at=4，而 at 的整数部分
+        是句序——生成期按 error 把整条管线拒掉（"at=4 越界：该段只有 3 句旁白"），
+        脚手架自己印出来的草稿却过不了自己下游的契约。
+        """
+        spec = write_json(self.tmp.name, "wrap.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "d", "cx": 800, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "e", "cx": 900, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "wrap.svg")
+        steps = os.path.join(self.tmp.name, "wrap_steps.json")
+        rc, _o, _err = run_cli(["--spec", spec, "-o", out, "--emit-steps", steps,
+                                "--sentences", "3", "--no-check"])
+        self.assertEqual(rc, 0)
+        with open(steps, encoding="utf-8") as f:
+            frag = json.load(f)
+        ats = [s["at"] for s in frag["steps"]]
+        # 5 个内容元素、3 句旁白：游标回绕，且每一拍都落在句序范围内
+        #（at 的整数部分就是句序，越界的那一拍会被生成期整条拒掉）。
+        self.assertEqual(ats, [0, 1, 2, 0, 1])
+        self.assertTrue(all(a < 3 for a in ats), ats)
+
+    def test_pinned_beat_beyond_the_narration_is_warned(self):
+        """显式钉拍越界要照实告警——那是作者意图，与自动拍的回绕不是一回事。"""
+        spec = write_json(self.tmp.name, "pinned.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "c", "cx": 200, "cy": 600, "r": 40,
+                          "beat": 7}]})
+        out = os.path.join(self.tmp.name, "pinned.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--sentences", "2",
+                               "--no-check"])
         self.assertIn("越界", err)
         self.assertIn("已写", err)
         self.assertIn("[ok]", err)
-        self.assertIn(rc, (0, 1))
+        self.assertEqual(rc, 0)
+
+    def test_without_sentences_auto_beats_are_not_wrapped(self):
+        """不给 --sentences 时脚本不替作者猜段里有几句，保持原先的顺序排拍。"""
+        spec = write_json(self.tmp.name, "nosent.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "nosent.svg")
+        steps = os.path.join(self.tmp.name, "nosent_steps.json")
+        rc, _o, _err = run_cli(["--spec", spec, "-o", out, "--emit-steps", steps,
+                                "--no-check"])
+        self.assertEqual(rc, 0)
+        with open(steps, encoding="utf-8") as f:
+            frag = json.load(f)
+        self.assertEqual([s["at"] for s in frag["steps"]], [0, 1, 2])
+
+    def test_missing_sentences_hints_at_overflow_risk(self):
+        """不给 --sentences 且自动拍不止一拍时，提示作者按句数回绕（实测摩擦：
+        内容元素多于旁白句数时生成期整条 error 拒，提前出声让写稿阶段就对好）。"""
+        spec = write_json(self.tmp.name, "hint.json", {
+            "elements": [{"kind": "text", "id": "t", "x": 100, "y": 120,
+                          "tier": "title", "content": "标题", "role": "structure"},
+                         {"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "hint.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--no-check"])
+        self.assertEqual(rc, 0)
+        self.assertIn("[hint] 未给 --sentences", err)
+        self.assertIn("给上 --sentences N", err)
+        # 给了 --sentences 就不该再提示（自动拍已按句数回绕）。
+        rc2, _o2, err2 = run_cli(["--spec", spec, "-o", out, "--sentences", "2",
+                                  "--no-check"])
+        self.assertEqual(rc2, 0)
+        self.assertNotIn("未给 --sentences", err2)
+
+    def test_non_positive_sentences_is_rejected_in_plain_words(self):
+        """--sentences 不是正整数要报成人话 + exit 2，不是 Python 栈、也不是静默退化。
+
+        证伪（去掉 main() 那条校验后实测）：
+          - `--sentences=-3`：契约校验抛 ValueError 裸栈（"at 必须是非负数（实际: -2）"），
+            rc=1——脚手架自己印的草稿，报错却不说是哪条参数错了；
+          - `--sentences=0`：不报错，但自动拍静默退化成不回绕（3 个元素排到 at=0..2 是
+            巧合，5 个元素就排到 at=4），与"给了句数就按句数回绕"的口径相反，那份草稿
+            会被生成期整条 error 拒掉。
+        """
+        spec = write_json(self.tmp.name, "negsent.json", {
+            "elements": [{"kind": "circle", "id": "a", "cx": 200, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "b", "cx": 400, "cy": 500, "r": 40},
+                         {"kind": "circle", "id": "c", "cx": 600, "cy": 500, "r": 40}]})
+        out = os.path.join(self.tmp.name, "negsent.svg")
+        for bad in ("-3", "0"):
+            with self.subTest(sentences=bad):
+                rc, _o, err = run_cli(["--spec", spec, "-o", out,
+                                       "--sentences=" + bad, "--no-check"])
+                self.assertEqual(rc, 2, err)
+                self.assertIn("--sentences", err)
+                self.assertIn(bad, err)
+                self.assertNotIn("Traceback", err)
+        # 校验不过就不该落产物：留着上一轮的 SVG，作者会以为这轮也出了图。
+        self.assertFalse(os.path.exists(out))
 
 
 if __name__ == "__main__":

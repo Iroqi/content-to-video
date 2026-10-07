@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """TTS 管线的 FFmpeg 音频操作。
 
-包含：时长测量、静音生成、atempo 变速、拼接、BGM 混音、定长裁剪（单段预览）。
-所有函数都只依赖"ffmpeg 路径 + 参数"，不碰 TTS/网络，可脱离 pipeline 单独测试。
+包含：时长测量、静音生成、atempo 变速、拼接。所有函数都只依赖
+"ffmpeg 路径 + 参数"，不碰 TTS/网络，可脱离 pipeline 单独测试。
 """
 import os
 import subprocess
@@ -109,29 +109,6 @@ def measure_duration(ffmpeg_path, audio_path):
               file=sys.stderr)
         return 0.0
     return dur if dur is not None else 0.0
-
-
-def trim_audio(ffmpeg_path, src, dst, start, duration):
-    """切出 ``[start, start+duration)`` 一段音频（``--only`` 单段预览用）。
-
-    ``-ss`` 放在 ``-i`` 之前配 ``-t`` 定长：重编码成 PCM 时输入端定位是样本级
-    准确的，而 ``-t`` 的语义不受各 ffmpeg 版本对 ``-to`` 是"绝对时间轴"还是
-    "相对 -ss"的解释差异影响——预览片宁可写死长度也不要赌版本。
-
-    失败抛 RuntimeError 并带上 stderr 末尾：这条路径的唯一产物就是预览音频，
-    回落到"用整条配音"会让时间轴错位却看不出来。
-    """
-    args = [ffmpeg_path, "-y",
-            "-ss", "{:.3f}".format(max(0.0, float(start))),
-            "-i", src,
-            "-t", "{:.3f}".format(float(duration)),
-            "-c:a", "pcm_s16le", dst]
-    r = _run_ff(args, 120)
-    if r is None:
-        raise RuntimeError(f"裁剪音频超时（120s）：{src} @{start:.3f}s")
-    if r.returncode != 0:
-        tail = (r.stderr or "").strip().splitlines()[-3:]
-        raise RuntimeError("裁剪音频失败：" + " | ".join(tail))
 
 
 def generate_silence(ffmpeg_path, duration, out_path):
@@ -433,92 +410,6 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
 
     return True
 
-
-def mix_bgm(ffmpeg_path, voice_path, bgm_path, bgm_volume, out_path):
-    """Mix background music under voice audio. BGM loops to match voice duration.
-
-    全程使用固定的 bgm_volume。
-    """
-    volume_filter = f"volume={bgm_volume}"
-    # 输出格式跟着人声母带走，不写死 24000/mono（同 apply_loudnorm 的理由）。
-    # 人声读不出头时退回 24000/mono：混音输入已不正常，宁可保守。
-    voice_fmt = _wav_format(voice_path)
-    rate, channels = (voice_fmt[0], voice_fmt[1]) if voice_fmt else (24000, 1)
-    # normalize=0：amix 默认把每路输入各乘 1/inputs（两路即人声 -6dB），
-    # 带 BGM 的成片会系统性比不带的一半响度；关掉 normalize 后音量
-    # 关系完全交给 volume_filter 控制
-    result = _run_ff([
-        ffmpeg_path, "-y",
-        "-i", voice_path,
-        "-i", bgm_path,
-        "-filter_complex",
-        # aloop size expects an integer; 2e+09 (Python float literal) would
-        # be passed verbatim into the ffmpeg filter string and may fail to
-        # parse on some ffmpeg builds, causing BGM loop to silently break.
-        f"[1:a]{volume_filter},aloop=loop=-1:size=2000000000[bgm];"
-        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3:normalize=0",
-        "-ar", str(rate), "-ac", str(channels),
-        "-c:a", "pcm_s16le", out_path
-    ], 300)
-    if result is None:
-        print("  [BGM mix failed] ffmpeg 混音超时", file=sys.stderr)
-        remove_if_exists(out_path)
-        return False
-    if result.returncode != 0:
-        print(f"  [BGM mix failed] {result.stderr[-300:]}", file=sys.stderr)
-        remove_if_exists(out_path)
-        return False
-    # amix + aloop 会以 returncode=0 退出却吐出一个空/极短文件（BGM 本身不是
-    # 音频流、或滤镜图被静默截断），调用方拿它当"带 BGM 的母带"，而总时长仍是
-    # 混音前量的那个值——manifest 完全合法，成片却是无声/短片。与 loudnorm 同
-    # 一道口径：产物必须真有数据帧才算成功。
-    if not _wav_has_frames(out_path):
-        print("  [BGM mix failed] 混音产物为空，未替换人声音频", file=sys.stderr)
-        remove_if_exists(out_path)
-        return False
-    return True
-
-
-def apply_loudnorm(ffmpeg_path, in_path, out_path, target_lufs):
-    """对整条音频做响度归一化，输出到 out_path。返回是否成功。
-
-    用于把逐句 TTS 拼出来的音频统一到目标响度（跨句/跨视频音量一致）。在 concat
-    之后、对 combined 整段做，loudnorm 只做增益、不做变速，不改变句子间相对时序，
-    字幕时间轴仍按 timing_manifest.json 的实测值对齐。
-    """
-    # 单遍 loudnorm：-16 LUFS 是网络视频/播客常见响度；TP/LRA 用固定值即可。
-    filt = f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
-    # 输出格式跟着输入走，而不是写死 24000/mono：loudnorm 内部按 192kHz 处理，
-    # 完全不写 -ar 会把母带上采样到 192k（实测 44.1k 输入 → 192k 输出，体积
-    # 翻 4 倍），写死 24000 又会把 --speed 1.0 保生的原生 44.1k 母带悄悄降一档
-    # ——同一条片子加不加 --loudness 格式都不一致，排查时最容易误判。
-    in_fmt = _wav_format(in_path)
-    # 读不出头（非 WAV/扩展头）时退回旧的 24000/mono：调用方喂进来的永远是
-    # concat 自己的 pcm_s16le 产物，真走到这里说明输入已经不正常，宁可保守
-    # 也不能让 loudnorm 的 192kHz 内部律漏进母带。
-    rate, channels = (in_fmt[0], in_fmt[1]) if in_fmt else (24000, 1)
-    fmt_args = ["-ar", str(rate), "-ac", str(channels)]
-    result = _run_ff([
-        ffmpeg_path, "-y", "-i", in_path,
-        "-af", filt,
-        *fmt_args,
-        "-c:a", "pcm_s16le", out_path,
-    ], 120)
-    if result is None:
-        # 不显式接住的话，ffmpeg 卡死时用户直接吃裸栈
-        print("  [loudnorm] ffmpeg timeout (120s)", file=sys.stderr)
-        remove_if_exists(out_path)
-        return False
-    # 产物必须真有数据帧（_wav_has_frames）：44 字节的"纯头"尺寸线会被
-    # ffmpeg 的 LIST/INFO 元数据块越过，0 帧文件量出来 0 秒，调用方只会
-    # 拿到一个"成功但空"的母带（mix_bgm 同口径）。
-    # 失败路径一律收走产物：留着半截 combined_loud.wav，下次 --resume 或人工
-    # 挑文件时它和正常产物长得一模一样。
-    if result.returncode == 0 and _wav_has_frames(out_path):
-        return True
-    print(f"  [loudnorm] failed: {result.stderr[-200:]}", file=sys.stderr)
-    remove_if_exists(out_path)
-    return False
 
 # ── FFmpeg runtime helpers ─────────────────────────────────────────
 def ffmpeg_usable(ffmpeg_path):

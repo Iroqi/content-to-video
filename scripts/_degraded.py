@@ -14,9 +14,6 @@ from typing import NamedTuple
 # ── 键名常量：pipeline 写侧与 KINDS 共用 ──
 SILENCE_FALLBACK_COUNT = "tts_silence_fallback_count"
 LOST_SENTENCE_COUNT = "tts_lost_sentence_count"
-BGM_MIX_FAILED = "bgm_mix_failed"
-BGM_MISSING_FILE = "bgm_missing_file"
-LOUDNESS_NORM_FAILED = "loudness_norm_failed"
 SEGMENTS_DROPPED = "segments_dropped"
 AUDIO_SHORTER_THAN_TIMELINE = "audio_shorter_than_timeline"
 
@@ -48,12 +45,6 @@ def _read_lost(_tm, deg):
     return (n, f"{n} 句完全丢失（连静音占位都没生成）") if n else None
 
 
-def _read_flag(key, label):
-    def reader(_tm, deg):
-        return (1, label) if deg.get(key) else None
-    return reader
-
-
 def _read_dropped(_tm, deg):
     # segments_dropped 是 pipeline 写下的被剔除 sid 列表（不是计数）
     ids = deg.get(SEGMENTS_DROPPED) or []
@@ -75,14 +66,6 @@ def _read_audio_short(_tm, deg):
 KINDS = (
     Kind("tts_silence_fallback", SILENCE_FALLBACK_COUNT, _read_synth_failed),
     Kind("tts_lost_sentences", LOST_SENTENCE_COUNT, _read_lost),
-    # BGM/响度不影响"内容在不在"，但 --bgm 传了却没混进、--loudness 传了却没
-    # 过响度，都属于必须让人先看见的差异。
-    Kind("bgm_mix_failed", BGM_MIX_FAILED,
-         _read_flag(BGM_MIX_FAILED, "BGM 混音失败（成片为纯人声）")),
-    Kind("bgm_missing_file", BGM_MISSING_FILE,
-         _read_flag(BGM_MISSING_FILE, "--bgm 文件不存在，成片未混 BGM")),
-    Kind("loudness_norm_failed", LOUDNESS_NORM_FAILED,
-         _read_flag(LOUDNESS_NORM_FAILED, "响度归一化失败（响度未达标）")),
     Kind("segments_dropped", SEGMENTS_DROPPED, _read_dropped),
     Kind("audio_shorter_than_timeline", AUDIO_SHORTER_THAN_TIMELINE, _read_audio_short),
 )

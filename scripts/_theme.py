@@ -1,5 +1,5 @@
 """主题注册表。配色数据直接内联在本模块。包含：
-  - "cream" / "dark"：背景/文字等主题配色（get_theme_colors）
+  - "dark"：背景/文字主题配色（get_theme_colors；单一主题，无选择面）
   - "_ACCENT_PALETTE"：8 色 accent 色板，供 build_from_structured
     按内容段序号轮询取色（get_accent_palette）
   - "_DEFAULT_ACCENT"：默认段落强调色
@@ -8,14 +8,9 @@
 import copy
 import re
 # ── 主题注册表──
-# 主题表只放主题，accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
+# 单一主题 dark。accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
 # 区分，新加的下划线键容易被误当成配色。
 _THEMES = {
-    "cream": {
-        "bg_gradient": "linear-gradient(135deg,#f7f3e9 0%,#eee7d6 45%,#f7f3e9 100%)",
-        "grid_color": "rgba(58,92,140,0.07)",
-        "text_color": "#22262b",
-    },
     "dark": {
         "bg_gradient": "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
         "grid_color": "rgba(0,220,150,0.055)",
@@ -36,7 +31,7 @@ def get_theme_colors(theme):
     影响背景渐变、网格线与文字颜色；每段 accent 彩色不受影响。
 
     Args:
-        theme: 主题名，取值见 list_theme_names()（当前为 cream/dark）
+        theme: 主题名，当前只有 "dark"。
 
     Returns:
         dict: 包含 bg_gradient, grid_color, text_color 三个键。
@@ -49,9 +44,7 @@ def get_theme_colors(theme):
 
 
 def list_theme_names():
-    """返回注册表里所有可用主题名（按字母排序），供 CLI --theme 的
-    choices 动态生成，避免 gen_hyperframes.py / run.py 各硬编码一份列表。
-    """
+    """返回注册表里所有可用主题名（当前只有 "dark"）。"""
     return sorted(_THEMES.keys())
 
 
@@ -83,7 +76,7 @@ def _hex_rgb_bytes(hex_color):
     3 位缩写（#fff）先展开成 6 位——is_safe_css_color 放行用户传入的
     "#rgb" 缩写色，不展开会解析失败返回 None，深浅主题判断
     静默失效（dark 被当浅色，tagline 走压暗分支，对比度掉到 ~2.1）。
-    全模块的 hex 解析只有这一份：darken / hex_to_rgb01 / css_color_to_hex
+    全模块的 hex 解析只有这一份：hex_to_rgb01 / css_color_to_hex
     各自再写一遍 3 位展开与 int(h,16) 迟早漂移。
     """
     h = hex_color.lstrip("#")
@@ -92,18 +85,6 @@ def _hex_rgb_bytes(hex_color):
     if len(h) != 6 or not all(c in "0123456789abcdef" for c in h.lower()):
         return None
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def darken(hex_color, factor=0.6):
-    """把 accent 十六进制色压暗一档，用于浅色主题下的小字（如 tagline）。
-
-    保持色相不变、只降低亮度，让文字在米白/浅色背景上达到可读对比度，
-    同时不改变该段落 accent 色在大元素（竖条/glow/进度条）上的视觉效果。
-    """
-    rgb = _hex_rgb_bytes(hex_color)
-    if rgb is None:
-        return hex_color
-    return "#" + "".join(f"{int(v * factor):02x}" for v in rgb)
 
 
 def hex_to_rgb01(hex_color):

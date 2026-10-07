@@ -427,6 +427,12 @@ def validate_images_json(data):
                   "muted": true, "autoplay": true, "poster": "...png"}}
       "type" 可选（auto=按扩展名判断；image/video/gif 显式指定），其余字段均为
       可选（静态图只需 src）。不接受裸字符串路径。gif 也走 <img>，与 image 同档。
+
+    契约层只校验**结构**（路径 / 类型 / 锚点 / 尺寸这类），不读图像像素，因此
+    **不要求图片不透明**——带 alpha 通道的透明 PNG/WEBP 与 SVG 等价，渲染端当 <img>
+    放进同一 scene 后透明处透出主题渐变与 accent 辉光，可直接叠在画布背景上（无需抠图）；
+    "本该透明却被出图端填了不透明底色"这种信源问题不在本层拦截（见 image_options.md
+    「透明通道」一节）。别为"防盖背景"而在契约层加 opacity 校验，那会误伤合法的透明前景图。
     """
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")

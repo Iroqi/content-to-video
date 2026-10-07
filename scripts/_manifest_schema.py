@@ -222,7 +222,7 @@ def validate_timing_manifest(data):
                     "要開場動畫请写在 opening 段上")
             _validate_opening_animation(
                 sg["opening_animation"],
-                f"timing_manifest.json 的段落 'opening'")
+                "timing_manifest.json 的段落 'opening'")
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:

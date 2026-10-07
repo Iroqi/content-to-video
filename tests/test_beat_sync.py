@@ -220,6 +220,31 @@ class WindowWarnings(unittest.TestCase):
     def test_beat_that_ends_exactly_at_the_boundary_stays_silent(self):
         self.assertEqual(self._w([{"at_time": 4.5, "target": "#a1"}]), [])
 
+    def test_stagger_pushes_the_tail_past_the_page_boundary(self):
+        """一组元素逐个错开：整拍的收尾比 span 更晚，出窗判定得算进去。
+
+        证伪（去掉 _stagger_extra 之后实测）：4.40 + 0.50 = 4.90 看着在页内，
+        成片里第二个、第三个元素却是在下一页盖过来之后才亮完——门禁一声不吭。
+        """
+        base = {"at_time": 4.4, "target": "#a1", "duration": 0.5,
+                "to": {"opacity": 1}}
+        self.assertEqual(self._w([dict(base)]), [])      # 4.90 收尾，还在本页
+        for stagger in (0.3, {"each": 0.3}, {"amount": 0.3}):
+            with self.subTest(stagger=stagger):
+                warns = self._w([dict(base, stagger=stagger)])
+                self.assertEqual(len(warns), 1, warns)
+                self.assertIn("被切在半路", warns[0])
+                self.assertIn("stagger", warns[0])
+                self.assertIn("5.20", warns[0])          # 收尾被推到 5.20
+
+    def test_stagger_extra_lower_bound(self):
+        """拿不到元素数，只能给下界：至少多一个间隔，amount 是精确值。"""
+        self.assertEqual(G._stagger_extra({}), 0.0)
+        self.assertEqual(G._stagger_extra({"stagger": 0.25}), 0.25)
+        self.assertEqual(G._stagger_extra({"stagger": {"each": 0.25}}), 0.25)
+        self.assertEqual(G._stagger_extra({"stagger": {"amount": 1.5}}), 1.5)
+        self.assertEqual(G._stagger_extra({"stagger": {"from": "center"}}), 0.0)
+
     def test_unresolved_at_is_not_double_reported(self):
         # at 越界由句序检查按步报 error，这里静默（避免同一件事两种口径）
         self.assertEqual(self._w([{"at": 9, "target": "#a1"}]), [])

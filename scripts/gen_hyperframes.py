@@ -535,6 +535,29 @@ def _beat_landing(pos, sentences, seg_start, seg_end, next_start):
     return "gap", "静音"
 
 
+def _stagger_extra(step):
+    """这一拍写了 stagger 时，收尾**至少**还要往后推多少秒。
+
+    GSAP 的 stagger 是"一组元素逐个错开"：`stagger: 0.1` 命中 N 个元素，最后一个的
+    起点就是 pos+0.1×(N-1)，整拍收尾也跟着后移。N 只有渲染端展开 DOM 才知道，这里
+    算不出精确值——但下界是确定的：**只要有第二个元素，就至少多一个间隔**。出窗判定
+    用下界，宁可早报也不能漏报。
+
+    `amount` 是 GSAP 的另一套写法（总分摊时长，与元素数无关），它是精确值，直接用。
+    """
+    st = step.get("stagger")
+    if isinstance(st, bool) or st is None:
+        return 0.0
+    if isinstance(st, (int, float)):
+        return max(float(st), 0.0)
+    if isinstance(st, dict):
+        v = st.get("amount", st.get("each"))
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return 0.0
+        return max(float(v), 0.0)
+    return 0.0
+
+
 def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, keep=False):
     """beat 落在本页可见窗口之外（before/after/被切半路）→ warn 文案。
 
@@ -571,14 +594,20 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
             # 跨度按 beat_span 算：写了 repeat 的这一拍要演好几遍，只按单遍 duration 判
             # 就是四倍误差——"演到一半被盖过来"的门禁必须拿成片里真正的那个大括号。
             # repeat:-1 没有终点，也不报：它本来就要被页界切掉，报它是训练作者忽略 warn。
+            # stagger 另加：一组元素逐个错开，最后那个的收尾比 span 更晚（见
+            # _stagger_extra——拿不到元素数，按"至少多一个间隔"的下界算）。
             span = beat_span(step, dur)
-            if span is not None and pos + span > next_start + _BEAT_EPS:
+            extra = _stagger_extra(step)
+            total = None if span is None else span + extra
+            if total is not None and pos + total > next_start + _BEAT_EPS:
                 n = beat_cycles(step)
                 again = f"（演 {n} 遍、共 {span:.2f}s）" if n and n > 1 else ""
+                staggered = (f"，stagger 还要再推 {extra:.2f}s（收到 {pos + total:.2f}s）"
+                             if extra else "")
                 out.append(f"director.steps[{i}]（{step['target']}，{anchor}）从 {pos:.2f}s 演到 "
-                           f"{pos + span:.2f}s 才完{again}，而下一段旁白 {next_start:.2f}s 就把这一页盖"
+                           f"{pos + span:.2f}s 才完{again}{staggered}，而下一段旁白 {next_start:.2f}s 就把这一页盖"
                            f"过来——这一拍被切在半路，它要收的那个尾在成片里从没出现过（早 "
-                           f"{pos + span - next_start:.2f}"
+                           f"{pos + total - next_start:.2f}"
                            "s）。要么把 duration/delay/repeat 收紧到本页内，要么让它在接续页里重演一遍"
                            + ("；这一页写了 stage:\"keep\"，接续烘焙搬走的就是那个没演到的终态"
                               if keep else ""))
@@ -846,6 +875,43 @@ def _audio_candidates(path, out_dir, manifest_dir=None):
     return cands
 
 
+def audio_fallback_check(audio_path, want_total):
+    """回落的音轨能不能被证明属于这条时间轴：放行返回 None，否则返回拒跑理由。
+
+    manifest 的 `combined_audio` 指不到文件时，main() 会静默复用项目里上次暂存的
+    `audio/combined.wav`。那是"上一次的配音"，未必是这一条稿子的——成片会有声、字幕
+    也会对，只是两者说的不是同一件事，交付前没有任何环节会再提一次。所以复用之前
+    必须拿实测时长跟 manifest 时间轴对账。
+
+    对账**测不出**（`measure_duration` 返回 0.0）不是"对过了、一致"，而是这次对账根本
+    没发生：非 WAV 且 ffmpeg 不可用、或 WAV 本身损坏（wave 模块解析失败）都会走到
+    这里。放行它等于把上一版的判断（"对得上"）变成永远成立——所以按拒跑处理，宁可
+    让用户重跑 TTS。
+
+    `want_total` 为空（manifest 没写总时长）时无从对账，返回 None：那条路径本来就没有
+    可比较的基准，差别只在 warn 已经打过。
+    """
+    if want_total in (None, "", 0):
+        return None
+    try:
+        want = float(want_total)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0:
+        return None
+    got = measure_duration(get_ffmpeg(), audio_path)   # 0.0 = 测不出
+    if not got:
+        return (f"回落用的 {audio_path} 测不出时长（ffmpeg 不可用，或这个文件不是"
+                "能解码的音频）——无法证明它属于当前这份 manifest"
+                f"（时间轴 {want:.2f}s）。请重跑 TTS，或显式 --audio 指定这条稿子的"
+                "配音；把 ffmpeg 装回来也可，装好后会重新对账。")
+    if abs(got - want) > max(1.0, 0.02 * want):
+        return (f"回落音频实测 {got:.2f}s 与 manifest 时间轴 {want:.2f}s 相差过大——"
+                "这是另一条时间轴的旧配音，拒绝用新字幕烧旧音轨。"
+                "请重跑 TTS，或显式 --audio。")
+    return None
+
+
 def main(argv=None):
     """argv=None 走 sys.argv；run.py 进程内直调时传入参数列表，
     参数校验只有本文件这一份 parser，run.py 不再复制。"""
@@ -1065,14 +1131,9 @@ def main(argv=None):
             print(f"[warn] manifest 的 combined_audio 不可用，回落到上次暂存的 "
                   f"{audio_path}——若这是另一条稿子的旧配音，重跑 TTS 或显式 "
                   f"--audio 指定。", file=sys.stderr, flush=True)
-            _want = manifest.get("total_duration")
-            _got = measure_duration(get_ffmpeg(), audio_path)  # 0.0=测不出
-            if (_want and _got
-                    and abs(_got - float(_want)) > max(1.0, 0.02 * float(_want))):
-                raise SystemExit(
-                    f"[error] 回落音频实测 {_got:.2f}s 与 manifest 时间轴 "
-                    f"{_want:.2f}s 相差过大——这是另一条时间轴的旧配音，"
-                    "拒绝用新字幕烧旧音轨。请重跑 TTS，或显式 --audio。")
+            _why = audio_fallback_check(audio_path, manifest.get("total_duration"))
+            if _why:
+                raise SystemExit(f"[error] {_why}")
         audio_src = _stage_audio_file(audio_path, out_dir)
 
     html = generate_html(manifest, audio_src,

@@ -196,5 +196,53 @@ class CurveShape(unittest.TestCase):
         self.assertAlmostEqual(f(0.4), 0.4, places=9)
 
 
+class ElasticArgs(unittest.TestCase):
+    """elastic 的两个参数：非正当非法写法拒掉，采样器兜底不崩。
+
+    振幅进分母（`period / (amplitude < 1 ? amplitude : 1)`），0 在 Python 里是
+    ZeroDivisionError、负数是负周期——GSAP 那边两个都不崩，只是产出一条谁也说不清
+    的怪曲线且不报错。所以判据放在契约层：写了就必须 > 0。
+    """
+
+    def test_zero_and_negative_amplitude_rejected(self):
+        for spec in ("elastic.out(0)", "elastic.out(-1)", "elastic.in(0)",
+                     "elastic.inOut(0.0)"):
+            with self.assertRaises(ValueError, msg=spec) as cm:
+                E.validate_ease(spec, "ease")
+            self.assertIn("振幅", str(cm.exception))
+
+    def test_zero_and_negative_period_rejected(self):
+        for spec in ("elastic.out(1,0)", "elastic.out(1,-0.3)"):
+            with self.assertRaises(ValueError, msg=spec) as cm:
+                E.validate_ease(spec, "ease")
+            self.assertIn("周期", str(cm.exception))
+
+    def test_legal_amplitude_below_one_still_allowed(self):
+        # 振幅 <1 是 GSAP 的合法写法（钳到 1、周期按 1/振幅 放大），别误伤
+        for spec in ("elastic.out(0.6,0.18)", "elastic.in(0.5,0.4)",
+                     "elastic.inOut(0.5,0.45)"):
+            self.assertEqual(E.validate_ease(spec, "ease"), spec)
+
+    def test_bare_and_valid_pairs_pass(self):
+        for spec in ("elastic.out", "elastic.in", "elastic.inOut",
+                     "elastic.out(1,0.3)", "elastic.out(2)"):
+            self.assertEqual(E.validate_ease(spec, "ease"), spec)
+
+    def test_curve_survives_illegal_args_without_raising(self):
+        # 渲染端最后一道兜底：绕过契约层的输入（手改过的 images.json）不该把整页
+        # 渲染崩在除零上。回落到缺省振幅 1.0，与合法裸名同值。
+        for spec in ("elastic.out(0)", "elastic.out(-1)", "elastic.out(1,-0.3)"):
+            f = E.curve(spec, "none")
+            self.assertAlmostEqual(f(0.5), E.curve("elastic.out", "none")(0.5),
+                                   places=9, msg=spec)
+        for t in (0.0, 0.25, 0.5, 0.75, 1.0):
+            self.assertTrue(-2.0 < E.curve("elastic.out(0)", "none")(t) < 2.0)
+
+    def test_other_families_unaffected(self):
+        # 只有 elastic 查参数：back 的过冲量、steps 的档数另有自己的口径
+        for spec in ("back.out(0)", "back.out(-1)", "steps(4)"):
+            self.assertEqual(E.validate_ease(spec, "ease"), spec)
+
+
 if __name__ == "__main__":
     unittest.main()

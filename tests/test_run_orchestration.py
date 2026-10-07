@@ -248,6 +248,35 @@ class FailurePropagation(unittest.TestCase):
         rep = self.h.report()
         self.assertFalse(rep["steps"][0]["ok"])
 
+    def test_unexpected_exception_from_a_step_still_lands_a_report(self):
+        """子脚本抛 ValueError / OSError 时也要按失败步骤收尾。
+
+        证伪（去掉 _run_step 那两条 except 之后实测）：一次普通的"路径写错"变成裸栈
+        退出，且**不落** production_report——"这次跑到哪一步、哪一步挂的"这条唯一的
+        排查线索也没了，与 docstring 承诺的"失败也落盘"不符。
+        """
+        for exc, label in ((ValueError("稿件里少了个字段"), "ValueError"),
+                           (OSError(28, "磁盘满了"), "OSError")):
+            with self.subTest(exc=label):
+                def boom(argv, _e=exc):
+                    raise _e
+                with self.assertRaises(SystemExit) as cm:
+                    self.h.invoke(["--until", "tts"], pipeline_main=boom)
+                self.assertEqual(cm.exception.code, 1)
+                rep = self.h.report()
+                self.assertFalse(rep["steps"][0]["ok"])
+                self.assertIn(label, self.h.last_err)
+                self.assertIn(str(exc), self.h.last_err)
+
+    def test_keyboard_interrupt_is_not_recorded_as_a_failed_step(self):
+        """Ctrl-C 是用户主动中断，不该被当成"这一步渲染坏了"写进报告。"""
+        def interrupted(argv):
+            raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.h.invoke(["--until", "tts"], pipeline_main=interrupted)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.h.out, "production_report.json")))
+
     def test_string_systemexit_prints_message_and_becomes_1(self):
         def msg_exit(argv):
             raise SystemExit("人话报错")

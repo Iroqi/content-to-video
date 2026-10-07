@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而不是重算一遍
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_stagger, validate_images_json)
-from _script_utils import read_json_file  # noqa: E402
+from _script_utils import guard_not_in_skill_dir, read_json_file  # noqa: E402
 from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
@@ -784,6 +784,15 @@ def main(argv=None):
         print("[error] --sentences 必须是正整数（该段旁白句数），实际: {}"
               .format(args.sentences), file=sys.stderr)
         return 2
+
+    # 本模块是第四个写盘出口（另三个在 pipeline / gen_hyperframes / run），守卫必须一起
+    # 补上：画布页的产出是配图，从技能目录照抄命令 `-o images/seg1.svg` 就把图写进了
+    # 技能目录——和音频/HTML 一样污染仓库、多次制作串台，只是它更难被发现（一张 SVG
+    # 混在 references/ 旁边的目录里看不出是残渣）。
+    guards = [("输出 SVG", args.out)]
+    if args.emit_steps:
+        guards.append(("director 草稿", args.emit_steps))
+    guard_not_in_skill_dir(*guards)
 
     try:
         spec = load_spec(args.spec, aspect=args.aspect, accent=args.accent)

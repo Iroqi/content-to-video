@@ -1,6 +1,10 @@
+import contextlib
+import io
 import os
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
@@ -212,6 +216,53 @@ class SvgIntrinsicSize(unittest.TestCase):
         # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
         self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
                          (980.0, 735.0))
+
+
+class CheckSvgCommandLine(unittest.TestCase):
+    """`python scripts/check_svg.py` 的退出码：2=没找到文件，1=有 error，0=干净。
+
+    它是第 4 步引用的生产工具（SKILL.md 明确要留着），退出码是它被编排进脚本时
+    唯一能读的信号——没人测过，改坏了也不知道。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["check_svg.py"] + list(argv)):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = check_svg.main()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_clean_file_is_zero(self):
+        p = write(self.tmp.name, "a.svg", GOOD)
+        rc, out, _err = self._main([p])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("[OK]", out)
+
+    def test_file_with_errors_is_one(self):
+        p = write(self.tmp.name, "b.svg", GOOD.replace(
+            'height="735" viewBox="0 0 980 735"', 'height="980" viewBox="0 0 980 980"'))
+        rc, out, _err = self._main([p])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("[FAIL]", out)
+        self.assertIn("1 条 error", out)
+
+    def test_directory_expands_svg_only(self):
+        write(self.tmp.name, "a.svg", GOOD)
+        write(self.tmp.name, "notes.txt", "not an svg")
+        rc, out, _err = self._main([self.tmp.name])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("1 个文件", out)     # .txt 不该被当 SVG 读
+
+    def test_nothing_found_is_two(self):
+        empty = os.path.join(self.tmp.name, "nope")
+        os.makedirs(empty, exist_ok=True)
+        rc, _out, err = self._main([empty])
+        self.assertEqual(rc, 2)
+        self.assertIn("没找到", err)
 
 
 class DocRefChecker(unittest.TestCase):

@@ -113,6 +113,10 @@ _DIRECTOR_STEP_KEYS = frozenset({"at", "at_time", "target", "from", "to", "set",
 # 一处两个真源正是最坏形状：门禁的判词就成了谎话。
 _PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
                                    "repeat", "yoyo"})
+# GSAP 的 attr 是"SVG 属性名 → 值"的集合（d / pathLength / cx …），与 CSS 通道
+# 并列。名字与接续烘焙（_stage_carry._ATTR_KEY）是同一个键——两处必须指同一个东西，
+# 否则"契约层放行的形状"和"烘焙认得的形状"会分家。
+_ATTR_KEY = "attr"
 # at_time 的相对写法：以 "+0.5" / "-0.2" 出现，含义是"上一条 beat 结束之后再过
 # 这么多秒"（首条则从段落音频起点算）。让整页画布的自由时间线能顺次链接节奏，
 # 不必每步手算绝对秒——重配音后绝对秒会整体漂移，相对链则跟着上一条走。
@@ -147,6 +151,16 @@ def _validate_tween_vars(vars_, where):
                 f"{where} 含回调键 {k!r}——director 只接受可序列化的补间属性，"
                 "不接受 onStart/onUpdate/onComplete 这类回调（信源不可信，"
                 "回调等于在渲染页执行任意逻辑）")
+        if k == _ATTR_KEY and not isinstance(v, dict):
+            # GSAP 的 attr 是"SVG 属性名 → 值"的一集合。标量与数组在渲染端不报错
+            # （补间静默无效），真正的坏在跨段接续：烘焙 _settle_payload 只认 dict，
+            # 非 dict 掉进 CSS 通道，把 style="attr:5" 写死在下一页的起始画面上——
+            # 本页看着没事，接续页第 0 帧就是坏的。
+            raise ValueError(
+                f"{where} 的 'attr' 必须是对象（SVG 属性名 → 值，如 "
+                f"{{\"d\": \"M0 0L1 1\"}}）（实际: {v!r}）——非对象写法不会当场报错，"
+                "只会在 stage:\"keep\" 的接续烘焙里被当成 CSS 属性写进 style，"
+                "让下一页的起始画面从第一帧就是坏的")
         _validate_tween_leaf(v, f"{where} 的 {k!r}")
 
 
@@ -408,6 +422,14 @@ def _validate_director(key, dirval):
             raise ValueError(
                 f"{where} 的 morph 不能配 repeat:-1——形变是生成期按帧率采样成离散关键帧的，"
                 "无限循环没有终点可采。要循环就写明确遍数（repeat:N）")
+        # morph 的形变是采样出来的：`duration: 0` 时采样器按 max(2, 0×fps) 采两个关键帧，
+        # 全落在同一时刻——成片里不是"很快的形变"，是**瞬跳**，而作者看到的仍是自己写的
+        # 那条曲线。duration 缺省（模板 director.duration）不在此列：那是没写，不是写了 0。
+        if morph is not None and "duration" in step and float(step["duration"]) <= 0:
+            raise ValueError(
+                f"{where} 写了 morph 却给 duration={step['duration']}——形变是生成期"
+                "按 duration×fps 采样成离散关键帧的，0 秒采不出中间态，成片里这一拍"
+                "会退化成瞬跳。给一个 >0 的 duration，或删掉让它走模板缺省")
     return dirval
 
 

@@ -102,6 +102,14 @@ def _run_step(fn, argv, step_name):
     失败以 SystemExit 传回：非 0 记失败步骤、落制作报告、以同码退出。
     sys.exit("消息") 这种字符串码在子进程里由解释器代打并归一为 1，
     进程内没人代打，这里补打。
+
+    ValueError / OSError 一并接住：子脚本的入口只保证"错就 sys.exit"，但
+    `read_json_file` / 写盘 / 子进程拉起这些路径抛的是 ValueError 与 OSError——
+    漏掉它们时一次普通的"文件路径写错"会变成裸栈退出，且**不落制作报告**
+    （报告只在下面的失败分支里写），于是"这次跑到哪一步、哪一步挂的"这条唯一
+    的排查线索也没了。接住后按退出码 1 走同一条失败路径。
+    KeyboardInterrupt / SystemExit 之外的 BaseException（Ctrl-C）不接：
+    用户主动中断不该被当成步骤失败写进报告。
     """
     print(f"\n>>> {step_name} [in-process]: {' '.join(argv)}", flush=True)
     t0 = time.time()
@@ -116,6 +124,10 @@ def _run_step(fn, argv, step_name):
         else:
             code = 1
             print(str(e.code), file=sys.stderr, flush=True)
+    except (ValueError, OSError) as e:
+        code = 1
+        print(f"[run] {step_name} 异常终止（{type(e).__name__}）：{e}",
+              file=sys.stderr, flush=True)
     if code != 0:
         _REPORT["steps"].append(
             {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": False})

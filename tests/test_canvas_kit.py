@@ -430,6 +430,34 @@ class CommandLine(unittest.TestCase):
                                  "--aspect", "landscape", "--no-check"])
         self.assertEqual(rc, 0, err)
 
+    def test_writing_into_skill_dir_is_refused(self):
+        """配图也是产物：从技能目录照抄命令不该把 SVG / 草稿写进去。
+
+        本模块是第四个写盘出口（另三个在 pipeline / gen_hyperframes / run），守卫
+        必须一起补上——否则 `cd` 到技能目录跑 `-o images/seg1.svg` 就把图落进了
+        技能目录，和音频/HTML 一样污染仓库、多次制作串台。
+        """
+        from _script_utils import SKILL_DIR
+        cwd = os.getcwd()
+        os.chdir(SKILL_DIR)
+        self.addCleanup(os.chdir, cwd)
+        rel = os.path.join("images", "guard-probe.svg")
+        with self.assertRaises(SystemExit) as cm:
+            run_cli(["--spec", self.spec, "-o", rel, "--no-check"])
+        self.assertIn("技能目录", str(cm.exception))
+        self.assertIn("输出 SVG", str(cm.exception))
+        self.assertFalse(os.path.exists(os.path.join(SKILL_DIR, rel)))
+
+    def test_emit_steps_into_skill_dir_is_named_too(self):
+        """第二个出口同样要点名：只拦 -o 的话，草稿照样写进技能目录。"""
+        from _script_utils import SKILL_DIR
+        steps = os.path.join(SKILL_DIR, "guard-steps.json")
+        with self.assertRaises(SystemExit) as cm:
+            run_cli(["--spec", self.spec, "-o", self.out, "--no-check",
+                     "--emit-steps", steps])
+        self.assertIn("director 草稿", str(cm.exception))
+        self.assertFalse(os.path.exists(steps))
+
     def test_bad_spec_is_an_error_not_a_traceback(self):
         bad = write_json(self.tmp.name, "bad.json", {"elements": [{"kind": "nope"}]})
         rc, _out, err = run_cli(["--spec", bad, "-o", self.out])

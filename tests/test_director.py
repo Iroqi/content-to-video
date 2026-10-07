@@ -137,6 +137,29 @@ class Schema(unittest.TestCase):
         self._one_step({"at_time": -0.5, "target": "#a", "set": {"opacity": 1}})
         self._one_step({"at_time": True, "target": "#a", "set": {"opacity": 1}})
 
+    def test_scalar_attr_rejected(self):
+        """`attr` 必须是"属性名 → 值"的对象；标量与数组会污染接续页的第 0 帧。
+
+        证伪（去掉那条校验之后实测）：契约层放行，本页渲染不出错，但 stage:"keep"
+        的接续烘焙把非 dict 的 attr 当成 CSS 属性写成 style="attr:5"——下一页的
+        起始画面从第一帧就是坏的，且没有任何提示。
+        """
+        for bad in (5, "d", [1, 2], True, None):
+            with self.subTest(attr=bad):
+                with self.assertRaises(ValueError) as cm:
+                    validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {
+                        "steps": [{"at": 0, "target": "#a", "to": {"attr": bad}}]}}})
+                self.assertIn("attr", str(cm.exception))
+
+    def test_nested_scalar_attr_rejected_too(self):
+        """递归层同样要查：`{"attr": {"fill": {"x": 1}}}` 里的 attr 是对象，合规。"""
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+            {"at": 0, "target": "#a", "to": {"attr": {"fill": "red"}}}]}}})
+        # 但 attr 嵌在更深层时同样按对象要求（键名一样，语义一样）
+        with self.assertRaises(ValueError):
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+                {"at": 0, "target": "#a", "to": {"attr": {"attr": 3}}}]}}})
+
     def test_morph_accepted(self):
         validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
             {"at": 1, "target": "#p", "morph": {"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"},
@@ -367,6 +390,23 @@ class TweenKnobContract(unittest.TestCase):
         self._bad({"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
                                                       "to": "M 0 5 L 1 9"},
                    "repeat": -1}, "没有终点可采")
+
+    def test_zero_duration_rejected_for_morph(self):
+        """duration:0 的形变采不出中间态，成片里是瞬跳——不是"很快"，是没有。
+
+        证伪（删掉那条校验之后实测）：契约层放行，采样器按 max(2, 0×fps) 采两帧
+        落在同一时刻，作者看到的仍是自己写的曲线，成片里却一步跳到终态。
+        """
+        for bad in (0, 0.0):
+            with self.subTest(duration=bad):
+                self._bad({"at": 0, "target": "#p", "duration": bad,
+                           "morph": {"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"}},
+                          "瞬跳")
+        # duration 缺省（走模板 director.duration）不在此列：那是没写，不是写了 0
+        self._ok({"at": 0, "target": "#p",
+                  "morph": {"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"}})
+        # 补间类步的 duration:0 是"瞬时生效"，合法，别误伤
+        self._ok({"at": 0, "target": "#p", "duration": 0, "to": {"opacity": 1}})
 
 
 class Renderer(unittest.TestCase):

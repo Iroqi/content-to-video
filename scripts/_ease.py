@@ -80,21 +80,50 @@ def ease_ok(spec):
     return True
 
 
+def _elastic_arg_bad(value, what, spec, where):
+    """elastic 的参数是否非法（<=0 或 NaN）→ 人话报错；合法返回 None。
+
+    GSAP 的 `_configElastic` 里振幅与周期都当正数用：振幅进分母
+    （`period / (amplitude < 1 ? amplitude : 1)`），JS 里 0 出 Infinity、负数出负周期，
+    都不是崩——而是成片里一条谁也说不清理的怪曲线，且不报任何错。这正是本模块要挡的
+    那一类"无声退化"，所以在契约层就当非法写法拒掉，别等采样器除零。
+
+    只有**写了**的参数才判；没写的走缺省（1.0 / .3 或 .45），不在这里挑刺。
+    """
+    if value != value or value <= 0:
+        raise ValueError(
+            f"{where} {spec!r}：elastic 的{what}必须 > 0（实际 {value}）。"
+            f"振幅进分母，0 会除零、负数会得到负周期——两种都不报错，"
+            f"只是成片里那条曲线不再是你写的那个弹性。{EASE_HELP}")
+    return None
+
+
 def validate_ease(spec, where):
-    """契约层校验：档名不在目录里就 fail-fast，绝不留成"成片里悄悄换成别的缓动"。"""
+    """契约层校验：档名不在目录里就 fail-fast，绝不留成"成片里悄悄换成别的缓动"。
+
+    档名之外还要查 elastic 的两个参数：它们是唯一能让采样器崩（振幅 0 除零）
+    或静默产出错误曲线（负数）的输入，而 `ease_ok` 只看族名方向看不出参数好坏。
+    """
     if not isinstance(spec, str):
         raise ValueError(f"{where} 必须是字符串（实际: {spec!r}）")
-    if ease_ok(spec):
-        return spec
+    if not ease_ok(spec):
+        parts = split_ease(spec)
+        if parts is None:
+            raise ValueError(f"{where} {spec!r} 不是合法缓动写法。{EASE_HELP}")
+        if parts[0] not in EASE_FAMILIES:
+            raise ValueError(f"{where} 的族名 {parts[0]!r} 不在钉固的 GSAP core 里。{EASE_HELP}")
+        if parts[0] == "none":
+            raise ValueError(f"{where} {spec!r}：none 是直通档，GSAP 不认它的方向后缀，写 \"none\" 就好")
+        raise ValueError(f"{where} {spec!r}：steps 要带方向就必须给档数，写 \"steps(4).in\" 那样"
+                         "（裸 steps.in 实测解析不出来，GSAP 会静默换成别的缓动）")
     parts = split_ease(spec)
-    if parts is None:
-        raise ValueError(f"{where} {spec!r} 不是合法缓动写法。{EASE_HELP}")
-    if parts[0] not in EASE_FAMILIES:
-        raise ValueError(f"{where} 的族名 {parts[0]!r} 不在钉固的 GSAP core 里。{EASE_HELP}")
-    if parts[0] == "none":
-        raise ValueError(f"{where} {spec!r}：none 是直通档，GSAP 不认它的方向后缀，写 \"none\" 就好")
-    raise ValueError(f"{where} {spec!r}：steps 要带方向就必须给档数，写 \"steps(4).in\" 那样"
-                     "（裸 steps.in 实测解析不出来，GSAP 会静默换成别的缓动）")
+    if parts[0] == "elastic":
+        args = parts[2]
+        if args:
+            _elastic_arg_bad(_num(args, 0, 1.0), "振幅（第一个参数）", spec, where)
+        if len(args) > 1:
+            _elastic_arg_bad(_num(args, 1, 0.3), "周期（第二个参数）", spec, where)
+    return spec
 
 
 def _bounce_out(t):
@@ -158,9 +187,16 @@ def curve(name, default):
         # 不是 (1,0.3)——GSAP 注册 inOut 时 type 为空，走了 .45 分支）；振幅不足 1 时 p1
         # 钳到 1、周期按 1/振幅 放大，等价于 (1, p/a)（实测 (0.6,0.18)≡(1,0.3)）。
         a = _num(args, 0, 1.0)
+        # 渲染端最后一道兜底：契约层已按「振幅/周期必须 > 0」拒过非法写法，这里挡的是
+        # 绕过契约层的输入（手改过的 images.json、老产物重放）——morph 采样不该因为一条
+        # 算不出的曲线把整页渲染崩在除零上。判据与契约层同一条（≤0 / NaN 都当没写），
+        # 回落值就是缺省振幅：GSAP 里 `elastic.out(0)` 走的是 Infinity 周期，同样是垃圾
+        # 曲线，回落到 1.0 至少是"认得出的弹性"，且不会让这一页变成 NaN 坐标。
+        if a != a or a <= 0:
+            a = 1.0
         default_p = 0.45 if mod == "inOut" else 0.3
         p = _num(args, 1, default_p)
-        if not p or p != p:             # GSAP 的 `period || 缺省`：0/NaN 一律回落
+        if p != p or p <= 0:            # GSAP 的 `period || 缺省`：0/NaN/负数一律回落
             p = default_p
         p1 = a if a >= 1 else 1.0
         per = p / (a if a < 1 else 1.0)

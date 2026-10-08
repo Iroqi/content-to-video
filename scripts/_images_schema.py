@@ -64,7 +64,30 @@ MEDIA_ENTRY_KEYS = frozenset({
     # images.json 里会被 validate_images_json 直接拒（见下），否则等于开了一个
     # "绕过净化、把任意字符串塞进成片 DOM"的注入口。
     "inline_svg",
+    # 视频音轨四件套：volume/fade_in/fade_out/media_start。前三个管"这条原声在
+    # 成片里多响、怎么进出"，media_start 管从源片第几秒起播。它们只对 video
+    # 成立（位图/SVG/GIF 没有音轨，也没有可 trim 的时间轴），写在非 video 上
+    # 一律按"写了不会生效"拒掉，口径与 director/stage 一致。
+    # 为什么必须显式开这四个口子：<video> 的音轨是唯一一条**不经过第 3 步
+    # TTS、却照样混进成片**的声音（见 html_renderer._media_html）。不给它增益
+    # 旋钮，"要了原声"就等于"原声压着口播一起播"，而这条链上没有任何报错。
+    "volume", "fade_in", "fade_out", "media_start",
 })
+
+# Hyperframes 的音轨增益上限：data-volume 超过 3.98（+12dB）不再被放大。
+# 抄自官方 html-schema 契约，不在这里另立一个数——将来上游改了上限，
+# 只改这一处常量，报错文案与渲染端随即跟着走。
+MEDIA_VOLUME_MAX = 3.98
+
+# 视频音轨四件套的取值范围：(下限, 上限, 报错误文案里的人话)。上限 None = 不封顶。
+# 上限只有一个（volume），其余三项只要非负——"淡入比整段还长"这类不合理不是
+# 取值越界，而是与片段时长的关系，那件事只有渲染端知道段有多长，交给它 warn。
+_VIDEO_AUDIO_OPTS = {
+    "volume": (0.0, MEDIA_VOLUME_MAX, "增益倍数，1 = 0 dB"),
+    "fade_in": (0.0, None, "淡入秒数"),
+    "fade_out": (0.0, None, "淡出秒数"),
+    "media_start": (0.0, None, "从源片第几秒起播"),
+}
 
 # 扩展名 → 媒体类型。gif 与 image 同档（都走 <img>，语义上 gif 就是一张会自己
 # 动的静态图），单列出来只为让 images.json 能显式写 type:"gif" 而不被拒。
@@ -498,6 +521,37 @@ def validate_images_json(data):
                     raise ValueError(
                         f"images.json 的 '{key}' 的 {_flag} 必须是 JSON 布尔 true/false"
                         f"（实际: {value[_flag]!r}）")
+            # 视频音轨四件套：只对 video 成立（位图/SVG/GIF 没有音轨也没有可
+            # trim 的时间轴，写了不会生效 = 静默丢键，按契约层统一口径拒）。
+            # type 是 "auto" 时按扩展名判，与 classify_media_path 同一条路。
+            # src 缺失由下面那条"缺少 src"统一报（先报它更容易看懂），
+            # 这里只在 src 是字符串时才判类型，别让 None 撞进 splitext。
+            _is_video = (isinstance(src, str)
+                         and classify_media_path(src, _t or "auto") == "video")
+            for _opt, (_lo, _hi, _hint) in _VIDEO_AUDIO_OPTS.items():
+                if _opt not in value:
+                    continue
+                if not isinstance(src, str):
+                    continue  # 缺 src 的错让下面那条报，不在这里叠第二句
+                if not _is_video:
+                    raise ValueError(
+                        f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
+                        f"（type={(_t or 'auto')!r}）——{_opt} 只对 video 生效，"
+                        "位图 / SVG / GIF 没有音轨也没有可裁剪的时间轴")
+                _v = value[_opt]
+                # 布尔必须单独挡：isinstance(True, int) 为真，`"volume": true`
+                # 会溜过数值校验、被渲染端拼成 data-volume="True"——那是个无效
+                # 增益，症状是"要了原声、成片却没声音"，与本套契约要堵的正是
+                # 同一类静默退化。与 loop/muted 的布尔口径保持一致。
+                if isinstance(_v, bool) or not isinstance(_v, (int, float)):
+                    raise ValueError(
+                        f"images.json 的 '{key}' 的 {_opt} 必须是数字"
+                        f"（{_hint}；实际: {_v!r}）")
+                if _v < _lo or (_hi is not None and float(_v) > _hi):
+                    _bound = (f"{_lo} ~ {_hi}" if _hi is not None else f"≥ {_lo}")
+                    raise ValueError(
+                        f"images.json 的 '{key}' 的 {_opt} 超出范围（{_bound}）"
+                        f"（{_hint}；实际: {_v!r}）")
             if "src" not in value:
                 raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
         else:

@@ -526,6 +526,59 @@ def _tagline_html(rc, seg, sid, ac):
             f'style="color:{_tag_color}">{esc(seg["tagline"])}</div>')
 
 
+def _fmt_attr_num(v):
+    """秒 / 增益写进 HTML 属性时的字面形态。
+
+    固定 6 位小数再剥尾零：`2` 不写成 `2.0`（多余），`0.5` 不写成
+    `0.5000000000000001`（浮点噪音）。同一份稿件两次生成必须字节一致——
+    直接 repr(float) 会让 1/3 这类值带上二进制余尾，diff 里全是假改动。
+    """
+    return f"{float(v):.6f}".rstrip("0").rstrip(".")
+
+
+def _video_audio_attrs(media_opts, sid, d):
+    """视频音轨那几个 data-* 属性（一行一个，末尾带空格）。
+
+    Hyperframes 的 ffmpeg 混音只读两类源：`<audio>` 元素，和声明了
+    `data-has-audio="true"` 的 `<video>`。**不写就一条都不混**——所以
+    `muted: false`（用户明确要原声）时必须补上这个声明，否则成片有画面、
+    没原声，而整条链上没有任何报错。这是本函数存在的唯一理由。
+
+    反过来，`muted: true`（默认）时**不能**写它：契约是二选一，同时挂
+    muted 和 data-has-audio 会让 lint 的 video_missing_muted 判据失效。
+    """
+    attrs = []
+    muted = media_opts.get("muted", True)
+    if not muted:
+        attrs.append('data-has-audio="true"')
+        # 知情告警：口播是 <audio id="main-audio">（见 templates/composition.html），
+        # 视频原声是第二条进混音器的轨。两条都响 = 两条人声/环境声叠着播，
+        # 跑完不报错、成片却没法听——这正是要出声提醒的那一类。
+        print(f"[warn] images.json 的 '{sid}' 关掉了 muted：视频原声会与口播"
+              "（audio/combined.wav）一起混进成片。原声不是配乐，它和旁白"
+              "抢同一段频谱，建议同时给 volume（0.15~0.3 是实测能听清旁白的档）"
+              "让原声退到背景。", file=sys.stderr)
+    # 增益与裁剪四件套：只对不静音的轨有意义（静音轨调增益听不出区别，
+    # 但写了不算错，照样透传——契约层已按 video 校验过类型与范围）。
+    for opt, attr in (("volume", "data-volume"),
+                      ("fade_in", "data-fade-in"),
+                      ("fade_out", "data-fade-out"),
+                      ("media_start", "data-media-start")):
+        if opt in media_opts:
+            attrs.append(f'{attr}="{_fmt_attr_num(media_opts[opt])}"')
+    # 淡入淡出之和超过片段时长会被引擎按比例缩放——写了一段"淡入"却因为
+    # 时长不够被压成几乎看不见，是典型的"写了没生效"。渲染端这里正好知道
+    # 片段有多长（d），所以这句只能在这儿说，契约层说不了。
+    fin = float(media_opts.get("fade_in", 0.0) or 0.0)
+    fout = float(media_opts.get("fade_out", 0.0) or 0.0)
+    if fin + fout > d > 0:
+        print(f"[warn] images.json 的 '{sid}' 的 fade_in+fade_out"
+              f"（{_fmt_attr_num(fin + fout)}s）超过本段时长"
+              f"（{_fmt_attr_num(d)}s）：引擎会把两段淡变按比例压进片段内，"
+              "实际听到的大概率比写的短。", file=sys.stderr)
+    return " ".join(a + " " for a in attrs) if attrs else ""
+
+
 def _media_html(rc, sid, s, d):
     """配图/视频容器 HTML（右栏或画布槽位）。仅在 sid 有配图映射时调用。
 
@@ -549,7 +602,7 @@ def _media_html(rc, sid, s, d):
             f'      <video id="vid-{sid}" src="{quote(media_path)}" '
             f'data-start="{s}" data-duration="{d}" '
             f'{loop} {muted} {autoplay} {playsinline} '
-            f'{poster_attr}>\n'
+            f'{poster_attr}{_video_audio_attrs(media_opts, sid, d)}>\n'
             f'      </video>\n'
             f'    </div>'
         )

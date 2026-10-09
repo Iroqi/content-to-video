@@ -274,6 +274,9 @@ _TEMPLATE_JSON = r'''
           "opacity": 0.55,
           "breatheTo": 0.35,
           "breatheDur": 1.2
+        },
+        "budget": {
+          "minFactor": 0.5
         }
       }
     }

@@ -54,6 +54,15 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
 - 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
+### 蘋果風開場（`opening_animation: "apple"`）
+
+开屏 agenda 卡的整页编排，取代通用标题入场（两条补间同元素会打架）。取值与写稿口径见 `references/writing.md` 的 `opening_animation`，参数真源在 `_template.py` 的 `animation.opening.apple`。
+
+- **整支舞按开屏页的可见窗口等比归一**。收尾时刻由 agenda 行数决定（`rows.delay + stagger×(行数−1) + duration`：7 行 2.12s、1 行 1.40s），而它能用的时长是**可见窗口**（`[擦除起点, 被下一页盖住]`，不是口播段长——短开场段里两者差着一整个 gap）。装得下原速，装不下按 `可见窗口 ÷ 收尾时刻` 等比压缩，地板 0.5（`animation.opening.apple.budget.minFactor`）：压到一半就停手，再压就成闪烁。节奏比例不变，所以压缩后仍是一支舞，不是一个被赶过的动画。
+- **光晕呼吸的时长不参与压缩**。它是淡入之后的稳态循环（`repeat:-1 yoyo`），压它等于让开场一直喘，而且它不参与"舞演完没有"的判定——压缩只落在淡入时长与呼吸起点上。
+- **地板仍装不下时打 `[warn]`**，点名可见窗口、需要的时长与行数。症状与去处见 `references/image_options.md` 的「已知翻车速查表」。
+- 锚点是**擦除起点 `win_start`** 而不是段起点：页面从 `clip-path` 里被擦开的同时内容就在演化。标题若等擦完再出现，会先"完整亮 0.28s 再跳回模糊起点"。
+
 ## 版式真源
 
 画布尺寸、标题区、句子流、圆角、动画等版式数值都从 `scripts/_template.py` 派生 CSS 变量，配色由 `scripts/_theme.py` 派生。新增视觉参数一律先加进这两个 py，再由 HTML renderer 注入 `--ctv-*` 变量；哪些常量允许留在 `templates/composition.css`（以及 `@font-face`、`verse.clipPad` 这两处与模板值的联动代价）写在 CSS 自己的文件头与各块注释里。

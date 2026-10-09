@@ -33,7 +33,12 @@ class Harness:
         self.tts_argv = None
         self.gen_argv = None
         self.render_calls = []
+        self.probe_calls = []
         self.last_out = self.last_err = ""
+        # 假成片时长（秒）；None = 量不到（ffmpeg 不可用那条降级路径）。
+        # 渲染之后 run.py 会拿它跟 manifest 的 total_duration 对账，测试靠
+        # 这个注入点覆盖那道闸——不注入会去调真 ffmpeg（CI 上没有）。
+        self.video_duration = None
 
     def cleanup(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -58,6 +63,10 @@ class Harness:
                                   "cwd": cwd, "max_wait": max_wait})
         with open(out_path, "wb") as f:
             f.write(b"x" * 100)
+
+    def fake_probe(self, out_path, ffmpeg_path=None):
+        self.probe_calls.append(out_path)
+        return self.video_duration
 
     def make_images_complete(self):
         """按 manifest 需要配图的段 id 落齐映射与文件。"""
@@ -90,6 +99,7 @@ class Harness:
                 mock.patch.object(R.gen_hyperframes, "main", self.fake_gen),
                 mock.patch.object(R, "render_wait", self.fake_render),
                 mock.patch.object(R, "hyperframes_command", lambda p: ["fakehf"]),
+                mock.patch.object(R, "probe_video_duration", self.fake_probe),
                 contextlib.redirect_stdout(out),
                 contextlib.redirect_stderr(err),
             ):

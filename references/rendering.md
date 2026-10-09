@@ -51,6 +51,13 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`（曾因此让竖屏配图的 y 滑入整条失效，实测过程见 `git log`）。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。
+  对话段（`dialogue`）在**轮次切换的首句**行首多挂一枚说话人标签 `.verse-who`——谁在说
+  这件事原本只存在于声音里，静音播放、听障观看、或两个音色选得相近时，观众手里只剩一串
+  分不清轮次的字幕。同一说话人连着说多句只在第一句挂（行首不变成一列复读的抬头）；标签
+  字号与右侧间隔走 `_template.py` 的 `verse.whoFontSize` / `whoGap`（随画幅变，两画幅各
+  一份），颜色是本段 accent 的文本安全副本，由渲染器按段写成 `.verse-clip` 上的
+  `--ctv-verse-who-color`，CSS 只消费。它跟正文抢同一行宽度，所以 `speakers[].label` 是
+  上墙文字、有 6 字上限，判据与报错见 `references/writing.md` 的 `label` 条目。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
 - 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为画布页的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/image_options.md` 的「不铺满幅底」一节。
 
@@ -109,6 +116,16 @@ hf-project/
 
 渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
 
+**渲染之后还有一道闸：成片时长对账。** 容器完整证明不了内容完整——抓帧超时重抓、worker 崩、Chrome 提前退出都能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子，后几段整段不在片里，而控制台照打"完成"。所以 `run.py` 在成片落盘后拿 ffmpeg 量一次实际时长，与 manifest 的 `total_duration` 对账，容差沿用全仓那条 `max(1s, 2%)`：
+
+| 实测 vs 时间轴 | 处置 | 为什么 |
+| --- | --- | --- |
+| 短于容差 | **退出码 4**，拦下交付（成片留在盘上不删） | 后段内容可能整个不在片里；先看成片同目录的 `out.render.log` 里有没有 `Parallel capture timed out`，有的话降 `--workers` 到 2 重渲 |
+| 长于容差 | `[warn]`，正常交付 | 画面信息没丢，多出来的多半是末段音频尾巴或末帧余量 |
+| 量不到（ffmpeg 不可用） | `[warn]`，正常交付 | ffmpeg 是可选依赖；明说"演完了没有这条没人证明"，不拿缺依赖当失败 |
+
+三种结果与实测秒数都进 `production_report.json` 的 `video` 字段（`check` 取 `ok` / `short` / `long` / `skipped`）。别把这条 warn 当噪音划走——它是"成片到底演完没有"唯一的机器证据。
+
 ## 性能参数
 
 - `fps`：默认 24；抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
@@ -135,6 +152,8 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   - `negative_z_index`（**每条 `z-index:-1/-2` 规则一条**）：氛围光 `.seg-card::after` + 背景两层 `.seg-card>.bg,.grid`。`negative_z_index` 是误报——浏览器实测 `getComputedStyle(.seg-card).isolation` 为 `isolate`，氛围光确实压在卡片内容之下、页面背景之上，检查器不认 `isolation` 建的层叠上下文，而它自己给的 Fix 就是"加 `isolation: isolate`"（`composition.css` 已加）。
   - **判据**：这 5 类之外的任何新增条目一律当真读。条数对不上不用慌（段数变了就变），**类型多出一类就要查**。反过来，Layout 段出现的 `✗` 要当真——它量的是真实版面重叠，`check_svg` 查不到图内两行文字压字（见 `image_options.md`「画布几何」末条）；已知唯一的例外是 `text_occluded`，见下条。
 - Runtime 的 `clip_media_fit` 和 Layout 的 `clipped_text` **不在噪声之列**：前者是音频实际时长短于 `data-duration`（成片被截到音频长度、字幕时间轴对不上），真实 pipeline 产物的 `total_duration` 就是量出来的音频时长，正常不该出现，手写/裁剪 manifest 时它是"manifest 与音频不同步"的唯一信号（实测把 `total_duration` 对齐音频后该条消失）；后者是某行文本被自己的盒子裁掉，竖屏 agenda 行的 `nameTrim` 只能挡字数超限，挡不住半角/混排的实际字宽（Python 侧 warn 与它两道闸各管一头，见 `references/writing.md`「开场/结尾专用顶层字段」）。
-- Layout 的 `text_occluded` **曾经误报，现在不会再报**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。豁免靠 `data-layout-allow-occlusion` 等三个属性，而**检查器只认元素自己身上的标记、不继承祖先的**——原先只打在 `.verse` 上，检查器照样去量它下面的每一行。模板已在**每一行 `.verse-line`** 上也打上（`html_renderer.py`），实测 7 段竖屏稿：只打 `.verse` 时报 1 error，每行补齐后 0 error 且 warning 条数不变。**再见到 `text_occluded` 先别当版面 bug**——先用 `snapshot --at <时刻>` 看画面：文字真被遮（配图压住句子流）就调版式，画面正常则是这个漏判回来了。
+- Layout 的 `text_occluded` **曾经误报，现在不会再报**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。豁免靠 `data-layout-allow-occlusion` 等三个属性，而**检查器只认元素自己身上的标记、不继承祖先的**——原先只打在 `.verse` 上，检查器照样去量它下面的每一行。模板已在**每一行 `.verse-line`** 上也打上（`html_renderer.py`），实测 7 段竖屏稿：只打 `.verse` 时报 1 error，每行补齐后 0 error 且 warning 条数不变。
+  **再往下嵌一层 DOM 就要再打一层**：2026-10 给对话段加了行首说话人标签（`<span class="verse-who">`，见上面 verse 一条），同一份稿子 Layout 立刻报 `text_occluded … span:nth-of-type(1) "主播"` 1 error——判据与那两层完全一样，只是这次被量的是 span。所以那三个属性现在打在 `.verse` / `.verse-line` / `.verse-who` 三层上。**以后再往句子流里嵌任何带文字的元素，先给它自己带上这三个属性**；事后调试的路子是先跑 `check` 看报的是哪一层的选择器，别去改版式。
+  **再见到 `text_occluded` 先别当版面 bug**——先用 `snapshot --at <时刻>` 看画面：文字真被遮（配图压住句子流）就调版式，画面正常则是这个漏判回来了。
 - `snapshot --at` 精确取时刻帧并自动拼 contact sheet，比"复制 HTML + 注入 `tl.pause(t)` + Chrome `--screenshot`"省事且不会踩 vendor 相对路径的坑；手搓探针只在需要同一页连取多帧、或 `snapshot` 不可用时作后备。
 - 渲染前判断本机依赖齐不齐，用 `npx -y hyperframes doctor`：全绿就可以直接跑真渲染，不必止步于 HTML 预览（Chrome headless shell 由 Hyperframes 自己下载并缓存在 `~/.cache/hyperframes/chrome/`，FFmpeg 走第 3 步那条查找链）。

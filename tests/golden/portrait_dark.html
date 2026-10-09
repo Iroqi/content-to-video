@@ -172,6 +172,15 @@ body{font-family:var(--ctv-font-family)}
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
 .verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
 .verse-line.past{opacity:.45}
+/* 对话段的说话人标签（只在轮次切换的首句行首出现，见 html_renderer._verse_html）。
+   它是字幕里的**元信息**，不是内容：字号比句子小一档、字重压到最重、颜色走
+   accent 的文本安全副本（--ctv-verse-who-color 由渲染器按段写在 .verse-clip 上，
+   这里不存第二份色值）。小字号 + 重字重是为了让它读作"抬头"而不是"正文的
+   前两个字"——只缩不重会跟正文糊在一起。
+   不写 vertical-align：inline 元素默认基线对齐，且它自身 line-height 继承的
+   数值（--ctv-verse-lh）× 更小的 font-size，算出来的行盒比 .verse-line 矮，
+   不会把行撑高、不推动滚动锚点。 */
+.verse-who{font-size:var(--ctv-verse-who-font);font-weight:800;color:var(--ctv-verse-who-color);margin-right:var(--ctv-verse-who-gap);white-space:nowrap}
 /* 竖屏钉底。不用 !important：本条 0,2,0 压过上面的 .verse（0,1,0）；
    agenda 卡里的豁免由 .agenda-col .verse 用 importance 拿下（那两条选择器
    打平，靠 importance 而非源序决胜，理由见该处注释）。 */
@@ -281,6 +290,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-verse-h:280px;--ctv-verse-clip:40px;
   --ctv-verse-line:5px;--ctv-verse-lh:1.5;
   --ctv-verse-rule:0.12em;
+  --ctv-verse-who-font:28px;--ctv-verse-who-gap:12px;
   --ctv-ag-x:72px;--ctv-ag-t:88px;--ctv-ag-b:96px;
   --ctv-ag-title-lh:1.1;--ctv-ag-title-mt:18px;
   --ctv-ag-kicker:24px;--ctv-ag-idx:30px;
@@ -320,7 +330,7 @@ body{font-family:var(--ctv-font-family)}
       <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
     
-    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="0" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>大家好，今天聊两件事。</div></div></div>
+    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf" style="--ctv-verse-who-color:#2dd4bf"><div class="verse-line" data-i="0" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>大家好，今天聊两件事。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-opening" style="height:6px"></div>
@@ -338,7 +348,7 @@ body{font-family:var(--ctv-font-family)}
     </div>
     <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
     
-    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f"><div class="verse-line" data-i="1" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第一句。</div><div class="verse-line" data-i="2" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第二句，稍微长一点点。</div></div></div>
+    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f" style="--ctv-verse-who-color:#ffd54f"><div class="verse-line" data-i="1" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第一句。</div><div class="verse-line" data-i="2" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第二句，稍微长一点点。</div></div></div>
       <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
 </div>
   <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
@@ -357,7 +367,7 @@ body{font-family:var(--ctv-font-family)}
       <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
     
-    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf"><div class="verse-line" data-i="5" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>谢谢观看，下期再见。</div></div></div>
+    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf" style="--ctv-verse-who-color:#2dd4bf"><div class="verse-line" data-i="5" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>谢谢观看，下期再见。</div></div></div>
     </div>
     <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
       <div class="reveal-line" id="line-closing" style="height:6px"></div>

@@ -42,6 +42,13 @@ ON_SCREEN_TOP_KEYS = ("title", "opening_title", "closing_title",
                       "opening_tagline", "closing_tagline")
 ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway")
 
+# 说话人标签的字数上限（两画幅同值）。它上墙后挂在字幕**行首**，跟正文抢同一
+# 行的宽度：竖屏字幕行约 24 个正文字位，标签吃掉 6 个字位还剩得下正文；再长
+# 就把正文挤到第二行，而 verse 窗口只有两行多一点的余量——一句正常长度的话
+# 会顶掉下一句的位置。所以这里按上墙文字管，超限直接拒（label 是作者自己起
+# 的短名，当场改比事后在字幕里看一串长抬头便宜得多）。
+SPEAKER_LABEL_MAX_CHARS = 6
+
 
 def validate_segments_source(data):
     """segments_source.json：需要非空的 segments 列表，opening/closing 可选。
@@ -121,6 +128,27 @@ def validate_segments_source(data):
             for _key in ("label", "voice_style"):
                 _validate_text(spk_cfg.get(_key),
                                f"segments_source.json 的 speakers['{spk}'].{_key}")
+            # label 现在是**上墙文字**：对话段轮次切换的首句行首会挂出这枚标签
+            # （见 references/rendering.md「画面结构」的 verse 一条）。所以它也
+            # 受上墙那三道管：不收分号、单行、字数有上限。
+            # 判的是**最终上墙的那个值**而不是只判显式 label：label 缺省时回退
+            # 成 speaker 名本身（build_from_structured 的 `label or spk`），key
+            # 起长了又不给 label，画面上照样挂一串长抬头——只校验显式 label 等于
+            # 给这条约束留了个绕过去的口子。
+            _label = spk_cfg.get("label")
+            _on_screen = _label if isinstance(_label, str) and _label.strip() else spk
+            _where = f"segments_source.json 的 speakers['{spk}'] 上墙的说话人标签"
+            if "\n" in _on_screen or "\r" in _on_screen:
+                raise ValueError(f"{_where}（{_on_screen!r}）必须是单行"
+                                 "（它挂在字幕行首，含换行会撑破行高）")
+            _validate_display_text(_on_screen, _where)
+            if len(_on_screen.strip()) > SPEAKER_LABEL_MAX_CHARS:
+                raise ValueError(
+                    f"{_where}（{_on_screen!r}）有 {len(_on_screen.strip())} 字，"
+                    f"超过 {SPEAKER_LABEL_MAX_CHARS} 字上限：它跟正文抢同一行字幕，"
+                    "长了会把正文挤到下一行、顶掉下一句。\n"
+                    "  给 speakers 里这个说话人写一枚短的 'label'（如「主播」「讲解」），"
+                    f"或把 speaker 名 {spk!r} 改短（不写 label 时上墙的就是它）。")
 
     seen_source_ids = set()
     for i, seg in enumerate(segments, 1):

@@ -409,6 +409,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
   --ctv-verse-h:{_vv["windowHeight"]}px;--ctv-verse-clip:{_vv["clipPad"]}px;
   --ctv-verse-line:{_vv["linePad"]}px;--ctv-verse-lh:{_vv["lineHeight"]};
   --ctv-verse-rule:{_vv["activeRule"]}em;
+  --ctv-verse-who-font:{_vv["whoFontSize"]}px;--ctv-verse-who-gap:{_vv["whoGap"]}px;
   --ctv-ag-x:{_ag["insetX"]}px;--ctv-ag-t:{_ag["insetTop"]}px;--ctv-ag-b:{_ag["insetBottom"]}px;
   --ctv-ag-title-lh:{_ag["titleLineHeight"]};--ctv-ag-title-mt:{_ag["titleMarginTop"]}px;
   --ctv-ag-kicker:{_ag["kickerSize"]}px;--ctv-ag-idx:{_ag["idxSize"]}px;
@@ -635,31 +636,57 @@ def _media_html(rc, sid, s, d):
 
 
 def _verse_html(seg, sid, ac_text_attr):
-    """句子流（歌词式 verse）DOM：该段全部句子按序渲染成静态行。"""
+    """句子流（歌词式 verse）DOM：该段全部句子按序渲染成静态行。
+
+    对话段（`dialogue`）在**轮次切换的首句**行首挂一枚说话人标签
+    （`<span class="verse-who">`）。它上墙的理由与「画布页要把关键句画进图里」
+    同源：谁在说这件事原本只存在于声音里——静音播放、听障观看、或两个音色
+    选得相近时，观众手里只剩一串分不清轮次的字幕。只在轮次首句挂，同一
+    说话人连着说三句不刷三遍标签（那会让字幕行首变成一列复读的抬头）。
+    """
     # 三个 layout 豁免属性打在 .verse 与**每一行**上，两处都要，缺一不可：
     # 检查器只认元素自己身上的标记，**不继承祖先的**。只打 .verse 的话它照样
     # 去量每行，而被 .verse-clip 裁在窗口外的半截行 rect 仍在原位 → 判
     # text_occluded 报 error。实测（7 段竖屏稿）：只打 .verse 报 1 error，
     # 连每行一起打则 0 error、warning 条数不变。快照确认画面本身没问题。
-    _vlines = [
-        # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
-        # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
-        # 永久失灵或错行——宁可都不高亮，也不错误高亮
-        f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
-        f' data-layout-allow-overflow data-layout-allow-overlap'
-        f' data-layout-allow-occlusion>'
-        f'{esc(_s2["text"])}</div>'
-        for _s2 in seg["sentences"]
-    ]
+    _prev_who = None
+    _vlines = []
+    for _s2 in seg["sentences"]:
+        _who = _s2.get("speaker") or None
+        # 轮次首句才标：与上一句同一说话人时不再重复。
+        _who_html = ""
+        if _who and _who != _prev_who:
+            # 三个豁免属性**也得打在 span 自己身上**：检查器只认元素自己带
+            # 的标记、不继承祖先（`.verse` 打过、每行 `.verse-line` 也打过，
+            # 实测同一份稿子加了这个 span 之后 Layout 立刻报
+            # `text_occluded … span:nth-of-type(1) "主播"`——滚出窗口的行 rect
+            # 仍在原位，判据与那两层一模一样，只是又往下走了一层 DOM）。
+            _who_html = (f'<span class="verse-who" data-layout-allow-overflow'
+                         f' data-layout-allow-overlap'
+                         f' data-layout-allow-occlusion>{esc(_who)}</span>')
+        _prev_who = _who
+        _vlines.append(
+            # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
+            # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
+            # 永久失灵或错行——宁可都不高亮，也不错误高亮
+            f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
+            f' data-layout-allow-overflow data-layout-allow-overlap'
+            f' data-layout-allow-occlusion>'
+            f'{_who_html}{esc(_s2["text"])}</div>'
+        )
     return (
         # 豁免的成因：滚出窗口的行视觉上被 overflow:hidden 裁掉，但静态 DOM
         # rect 仍在原位——上越标题区（allow-overlap）、下碰底部元素如进度条
         # （allow-occlusion）、整体越出卡片（allow-overflow）。活动行锚定在
         # 窗口内 clipPad 处，真实重叠不可能发生。
+        # --ctv-verse-who-color 只在这里写一次：值来自本段 accent 的文本安全
+        # 副本（_card_colors 已过 ensure_text_contrast 保到 check 门禁最严档），
+        # CSS 侧只消费变量、不存第二份色值。
         f'\n    <div class="verse" id="verse-{sid}" '
         f'data-layout-allow-overflow data-layout-allow-overlap '
         f'data-layout-allow-occlusion>'
-        f'<div class="verse-clip" data-accent="{ac_text_attr}">'
+        f'<div class="verse-clip" data-accent="{ac_text_attr}" '
+        f'style="--ctv-verse-who-color:{ac_text_attr}">'
         f'{"".join(_vlines)}</div></div>'
     )
 

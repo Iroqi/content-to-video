@@ -39,7 +39,7 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 ### 2. 写结构化稿
 
-生成 `segments_source.json`。每个 segment 至少有 `title` 和 `text`（或 `dialogue`）；建议给显式 `id`（`seg` 前缀），改稿重排后 `images.json` 的键不用跟着变。对话内容用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述。
+生成 `segments_source.json`。每个 segment 至少有 `title` 和 `text`（或 `dialogue`）；建议给显式 `id`（`seg` 前缀），改稿重排后 `images.json` 的键不用跟着变。对话内容用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述——对话段的轮次首句会在字幕行首挂出说话人标签（`speakers[].label`，**上墙文字**：单行、不收分号、≤6 字，超限契约层直接报错；不写 label 时按 speaker 名判，所以 speaker 名也别起太长）。双人对话别放进 `layout: "canvas"` 段：画布页没有字幕层，轮次信息就只剩声音了。
 
 写稿要点：
 
@@ -98,9 +98,11 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告——**整页画布段除外**，那一页没有标题层与句子流层，缺图连预览 HTML 都生成不出来，一律 exit 2。映射的 `src` 文件不存在则连 `--until html` 也拦（同 exit 2），`--until images` 只看覆盖率、不拦。
 
+渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）。成片明显短于时间轴 = 后段内容可能整个不在片里（抓帧超时/worker 崩的典型症状），默认拦下交付，先看成片同目录 `out.render.log` 里有没有 `Parallel capture timed out`，有就降 `--workers` 重渲；长于容差与量不到（ffmpeg 不可用）只 `[warn]`。结果与实测秒数在 `production_report.json` 的 `video` 字段。
+
 ## 输出契约
 
-- `OUTPUT/`：`timing_manifest.json`（时间轴）+ `production_report.json`（各步耗时、配图覆盖率、降级项）；逐句 WAV 与 `combined.wav` 同目录，是 `--resume` 的缓存，不用手改。
+- `OUTPUT/`：`timing_manifest.json`（时间轴）+ `production_report.json`（各步耗时、配图覆盖率、降级项、成片时长校验）；逐句 WAV 与 `combined.wav` 同目录，是 `--resume` 的缓存，不用手改。
 - `hf-project/`（默认 `<output 同级>`）：`images.json`（段 sid → 素材）、素材目录 `images/`、`index.html`（预览入口）、`out.mp4`（成片）。
 
 ## 安全边界

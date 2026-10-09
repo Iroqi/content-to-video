@@ -163,7 +163,7 @@ def _agenda_row_html(rows):
 
 
 def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
-                     title_size, bgs, apple_opening=False):
+                     title_size, bgs, apple_opening=False, card=None):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流（verse）后再闭合 .agenda-col——flex 列"题头在顶、
@@ -172,6 +172,11 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     apple_opening 时额外带一枚题头光晕（.apple-halo）与 data 标记——光晕在
     DOM 最前、z-index:-1，衬在标题后面，由 _card_timeline_lines 编排淡入与
     呼吸；data 标记供 CSS/调试识别人，不参与渲染路径。
+
+    card 形参只用于**回写**实际画出来的行数（_apple_opening_lines 要拿它算
+    整支舞的收尾时刻）。行数只在这里算得出，而 `_agenda_rows` 超上限时会打
+    [warn]——时间线侧再算一遍就是把同一条 warn 打两次，所以把结果递过去，
+    不重算。
     """
     sid = seg["id"]
     halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n' % sid
@@ -184,6 +189,10 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
         kicker_html = (f'<div class="agenda-kicker" style="color:{_kc}">'
                        f'{esc(seg["tagline"])}</div>')
     rows, tail_rows = _agenda_rows(sid, clips, manifest, ag)
+    if card is not None:
+        # 截断后的真实行数（正文 + cta 尾行）。苹果开场按它算 stagger 的收尾时刻，
+        # 必须是**画在画面上**的行数，不是稿件里想写的行数。
+        card.agenda_row_count = len(rows) + len(tail_rows)
     agenda_html = (f'<div class="agenda">{_agenda_row_html(rows)}</div>'
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
@@ -740,11 +749,19 @@ def _prepare_card(rc, clip):
     )
     return SimpleNamespace(
         seg=seg, sid=sid, s=s, d=d, wipe=clip["wipe"], win_start=win_start,
+        # vis = 这一页真正在画面上的时长（[擦除起点, 被下一页盖住]），也是
+        # data-duration 写进标签的那个数。苹果开场按它归一，不按 d：编排锚在
+        # 擦除起点，可用时长里还含着入场那段 wipe，短开场段里两者差一整个 gap。
+        vis=vis_d,
         peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
         apple_opening=apple_opening,
+        # agenda 卡装配时回写实际行数（_agenda_col_html）；非 agenda 页用不到，
+        # 留 0 而不是 getattr 兜底——苹果开场只在 agenda 卡上生效，读到的
+        # 必然是回写过的那个值。
+        agenda_row_count=0,
         is_keep=_is_keep_page(rc, sid),
         tagline_html=tagline_html, image_html=image_html,
         verse_html=verse_html, card_open=card_open,
@@ -759,7 +776,7 @@ def _assemble_card(rc, card, clips, manifest):
         return (card.card_open
                 + _agenda_col_html(card.seg, clips, manifest, rc.ag,
                                    card.ac, card.ac_attr, card.title_size,
-                                   rc.bgs, card.apple_opening)
+                                   rc.bgs, card.apple_opening, card)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html
                 + '  </div>')
@@ -1082,6 +1099,49 @@ def _director_timeline_lines(rc, card):
     return lines
 
 
+def _apple_opening_budget(rc, card):
+    """蘋果風開場的等比压缩系数（1.0 = 原速不压）。
+
+    这支舞的收尾时刻由**行数**决定：最后一行浮起 = rows.delay +
+    stagger×(行数−1) + duration，7 行 2.12s、1 行 1.40s。而它能用到的时长是
+    开屏页的**可见窗口**（锚在擦除起点 win_start 的整段 life，不是口播段长）。
+    两者不挂钩，于是短开场会静默丢尾巴：opening 写一句话（~1.0s）、内容段
+    写满 7 行时，最后三行是在页面已被下一页盖住之后才浮起来的——没人看得到，
+    日志也不吭声。
+
+    口径对齐 entranceBudget：够就原速，不够按比例压，压到 minFactor 就停手
+    并告警（压得更狠就成闪烁了，那比"演到一半被切"更难看）。光晕的呼吸
+    (breatheDur) 不参与压缩——它是淡入之后的稳态循环，压缩它等于让开场一直
+    在喘，而它也不参与"舞是否演完"的判定。
+    """
+    ap = rc.anim["opening"]["apple"]
+    bud = ap["budget"]
+    a_t, a_k, a_r = ap["title"], ap["kicker"], ap["rows"]
+    n = max(1, card.agenda_row_count)
+    has_kicker = bool(card.seg.get("tagline"))
+    # 收尾时刻只数**真会生成**的那几条补间：没写 tagline 就没有 kicker 那条。
+    ends = [a_t["duration"],
+            a_r["delay"] + a_r["stagger"] * (n - 1) + a_r["duration"]]
+    if has_kicker:
+        ends.append(a_k["delay"] + a_k["duration"])
+    need = max(ends)
+    if need <= 0:
+        return 1.0
+    k = 1.0
+    if card.vis < need:
+        raw = card.vis / need
+        k = max(raw, bud["minFactor"])
+        if raw < bud["minFactor"]:
+            print(f"[warn] 开屏（opening_animation:\"apple\"）的可见窗口 "
+                  f"{card.vis:.2f}s 装不下整支开场动画（{need:.2f}s，"
+                  f"{n} 行 agenda）：已压到地板 "
+                  f"{bud['minFactor']:.0%}，收尾仍会被下一页切走。"
+                  "把 opening 写长一点（建议说完主题 + 为什么值得看，2.5s 以上）"
+                  "、减少内容段数，或不写 opening_animation 退回静态开场。",
+                  file=sys.stderr)
+    return k
+
+
 def _apple_opening_lines(rc, card):
     """蘋果風開場编排（opening_animation:"apple"）。
 
@@ -1091,44 +1151,49 @@ def _apple_opening_lines(rc, card):
     行逐行浮起（y 24 → 0，stagger 0.12）。
 
     全部锚在擦除起点 win_start：页面从 clip-path 被擦开的同时内容就在演化。
-    时长是编排的一部分，不随段长归一化（entranceBudget 只归一通用入场；
-    苹果开场是固定 choreography，段再短也是同一支舞）。模糊是短暂的（标题
-    1.6s 内收敛到 0），成片只有开头约 40 帧带 filter 开销，无头渲染可接受。
+    时长是编排的一部分，**但按可见窗口等比归一**（_apple_opening_budget）：
+    固定 choreography 遇到短开场会静默丢尾巴，而"丢了"这件事只有页面被盖住
+    之后才知道，那时已经无法回溯。压缩是等比的，节奏比例不变。
+    模糊是短暂的（标题 1.6s 内收敛到 0），成片只有开头约 40 帧带 filter
+    开销，无头渲染可接受。
     """
     sid, t = card.sid, card.win_start
     ap = rc.anim["opening"]["apple"]
+    k = _apple_opening_budget(rc, card)
+    has_kicker = bool(card.seg.get("tagline"))
     lines = []
     halo = ap["halo"]
     lines.append(
         f'tl.fromTo("#halo-{sid}",{{opacity:0}},'
-        f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"]:.2f},'
+        f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"] * k:.2f},'
         f'ease:"sine.out"}},{t:.2f})'
     )
     # 呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
     # 与 director 的 repeat:-1 同一种确定性（无"最后停在哪儿"可争）。
+    # breatheDur 不参与压缩——它是淡入之后的稳态循环，与"舞演完没有"无关。
     lines.append(
         f'tl.to("#halo-{sid}",{{opacity:{halo["breatheTo"]:.2f},'
         f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
-        f'ease:"sine.inOut"}},{t + halo["in"]:.2f})'
+        f'ease:"sine.inOut"}},{t + halo["in"] * k:.2f})'
     )
     a_t = ap["title"]
     lines.append(
         f'tl.from("#title-{sid}",{{opacity:0,scale:{a_t["scale"]},'
-        f'filter:"blur({a_t["blur"]}px)",duration:{a_t["duration"]:.2f},'
+        f'filter:"blur({a_t["blur"]}px)",duration:{a_t["duration"] * k:.2f},'
         f'ease:"{a_t["ease"]}"}},{t:.2f})'
     )
-    if card.seg.get("tagline"):
+    if has_kicker:
         a_k = ap["kicker"]
         lines.append(
             f'tl.from("#{sid} .agenda-kicker",{{opacity:0,'
-            f'filter:"blur({a_k["blur"]}px)",duration:{a_k["duration"]:.2f},'
-            f'ease:"{a_k["ease"]}"}},{t + a_k["delay"]:.2f})'
+            f'filter:"blur({a_k["blur"]}px)",duration:{a_k["duration"] * k:.2f},'
+            f'ease:"{a_k["ease"]}"}},{t + a_k["delay"] * k:.2f})'
         )
     a_r = ap["rows"]
     lines.append(
         f'tl.from("#{sid} .agenda-row",{{opacity:0,y:{a_r["y"]},'
-        f'duration:{a_r["duration"]:.2f},stagger:{a_r["stagger"]:.2f},'
-        f'ease:"{a_r["ease"]}"}},{t + a_r["delay"]:.2f})'
+        f'duration:{a_r["duration"] * k:.2f},stagger:{a_r["stagger"] * k:.2f},'
+        f'ease:"{a_r["ease"]}"}},{t + a_r["delay"] * k:.2f})'
     )
     return lines
 

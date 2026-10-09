@@ -404,5 +404,159 @@ class AppleOpening(unittest.TestCase):
         self.assertIn('tl.from("#title-opening",{scale:0.5', html)
 
 
+def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
+    """opening 口播 open_dur 秒 + n_rows 个内容段的 manifest。
+
+    不走 _helpers.make_manifest：它给所有句子同一个 dur，而苹果开场的预算
+    只在"开屏那段特别短"时才会被触发——那正是这条用例要摆出来的形状。
+    行时间轴在这里手排，好让 opening 段的长度与内容段解耦。
+    """
+    def _seg(i, t):
+        return {"id": f"seg{i}", "title": f"第{i}段", "layout": "slot",
+                "sentences": [{"index": i, "text": f"第{i}段的第一句。",
+                               "start_time": round(t, 3), "duration": seg_dur}]}
+
+    segs = [{"id": "opening", "title": "开场", "tagline": "AI WEEKLY",
+             "layout": "agenda", "opening_animation": "apple",
+             "sentences": [{"index": 0, "text": "大家好。",
+                            "start_time": 0.0, "duration": open_dur}]}]
+    t = open_dur + gap
+    for i in range(1, n_rows + 1):
+        segs.append(_seg(i, t))
+        t += seg_dur + gap
+    segs.append({"id": "closing", "title": "小结", "layout": "agenda",
+                 "sentences": [{"index": 99, "text": "谢谢。",
+                                "start_time": round(t, 3), "duration": seg_dur}]})
+    return {"schema_version": 2, "status": "ok", "degraded": {}, "sentences": [],
+            "total_duration": round(t + seg_dur, 3), "gap": gap,
+            "voice_id": "冰糖", "segments": segs}
+
+
+class AppleOpeningBudget(unittest.TestCase):
+    """蘋果風開場按可见窗口等比归一：短开场装不下时不静默丢尾巴。
+
+    这支舞的收尾时刻由 agenda 行数决定（7 行 2.12s、1 行 1.40s），而它能用
+    的时长是开屏页的可见窗口。两者原本不挂钩，于是短开场会静默丢掉最后
+    几行——那几行是在页面已被下一页盖住之后才浮起来的，日志一声不吭。
+    """
+
+    def _render(self, open_dur, n_rows, gap=0.4):
+        m = _apple_manifest(open_dur, n_rows, gap=gap)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            html = generate_html(
+                m, "audio/combined.wav", theme="dark", aspect="portrait",
+                images={f"seg{i}": {"src": f"images/seg{i}.png"}
+                        for i in range(1, n_rows + 1)})
+        vis = float(re.search(
+            r'<div id="opening" class="clip seg-card agenda-card"[^>]*'
+            r'data-duration="([\d.]+)"', html).group(1))
+        return html, vis, err.getvalue()
+
+    @staticmethod
+    def _k(html):
+        """从写出的补间反解压缩系数（rows.duration 是模板 duration×k 的直读口）。"""
+        dur = float(re.search(
+            r'tl\.from\("#opening \.agenda-row",\{[^}]*duration:([\d.]+)', html).group(1))
+        return round(dur / 0.7, 4)
+
+    def test_enough_window_keeps_original_speed(self):
+        """窗口装得下就原速——归一化不能变成"一律压缩"，那会让正常开场变味。"""
+        html, vis, err = self._render(3.0, 2)
+        self.assertEqual(self._k(html), 1.0)
+        self.assertIn('duration:1.60,ease:"power3.out"', html)
+        self.assertIn("stagger:0.12", html)
+        self.assertNotIn("可见窗口", err)
+
+    def test_short_window_compresses_every_stage_by_one_factor(self):
+        """压缩是**等比**的：标题、kicker、行延迟、行时长、行错峰乘同一个系数。
+        只有这样节奏比例不变——只压尾巴或只压错峰都读得出是"被赶过"。"""
+        html, vis, err = self._render(1.2, 4)
+        k = self._k(html)
+        self.assertLess(k, 1.0)
+        # 逐项对账：模板原值 → 写出的值（补间参数保留 2 位小数，比对留 0.01）
+        for pat, orig in (
+            (r'filter:"blur\(16px\)",duration:([\d.]+)', 1.6),   # 标题
+            (r'#opening \.agenda-kicker",\{opacity:0,filter:"blur\(8px\)"'
+             r',duration:([\d.]+)', 1.2),                        # kicker 时长
+            (r'#opening \.agenda-row",\{opacity:0,y:24,duration:([\d.]+)', 0.7),
+        ):
+            got = float(re.search(pat, html).group(1))
+            self.assertAlmostEqual(got, round(orig * k, 2), delta=0.011, msg=pat)
+
+    def test_compressed_tail_fits_inside_window(self):
+        """核心断言：压完之后的**最晚收尾**（最后一行浮起）落在可见窗口内。
+        这条守住的是"短开场不再静默丢尾巴"这句话本身。"""
+        for open_dur, n_rows in ((1.0, 7), (1.2, 4), (1.5, 7), (1.0, 1)):
+            with self.subTest(open_dur=open_dur, n_rows=n_rows):
+                html, vis, err = self._render(open_dur, n_rows)
+                k = self._k(html)
+                stag = float(re.search(
+                    r'#opening \.agenda-row",\{[^}]*stagger:([\d.]+)', html).group(1))
+                tail = max(1.6 * k, 1.6 * k, stag * (n_rows - 1) + 0.7 * k + 0.7 * k)
+                self.assertLessEqual(tail, vis + 0.02,
+                                     f"{tail:.2f}s 收尾超出窗口 {vis:.2f}s（k={k}）")
+
+    def test_floor_and_warning_when_even_compressed_it_cannot_fit(self):
+        """压到地板还装不下时必须出声：地板 0.5 是"不再往下压"的承诺，
+        剩下的缺口靠告警说清楚，并给出三条可操作的方向。"""
+        html, vis, err = self._render(0.6, 7, gap=0.1)
+        self.assertEqual(self._k(html), 0.5)
+        self.assertIn("可见窗口", err)
+        self.assertIn("地板", err)
+        for advice in ("opening", "内容段数", "opening_animation"):
+            self.assertIn(advice, err)
+
+    def test_more_rows_need_more_room(self):
+        """行数多 → 收尾晚 → 同样窗口下压缩得更狠。守住"预算由行数驱动"。"""
+        k_one = self._k(self._render(1.5, 1)[0])
+        k_seven = self._k(self._render(1.5, 7)[0])
+        self.assertLess(k_seven, k_one)
+        self.assertEqual(k_one, 1.0)
+
+    def test_breathe_cycle_is_not_compressed(self):
+        """光晕呼吸的**时长**不参与压缩：它是淡入之后的稳态循环，压它等于让
+        开场一直喘，而且它不参与"舞演完没有"的判定。压缩只落在淡入与其起点。"""
+        html, vis, err = self._render(1.0, 7)
+        self.assertIn('duration:1.20,repeat:-1,yoyo:true', html)
+        # 呼吸起点跟着淡入一起压缩：起点 = 淡入时长(1.6×k)，不再落在 1.60
+        start = float(re.search(r'repeat:-1,yoyo:true,ease:"sine.inOut"\},([\d.]+)',
+                                html).group(1))
+        self.assertAlmostEqual(start, round(1.6 * self._k(html), 2), delta=0.011)
+
+    def test_budget_ignores_kicker_when_absent(self):
+        """没写 tagline 就没有 kicker 那条补间，收尾时刻也不能把它算进去。
+        （否则一条不存在的补间会把预算算贵，害得整支舞被压。）"""
+        m = _apple_manifest(2.0, 4)
+        for sg in m["segments"]:
+            if sg["id"] == "opening":
+                sg.pop("tagline")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            html = generate_html(m, "audio/combined.wav", theme="dark",
+                                 aspect="portrait",
+                                 images={f"seg{i}": {"src": f"images/seg{i}.png"}
+                                         for i in range(1, 5)})
+        self.assertNotIn("#opening .agenda-kicker", html)
+        # 有 kicker 时收尾由 kicker 支配（1.6s）；没它时由行支配（1.4s），都装得下
+        self.assertEqual(self._k(html), 1.0)
+
+    def test_static_opening_gets_no_budget_at_all(self):
+        """不写 opening_animation 的静态开场不受这套预算影响——
+        通用入场的归一化仍归 entranceBudget，两条路互不干涉。"""
+        m = _apple_manifest(1.0, 7)
+        for sg in m["segments"]:
+            sg.pop("opening_animation", None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            html = generate_html(m, "audio/combined.wav", theme="dark",
+                                 aspect="portrait",
+                                 images={f"seg{i}": {"src": f"images/seg{i}.png"}
+                                         for i in range(1, 8)})
+        self.assertNotIn('class="apple-halo" id="halo-opening"', html)
+        self.assertNotIn("data-opening-anim", html)
+        self.assertNotIn("可见窗口", err)
+
+
 if __name__ == "__main__":
     unittest.main()

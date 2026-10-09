@@ -62,11 +62,18 @@
     }
     ```
     一个段落里的 dialogue 轮次按顺序拼成该段的完整句子列表。字幕与时间轴共用同一序列。
-    **每轮的说话人各自使用 `speakers` 里声明的音色合成语音，互不影响**。说话人信息
-    只保留在 manifest 数据层。数据层存句子级 `speaker` 字段与 turns，供人工回查。这些信息不进 HTML。
-    verse 画面（两画幅同样）**不渲染说话人标签**。谁在说完全靠音色切换区分。音色
+    **每轮的说话人各自使用 `speakers` 里声明的音色合成语音，互不影响**。说话人
+    还会以**行首标签**的形式进画面：该段每句在 manifest 数据层存句子级 `speaker`
+    字段与 turns（供人工回查），渲染端在**轮次切换的首句**行首挂出这枚标签
+    （同一说话人连着说三句只在第一句挂一次，不让行首变成一列复读的抬头）。
+    谁在说不再只靠音色区分——静音播放与听障观看时，那串字幕本来是分不出轮次的。
+    字号/间隔在 `_template.py` 的 `verse.whoFontSize` / `whoGap`，样式见
+    `references/rendering.md`「画面结构」的 verse 一条。`label` 因此是**上墙文字**：
+    单行、不收分号、字数有上限（见下面「对话字段（顶层）」的 `label`）。音色
     搭配与避坑判据见 `references/tts_pipeline.md` 的预置音色表。`label` 仍要照常
-    声明，它存入 manifest turns。对话段落同样支持 `tagline` 和 `accent`。
+    声明，它存入 manifest turns 并作为字幕行首那枚标签。对话段落同样支持 `tagline` 和 `accent`。
+    整页画布段（`layout: "canvas"`）**不生成字幕层**，那一段的说话人标签自然也没有——
+    双人对话别放进画布段，否则轮次信息只剩声音（画布上的字得自己画进 SVG）。
 - 分句与句长（`text` / `dialogue` 共用）：断句只认终止标点，逗号不切句。认哪些标点以
   `scripts/_text.py` 的 `split_sentences` 为准。中文 `。！？；`、ASCII `;` 与换行都切。
   ASCII `.!?` 需后随空白或文末，所以 `split_sentences` 不会误切小数点、`Mr.` 和 `U.S.`。
@@ -125,8 +132,15 @@ agenda 大标题（`opening_title`/`closing_title`）有长度守卫。两画幅
   `{speaker 名: {voice_id, label?, voice_style?}}`。任何段落用到 `dialogue` 时
   此字段必需，且每个 `dialogue[].speaker` 的值都要在此声明。
   - `voice_id`（必填）：该说话人使用的预设音色，取值见 `references/tts_pipeline.md` 的预置音色表。
-  - `label`（可选）：说话人显示名，缺省回退为 speaker 名本身。它只写进 manifest 的
-    turn 数据，画面不渲染，见上文 `dialogue` 条目。
+  - `label`（可选，**上墙文字**）：说话人显示名，缺省回退为 speaker 名本身。它写进
+    manifest 的 turn 数据，也会作为**字幕行首那枚标签**出现在对话段的轮次首句上
+    （见上面 `dialogue` 条目）。既然上墙，它就受上墙那三道管：**单行、不收分号、
+    最多 6 字**（`_source_schema.SPEAKER_LABEL_MAX_CHARS`，两画幅同值）。字数上限是
+    因为它跟正文抢同一行字幕：竖屏一行约 24 个正文字位，标签吃掉 6 个字位正文还
+    放得下，再长就把正文挤到第二行、顶掉下一句。超限契约层直接报错而不是静默截断
+    ——label 是作者自己起的短名（「主播」「讲解」「嘉宾」），当场改比事后在成片里
+    看到一串长抬头便宜得多。没写 `label` 时按**回退后的 speaker 名**判，所以 speaker
+    名本身也别起太长。
   - `voice_style`（可选）：该说话人的语气风格描述，覆盖全局 `--voice-style`。
 
 ### 语速默认值

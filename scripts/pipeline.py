@@ -644,7 +644,9 @@ def _manifest_sentence_entries(sentence_data):
             "duration": s["duration"],
         }
         if s.get("speaker"):
-            entry["speaker"] = s["speaker"]  # 对话段：说话人标签只进 manifest 数据层，画面不渲染
+            # 对话段：说话人标签进 manifest 数据层，渲染端据此在轮次切换的
+            # 首句行首挂出这枚标签（见 html_renderer._verse_html）
+            entry["speaker"] = s["speaker"]
         if s.get("synth_failed"):
             entry["synth_failed"] = True  # TTS 失败降级为静音占位（见 --on-fail）
         manifest_sentences.append(entry)
@@ -953,7 +955,7 @@ def main(argv=None):
     # （比如开场用甲音色、正文用乙音色）可以分别指定 voice_id/voice_style。
     sentence_speeds = {}
     sentence_voices = {}  # index -> (voice_id, voice_style)
-    sentence_speaker_labels = {}  # index -> 说话人标签（仅对话段有值；只进 manifest 数据层）
+    sentence_speaker_labels = {}  # index -> 说话人标签（仅对话段有值；进 manifest 数据层，也是字幕上那枚行首标签的来源）
     for seg in seg_config:
         start_idx = seg["start"]
         end_idx = seg["end"]

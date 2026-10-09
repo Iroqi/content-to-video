@@ -1,4 +1,6 @@
-"""渲染后端：命令解析 + 进程管理。用假进程（python -c）验证，不需要 Node / Chrome / ffmpeg。"""
+"""渲染后端：命令解析 + 进程管理 + 成片时长探测。用假进程（python -c）验证，不需要 Node / Chrome / ffmpeg。"""
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -119,6 +121,59 @@ class RenderWait(unittest.TestCase):
         with self.assertRaises(SystemExit):
             RB.render_wait(_py("import sys; sys.exit(1)"), self.out)
         self.assertFalse(os.path.exists(self.out))
+
+
+class ProbeVideoDuration(unittest.TestCase):
+    """成片时长探测：值/降级/容错。
+
+    probe_video_duration 是"渲染之后那道闸"的量具，所以它自己的失败必须
+    是**降级**而不是新的失败点：ffmpeg 是可选依赖（SKILL.md「环境」），
+    量不到就交回调用方去 warn，不能把一个"没装 ffmpeg"变成渲染失败。
+    """
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = os.path.join(self.tmp.name, "out.mp4")
+        with open(self.out, "wb") as f:
+            f.write(b"x" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_returns_measured_seconds(self):
+        with mock.patch("_audio.measure_duration", lambda ff, p: 12.5):
+            self.assertEqual(RB.probe_video_duration(self.out, "ff"), 12.5)
+
+    def test_zero_from_measure_is_treated_as_unmeasured(self):
+        # measure_duration 以 0.0 表示"WAV 读不出 + ffmpeg 解析不到"，
+        # probe 必须把它翻成 None（0 秒是个合法时长，不能当成没量到放行）
+        with mock.patch("_audio.measure_duration", lambda ff, p: 0.0):
+            self.assertIsNone(RB.probe_video_duration(self.out, "ff"))
+
+    def test_missing_ffmpeg_degrades_to_none(self):
+        err = io.StringIO()
+        with mock.patch("_audio.measure_duration",
+                        side_effect=OSError("No such file")), \
+             contextlib.redirect_stderr(err):
+            self.assertIsNone(RB.probe_video_duration(self.out, "ff"))
+        self.assertIn("成片时长无法测量", err.getvalue())
+
+    def test_unexpected_error_degrades_to_none(self):
+        err = io.StringIO()
+        with mock.patch("_audio.measure_duration",
+                        side_effect=RuntimeError("boom")), \
+             contextlib.redirect_stderr(err):
+            self.assertIsNone(RB.probe_video_duration(self.out, "ff"))
+        self.assertIn("成片时长测量失败", err.getvalue())
+
+    @unittest.skipIf(os.name != "posix", "假 ffmpeg 用 POSIX shell 脚本")
+    def test_end_to_end_parses_real_duration_line(self):
+        # 真走一遍 `ffmpeg -i` 的 stderr 解析（Duration: 行），确认复用
+        # measure_duration 那条路对 mp4 落到了 ffmpeg 分支而不是 WAV 分支。
+        ff = os.path.join(self.tmp.name, "fakeff")
+        with open(ff, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\necho "Duration: 00:00:12.50, start: 0.0" >&2\nexit 1\n')
+        os.chmod(ff, 0o755)
+        self.assertEqual(RB.probe_video_duration(self.out, ff), 12.5)
 
 
 if __name__ == "__main__":

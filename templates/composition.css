@@ -165,6 +165,15 @@ body{font-family:var(--ctv-font-family)}
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
 .verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
 .verse-line.past{opacity:.45}
+/* 对话段的说话人标签（只在轮次切换的首句行首出现，见 html_renderer._verse_html）。
+   它是字幕里的**元信息**，不是内容：字号比句子小一档、字重压到最重、颜色走
+   accent 的文本安全副本（--ctv-verse-who-color 由渲染器按段写在 .verse-clip 上，
+   这里不存第二份色值）。小字号 + 重字重是为了让它读作"抬头"而不是"正文的
+   前两个字"——只缩不重会跟正文糊在一起。
+   不写 vertical-align：inline 元素默认基线对齐，且它自身 line-height 继承的
+   数值（--ctv-verse-lh）× 更小的 font-size，算出来的行盒比 .verse-line 矮，
+   不会把行撑高、不推动滚动锚点。 */
+.verse-who{font-size:var(--ctv-verse-who-font);font-weight:800;color:var(--ctv-verse-who-color);margin-right:var(--ctv-verse-who-gap);white-space:nowrap}
 /* 竖屏钉底。不用 !important：本条 0,2,0 压过上面的 .verse（0,1,0）；
    agenda 卡里的豁免由 .agenda-col .verse 用 importance 拿下（那两条选择器
    打平，靠 importance 而非源序决胜，理由见该处注释）。 */

@@ -31,7 +31,8 @@ from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
-                             build_render_command, render_wait)
+                             build_render_command, render_wait,
+                             probe_video_duration)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
@@ -90,6 +91,11 @@ def _print_report_summary():
         img = _REPORT["images"]
         print(f"  配图：{img['matched']}/{img['total']} 条内容已定稿"
               + (f"，{img['missing']} 条待人工审阅/兜底" if img.get("missing") else ""))
+    if _REPORT.get("video"):
+        v = _REPORT["video"]
+        _got = "未测量" if v["seconds"] is None else f"{v['seconds']:.2f}s"
+        print(f"  成片：{_got} / 时间轴 {v['expected_seconds']:.2f}s"
+              f"（时长校验 {v['check']}）")
     if _REPORT["skipped"]:
         print("  跳过的步骤：" + "；".join(_REPORT["skipped"]))
     print("=" * 44)
@@ -503,6 +509,52 @@ def main():
     # 走到这里成片必已存在且非空：_render_poll_loop 的所有 return 路径都以
     # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
     # 的整容器解码），失败路径一律 SystemExit——不再补一遍 isfile/getsize。
+
+    # ── 成片时长契约：演完了才算完成 ──────────────────────────────────
+    # 容器完整证明不了内容完整。抓帧超时重抓、worker 崩、Chrome 提前退出都
+    # 能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子：后面几段整段
+    # 不在片里，字幕、配图、导演节拍全跟着丢，而控制台照打"完成、成片：…"。
+    # 这是整条管线唯一没有契约的一段——渲染之前的每一步都有校验拦着，渲染
+    # 之后只剩"文件在且非空"。所以这里补最后一道：拿成片实测时长与 manifest
+    # 的 total_duration 对账，容差沿用全仓既有的 max(1s, 2%)（音频与 manifest
+    # 对账就是这一档），量不到（ffmpeg 不可用）只降级 warn，不阻断交付。
+    _expected = float(_tm["total_duration"])
+    _tol = max(1.0, _expected * 0.02)
+    _actual = probe_video_duration(out_video)
+    _REPORT["video"] = {
+        "path": out_video,
+        "expected_seconds": round(_expected, 3),
+        "seconds": None if _actual is None else round(_actual, 3),
+        "tolerance_seconds": round(_tol, 3),
+        "check": "skipped",
+    }
+    if _actual is None:
+        print("[run][warn] 成片时长未校验（ffmpeg 不可用或读不出 Duration）："
+              f"时间轴 {_expected:.2f}s，成片 {out_video}。\n"
+              "      成片已生成，但「演完了没有」这一条没人证明——"
+              "装好 ffmpeg 重跑本命令即可补上这道闸。", file=sys.stderr)
+    elif _actual + _tol < _expected:
+        _REPORT["video"]["check"] = "short"
+        _write_report(_report_path())
+        _print_report_summary()
+        print(
+            f"[run] 成片比时间轴短：实测 {_actual:.2f}s，时间轴 {_expected:.2f}s"
+            f"（容差 {_tol:.2f}s）——后段内容可能整个不在片里。\n"
+            "      常见成因：抓帧超时后重抓丢帧、worker 崩溃、Chrome 提前退出。\n"
+            "      先看渲染日志（成片同目录的 out.render.log）里有没有"
+            "`Parallel capture timed out`；有的话降 --workers 到 2 重渲。\n"
+            "      确认画面确实完整、只是尾帧差这点时长时，重跑本命令再核一次。"
+            f"成片已留在 {out_video}，未删除。", file=sys.stderr)
+        sys.exit(4)
+    elif _actual - _tol > _expected:
+        _REPORT["video"]["check"] = "long"
+        print(f"[run][warn] 成片比时间轴长：实测 {_actual:.2f}s，"
+              f"时间轴 {_expected:.2f}s（容差 {_tol:.2f}s）。\n"
+              "      画面内容完整，多出来的多半是末段音频尾巴或末帧余量；"
+              "若片尾出现明显空帧，检查 manifest 的 total_duration 是否漏算了"
+              "最后一段。", file=sys.stderr)
+    else:
+        _REPORT["video"]["check"] = "ok"
 
     print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())

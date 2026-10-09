@@ -227,6 +227,38 @@ def _verify_killed_render(out_path):
             "已丢弃废片，请重跑渲染。")
 
 
+def probe_video_duration(out_path, ffmpeg_path=None):
+    """成片实际时长（秒）；量不出来返回 None（调用方按"没量到"处理）。
+
+    为什么渲染完还要再量一次：成片"能播"不等于"演完了"。抓帧超时重抓、
+    worker 崩、Chrome 提前退出都可能产出一支容器完好、全解码也过得去，却
+    比时间轴短一大截的片子——后几段整段不在片里，而 run.py 照打"完成"。
+    这一条过去没有闸：`_verify_killed_render` 只证明容器没被写坏，证明不了
+    长度。量长度复用 `_audio.measure_duration`（WAV 优先那条路对 mp4 直接
+    落空，自然走到 `ffmpeg -i` 的 Duration 解析），不新写一份正则。
+
+    ffmpeg 不可用 / 解析失败一律返回 None 而不是抛：ffmpeg 是本技能的可选
+    依赖（SKILL.md「环境」），探测降级与既有口径一致——降级只 warn，不阻断。
+    """
+    try:
+        from _audio import get_ffmpeg, measure_duration
+    except Exception:  # 模块不可用时也不该让"量时长"变成新的失败点
+        return None
+    try:
+        ff = ffmpeg_path or get_ffmpeg()
+        d = measure_duration(ff, out_path)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[run][warn] 成片时长无法测量（ffmpeg 不可用：{e}）",
+              file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[run][warn] 成片时长测量失败（{type(e).__name__}: {e}）",
+              file=sys.stderr)
+        return None
+    # measure_duration 以 0.0 表示"没量出来"（WAV 读不出 + ffmpeg 解析不到）
+    return float(d) if d and d > 0 else None
+
+
 def render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
     """启动 Hyperframes render；输出文件稳定后不再死等 Node/Chrome 退出。"""
     log_path = os.path.splitext(os.path.abspath(out_path))[0] + ".render.log"

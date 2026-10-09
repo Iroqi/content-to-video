@@ -64,7 +64,9 @@ _TEMPLATE_JSON = r'''
         "clipPad": 40,
         "linePad": 5,
         "lineHeight": 1.5,
-        "activeRule": 0.12
+        "activeRule": 0.12,
+        "whoFontSize": 28,
+        "whoGap": 12
       },
       "title": {
         "top": 80,
@@ -133,7 +135,9 @@ _TEMPLATE_JSON = r'''
         "clipPad": 40,
         "linePad": 5,
         "lineHeight": 1.45,
-        "activeRule": 0.12
+        "activeRule": 0.12,
+        "whoFontSize": 24,
+        "whoGap": 10
       },
       "title": {
         "fontSize": 62,

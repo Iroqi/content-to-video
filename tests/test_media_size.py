@@ -201,8 +201,10 @@ class UpscaleWarnAtGeneration(unittest.TestCase):
         self.assertIn("放大", out)
 
     def test_big_enough_raster_stays_silent(self):
+        # 只断言"没有尺寸告警"：CI runner 上没有可用 ffmpeg 时，同一段还会打
+        # 一条"跳过完整性校验"的降级提示，那是另一件事，不该被这条用例判死。
         out = self._run("seg-a.png", _png(1920, 1440), (1067, 800))
-        self.assertEqual(out, "")
+        self.assertNotIn("不够大", out)
 
     def test_svg_never_checked(self):
         """矢量放大不失真：SVG 另有比例与字号两道门禁，这里一律不验。"""
@@ -219,7 +221,7 @@ class UpscaleWarnAtGeneration(unittest.TestCase):
     def test_no_box_means_no_check(self):
         """不知道框多大就不比——拿猜的数报警比不报更糟。"""
         out = self._run("seg-a.png", _png(400, 300), None)
-        self.assertEqual(out, "")
+        self.assertNotIn("不够大", out)
 
 
 if __name__ == "__main__":

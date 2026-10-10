@@ -111,6 +111,123 @@ class VideoGainAndTrimAttrs(unittest.TestCase):
         self.assertIn("fade_in+fade_out", buf.getvalue())
 
 
+class VoiceoverDuck(unittest.TestCase):
+    """视频原声的让路：默认那一版必须是不盖旁白的那一版。
+
+    两条轨（口播 <audio> 与视频原声）默认都按 1.0 进混音器，所以"要了原声"
+    的默认结果就是互相盖住——跑完不报错、成片没法听。过去这事的处置是一条
+    `[warn]` 建议人自己写 volume：那句话没有改任何东西，成片照样没法听。
+    现在改成脚本替他落一个让路默认，并说清压成多少、怎么改回去。
+    """
+
+    def _stderr_of(self, opts):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            tag = _video_html(opts)
+        return tag, buf.getvalue()
+
+    def test_muted_off_gets_duck_default_without_author_asking(self):
+        """没写 volume 就落让路默认增益——1.0 不该是默认。"""
+        tag = _video_html({"muted": False})
+        self.assertIn('data-volume="0.25"', tag)
+
+    def test_duck_chain_present_by_default(self):
+        """让路不止压响度：人声占住的那几档频段上还要开槽（data-fx-chain）。"""
+        import html as _html
+        import json
+        import re
+        tag = _video_html({"muted": False})
+        m = re.search(r'data-fx-chain="([^"]*)"', tag)
+        self.assertIsNotNone(m, "要了原声却没有让路 EQ")
+        chain = json.loads(_html.unescape(m.group(1)))
+        self.assertEqual(chain["version"], 1)
+        freqs = [n["params"]["frequency"] for n in chain["nodes"]]
+        self.assertTrue(freqs)
+        # carve 的说明里明确写了：真正掩蔽人声的频段更高，按能量排会一直选到
+        # 基频（160/250Hz），切那里只是把床铺削薄。让路得落在中高频。
+        self.assertTrue(all(n["type"] == "peaking" for n in chain["nodes"]))
+        self.assertTrue(all(f >= 1000 for f in freqs), freqs)
+        self.assertTrue(all(n["params"]["gain"] < 0 for n in chain["nodes"]))
+
+    def test_chain_json_is_html_escaped(self):
+        """官方的 carve 脚本用 name="..." 正则找这些属性：JSON 的引号必须是
+        &quot;，裸双引号会把整条属性截断。"""
+        tag = _video_html({"muted": False})
+        self.assertIn("&quot;version&quot;", tag)
+        self.assertNotIn('data-fx-chain="{"', tag)
+
+    def test_duck_false_drops_the_eq(self):
+        """duck:false = 原声要当主体（采访原声、现场同期声），链必须撤掉。"""
+        tag = _video_html({"muted": False, "duck": False})
+        self.assertNotIn("data-fx-chain", tag)
+        self.assertIn('data-volume="0.25"', tag)   # 响度兜底与 duck 是两件事
+
+    def test_explicit_volume_wins(self):
+        """写了 volume 就完全尊重，不再自动兜底——他要的响度只有他知道。"""
+        tag, err = self._stderr_of({"muted": False, "volume": 1.0})
+        self.assertIn('data-volume="1"', tag)
+        self.assertNotIn("0.25", tag)
+        self.assertNotIn("让路默认", err)
+
+    def test_duck_is_announced_even_when_volume_is_explicit(self):
+        """替人改了混音却一声不吭 = 另一类静默行为，哪怕方向是对的。
+        写了 volume 的人也该知道自己身上还挂着一条 EQ。"""
+        _tag, err = self._stderr_of({"muted": False, "volume": 0.5})
+        self.assertIn("data-fx-chain", err)
+        self.assertIn("duck:false", err)
+
+    def test_duck_false_and_volume_stays_quiet(self):
+        """两个旋钮都显式拧过 = 混音完全由人做主，不必再刷告警。"""
+        _tag, err = self._stderr_of({"muted": False, "volume": 1.0,
+                                     "duck": False})
+        self.assertEqual(err, "")
+
+    def test_duck_warn_says_how_to_take_control_back(self):
+        """替他压下去就得说清怎么改回来，否则这个默认就是不可逆的。"""
+        _tag, err = self._stderr_of({"muted": False})
+        self.assertIn("0.25", err)
+        self.assertIn("volume", err)
+        self.assertIn("duck:false", err)
+
+    def test_muted_video_gets_no_duck_attrs(self):
+        """静音轨没有音轨可让：挂链和增益都是纯噪音（还会让 lint 的
+        video_missing_muted 判据失效）。"""
+        tag = _video_html({"duck": True})
+        self.assertNotIn("data-fx-chain", tag)
+        self.assertNotIn("data-volume", tag)
+
+
+class DuckOptSchema(unittest.TestCase):
+    """契约层：duck 与音轨四件套同一口径——只对 video 成立、必须是布尔。"""
+
+    def _err(self, entry):
+        with self.assertRaises(ValueError) as ctx:
+            validate_images_json({"seg-b": entry})
+        return str(ctx.exception)
+
+    def test_accepts_duck_on_video(self):
+        out = validate_images_json({"seg-b": {"src": "images/seg-b.mp4",
+                                              "muted": False, "duck": False}})
+        self.assertEqual(out["seg-b"]["duck"], False)
+
+    def test_non_bool_rejected(self):
+        """字符串 "false" 是真值：会让"关掉让路"变成"永远让路"，与
+        loop/muted 那条是同一个坑。"""
+        self.assertIn("必须是 JSON 布尔", self._err(
+            {"src": "images/seg-b.mp4", "duck": "false"}))
+
+    def test_non_video_rejected(self):
+        """位图 / SVG / GIF 没有音轨可让，写了不会生效。"""
+        for src in ("images/seg-b.png", "images/seg-b.svg", "images/seg-b.gif"):
+            self.assertIn("不是视频", self._err({"src": src, "duck": True}), src)
+
+    def test_explicit_type_video_allows_duck(self):
+        validate_images_json({"seg-b": {"src": "images/seg-b.bin",
+                                        "type": "video", "duck": False}})
+
+
 class VideoAudioOptSchema(unittest.TestCase):
     """契约层：只挡"写了不会生效"的形态，取值范围照官方契约抄。"""
 

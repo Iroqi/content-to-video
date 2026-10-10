@@ -205,6 +205,34 @@ class RolesAndInitialState(unittest.TestCase):
         self.assertEqual(len(ticks), 8)          # 两个轴各自的刻度
         self.assertEqual([t.text for t in ticks if t.text].count("100%"), 1)
 
+    def test_tick_marks_point_at_their_labels(self):
+        """刻度线要往标签那一侧伸，四个组合都得自查一遍。
+
+        证伪：原先 x 轴恒画 `at→at+tick_len`（朝下）、y 轴恒画 `at→at-tick_len`（朝左），
+        只有 `label_side` 落在默认那一侧才对。写 `above` / `right` 时标签悬在轴的
+        一侧、刻度朝另一侧伸，两者之间隔着一根不该在那儿的短线。
+        """
+        def tick_end(orient, side):
+            el = {"kind": "axis", "id": "a", "role": "structure", "orient": orient,
+                  "at": 900, "from": 100, "to": 1000, "label_side": side,
+                  "ticks": [{"v": 0, "label": "0"}, {"v": 50, "label": "50"}]}
+            root = ET.fromstring(K.render_svg(K.validate_spec({"aspect": "portrait",
+                                                               "elements": [el]})))
+            lines = [n for n in root.iter() if local(n.tag) == "line"]
+            text = next(n for n in root.iter() if local(n.tag) == "text")
+            mark = lines[1]          # lines[0] 是轴线本身
+            if orient == "x":
+                return float(mark.get("y2")), float(text.get("y"))
+            return float(mark.get("x2")), float(text.get("x"))
+
+        for orient, side in (("x", "below"), ("x", "above"),
+                             ("y", "left"), ("y", "right")):
+            with self.subTest(orient=orient, side=side):
+                end, label = tick_end(orient, side)
+                # 标签与刻度末端必须落在轴的同一侧（轴本身在 900）
+                self.assertEqual(end < 900, label < 900,
+                                 f"刻度末端 {end} 与标签 {label} 分处轴的两侧")
+
     def test_draw_ready_geometry_carries_pathlength(self):
         nodes = self.nodes()
         self.assertEqual(nodes["curve"].get("pathLength"), "1")
@@ -212,8 +240,30 @@ class RolesAndInitialState(unittest.TestCase):
 
 
 class DirectorDraft(unittest.TestCase):
-    def fragment(self, spec):
-        return K.selfcheck_fragment(K.validate_spec(spec))
+    def fragment(self, spec, sentences=None):
+        return K.selfcheck_fragment(K.validate_spec(spec), sentences=sentences)
+
+    def test_auto_beats_never_land_before_a_pinned_beat(self):
+        """给了句数时，钉拍之后的自动拍不能回绕到它前面。
+
+        回绕（`cursor % sentences`）的初衷是"元素多于句子时不越界"，但钉拍已经把
+        游标推到 `beat+1`，再取模会被拉回句首——作者钉的那一拍反倒成了本段的倒数
+        几拍（实测 3 句稿 beat=2 之后算出 at=0.5/1.5）。钉过拍就顶到末句为止：
+        同样不越界，且不推翻作者排的顺序。
+        """
+        spec = {"elements": [
+            {"kind": "circle", "id": "a", "cx": 100, "cy": 100, "r": 10, "beat": 2},
+            {"kind": "circle", "id": "b", "cx": 200, "cy": 100, "r": 10},
+            {"kind": "circle", "id": "c", "cx": 300, "cy": 100, "r": 10},
+        ]}
+        self.assertEqual([s["at"] for s in self.fragment(spec, sentences=3)["steps"]],
+                         [2, 2, 2])
+        # 没钉过拍时回绕照旧：元素多于句子也不会把 at 顶到句序之外
+        many = {"elements": [
+            {"kind": "circle", "id": "c%d" % i, "cx": 100 + 40 * i, "cy": 100, "r": 10}
+            for i in range(5)]}
+        self.assertEqual([s["at"] for s in self.fragment(many, sentences=3)["steps"]],
+                         [0, 1, 2, 0, 1])
 
     def test_draft_is_a_valid_images_json_director_block(self):
         frag = self.fragment(spec_for("portrait"))
@@ -569,6 +619,23 @@ class CommandLine(unittest.TestCase):
                 self.assertNotIn("Traceback", err)
         # 校验不过就不该落产物：留着上一轮的 SVG，作者会以为这轮也出了图。
         self.assertFalse(os.path.exists(out))
+
+    def test_unsatisfiable_director_draft_reports_in_our_voice(self):
+        """spec 合法但草稿过不了真契约时，报的是一句 [error] + 退出码 2。
+
+        证伪：selfcheck 原先罩在 spec 的 try 外面。spec 里给 polyline 同时写 `draw` 与
+        `stagger`（`draw` 那条支路不产 from/to），selfcheck 抛 ValueError 逃到顶层：
+        控制台吐一段裸 traceback、退出码不是本模块的 2，而且 SVG 也没写盘——
+        三个后果一起来，作者完全不知道是自己的 spec 写炸了。
+        """
+        spec = write_json(self.tmp.name, "badspec.json", {"elements": [
+            {"kind": "polyline", "id": "curve", "role": "content", "draw": True,
+             "stagger": 0.12, "points": [[100, 100], [200, 200]]}]})
+        out = os.path.join(self.tmp.name, "badspec.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--no-check"])
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("[error]", err)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,38 @@ class WallclockDefinitions(unittest.TestCase):
 
 
 class ExternalUrls(unittest.TestCase):
+    def _sanitize(self, markup):
+        """过一遍整份 SVG 的净化器，返回 (产物, notes)。"""
+        return S.sanitize_svg_for_inline(markup)
+
+    def test_presentation_attribute_urls_are_neutralized_too(self):
+        """呈现属性里的 url() 也是外链入口，不能只管 style 那一处。
+
+        证伪：中和只写在 _clean_style_attr 上，于是 `fill="url(https://…)"`、
+        `filter="url(data:…)"` 原样内联——内联后它是同源活 DOM，浏览器照样去取那个
+        地址，`file:` 还能触及本机磁盘（产物 HTML 常以 file:// 打开）。这类写法在
+        手绘 SVG 里不罕见（渐变/滤镜/marker 都往属性里放），漏了就是白做一层净化。
+        内部的 `url(#id)` 必须照旧放行。
+        """
+        for attr in ("fill", "stroke", "filter", "mask", "clip-path", "marker-start"):
+            with self.subTest(attr=attr):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}"><rect {attr}="url(https://evil.com/x.png)"/></svg>')
+                self.assertNotIn("evil.com", out, attr)
+                self.assertIn("url(about:blank)", out, attr)
+                self.assertTrue(any("已中和" in n for n in notes), attr)
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><defs><linearGradient id="g"/></defs>'
+            '<rect fill="url(#g)"/></svg>')
+        self.assertIn('url(#g)', out)
+        self.assertEqual(notes, [])
+
+    def test_local_file_url_is_neutralized(self):
+        """file: 与 http 同档：遍历本机磁盘的外链不该进成片。"""
+        out, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><rect fill="url(file:///etc/passwd)"/></svg>')
+        self.assertNotIn("/etc/passwd", out)
+
     def test_url_is_neutralized_whole_not_half(self):
         """外链 url() 要整颗换成 about:blank，只吃 scheme 那一截会留下半截 URL。
 
@@ -58,3 +90,31 @@ class ExternalUrls(unittest.TestCase):
         self.assertNotIn("evil.com", out)
         self.assertIn("url(about:blank)", out)
         self.assertEqual(out.count("url("), out.count(")"), out)
+
+
+class CssCustomProperties(unittest.TestCase):
+    def test_custom_property_named_animation_is_not_a_wallclock(self):
+        """CSS 自定义属性不是墙钟动画，不能被拦腰截断。
+
+        证伪：判定原先是没有左边界的 `(animation|transition)(-[a-z]+)?:`，
+        `--animation-duration:2s` 里 `animation-duration:` 照样命中，剥完之后留下一个
+        孤零零的 `--`，而紧随其后的那条真声明被当成值一并吃掉——实测
+        `.a{--animation-duration:2s;fill:red}` 变成 `.a{--fill:red}`，作者写的颜色
+        在成片里静默消失。
+        """
+        out = _clean(".a{--animation-duration:2s;fill:red}")
+        self.assertIn("--animation-duration:2s", out)
+        self.assertIn("fill:red", out)
+
+    def test_real_animation_is_still_stripped(self):
+        """加边界不能把真动画放过：几种常见位置都要照样剥掉。
+
+        行首、 inline style 的第一条、`;` 之后、`{` 之后、以及跨行的写法。
+        """
+        for css in ("animation:x 2s", "-webkit-animation:x 2s",
+                    ".a{animation:x 2s}", ".a{fill:red;transition:all .3s}",
+                    ".a{\n  animation:x 2s\n}"):
+            with self.subTest(css=css.replace("\n", "\\n")):
+                out = _clean(css)
+                self.assertNotIn("animation", out.lower(), css)
+                self.assertNotIn("transition", out.lower(), css)

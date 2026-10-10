@@ -13,13 +13,64 @@ from _images_schema import validate_images_json, MEDIA_VOLUME_MAX
 import html_renderer as HR
 
 
-def _video_html(opts):
+def _video_html(opts, aspect="portrait"):
     """给 seg-b 挂一条视频、返回该 <video> 标签那一段（seg-a 给张图占位）。"""
     m = H.make_manifest()
-    html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+    html = HR.generate_html(m, "audio/combined.wav", aspect=aspect, images={
         "seg-a": {"src": "images/seg-a.png"},
         "seg-b": dict({"src": "images/seg-b.mp4"}, **opts)})
     return html.split('<video id="vid-seg-b"')[1].split("</video>")[0]
+
+
+def _attr_of(html, sid, name):
+    """从生成结果里取某个元素的 data-start / data-duration。"""
+    frag = html.split('<div id="%s"' % sid)[1]
+    if name == "start":
+        return frag.split("data-start=")[1].split()[0].strip('"')
+    if name == "duration":
+        return frag.split("data-duration=")[1].split()[0].strip('"')
+    raise AssertionError(name)
+
+
+class VideoVisibilityWindow(unittest.TestCase):
+    """<video> 的可见窗口必须逐字等于它所在那张卡片的窗口。
+
+    引擎给**每个**带 data-start 的元素按它自己的窗口独立判显隐
+    （`applyTimedElementVisibility` + 逐帧 style.visibility），所以这一点与卡片
+    不等不是"偏一点"，而是头尾各有一段：卡片还在画面上、媒体已被判出窗，画面上
+    只剩一个空图槽。`<img>` 不带 data-start、继承祖先卡，两种素材必须同一口径。
+    """
+
+    def test_video_window_matches_its_card(self):
+        for aspect in ("portrait", "landscape"):
+            with self.subTest(aspect=aspect):
+                m = H.make_manifest()
+                html = HR.generate_html(m, "audio/combined.wav", aspect=aspect, images={
+                    "seg-a": {"src": "images/seg-a.png"},
+                    "seg-b": {"src": "images/seg-b.mp4"}})
+                card_start = _attr_of(html, "seg-b", "start")
+                card_dur = _attr_of(html, "seg-b", "duration")
+                video = _video_html({}, aspect=aspect)
+                self.assertIn(f'data-start="{card_start}"', video)
+                self.assertIn(f'data-duration="{card_dur}"', video)
+
+    def test_video_window_starts_with_the_wipe_not_the_first_sentence(self):
+        """video 要跟着卡片一起从擦除起点开始（= 首句 − wipe），不是从首句开始。
+
+        证伪：video 原先锚的是口播段长 [s, s+d]，比卡片窗口短一整个入场，那一页
+        正在被揭开的那段屏幕上没有素材——画面先揭开一个空槽。
+        """
+        m = H.make_manifest()
+        html = HR.generate_html(m, "audio/combined.wav", aspect="portrait", images={
+            "seg-a": {"src": "images/seg-a.mp4"},
+            "seg-b": {"src": "images/seg-b.png"}})
+        video = html.split('<video id="vid-seg-a"')[1].split("</video>")[0]
+        seg_a = next(s for s in m["segments"] if s["id"] == "seg-a")
+        card_start = float(_attr_of(html, "seg-a", "start"))
+        first_sentence = round(float(seg_a["sentences"][0]["start_time"]), 2)
+        self.assertLess(card_start, first_sentence,
+                        "卡片窗口应从擦除起点开始（比首句更早）")
+        self.assertIn(f'data-start="{card_start:.2f}"', video)
 
 
 class VideoAudioDeclaration(unittest.TestCase):

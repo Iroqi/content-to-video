@@ -509,9 +509,15 @@ def _emit_axis(el, ctx, where):
     kids.append(_node("line", OrderedDict(axis_attrs)))
     labels = []
     for t, p in zip(el["ticks"], pos):
-        mark = ({"x1": _num(p), "y1": _num(at), "x2": _num(p), "y2": _num(at + tick_len)}
+        # 刻度线要往**标签那一侧**伸：标签在轴的另一边时，读者看到的是标签悬在
+        # 一边、刻度朝反方向伸出去（`label_side: "above"` 却配一根朝下的刻度，两者
+        # 之间隔着一根不属于这一侧的短线）。符号跟 label 走：横向 below→+ / above→-，
+        # 纵向 left→- / right→+。
+        _tick_sign = (-1.0 if side == "above" else 1.0) if horizontal else \
+            (1.0 if side == "right" else -1.0)
+        mark = ({"x1": _num(p), "y1": _num(at), "x2": _num(p), "y2": _num(at + tick_len * _tick_sign)}
                 if horizontal else
-                {"x1": _num(at), "y1": _num(p), "x2": _num(at - tick_len), "y2": _num(p)})
+                {"x1": _num(at), "y1": _num(p), "x2": _num(at + tick_len * _tick_sign), "y2": _num(p)})
         mark.update({"stroke": ctx["pal"]["line"], "stroke-width": _num(sw)})
         kids.append(_node("line", OrderedDict(mark)))
         text = t.get("label")
@@ -663,16 +669,27 @@ def build_director(spec, sentences=None):
     """
     steps = []
     cursor = 0
+    pinned = False
     for el in spec["elements"]:
         if role_of(el) != "content":
             continue
         if "beat" in el:
             at = float(el["beat"])
             cursor = max(cursor, at + 1)   # 显式钉拍也把游标推过去，后面的自动拍不会插到它前面
+            pinned = True
         else:
             # 显式钉拍是作者意图，越界要照实报（见 main 的告警）；自动拍是机械分配，
             # 已知句数时按句数回绕，产出的草稿才真的能直接用。
-            at = cursor % sentences if sentences else cursor
+            # 回绕**只在没钉过拍时**用：取模会把已经被钉拍推过的游标拉回句首，
+            # 作者钉的那一拍反倒成了本段的倒数几拍（实测 3 句稿 beat=2 之后的两个
+            # 自动拍算出 at=0.5/1.5，落在它前面）。钉过拍就顶到末句为止：多出来的
+            # 元素和末句一起亮，跟回绕一样不越界，且不推翻作者排的顺序。
+            if not sentences:
+                at = cursor
+            elif pinned:
+                at = min(cursor, sentences - 1)
+            else:
+                at = cursor % sentences
             cursor += 1
         at = int(at) if at == int(at) else at
         step = OrderedDict([("at", at), ("target", _target_of(el))])
@@ -797,11 +814,15 @@ def main(argv=None):
     try:
         spec = load_spec(args.spec, aspect=args.aspect, accent=args.accent)
         svg = render_svg(spec)
+        # 自查必须和 spec 校验在同一个 try 里：它是拿草稿过一遍真契约
+        # （_images_schema），抛的 ValueError 与上面的校验同一档次（实测 polyline
+        # 同时写 draw 与 stagger、缺 from/to 时会抛）。漏在外面就是一段裸 traceback
+        # 加非本模块口径的退出码，而且那时 SVG 还没写盘——三个后果一起来。
+        # 收进来之后统一是一句 [error] + return 2。
+        frag = selfcheck_fragment(spec, sentences=args.sentences)
     except ValueError as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
-
-    frag = selfcheck_fragment(spec, sentences=args.sentences)
     _write(args.out, svg)
     if args.emit_steps:
         _write(args.emit_steps, json.dumps(frag, ensure_ascii=False, indent=2) + "\n")

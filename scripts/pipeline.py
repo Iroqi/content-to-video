@@ -1094,8 +1094,13 @@ def main(argv=None):
             # restore_first/reapply 分支本次实际重放了 atempo（花了 ffmpeg
             # 时间、改写了 WAV），一律打 (cached) 会掩盖"这次其实重新处理过
             # 音频"，排查语速问题时误导。cached_count 口径保持"没花 TTS 额度"。
+            # restore_first / restored 是"真的重放过一遍音频"；reapply 却未必——
+            # 语速本来就是 1.0 时 apply_speed 是空操作（连 ffmpeg 都没起），照样被判
+            # 成 reapply。再问一次 needs_speed_change，标签才对得上它的用途：它是给
+            # 排查语速问题的人看"这一句本次到底动没动过音频文件"。
             _reprocessed = (decision.restore_first or restored
-                            or decision.action == "reapply")
+                            or (decision.action == "reapply"
+                                and needs_speed_change(decision.apply_speed_to)))
             _tag = "skip,respeed" if _reprocessed else "skip,cached"
             print(f"  [{label}][{_tag}] {dur:.2f}s", flush=True)
             cached_count += 1

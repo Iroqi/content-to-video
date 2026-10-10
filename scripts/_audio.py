@@ -469,3 +469,23 @@ def parse_duration(stderr_text):
         return None
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
 
+
+def parse_video_size(stderr_text):
+    """从 `ffmpeg -i` 的 stderr 解析视频流的像素尺寸 `(w, h)`；没有视频流或
+    解析失败返回 None。
+
+    与 parse_duration 同一条路：视频的时长与尺寸都只有 ffmpeg 量得出来（没有
+    ffprobe，也不引 Pillow），而那一次全解码探测已经在跑了，这里只多读一行
+    stderr，不再多起一次子进程。
+
+    只认流信息行（`Stream #…: Video:`）里的那个 `WxH`：同一行后面还会跟着
+    `[SAR 1:1 DAR 16:9]` 这类比例对，第一个 `WxH` 才是实际编码像素。
+    """
+    for line in (stderr_text or "").splitlines():
+        if "Video:" not in line:
+            continue
+        m = re.search(r",\s*(\d{2,5})x(\d{2,5})\b", line)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+

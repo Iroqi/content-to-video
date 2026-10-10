@@ -50,6 +50,23 @@ class SourceValidation(unittest.TestCase):
             dict(H.sample_source(), opening_animation=True),
             contains="opening_animation")
 
+    def test_opening_animation_on_canvas_layout_is_rejected(self):
+        """開場編排只对 agenda 卡生效——`opening_layout:"canvas"` 那一页没有它的舞台。
+
+        证伪：取值那一层是校验过的，但"这一页会不会真长出 agenda 卡的 DOM"要看
+        opening_layout。画布那一页只有一张图，标题层、行列表、光晕的宿主全都不生成，
+        "apple" 会整支舞静默退回静态海报——writing.md 承诺了这种组合会被拒。
+        """
+        bad(SRC.validate_segments_source,
+            dict(H.sample_source(), opening_layout="canvas",
+                 opening_animation="apple"),
+            contains="opening_animation")
+
+    def test_opening_animation_still_ok_on_agenda_layout(self):
+        """显式写 agenda（=缺省那一档）不受这条限制：那一页确实是 agenda 卡。"""
+        SRC.validate_segments_source(dict(H.sample_source(), opening_layout="agenda",
+                                          opening_animation="apple"))
+
     def test_unknown_segment_key_rejected(self):
         s = H.sample_source()
         s["segments"][0]["_note"] = "备注"

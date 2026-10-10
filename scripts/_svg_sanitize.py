@@ -34,9 +34,16 @@ _WALLCLOCK_TAGS = {"animate", "animateTransform", "animateMotion", "set"}
 # CSS 里驱动墙钟动画的属性名（在 <style> 文本与 inline style 上都清）。
 # 值的终止要同时认 `;` 和 `}`：手绘 SVG 里 `.a{animation:x}` 结尾没有分号，
 # 若值吃到 `;` 为止会把闭合 `}` 之后下一条规则一起吞掉。
+#
+# 左边必须是一个**声明起始**（规则开括号 / 前一条声明的分号 / 串开头）。没有这个
+# 边界，CSS 自定义属性会被拦腰截断：`--animation-duration:2s;fill:red` 里
+# `animation-duration:` 同样命中旧写法，剥完之后 `--` 残留、`fill` 那条真声明被
+# 当成属性值一并吃掉（实测剩 `--fill:red`）——作者写的颜色在成片里静默消失。
+# 单短横的厂商前缀（-webkit-animation）照样放行，那是真 CSS 属性；
+# `--` 开头是自定义属性，天然不匹配。
 _WALLCLOCK_CSS = re.compile(
-    r"(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
-    re.I)
+    r"(?:(?<=[;{])|^)\s*(?:-[a-z]{1,10}-)?(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
+    re.I | re.M)
 # 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
 # url() 上下文一并拦 file:/data:——CSS 里 url(file:…) 同样会把本地文件拉进
 # 成片（HTML 以 file:// 打开时可达本机磁盘）。
@@ -217,6 +224,19 @@ def sanitize_svg_for_inline(raw):
             el.text = _clean_style_text(el.text, notes)
         else:
             _clean_style_attr(el, notes)
+            # 呈现属性里的 url()：style 那条路管的是 `style=""` 里的写法，而
+            # fill / stroke / filter / mask / clip-path / marker-* 这些**属性**同样
+            # 能放 url()，此前整条漏网（`fill="url(https://…)"` 原样内联，浏览器照样
+            # 去取那个地址，`file:` 还能触及本机磁盘）。外延到此为止：只中和 url()，
+            # 不删属性本身（那是覆写作者意图，且这些属性多数是颜色/变换）；内部的
+            # `url(#id)` 正则本就不命中，不受影响。
+            for k in list(el.attrib):
+                if _local(k).lower() == "style":     # style 已由上一步清过
+                    continue
+                v = el.get(k) or ""
+                if _EXT_URL.search(v):
+                    el.set(k, _EXT_URL.sub("url(about:blank)", v))
+                    notes.append(f"<{tag}> 的 {_local(k)} 属性外链 url() 已中和")
 
     # root 重写成 cover 语义：铺满 .seg-image 容器，短边对齐、长边居中裁切，
     # 和 <img>+object-fit:cover 的取景一致（作者按 4:3 槽位或整幅画布画的

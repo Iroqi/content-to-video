@@ -91,6 +91,18 @@ def validate_segments_source(data):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
 
     # 開場動畫模式（可选）：只影响开屏 agenda 卡，写 "apple" 走蘋果風開場编排。
+    # agenda 卡的**可见窗口之外，它无处可演**：writing.md 承诺了"写 'canvas' 海报
+    # 或写在其他段上会被契约层拒绝"，取值本身由 _validate_opening_animation 把守，
+    # 但"这一页到底是不是 agenda 卡"要看 opening_layout——画布那一页只有一张图，
+    # 导演层都不存在，苹果風整支舞只会静默退化成没有任何提示的静态海报。
+    # 拼错方向回复缺省（也是静态），所以这条组合在这里按 error 拦，不留到成片。
+    if data.get("opening_animation") is not None \
+            and (data.get("opening_layout") or "agenda") != "agenda":
+        raise ValueError(
+            f"segments_source.json 的 'opening_animation' 只对开屏 agenda 卡生效，"
+            f"而 'opening_layout' 写的是 {data['opening_layout']!r}（整页海报不生成"
+            " agenda 卡的 DOM，開場編排无处可演，会静默退回静态）。"
+            "要么去掉 opening_layout，要么去掉 opening_animation")
     _validate_opening_animation(
         data.get("opening_animation"),
         "segments_source.json 的 'opening_animation'")

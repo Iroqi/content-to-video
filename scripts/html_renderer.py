@@ -665,7 +665,8 @@ def _media_html(rc, sid, s, d):
         return (
             f'\n    <div class="seg-image" id="img-{sid}">\n'
             f'      <video id="vid-{sid}" src="{quote(media_path)}" '
-            f'data-start="{s}" data-duration="{d}" '
+            # 窗口值两位小数，与卡片标签的写法同型（唯一来源都是同一组 clip 值）
+            f'data-start="{s:.2f}" data-duration="{d:.2f}" '
             f'{loop} {muted} {autoplay} {playsinline} '
             f'{poster_attr}{_video_audio_attrs(media_opts, sid, d)}>\n'
             f'      </video>\n'
@@ -800,7 +801,13 @@ def _prepare_card(rc, clip):
 
     title_size = _title_font_px(rc, seg, sid, is_agenda)
     tagline_html = _tagline_html(rc, seg, sid, ac)
-    image_html = _media_html(rc, sid, s, d) if has_image else ""
+    # <video> 必须落在**卡片那个可见窗口**上，不能用口播段长：
+    # hyperframes 给每个带 data-start 的元素按**它自己**的窗口独立判显隐
+    # （runtime 的 applyTimedElementVisibility + 逐帧 style.visibility），
+    # 所以两段窗口的差集不是"稍早一点/稍晚一点"，而是头尾各有一段卡片还在
+    # 画面上、video 已被判出窗——画面上只剩一个空图槽（实测 0.4s ≈ 10 帧）。
+    # <img> 没有 data-start、继承祖先卡的窗口，两种素材必须同一口径。
+    image_html = _media_html(rc, sid, win_start, vis_d) if has_image else ""
     verse_html = _verse_html(seg, sid, ac_text_attr)
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧

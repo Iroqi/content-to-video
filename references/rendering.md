@@ -144,13 +144,14 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 ```
 
 - `check` 会真报问题：字体栈里出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`，判定基于名字而非解析结果）——`composition.css` 因此为 CJK 兜底名 `Noto Sans CJK SC/JP` 也补了 `local()` 声明。同一处还有条静默代价：家族名必须是它字体映射表认识的写法，CSS 惯例名 `SFMono-Regular` 不在表内（表里认 `"SF Mono"`），命中不了只打一条 `[WARN] No deterministic font mapping`，那一族就拿不到注入的 `@font-face`。`_template.py` 的 `monoStack` 已按映射表写，改字体栈要对着这条 WARN 改。
-- 一份干净产物的 `check` 基线（7 段稿竖屏实测，2026-10）：**Lint 12 条 warning 全部是下面这 5 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看的是**类型**不是条数——其中两条按段数增长，写死条数会自己吓自己：
+- 一份干净产物的 `check` 基线（7 段稿竖屏实测，2026-10）：**Lint 12 条 warning 全部是下面这 6 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看的是**类型**不是条数——其中两条按段数增长，写死条数会自己吓自己：
   - `gsap_callback_dom_measurement`（1 条）：verse 滚动测量是懒缓存 + seek 幂等，见 `templates/runtime.js` 注释。
   - `nested_structure_needs_subcomposition`（**每段一条**，7 段 = 7 条）：不拆 sub-composition 是刻意的——单文件便于 `--until html` 后人工审阅，且分段渲染实测更慢（见上文「性能参数」）。
   - `timeline_track_too_dense`（1 条）：同一合成根下 7 段就是 7 个 timed element，是上一条的另一种说法。
   - `composition_file_too_large`（1 条）：单文件行数超阈，是上面两条的单文件取舍的代价，同源。
   - `negative_z_index`（**每条 `z-index:-1/-2` 规则一条**）：氛围光 `.seg-card::after` + 背景两层 `.seg-card>.bg,.grid`。`negative_z_index` 是误报——浏览器实测 `getComputedStyle(.seg-card).isolation` 为 `isolate`，氛围光确实压在卡片内容之下、页面背景之上，检查器不认 `isolation` 建的层叠上下文，而它自己给的 Fix 就是"加 `isolation: isolate`"（`composition.css` 已加）。
-  - **判据**：这 5 类之外的任何新增条目一律当真读。条数对不上不用慌（段数变了就变），**类型多出一类就要查**。反过来，Layout 段出现的 `✗` 要当真——它量的是真实版面重叠，`check_svg` 查不到图内两行文字压字（见 `image_options.md`「画布几何」末条）；已知唯一的例外是 `text_occluded`，见下条。
+  - `gsap_infinite_repeat`（**只有写了 `opening_animation: "apple"` 的稿子才有**，1 条）：题头光晕的慢呼吸挂的是 `repeat:-1,yoyo:true`。官方 determinism 规则写明 `repeat:-1` 只在根元素声明了有限 `data-duration` 时降级为 warning（无限的是硬错误）——本技能的 root 恒带有限 `data-duration`，成片与导出都按那个窗口 seek。改成有限次 `repeat` 反倒要回答"最后一帧停在哪儿"，而那一呼吸本来就该是"页面还在就一直在呼吸"，所以留着。**只有这一条来路是噪声**：别处的 `repeat:-1`，以及揪着同一条无限管线报的生长线无界 duration，都要当真。
+  - **判据**：这 6 类之外的任何新增条目一律当真读。条数对不上不用慌（段数变了就变），**类型多出一类就要查**。反过来，Layout 段出现的 `✗` 要当真——它量的是真实版面重叠，`check_svg` 查不到图内两行文字压字（见 `image_options.md`「画布几何」末条）；已知唯一的例外是 `text_occluded`，见下条。
 - Runtime 的 `clip_media_fit` 和 Layout 的 `clipped_text` **不在噪声之列**：前者是音频实际时长短于 `data-duration`（成片被截到音频长度、字幕时间轴对不上），真实 pipeline 产物的 `total_duration` 就是量出来的音频时长，正常不该出现，手写/裁剪 manifest 时它是"manifest 与音频不同步"的唯一信号（实测把 `total_duration` 对齐音频后该条消失）；后者是某行文本被自己的盒子裁掉，竖屏 agenda 行的 `nameTrim` 只能挡字数超限，挡不住半角/混排的实际字宽（Python 侧 warn 与它两道闸各管一头，见 `references/writing.md`「开场/结尾专用顶层字段」）。
 - Layout 的 `text_occluded` **曾经误报，现在不会再报**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。豁免靠 `data-layout-allow-occlusion` 等三个属性，而**检查器只认元素自己身上的标记、不继承祖先的**——原先只打在 `.verse` 上，检查器照样去量它下面的每一行。模板已在**每一行 `.verse-line`** 上也打上（`html_renderer.py`），实测 7 段竖屏稿：只打 `.verse` 时报 1 error，每行补齐后 0 error 且 warning 条数不变。
   **再往下嵌一层 DOM 就要再打一层**：2026-10 给对话段加了行首说话人标签（`<span class="verse-who">`，见上面 verse 一条），同一份稿子 Layout 立刻报 `text_occluded … span:nth-of-type(1) "主播"` 1 error——判据与那两层完全一样，只是这次被量的是 span。所以那三个属性现在打在 `.verse` / `.verse-line` / `.verse-who` 三层上。**以后再往句子流里嵌任何带文字的元素，先给它自己带上这三个属性**；事后调试的路子是先跑 `check` 看报的是哪一层的选择器，别去改版式。

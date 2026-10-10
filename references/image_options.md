@@ -237,7 +237,7 @@ Prompt 先描述"讲什么"，再描述"怎么画"。不要先写一堆风格词
 
 **② 时间轴同步的「导演」（净化内联，opt-in）**：要"随旁白逐句推进"的状态变化（讲到第 2 句时高亮某个节点、讲到第 3 句时把箭头画出来、数值随句子跳到目标值），就在 images.json 给这张 SVG 写 `director`。写了 `director` 的 SVG 会：
 
-1. **净化后内联成活 DOM**（`scripts/_svg_sanitize.py`）：删掉 `<script>` / `on*` 事件属性 / `<foreignObject>` / **任何带 scheme 的 href**（`http(s):`、`javascript:`、`file:`、`data:`、`blob:` 等一律算外部资源——产物 HTML 常以 `file://` 打开，`file:` 引用会触及本机磁盘；内部 `#id` 片段与相对路径放行）/ `@import`，**并剥掉 SMIL 与 CSS animation/transition**（墙钟动画在逐帧 seek 里不可复现，导演档一律由补间驱动运动）。净化让"内联会执行脚本"的风险回到 `<img>` 水位——**这是本节唯一允许内联进交付 HTML 的情形**，且内联前必过净化。
+1. **净化后内联成活 DOM**（`scripts/_svg_sanitize.py`）：删掉 `<script>` / `on*` 事件属性 / `<foreignObject>` / **任何带 scheme 的 href**（`http(s):`、`javascript:`、`file:`、`data:`、`blob:` 等一律算外部资源——产物 HTML 常以 `file://` 打开，`file:` 引用会触及本机磁盘；内部 `#id` 片段与相对路径放行）/ `@import`，**把外链 `url()` 整颗换成 `about:blank`**（`style=""` 里和 `fill` / `stroke` / `filter` / `mask` / `clip-path` / `marker-*` 这些**呈现属性**里都一样——别以为只有 CSS 那条路`<rect fill="url(file:///…)"` 照样能触及本机磁盘；内部的 `url(#id)` 不碰），**并剥掉 SMIL 与 CSS animation/transition**（墙钟动画在逐帧 seek 里不可复现，导演档一律由补间驱动运动）。净化让"内联会执行脚本"的风险回到 `<img>` 水位——**这是本节唯一允许内联进交付 HTML 的情形**，且内联前必过净化。
 2. **由 GSAP 按句驱动**：`director.steps` 每一步挂在该段旁白某句的起点上，渲染器把它展开成时间线补间（属性补间，逐帧 seek 完全可复现，和标题/配图入场同一机制）。
 
 `director` 结构（键集封闭，写错在契约层直接报错）：

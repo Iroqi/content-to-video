@@ -42,6 +42,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 from _path_morph import y_span
+from _svg_sanitize import _WALLCLOCK_CSS as _CSS_WALLCLOCK
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 from _template import load_template
@@ -320,8 +321,13 @@ def check_file(path, layout, aspect, theme):
         if el.get("style") and re.search(
                 r"url\(\s*['\"]?(?:https?:|//|file:|data:)", el.get("style"), re.I):
             errors.append(f"<{tag}> 的 style 里有外链 url()")
-        if (tag == "style" and el.text and re.search(r"\b(animation|transition)\b", el.text, re.I)) \
-                or (el.get("style") and re.search(r"\b(animation|transition)\b", el.get("style"), re.I)):
+        # 墙钟动画的 CSS 判定**借用净化器那条正则**，不在我这里另写一份
+        # （口径漂移的代价是真问题：净化剥掉的东西与 check 报的东西必须是同一
+        # 类）。旧写法是裸的 \b(animation|transition)\b，`.animation-card` 这种
+        # 类名、以及 `--animation-duration` 这种自定义属性都会被误判成墙钟动画，
+        # 作者画一张静态图也要吃一条假 warn——误报训练人忽略 warn，比漏报更贵。
+        if (tag == "style" and el.text and _CSS_WALLCLOCK.search(el.text)) \
+                or (el.get("style") and _CSS_WALLCLOCK.search(el.get("style"))):
             has_wallclock = True
 
         if tag == "text":

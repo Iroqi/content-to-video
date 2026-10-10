@@ -72,12 +72,25 @@ MEDIA_ENTRY_KEYS = frozenset({
     # TTS、却照样混进成片**的声音（见 html_renderer._media_html）。不给它增益
     # 旋钮，"要了原声"就等于"原声压着口播一起播"，而这条链上没有任何报错。
     "volume", "fade_in", "fade_out", "media_start",
+    # duck：让路开关（默认开）。它与 volume 管的不是同一件事——volume 压的是整
+    # 条轨的响度，duck 只压人声占住的那几档频段，把环境声与音乐的厚度留下来。
+    # 默认开是因为"要了原声"的默认结果（原声与口播等响、互相盖）本来就是错的，
+    # 不该由人记住"还要额外写点什么"才对。真要让原声当主体（采访原声、现场
+    # 同期声）就显式写 duck:false 把它关掉。
+    "duck",
 })
 
 # Hyperframes 的音轨增益上限：data-volume 超过 3.98（+12dB）不再被放大。
 # 抄自官方 html-schema 契约，不在这里另立一个数——将来上游改了上限，
 # 只改这一处常量，报错文案与渲染端随即跟着走。
 MEDIA_VOLUME_MAX = 3.98
+
+# 视频原声的**让路默认增益**：关掉 muted 却没写 volume 时，渲染端按它落
+# data-volume（见 html_renderer._video_audio_attrs）。取 0.25 是实测可听档的
+# 下沿（references/image_options.md「音轨」实测 0.15~0.3 还能听清旁白）——
+# 默认那一版必须是不盖旁白的那一版：把 1.0 留作默认等于默认交付一支旁白被
+# 压住的片子。想要别的响度就显式写 volume，写了就不再自动兜底。
+MEDIA_DUCK_VOLUME = 0.25
 
 # 视频音轨四件套的取值范围：(下限, 上限, 报错误文案里的人话)。上限 None = 不封顶。
 # 上限只有一个（volume），其余三项只要非负——"淡入比整段还长"这类不合理不是
@@ -552,6 +565,19 @@ def validate_images_json(data):
                     raise ValueError(
                         f"images.json 的 '{key}' 的 {_opt} 超出范围（{_bound}）"
                         f"（{_hint}；实际: {_v!r}）")
+            # duck 与四件套同一口径：只对 video 成立，且必须是 JSON 布尔
+            # （渲染端按 `opts.get("duck", True)` 取值，字符串 "false" 是真值，
+            # 会让"关掉让路"变成"永远让路"，与 loop/muted 那条同一个坑）。
+            if "duck" in value:
+                if isinstance(src, str) and not _is_video:
+                    raise ValueError(
+                        f"images.json 的 '{key}' 写了 duck，但 src={src!r} 不是视频"
+                        f"（type={(_t or 'auto')!r}）——duck 只对 video 生效，"
+                        "位图 / SVG / GIF 没有音轨可让")
+                if not isinstance(value["duck"], bool):
+                    raise ValueError(
+                        f"images.json 的 '{key}' 的 duck 必须是 JSON 布尔 true/false"
+                        f"（实际: {value['duck']!r}）")
             if "src" not in value:
                 raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
         else:

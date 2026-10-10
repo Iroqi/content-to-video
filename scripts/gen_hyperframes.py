@@ -143,7 +143,7 @@ def ensure_local_gsap(project_dir):
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _template import get_canvas, load_template  # noqa: E402
+from _template import get_canvas, get_image_box, load_template  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path)
@@ -151,7 +151,9 @@ from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir)
-from _audio import ffmpeg_usable, get_ffmpeg, measure_duration, parse_duration  # noqa: E402
+from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
+                    parse_duration, parse_video_size)
+from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
@@ -241,7 +243,24 @@ def _warn_if_local_vendor_missing(src, out_dir):
           file=sys.stderr)
 
 
-def validate_images_files(images, out_dir, seg_durs=None):
+def _warn_if_upscaled(sid, media_path, box, size):
+    """素材铺进它那一页的框要被放大时打一条 `[warn]`（只提示，不拦）。
+
+    这一问此前没人管：配图一律 `cover` 铺满画布，而 `cover` 只管填满、不管清
+    楚——一张不够大的图会被悄悄放大成糊的，生成期、`hyperframes check`、渲染
+    日志全都不出声，只有成片里看得见。所以这里拿固有尺寸跟框比一次。
+
+    不拦是因为"糊不糊"还有主观成分（一张柔和的渐变背景放大 1.4 倍没人看得出来），
+    把整轮生成拦在半路不值当；要的是知情 + 可执行去处，判据与阈值在 `_media_size`。
+    box 或 size 缺失（不知道框多大 / 读不出尺寸）就静默——没得比就不比，
+    拿猜的数报警比不报更糟。
+    """
+    note = upscale_note(media_path, size, box)
+    if note:
+        print(f"[warn] 段落 '{sid}' 的配图不够大：{note}", file=sys.stderr)
+
+
+def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
     """校验 images.json 引用的媒体文件存在且可解码。
 
     检测项（依赖缺失时优雅降级，只降强度不改行为）：
@@ -251,10 +270,16 @@ def validate_images_files(images, out_dir, seg_durs=None):
       长时打"渲染只显示前段"提示（信息级，不阻断）；svg 是文本格式，
       ffmpeg 打不开，存在性校验已足够，跳过。ffmpeg 是渲染必需依赖，
       无需再引入 Pillow。
+    - **像素够不够铺满**：栅格图读文件头、视频读 ffmpeg 的流信息，拿固有
+      尺寸跟它要被 `cover` 铺进的那个框比——放大超过阈值就打一条 `[warn]`
+      点名哪一段、素材多大、要放大几倍。这是此前零报错的一类静默退化：
+      糊掉的那一帧在生成期、在 `hyperframes check` 里、在渲染日志里都不
+      存在，只有成片看得见。判据与阈值在 `_media_size`。svg 不验（矢量）。
 
     返回 (missing, corrupt)：missing=[(sid, media_path)]、
     corrupt=[(sid, media_path, reason)]；相对 src 按 out_dir 解析，
-    seg_durs=None 时跳过时长提示。是否 fail-fast 由调用方决定。
+    seg_durs=None 时跳过时长提示、seg_boxes=None 时跳过尺寸提示。
+    是否 fail-fast 由调用方决定（尺寸这一项只提示，永远不拦）。
     """
     missing_imgs = []
     corrupt_imgs = []
@@ -270,8 +295,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
     def _probe_media_ok(path):
         """ffmpeg 全解码探测，覆盖图片与视频。能同时发现 moov 缺失、
         头部损坏与尾部截断（下载中断的典型形态）。-v info 让 stderr
-        携带 Duration 行，成功时顺带解析出视频时长（用于"视频比段落
-        长会被截断"提示）。返回 (ok, reason, duration|None)。"""
+        携带 Duration 行与流信息，成功时顺带解析出视频时长（用于"视频
+        比段落长会被截断"提示）与像素尺寸（用于"够不够铺满"提示）。
+        返回 (ok, reason, duration|None, size|None)。"""
         import subprocess as _sp
         try:
             r = _sp.run(
@@ -279,17 +305,17 @@ def validate_images_files(images, out_dir, seg_durs=None):
                  "-f", "null", "-"],
                 capture_output=True, timeout=15)
         except _sp.TimeoutExpired:
-            return False, "probe timeout(15s)", None
+            return False, "probe timeout(15s)", None, None
         except OSError:
             # 兜底：调用方已用 ffmpeg_usable 预筛过，走到这里只剩"预筛之后
             # ffmpeg 才消失"这类竞态。当真报错会把"环境问题"说成"图片损坏"，
             # 所以退回存在性校验（文件存在在调用前已查过），不当损坏处理。
-            return True, "", None
+            return True, "", None, None
         err_text = (r.stderr or b"").decode("utf-8", "replace")
         if r.returncode != 0:
             return False, (err_text.strip()[-160:] or
-                           f"exit {r.returncode}"), None
-        return True, "", parse_duration(err_text)
+                           f"exit {r.returncode}"), None, None
+        return True, "", parse_duration(err_text), parse_video_size(err_text)
 
     for sid, entry in images.items():
         # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空
@@ -322,8 +348,9 @@ def validate_images_files(images, out_dir, seg_durs=None):
         # 视频用 ffmpeg 解码探测（只查存在性不够：
         # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
         if media_type == "video":
+            _size = None
             if _ffmpeg_probe:
-                ok, reason, vdur = _probe_media_ok(p)
+                ok, reason, vdur, _size = _probe_media_ok(p)
                 if not ok:
                     corrupt_imgs.append((sid, media_path,
                                          f"视频解码失败: {reason}"))
@@ -335,17 +362,24 @@ def validate_images_files(images, out_dir, seg_durs=None):
                               f"前 {seg_dur:.1f}s（尾部内容会被截断）。"
                               f"请剪短视频或换到更长的段落。",
                               file=sys.stderr)
+            _warn_if_upscaled(sid, media_path, (seg_boxes or {}).get(sid), _size)
             continue
-        # svg 是文本格式，ffmpeg 打不开，存在性校验已足够
+        # svg 是文本格式，ffmpeg 打不开，存在性校验已足够；矢量也不验尺寸
+        # （缩放不失真，它另有比例与字号两道门禁）
         if is_svg_path(p):
             continue
         # 栅格图（jpg/png/webp/gif…）用 ffmpeg 全解码探测损坏/截断——
         # ffmpeg 是渲染必需依赖，无需再引入 Pillow
+        # 尺寸只在"知道框多大"时才读：没框就不比，也就不用为它开一次文件
+        _size = raster_size(p) if (seg_boxes or {}).get(sid) else None
         if _ffmpeg_probe:
-            ok, reason, _dur = _probe_media_ok(p)
+            ok, reason, _dur, _probe_size = _probe_media_ok(p)
             if not ok:
                 corrupt_imgs.append((sid, media_path,
                                      f"图片损坏或无法解码: {reason}"))
+            # 头解析读不出的格式（avif/heic 之类）退回 ffmpeg 的流信息
+            _size = _size or _probe_size
+        _warn_if_upscaled(sid, media_path, (seg_boxes or {}).get(sid), _size)
     if not _ffmpeg_probe and images:
         print("[warn] ffmpeg 不可用，跳过配图完整性（损坏/截断）校验，"
               "仅做了文件存在性校验（ffmpeg 是渲染必需依赖，正常环境"
@@ -1015,8 +1049,17 @@ def main(argv=None):
             # 唯一来源，与渲染器读的是同一份分组。
             _seg_durs = {seg["id"]: segment_duration(seg)
                          for seg in _segs}
+            # 每个段落的配图要被铺进多大的框：整页画布铺整个画幅，槽位版式只
+            # 铺中间那块 4:3——"素材够不够大"只能按它实际落地的框判，按画幅
+            # 判会把槽位那一档整批漏报（槽位比画幅小得多，同样的图在槽位里
+            # 是够用的）。
+            _box_slot = get_image_box(args.aspect)
+            _box_full = get_canvas(args.aspect)
+            _seg_boxes = {seg["id"]: (_box_full if seg_layout(seg) == "canvas"
+                                      else _box_slot)
+                          for seg in _segs}
             missing_imgs, corrupt_imgs = validate_images_files(
-                images, out_dir, _seg_durs)
+                images, out_dir, _seg_durs, _seg_boxes)
             if missing_imgs or corrupt_imgs:
                 for sid, rel in missing_imgs:
                     print(f"[error] 配图引用缺失: segment '{sid}' -> "

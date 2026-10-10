@@ -19,7 +19,8 @@ from _theme import (
 )
 from _template import load_template, get_canvas, normalize_aspect
 from _images_schema import (unknown_media_keys, MEDIA_ENTRY_KEYS,  # noqa: E402
-                            classify_media_path, is_svg_path)
+                            classify_media_path, is_svg_path,
+                            MEDIA_DUCK_VOLUME)
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
@@ -546,28 +547,82 @@ def _fmt_attr_num(v):
     return f"{float(v):.6f}".rstrip("0").rstrip(".")
 
 
+# ── 视频原声的让路 EQ ────────────────────────────────────────────────
+# 只压整条轨的音量（volume）是把原声整个拧小：环境声、音乐、现场厚度一起没
+# 了，"有原声"这一诉求只剩下一点残余。Hyperframes 的 voiceover carve 走的是
+# 另一条路——只在人声占住的那几档频段上开槽，床铺的其余部分保持原样。那是
+# Studio 分析语音后落下来的一条 `data-fx-chain`（`data-fx-carve` 本身在播放
+# 期不读，见官方 audio-effects 参考），本技能没有那次分析，就给同一类链的**静态
+# 保守版**：三段 peaking 窄带衰减，落在人声最占地方的中高频。
+# 为什么是这三档：carve 的候选中心是 160~6000 Hz 的 1/3 倍频程，而官方明确写了
+# "真正掩蔽人声的频段更高"——按能量排会一直选到基频（160/250 Hz），切那里只是
+# 把床铺削薄，对听清旁白几乎没有帮助。所以取 1.6k / 2.5k / 4k，深度 -3/-3/-2 dB、
+# Q=1（宽到不留下"被挖了个洞"的听觉痕迹）。
+_DUCK_BANDS = ((1600.0, -3.0, 1.0), (2500.0, -3.0, 1.0), (4000.0, -2.0, 1.0))
+
+
+def _duck_chain_attr():
+    """让路 EQ 的 `data-fx-chain` 属性（整条，含属性名，末尾无空格）。
+
+    属性值里的 JSON 引号必须写成 `&quot;`：官方的 carve 脚本用 `name="..."` 的
+    正则找这些属性，单引号写法它看不见；`&` 同理要转 `&amp;`（本链不含 &，
+    转义仍照做——将来有人往 label 里加 & 时不会突然失联）。
+    """
+    nodes = [{
+        "type": "peaking",
+        "id": f"n{i}",
+        "label": f"Make room for VO {int(freq)}Hz",
+        "params": {"frequency": freq, "gain": gain, "q": q},
+    } for i, (freq, gain, q) in enumerate(_DUCK_BANDS, start=1)]
+    payload = json.dumps({"version": 1, "nodes": nodes},
+                         separators=(",", ":"))
+    escaped = payload.replace("&", "&amp;").replace('"', "&quot;")
+    return f'data-fx-chain="{escaped}"'
+
+
 def _video_audio_attrs(media_opts, sid, d):
     """视频音轨那几个 data-* 属性（一行一个，末尾带空格）。
 
     Hyperframes 的 ffmpeg 混音只读两类源：`<audio>` 元素，和声明了
     `data-has-audio="true"` 的 `<video>`。**不写就一条都不混**——所以
     `muted: false`（用户明确要原声）时必须补上这个声明，否则成片有画面、
-    没原声，而整条链上没有任何报错。这是本函数存在的唯一理由。
+    没原声，而整条链上没有任何报错。这是本函数存在的第二个理由。
 
-    反过来，`muted: true`（默认）时**不能**写它：契约是二选一，同时挂
-    muted 和 data-has-audio 会让 lint 的 video_missing_muted 判据失效。
+    第一个理由是**让路**：口播是 <audio id="main-audio">（见
+    templates/composition.html），视频原声是第二条进混音器的轨，两条默认都按
+    1.0 进混音器。默认结果就是"原声压着旁白一起播"，跑完不报错、成片没法听。
+    所以关掉 muted 而没写 volume 时，这里直接落一个让路默认增益
+    （`MEDIA_DUCK_VOLUME`）并说明怎么覆盖——**默认那一版必须是不盖旁白的那一版**，
+    "记得自己压音量"不是一道门禁，只是句话。显式写了 volume 就完全按写的来。
+
+    反过来，`muted: true`（默认）时**不能**写 data-has-audio：契约是二选一，
+    同时挂 muted 和 data-has-audio 会让 lint 的 video_missing_muted 判据失效。
     """
     attrs = []
     muted = media_opts.get("muted", True)
     if not muted:
         attrs.append('data-has-audio="true"')
-        # 知情告警：口播是 <audio id="main-audio">（见 templates/composition.html），
-        # 视频原声是第二条进混音器的轨。两条都响 = 两条人声/环境声叠着播，
-        # 跑完不报错、成片却没法听——这正是要出声提醒的那一类。
-        print(f"[warn] images.json 的 '{sid}' 关掉了 muted：视频原声会与口播"
-              "（audio/combined.wav）一起混进成片。原声不是配乐，它和旁白"
-              "抢同一段频谱，建议同时给 volume（0.15~0.3 是实测能听清旁白的档）"
-              "让原声退到背景。", file=sys.stderr)
+        duck = media_opts.get("duck", True)
+        # 让路分两半，各管一段：响度交给 volume，频段交给 duck 的让路 EQ。
+        # 两半都得**说出口**——替人改了混音却一声不吭，本身就是另一类静默行为，
+        # 哪怕改的方向是对的（写了 volume 的人也该知道这条链挂上去了）。
+        _notes = []
+        if duck:
+            attrs.append(_duck_chain_attr())
+            _notes.append("并在人声频段上开了让路 EQ（data-fx-chain，duck:false 撤掉）")
+        if "volume" not in media_opts:
+            # 没写响度 → 替他压到让路默认。只提醒"建议给 volume"等于把一支
+            # 默认盖住旁白的片子交出去：那句话没有改任何东西，成片照样没法听。
+            attrs.append(f'data-volume="{_fmt_attr_num(MEDIA_DUCK_VOLUME)}"')
+            _notes.append(f"没写 volume，已落让路默认 data-volume="
+                          f"{_fmt_attr_num(MEDIA_DUCK_VOLUME)}")
+        if _notes:
+            print(f"[warn] images.json 的 '{sid}' 关掉了 muted：视频原声与口播"
+                  f"（audio/combined.wav）抢同一段频谱，两条轨默认都按 1.0 进混音"
+                  f"器、互相盖住。本次已让路——{'；'.join(_notes)}。"
+                  "要原声当主体请显式写 volume（例如 1.0）并给 duck:false。",
+                  file=sys.stderr)
+        # 写了 volume 就完全尊重，不再自动兜底——他要的响度只有他知道。
     # 增益与裁剪四件套：只对不静音的轨有意义（静音轨调增益听不出区别，
     # 但写了不算错，照样透传——契约层已按 video 校验过类型与范围）。
     for opt, attr in (("volume", "data-volume"),

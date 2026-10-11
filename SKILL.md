@@ -100,7 +100,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告——**整页画布除外**，那一页没有标题层与句子流层，缺图连预览 HTML 都生成不出来，一律 exit 2。映射的 `src` 文件不存在则连 `--until html` 也拦（同 exit 2），`--until images` 只看覆盖率、不拦。
 
-渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）。成片明显短于时间轴 = 后段内容可能整个不在片里（抓帧超时/worker 崩的典型症状），默认拦下交付，先看成片同目录 `out.render.log` 里有没有 `Parallel capture timed out`，有就降 `--workers` 重渲；长于容差与量不到（ffmpeg 不可用）只 `[warn]`。结果与实测秒数在 `production_report.json` 的 `video` 字段。
+渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）。短于容差拦下交付，长于容差与量不到只 `[warn]`。机制、三档处置与补救路径见 `rendering.md`「正式渲染」。
 
 ## 输出契约
 

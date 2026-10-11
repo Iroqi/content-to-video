@@ -36,7 +36,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 
   整页画布**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光 `::after`（画布上换成近全屏的宽带柔光，见 `templates/composition.css` 画布块），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张，见 `references/canvas.md`「不铺满幅底」。
 
-  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/canvas.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，照 `references/canvas.md`「图内文字的对比度」的内联副本 + `check` 程序办（"交付 HTML 必须保持 `<img>`"的安全理由也写在那份里）。`check_svg.py --layout canvas` 现在会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度（整页画布只 warn 不 error：压在作者自画的浅色局部底板上的字，按页底算出来的数对它不成立），但渐变底、`class` 里的色、局部底板上的字它都管不着，那一次真测仍然要做。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
+  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字（实测同一篇稿去掉那两层后普查 40 → 38 项；一张被 `cover` 裁掉标题的画布照样 0 error、38/38 全过）。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单、实测翻车数字和"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/canvas.md`「整页画布」，画那张图时按那份执行，这里不复述。想让它真的量一次图内文字，照 `references/canvas.md`「图内文字的对比度」的内联副本 + `check` 程序办（"交付 HTML 必须保持 `<img>`"的安全理由也写在那份里）。`check_svg.py --layout canvas` 现在会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度，但渐变底、`class` 里的色、局部底板上的字它都管不着，那一次真测仍然要做（口径与为什么整页画布只 warn 见 `references/canvas.md`「图内文字的对比度」）。底部进度条与段落底轨在这里抬到 `z-index:2`：槽位版式里媒体够不到页底，画布拉满全屏后一张铺到底的照片会把进度整个盖掉（实测删掉这条规则，页底 24 行像素全是画布填充色）。
 
 opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。这一页自己就是一个版式值 `layout: "agenda"`，由 pipeline 盖章（它不是这一段自己的文字，而是对全片其它段的投影）；作者要把它换成整页海报，用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页就退化成内容段画布那条路：只剩一张满幅配图 + 进度条，标题层、句子流、章节行、`cta` 尾行连 DOM 都不生成——而 `check` 只数 HTML 文本，看不见这种丢失，画面上该有什么、读不读得清，全由那张图自己负责。渲染器只按 `layout` 分派三档版式（`_segments.seg_layout()`），不再按 id 猜。漏盖 `layout` 不会报错也不会塌成槽位：`seg_layout()` 按 id 兜回 agenda。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
@@ -47,7 +47,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 动画参数全部来自 `_template.py` 的 `animation` 数据：
 
 - 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页（几何档时长与缓动取模板 `animation.segmentWipe`）；`style` 全片统一一档——`line`（**默认**，引导线：见下）、`vertical`（自下而上 inset 揭屏）、`diagonal`（顶边 30% 斜度、左角先行的斜向擦除）、`circle`（中心向外，71% = 圆心到角点的精确半径，任意画幅同值）；写错档生成期直接报错。wipe 三档旧卡**不淡出**，被新卡盖住后随引擎窗口切走。选它而不是 cross-fade：两页互相透明度溶解在成片里是"凭空消失再出现"的廉价信号（PPT 观感，实测被否）；wipe 全程只揭一层不透明页，方向感来自遮盖本身。**整页画布除外**（`layout: "canvas"` 一律硬切，理由与代价见本节「整页画布」条）。
-- **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来物（razor/pull 两版 SVG 刀具，先后被否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径，两处各读各的=漂移穿帮），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴（`transformOrigin:"50% 100%"`）的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起——折页线附近最暗，Material elevation 做法；不用 box-shadow 是因为外投影会被卡自身 clip-path 整层裁掉、inset 内阴影又会被后画的 `.bg` 子层盖住）；线的辉光下偏（`box-shadow` y 偏移），光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。动效精修（首版沿用几何档被裁"闪现不是引导"）：笔程走 `propLine.duration`（line 档比几何档长）+ `propLine.ease` power2.inOut 的书写节奏（慢起—快行—慢收），线形是两端渐隐、中心提亮一枚"笔尖"的彗尾渐变（硬条读不出笔触）；扫到顶恰好缩没进边沿即收笔。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
+- **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来道具（razor / pull 两版刀具都试过、都否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径，两处各读各的=漂移穿帮），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴（`transformOrigin:"50% 100%"`）的 `rotationX` 透视后倒、`peelPerspective` 焦距，纸真正"揭"起来而非图层平移；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起）；线形用两端渐隐、中心提亮的彗尾渐变——硬条读不出笔触，均匀四散是"发光条"而不是"光源在画"。笔程走 `propLine.duration` + `propLine.ease`。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分——无需独立道具层，层叠天然正确。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`（基准：几何档 `segmentWipe.duration`，line 档 `propLine.duration`），入场提前铺到 `win_start = s − wipe`，恰好在本段音频起点完成揭屏（line 档的线与剥离同窗同值）。字幕住在卡里，转场早于上一句念完就开始，等于下一段文字压着还在讲的话。
 - **揭屏能成立的前提是卡元素的 `data-duration` 覆盖整个入场窗口**：hyperframes 引擎按 `data-start`/`data-duration`
   硬切 clip 可见性，补间排在窗口外等于没写（这正是旧 cross-fade 版查出的 bug：边界帧全黑、那一刻 GSAP opacity 仍是 0.999）。窗口 `[win_start, next_start]` 与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐；末卡窗口铺到成片结束。
@@ -60,10 +60,8 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   对话段（`dialogue`）在**轮次切换的首句**行首多挂一枚说话人标签 `.verse-who`——谁在说
   这件事原本只存在于声音里，静音播放、听障观看、或两个音色选得相近时，观众手里只剩一串
   分不清轮次的字幕。同一说话人连着说多句只在第一句挂（行首不变成一列复读的抬头）；标签
-  字号与右侧间隔走 `_template.py` 的 `verse.whoFontSize` / `whoGap`（随画幅变，两画幅各
-  一份），颜色是本段 accent 的文本安全副本，由渲染器按段写成 `.verse-clip` 上的
-  `--ctv-verse-who-color`，CSS 只消费。它跟正文抢同一行宽度，所以 `speakers[].label` 是
-  上墙文字、有 6 字上限，判据与报错见 `references/writing.md` 的 `label` 条目。
+  字号与右侧间隔走 `_template.py` 的 `verse.whoFontSize` / `whoGap`，颜色是本段 accent 的
+  文本安全副本（`--ctv-verse-who-color`）。它跟正文抢同一行宽度，所以 `speakers[].label` 有 6 字上限，判据见 `references/writing.md` 的 `label` 条目。
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
 - 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为整页画布的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/canvas.md` 的「不铺满幅底」一节。
 
@@ -122,21 +120,17 @@ hf-project/
 
 渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：`run.py` 会重新生成一次 HTML 再进入 render，渲染阶段内置文件稳定性等待器——Hyperframes/Node/Chrome 即使在 MP4 写完后没有及时退出，也会等待文件稳定并在必要时清理本次 render 的进程树。
 
-**渲染之后还有一道闸：成片时长对账。** 容器完整证明不了内容完整——抓帧超时重抓、worker 崩、Chrome 提前退出都能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子，后几段整段不在片里，而控制台照打"完成"。所以 `run.py` 在成片落盘后拿 ffmpeg 量一次实际时长，与 manifest 的 `total_duration` 对账，容差沿用全仓那条 `max(1s, 2%)`：
+**渲染之后还有一道闸：成片时长对账。** 容器完整证明不了内容完整——抓帧超时重抓、worker 崩、Chrome 提前退出都能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子，后几段整段不在片里，而控制台照打"完成"。所以 `run.py` 在成片落盘后拿 ffmpeg 量一次实际时长，与 manifest 的 `total_duration` 对账，容差沿用全仓那条 `max(1s, 2%)`：短于容差**退出码 4** 拦下交付，长于容差与量不到（ffmpeg 不可用）只 `[warn]`。
 
-| 实测 vs 时间轴 | 处置 | 为什么 |
-| --- | --- | --- |
-| 短于容差 | **退出码 4**，拦下交付（成片留在盘上不删） | 后段内容可能整个不在片里；先看成片同目录的 `out.render.log` 里有没有 `Parallel capture timed out`，有的话降 `--workers` 到 2 重渲 |
-| 长于容差 | `[warn]`，正常交付 | 画面信息没丢，多出来的多半是末段音频尾巴或末帧余量 |
-| 量不到（ffmpeg 不可用） | `[warn]`，正常交付 | ffmpeg 是可选依赖；明说"演完了没有这条没人证明"，不拿缺依赖当失败 |
-
-三种结果与实测秒数都进 `production_report.json` 的 `video` 字段（`check` 取 `ok` / `short` / `long` / `skipped`）。别把这条 warn 当噪音划走——它是"成片到底演完没有"唯一的机器证据。
+这一道为什么值得单说：它拦的不是"渲染失败"，而是"渲染成功但内容缺了"——后者容器层面无懈可击，只有对时长才能发现。三种结果与实测秒数都进 `production_report.json` 的 `video` 字段（`check` 取 `ok` / `short` / `long` / `skipped`）。**别把这条 warn 当噪音划走**，它是"成片到底演完没有"唯一的机器证据。真撞上 exit 4 时，终端报错自带成因、该看哪个日志、怎么补救，照它做即可，不必回头查文档。
 
 ## 性能参数
 
-- `fps`：默认 24；抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
-- `workers`：默认 4，`run.py` 字面透传给 `hyperframes render --workers`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
-- `quality`：`draft` / `standard` / `high`；draft 约省 15%，预览够用。
+默认值与可用档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality standard`），这里只写"什么时候该动它"：
+
+- `fps`：抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
+- `workers`：`run.py` 字面透传给 `hyperframes render`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
+- `quality`：draft 约省 15%，预览够用。
 - **固定开销**：每调用一次渲染约白付 8.5s（与帧数无关），冷跑第一次还多约 6s。所以"改一处重渲一次"很不划算：先 `--until html` + 快照看够，再整片渲一次。
 
 ## 官方校验命令（优先于手搓探针）

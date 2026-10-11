@@ -296,6 +296,18 @@ class NumberChecker(unittest.TestCase):
         ids = [f[0] for f in check_numbers.FACTS]
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_references_stay_under_byte_cap(self):
+        # 逐份断言留出余量，而不是只靠 main() 那个总闸——总闸响的时候已经胖完了。
+        for path in sorted(os.listdir(os.path.join(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))), "references"))):
+            if not path.endswith(".md"):
+                continue
+            size = os.path.getsize(os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "references", path))
+            with self.subTest(ref=path):
+                self.assertLessEqual(size, check_docs.REFERENCE_MAX_BYTES)
+
 
 if __name__ == "__main__":
     unittest.main()

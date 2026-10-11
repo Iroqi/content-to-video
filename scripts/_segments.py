@@ -81,7 +81,7 @@ def sids_needing_image(manifest):
 # 的投影卡（行来自全片其它段——作者能选这一档，选不了它印什么，见 seg_layout）；
 # canvas 两段通用——内容段用它换整页画布，结构性页用它把整页让给一张海报。
 # 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
-# references/image_options.md「整页画布」。
+# references/canvas.md「整页画布」。
 LAYOUT_VALUES = ("canvas", "agenda")
 STRUCTURAL_SIDS = ("opening", "closing")
 

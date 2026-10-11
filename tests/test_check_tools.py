@@ -271,7 +271,7 @@ class DocRefChecker(unittest.TestCase):
 
     def test_target_path_resolves_bare_and_prefixed_forms(self):
         # 裸文件名按 references/ → 根目录解析；带前缀照用；反引号不参与路径
-        self.assertTrue(os.path.isfile(check_docs._target_path("image_options.md")))
+        self.assertTrue(os.path.isfile(check_docs._target_path("canvas.md")))
         self.assertTrue(os.path.isfile(check_docs._target_path("SKILL.md`")))
         self.assertTrue(os.path.isfile(check_docs._target_path("references/writing.md")))
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))

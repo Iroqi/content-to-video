@@ -2,7 +2,7 @@
 """手绘 SVG 配图的静态自查（只依赖标准库）。
 
 管线对槽位版式的 SVG 只校验"文件存在"，对整页画布只校验比例与 px 字号。
-`references/image_options.md` 里那几条"没有门禁替你查"的硬约束，这里补一道
+`references/canvas.md` 里那几条"没有门禁替你查"的硬约束，这里补一道
 **尽力而为**的静态检查——它能抓明显的错，抓不到的（文字实际溢出、数据图比例
 是否画对）仍然要自己看图。
 
@@ -350,7 +350,7 @@ def check_file(path, layout, aspect, theme):
             # 原先手挑的 PAGE_BG（渐变的中间档），所以槽位判定一字不变，只是从"赌中间那档"
             # 变成"取最坏"。
             # 画布页只 warn、不 error：画布上的字可能压在自己画的局部浅色底板上（那是正当
-            # 画法，见 image_options.md「图内文字的对比度」），按页底算出来的数对它不成立，
+            # 画法，见 canvas.md「图内文字的对比度」），按页底算出来的数对它不成立，
             # 所以这里没有判死的资格。背景族那条启发式同理留在槽位。
             fill = inherited(el, "fill")
             fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
@@ -410,7 +410,7 @@ def check_file(path, layout, aspect, theme):
                 else:
                     warns.append("整页画布铺了一张满幅底板 <rect>：模板本来就在这一页底下画好了三层"
                                  "（主题渐变 / 只在页缘显形的网格 / 本段 accent 氛围光），满幅 rect 把三层"
-                                 "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 image_options.md"
+                                 "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 canvas.md"
                                  "「整页画布的密度与层次」）。确实要把整页换成另一种底色时可忽略本条")
 
         # 竖向占位登记（只有画布档用得上：整页构图没有模板兜底，空带得自己发现）
@@ -429,11 +429,11 @@ def check_file(path, layout, aspect, theme):
         warns.append("含墙钟动画（SMIL <animate*> / CSS animation / transition）：这类动画按页面墙上时钟自走，"
                      "无法与口播时间轴同步，只适合氛围循环。要"
                      "「随某句话变化」的时间轴同步动画，改用 images.json 的 director（净化内联后由 GSAP 补间驱动；"
-                     "内联时这些墙钟动画会被剥离，见 references/image_options.md 方式 C「SVG 动画：两档」）")
+                     "内联时这些墙钟动画会被剥离，见 references/directing.md「SVG 动画：两档」）")
     if layout == "canvas":
         warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
                      "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"
-                     "以及文字是否真的溢出。用 image_options.md「图内文字的对比度」的内联副本 "
+                     "以及文字是否真的溢出。用 canvas.md「图内文字的对比度」的内联副本 "
                      "+ `hyperframes check` 量一次")
         if w and h:
             gy0, gy1 = _largest_empty_band(ink_bands, h)
@@ -442,7 +442,7 @@ def check_file(path, layout, aspect, theme):
                     f"整页画布有一整条横向空带：y≈{gy0:.0f}–{gy1:.0f}（{gy1 - gy0:.0f}px，"
                     f"占页高 {(gy1 - gy0) / h:.0%}，阈值 {MAX_EMPTY_BAND:.0%}）横着没有任何图元。"
                     f"画布页的构图没人兜底，暂停成片时这就是一页空白——把主视觉撑开到这个带里、"
-                    f"或按 image_options.md「整页画布的密度与层次」补中景/底层信息。"
+                    f"或按 canvas.md「整页画布的密度与层次」补中景/底层信息。"
                     f"有意的极简留白可忽略本条（它只查竖向：横向留白、挤成一团，以及一根"
                     f"贯穿上下的细线把整页'填上'了却仍然很空，它都看不见）")
     return errors, warns

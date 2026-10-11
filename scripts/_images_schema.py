@@ -494,139 +494,269 @@ def validate_images_json(data):
     """
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
+    # 按段聚合：一份 images.json 里同时写错四处（muted 写成字符串、fade_in 负数、
+    # volume 超上限、director.steps 写错形态）是手写稿的常态，fail-fast 会让作者
+    # 为每处错各跑一轮脚本。段与段之间互不依赖，所以按段收集、段内按组收集。
+    errs = []
     for key, value in data.items():
-        # key 与 manifest 段 id 同一口径（is_valid_sid 包住 _SID_RE）：这些键会拼进 HTML 的
-        # id/选择器链路，"seg 3"、"seg.png" 之类在渲染端静默失联。
-        if not is_valid_sid(key):
-            raise ValueError(
-                f"images.json 的段落 key 必须是合法段 id"
-                f"（{SID_RULE}；实际: {key!r}）")
-        if isinstance(value, str):
-            raise ValueError(
-                f"images.json 的 '{key}' 必须是媒体对象（如 {{\"src\": \"images/{key}.png\"}}），"
-                f"不接受裸字符串路径")
-        if isinstance(value, dict):
-            src = value.get("src")
-            # type 先查、src 后查：写着 {"type": "chart"} 的旧稿件本来就没有
-            # src，先查 src 会报"缺少 src"，把人往错的方向引。
-            _t = value.get("type")
-            if _t is not None and _t not in ("auto", "image", "video", "gif"):
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif"
-                    f"（实际: {_t!r}）"
-                    + ("——图表 / 公式卡已从本技能移除，数据图和公式改走手绘 SVG"
-                       "（需要整页表达时给段落 layout: \"canvas\"）"
-                       if _t in ("chart", "formula") else ""))
-            # poster 与 src 同一校验口径：禁绝对路径/越出项目根。键存在就必须是
-            # 非空字符串——旧写法 `if poster:` 让空串 "" 与 None 同判，坏空串原样
-            if "poster" in value:
-                poster = value["poster"]
-                if not isinstance(poster, str) or not poster:
-                    raise ValueError(
-                        f"images.json 的 '{key}' 的 poster 必须是非空字符串"
-                        f"（不用封面就删掉这个键；实际: {poster!r}）")
-                value["poster"] = validate_relative_project_path(
-                    poster, f"images.json 的 '{key}' 的 poster")
-            # video 播放开关必须是 JSON 布尔：渲染端按 `opts.get("loop", True)`
-            # 取值，字符串 "false" 是真值——写成字符串会让"关掉循环"变成"永远循环"。
-            for _flag in ("loop", "muted", "autoplay", "playsinline"):
-                if _flag in value and not isinstance(value[_flag], bool):
-                    raise ValueError(
-                        f"images.json 的 '{key}' 的 {_flag} 必须是 JSON 布尔 true/false"
-                        f"（实际: {value[_flag]!r}）")
-            # 视频音轨四件套：只对 video 成立（位图/SVG/GIF 没有音轨也没有可
-            # trim 的时间轴，写了不会生效 = 静默丢键，按契约层统一口径拒）。
-            # type 是 "auto" 时按扩展名判，与 classify_media_path 同一条路。
-            # src 缺失由下面那条"缺少 src"统一报（先报它更容易看懂），
-            # 这里只在 src 是字符串时才判类型，别让 None 撞进 splitext。
-            _is_video = (isinstance(src, str)
-                         and classify_media_path(src, _t or "auto") == "video")
-            for _opt, (_lo, _hi, _hint) in _VIDEO_AUDIO_OPTS.items():
-                if _opt not in value:
-                    continue
-                if not isinstance(src, str):
-                    continue  # 缺 src 的错让下面那条报，不在这里叠第二句
-                if not _is_video:
-                    raise ValueError(
-                        f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
-                        f"（type={(_t or 'auto')!r}）——{_opt} 只对 video 生效，"
-                        "位图 / SVG / GIF 没有音轨也没有可裁剪的时间轴")
-                _v = value[_opt]
-                # 布尔必须单独挡：isinstance(True, int) 为真，`"volume": true`
-                # 会溜过数值校验、被渲染端拼成 data-volume="True"——那是个无效
-                # 增益，症状是"要了原声、成片却没声音"，与本套契约要堵的正是
-                # 同一类静默退化。与 loop/muted 的布尔口径保持一致。
-                if isinstance(_v, bool) or not isinstance(_v, (int, float)):
-                    raise ValueError(
-                        f"images.json 的 '{key}' 的 {_opt} 必须是数字"
-                        f"（{_hint}；实际: {_v!r}）")
-                if _v < _lo or (_hi is not None and float(_v) > _hi):
-                    _bound = (f"{_lo} ~ {_hi}" if _hi is not None else f"≥ {_lo}")
-                    raise ValueError(
-                        f"images.json 的 '{key}' 的 {_opt} 超出范围（{_bound}）"
-                        f"（{_hint}；实际: {_v!r}）")
-            # duck 与四件套同一口径：只对 video 成立，且必须是 JSON 布尔
-            # （渲染端按 `opts.get("duck", True)` 取值，字符串 "false" 是真值，
-            # 会让"关掉让路"变成"永远让路"，与 loop/muted 那条同一个坑）。
-            if "duck" in value:
-                if isinstance(src, str) and not _is_video:
-                    raise ValueError(
-                        f"images.json 的 '{key}' 写了 duck，但 src={src!r} 不是视频"
-                        f"（type={(_t or 'auto')!r}）——duck 只对 video 生效，"
-                        "位图 / SVG / GIF 没有音轨可让")
-                if not isinstance(value["duck"], bool):
-                    raise ValueError(
-                        f"images.json 的 '{key}' 的 duck 必须是 JSON 布尔 true/false"
-                        f"（实际: {value['duck']!r}）")
-            if "src" not in value:
-                raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
-        else:
-            raise ValueError(
-                f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
-        # 上面 dict 分支已拦缺键；非字符串（数字、列表这类手写 manifest 才会给）
-        # 在这里点名，空串交给 validate_relative_project_path 的统一判定。
-        if not isinstance(src, str):
-            raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
-        # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
-        # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
-        value["src"] = validate_relative_project_path(
-            src, f"images.json 的 '{key}' 的 src")
-        # provenance 记账字段必须是字符串。
-        for field in ("source_url", "license", "attribution", "query", "provider"):
-            if field in value and not isinstance(value[field], str):
-                raise ValueError(f"images.json 的 '{key}' 的 {field} 必须是字符串")
-
-        # inline_svg 是 gen_hyperframes 净化回填的内部键，绝不允许用户在
-        # images.json 里手写——手写等于绕过 _svg_sanitize 把任意字符串塞进
-        # 成片 DOM（内联 SVG 是同源活节点）。
-        if "inline_svg" in value:
-            raise ValueError(
-                f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
-                "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
-        # director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
-        # 没有可被 GSAP 逐帧驱动的图内命名元素）。
-        if "director" in value:
-            if not is_svg_path(src):
-                raise ValueError(
-                    f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
-                    "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
-            _validate_director(key, value["director"])
-        # stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
-        # 契约层只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有
-        # 读得到 manifest 的 gen_hyperframes 判得了，那边按段落点名报错。
-        # 不要求本页自己写 director：一段演完、下一页只是"停在那幅画上说话"是合法演法，
-        # 那种页面 steps 为空，画面照常接续（inline_svg 由接续烘焙给出，不靠本页 steps）。
-        if "stage" in value:
-            if value["stage"] != "keep":
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 stage 只认字符串 \"keep\""
-                    f"（实际: {value['stage']!r}）——keep=接着上一页演，不写=每页独立成片")
-            if not is_svg_path(src):
-                raise ValueError(
-                    f"images.json 的 '{key}' 写了 stage，但 src={src!r} 不是 SVG"
-                    "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")
-
+        _validate_entry(key, value, errs)
+    if errs:
+        raise ValueError("images.json 有{} 处问题：\n{}".format(
+            len(errs), "\n".join(errs)))
     return data
+
+
+def _collect(errs, what):
+    """跑一项检查，把它的 ValueError 收进 errs 而不是中断整段。
+
+    只收 ValueError：那是本模块自己抛的"写法不对"，值得攒齐一次报全。
+    别的异常（TypeError 之类）照常炸出去——那种是代码有 bug，攒起来只会
+    让报错变成一堆噪声。
+    """
+    try:
+        what()
+    except ValueError as e:
+        # 按行摊平：一组检查内部可能一次报多条（四个播放开关、四个音轨键各自
+        # 独立），不摊平的话开头那句"N 处问题"会少数落，作者也就不知道漏了几条。
+        errs.extend(str(e).splitlines())
+
+
+def _validate_entry(key, value, errs):
+    """校验 images.json 的一条 {段 id: 媒体对象}，把错收进 errs。"""
+    # key 与 manifest 段 id 同一口径（is_valid_sid 包住 _SID_RE）：这些键会拼进 HTML 的
+    # id/选择器链路，"seg 3"、"seg.png" 之类在渲染端静默失联。
+    if not is_valid_sid(key):
+        errs.append(
+            f"images.json 的段落 key 必须是合法段 id"
+            f"（{SID_RULE}；实际: {key!r}）")
+        return  # key 不合法就没法把后面的错点名给人看（每条错都要引用这个 key）
+    if isinstance(value, str):
+        errs.append(
+            f"images.json 的 '{key}' 必须是媒体对象（如 {{\"src\": \"images/{key}.png\"}}），"
+            f"不接受裸字符串路径")
+        return
+    if not isinstance(value, dict):
+        errs.append(
+            f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
+        return
+    src = value.get("src")
+    # 四组之间互不依赖：type 组不看播放开关、路径组不判媒体类型、动画组只问
+    # "是不是 SVG"。唯一跨组的前提是 src 得先是个字符串，否则 classify_media_path
+    # 会炸——所以 type 组之外的地方都先判 isinstance(src, str)，缺 src 那条错
+    # 由 type 组统一报，不在这里叠第二句。
+    _collect(errs, lambda: _check_type(key, value, src))
+    _collect(errs, lambda: _check_playback(key, value, src, errs))
+    _collect(errs, lambda: _check_paths(key, value, errs))
+    _collect(errs, lambda: _check_animation(key, value, src, errs))
+
+
+def _check_type(key, value, src):
+    """type 的合法取值 + src 必须在场且是字符串。"""
+    # type 先查、src 后查：写着 {"type": "chart"} 的旧稿件本来就没有
+    # src，先查 src 会报"缺少 src"，把人往错的方向引。
+    _t = value.get("type")
+    if _t is not None and _t not in ("auto", "image", "video", "gif"):
+        raise ValueError(
+            f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif"
+            f"（实际: {_t!r}）"
+            + ("——图表 / 公式卡已从本技能移除，数据图和公式改走手绘 SVG"
+               "（需要整页表达时给段落 layout: \"canvas\"）"
+               if _t in ("chart", "formula") else ""))
+    if "src" not in value:
+        raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
+    # 上面 dict 分支已拦缺键；非字符串（数字、列表这类手写 manifest 才会给）
+    # 在这里点名，空串交给 validate_relative_project_path 的统一判定。
+    if not isinstance(src, str):
+        raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
+
+
+def _check_playback(key, value, src, errs):
+    """播放开关（布尔）+ 视频音轨四件套 + duck。
+
+    内部分三小段、各自聚合，因为这三个小段之间互不依赖：`muted` 写错跟
+    `fade_in` 越界是两处独立的手误，谁也不需要谁先对。真正共享的前置只有
+    一个——「这个 src 是不是视频」，那是每段各算一次的事实，不是三段之间的依赖。
+    """
+    _collect(errs, lambda: _check_flags(key, value))
+    _collect(errs, lambda: _check_audio_opts(key, value, src))
+    _collect(errs, lambda: _check_duck(key, value, src))
+
+
+def _is_video_src(value, src):
+    """这个条目的 src 是不是视频（type 是 "auto" 时按扩展名判，与
+    classify_media_path 同一条路）。src 不是字符串时返回 False——缺 src 的错
+    由 _check_type 报，别让 None 撞进 splitext。"""
+    return (isinstance(src, str)
+            and classify_media_path(src, value.get("type") or "auto") == "video")
+
+
+def _check_flags(key, value):
+    """loop / muted / autoplay / playsinline：四个键互不依赖，逐个报。"""
+    # 播放开关必须是 JSON 布尔：渲染端按 `opts.get("loop", True)`
+    # 取值，字符串 "false" 是真值——写成字符串会让"关掉循环"变成"永远循环"。
+    _errs = []
+    for _flag in ("loop", "muted", "autoplay", "playsinline"):
+        if _flag in value and not isinstance(value[_flag], bool):
+            _errs.append(
+                f"images.json 的 '{key}' 的 {_flag} 必须是 JSON 布尔 true/false"
+                f"（实际: {value[_flag]!r}）")
+    if _errs:
+        raise ValueError("\n".join(_errs))
+
+
+def _check_audio_opts(key, value, src):
+    """视频音轨四件套：只对 video 成立，且每个键的值域互不依赖。
+
+    位图/SVG/GIF 没有音轨也没有可 trim 的时间轴，写了不会生效 = 静默丢键，
+    按契约层统一口径拒。
+    """
+    if not isinstance(src, str):
+        return  # 缺 src 的错让 _check_type 报，不在这里叠第二句
+    _errs = []
+    for _opt, (_lo, _hi, _hint) in _VIDEO_AUDIO_OPTS.items():
+        if _opt not in value:
+            continue
+        if not _is_video_src(value, src):
+            _errs.append(
+                f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
+                f"（type={(value.get('type') or 'auto')!r}）——{_opt} 只对 video 生效，"
+                "位图 / SVG / GIF 没有音轨也没有可裁剪的时间轴")
+            continue  # 不是视频时值域无从谈起，别再叠一句"必须是数字"
+        _v = value[_opt]
+        # 布尔必须单独挡：isinstance(True, int) 为真，`"volume": true`
+        # 会溜过数值校验、被渲染端拼成 data-volume="True"——那是个无效
+        # 增益，症状是"要了原声、成片却没声音"，与本套契约要堵的正是
+        # 同一类静默退化。与 loop/muted 的布尔口径保持一致。
+        if isinstance(_v, bool) or not isinstance(_v, (int, float)):
+            _errs.append(
+                f"images.json 的 '{key}' 的 {_opt} 必须是数字"
+                f"（{_hint}；实际: {_v!r}）")
+            continue
+        if _v < _lo or (_hi is not None and float(_v) > _hi):
+            _bound = (f"{_lo} ~ {_hi}" if _hi is not None else f"≥ {_lo}")
+            _errs.append(
+                f"images.json 的 '{key}' 的 {_opt} 超出范围（{_bound}）"
+                f"（{_hint}；实际: {_v!r}）")
+    if _errs:
+        raise ValueError("\n".join(_errs))
+
+
+def _check_duck(key, value, src):
+    """duck 与四件套同一口径：只对 video 成立，且必须是 JSON 布尔。
+
+    （渲染端按 `opts.get("duck", True)` 取值，字符串 "false" 是真值，
+    会让"关掉让路"变成"永远让路"，与 loop/muted 那条同一个坑。）
+    """
+    if "duck" not in value:
+        return
+    _errs = []
+    if isinstance(src, str) and not _is_video_src(value, src):
+        _errs.append(
+            f"images.json 的 '{key}' 写了 duck，但 src={src!r} 不是视频"
+            f"（type={(value.get('type') or 'auto')!r}）——duck 只对 video 生效，"
+            "位图 / SVG / GIF 没有音轨可让")
+    if not isinstance(value["duck"], bool):
+        _errs.append(
+            f"images.json 的 '{key}' 的 duck 必须是 JSON 布尔 true/false"
+            f"（实际: {value['duck']!r}）")
+    if _errs:
+        raise ValueError("\n".join(_errs))
+
+
+def _check_paths(key, value, errs):
+    """poster / src 的路径形态与归一回写，provenance 字段必须是字符串。
+
+    三个小段互不依赖，各自聚合：poster 写成空串不该挡住 source_url 写成数字。
+    """
+    _collect(errs, lambda: _check_poster(key, value))
+    _collect(errs, lambda: _check_src_path(key, value))
+    _collect(errs, lambda: _check_provenance(key, value))
+
+
+def _check_poster(key, value):
+    """poster 与 src 同一校验口径：禁绝对路径/越出项目根。键存在就必须是
+    非空字符串——旧写法 `if poster:` 让空串"" 与 None 同判，坏空串原样。"""
+    if "poster" not in value:
+        return
+    poster = value["poster"]
+    if not isinstance(poster, str) or not poster:
+        raise ValueError(
+            f"images.json 的 '{key}' 的 poster 必须是非空字符串"
+            f"（不用封面就删掉这个键；实际: {poster!r}）")
+    value["poster"] = validate_relative_project_path(
+        poster, f"images.json 的 '{key}' 的 poster")
+
+
+def _check_src_path(key, value):
+    """src 的路径归一（顺带把越界/绝对路径挡掉）。"""
+    src = value.get("src")
+    # src 缺失或不是字符串的错由 _check_type 报（那里已经点名），这里跳过归一化
+    # 而不是让它撞 KeyError ——聚合报错最怕的就是这种"帮你报了错、又顺手抛个
+    # 你没见过的异常"。空串交给 validate_relative_project_path 的统一判定。
+    if not isinstance(src, str):
+        return
+    # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
+    # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
+    value["src"] = validate_relative_project_path(
+        src, f"images.json 的 '{key}' 的 src")
+
+
+def _check_provenance(key, value):
+    """provenance 记账字段必须是字符串。"""
+    _errs = []
+    for field in ("source_url", "license", "attribution", "query", "provider"):
+        if field in value and not isinstance(value[field], str):
+            _errs.append(f"images.json 的 '{key}' 的 {field} 必须是字符串")
+    if _errs:
+        raise ValueError("\n".join(_errs))
+
+
+def _check_animation(key, value, src, errs):
+    """inline_svg / director / stage——三个只在 SVG 上成立的键，各自聚合。"""
+    # inline_svg 是 gen_hyperframes 净化回填的内部键，绝不允许用户在
+    # images.json 里手写——手写等于绕过 _svg_sanitize 把任意字符串塞进
+    # 成片 DOM（内联 SVG 是同源活节点）。
+    if "inline_svg" in value:
+        errs.append(
+            f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
+            "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
+    _collect(errs, lambda: _check_director(key, value, src))
+    _collect(errs, lambda: _check_stage(key, value, src))
+
+
+def _check_director(key, value, src):
+    """director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
+    没有可被 GSAP 逐帧驱动的图内命名元素）。"""
+    if "director" not in value:
+        return
+    if not is_svg_path(src):
+        raise ValueError(
+            f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
+            "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
+    _validate_director(key, value["director"])
+
+
+def _check_stage(key, value, src):
+    """stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
+
+    契约层只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有
+    读得到 manifest 的 gen_hyperframes 判得了，那边按段落点名报错。
+    不要求本页自己写 director：一段演完、下一页只是"停在那幅画上说话"是合法演法，
+    那种页面 steps 为空，画面照常接续（inline_svg 由接续烘焙给出，不靠本页 steps）。
+    """
+    if "stage" not in value:
+        return
+    _errs = []
+    if value["stage"] != "keep":
+        _errs.append(
+            f"images.json 的 '{key}' 的 stage 只认字符串 \"keep\""
+            f"（实际: {value['stage']!r}）——keep=接着上一页演，不写=每页独立成片")
+    if not is_svg_path(src):
+        _errs.append(
+            f"images.json 的 '{key}' 写了 stage，但 src={src!r} 不是 SVG"
+            "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")
+    if _errs:
+        raise ValueError("\n".join(_errs))
 
 
 def load_images_json(path):

@@ -118,7 +118,16 @@ def validate_timing_manifest(data):
 
     def _check_sentence_fields(s, where):
         if not isinstance(s, dict):
-            raise ValueError(f"{where} 必须是对象")
+            # 这条原来只有"必须是对象"五个字，而它是手写 manifest 的头号撞点：
+            # 最常见的错法是把 sentences 写成 sentence 的序号（[1]、[2]）或一句
+            # 台词字符串，因为两者都"看起来像一句话列表"。作者拿到五个字只能回去
+            # 读文档，而这里把形状说清就省掉了那一趟。
+            raise ValueError(
+                f"{where} 必须是对象，不是句序号也不是台词文本。"
+                "每个元素是完整的一句："
+                '{"index": 1, "text": "这句话的内容", "start_time": 0.0, "duration": 2.5}'
+                "（segments 里的每一项还要与顶层 sentences 里同index 的那一句"
+                "逐字一致）。正常路径是让 pipeline.py 生成 manifest，不要手写。")
         _reject_unknown_keys(s, MANIFEST_SENTENCE_KEYS, f"{where}")
         for key in ("index", "text", "start_time", "duration"):
             if key not in s:

@@ -94,6 +94,8 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 python scripts/gen_hyperframes.py   -m audio_output/timing_manifest.json   -o hf-project/index.html   --images hf-project/images.json   --fps 24
 ```
 
+`-o` 与 `--images` 的相对路径都相对 `-o` 所在目录（不是相对 manifest，也不是相对当前工作目录）。`--help` 的尾巴上挂着这条命令的参数说明与一份可直接照抄的 images.json，不必回文档查。
+
 画幅与主题在这一步烧进 HTML，渲染分辨率随之切换（默认 portrait + dark，见 SKILL.md「常用参数」）。
 
 生成目录应至少包含：

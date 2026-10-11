@@ -52,6 +52,16 @@ def skill_md_lines():
 # 细节，而不是把上限调大。
 SKILL_MD_MAX_LINES = 150
 
+# references/ 单文件的字节上限。这个数是量出来的，不是拍的：现在最大的一份是
+# rendering.md 约 32KB，它按"第 6 步"这一个决策时刻组织；超线通常意味着一个文件
+# 又开始服务第二个时刻——该拆，而不是把上限调大。
+#
+# 为什么只守字节、不守"哪句话该留"：内容臃肿是判断题，判断题写成规则就会变成
+# 噪音源（实测一次全面剪除，agent 报出的21KB 候选里有过半不该剪——把"复述报错
+# 文案"和"论证为什么"当成同一件事）。字节数是客观的，拦住的是"文件重新膨胀"
+# 这个真实发生过的事，其余交给读文档的人判断。
+REFERENCE_MAX_BYTES = 36_000
+
 
 def main():
     cache, bad = {}, []
@@ -73,11 +83,20 @@ def main():
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
     n = skill_md_lines()
-    if n > SKILL_MD_MAX_LINES:
+    fat = n > SKILL_MD_MAX_LINES
+    if fat:
         print(f"[too-fat] SKILL.md {n} 行，超过 {SKILL_MD_MAX_LINES} 行上限 —— "
               "细节下沉到 references/，别在这里复述")
+    fat_refs = []
+    for ref in sorted(glob.glob(os.path.join(ROOT, "references", "*.md"))):
+        size = os.path.getsize(ref)
+        if size > REFERENCE_MAX_BYTES:
+            fat_refs.append((os.path.relpath(ref, ROOT), size))
+    for name, size in fat_refs:
+        print(f"[too-fat] {name} {size} 字节，超过 {REFERENCE_MAX_BYTES} 上限 —— "
+              "一个文件又服务了第二个决策时刻，该拆")
     print(f"\n{len(bad)} 条悬空引用")
-    return 1 if (bad or n > SKILL_MD_MAX_LINES) else 0
+    return 1 if (bad or fat or fat_refs) else 0
 
 
 if __name__ == "__main__":

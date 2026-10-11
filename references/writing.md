@@ -98,8 +98,7 @@
     字号/间隔在 `_template.py` 的 `verse.whoFontSize` / `whoGap`，样式见
     `references/rendering.md`「画面结构」的 verse 一条。`label` 因此是**上墙文字**：
     单行、不收分号、字数有上限（见下面「对话字段（顶层）」的 `label`）。音色
-    搭配与避坑判据见 `references/tts_pipeline.md` 的预置音色表。`label` 仍要照常
-    声明，它存入 manifest turns 并作为字幕行首那枚标签。对话段落同样支持 `tagline` 和 `accent`。
+    搭配与避坑判据见 `references/tts_pipeline.md` 的预置音色表。对话段落同样支持 `tagline` 和 `accent`。
     整页画布（`layout: "canvas"`）**不生成字幕层**，那一段的说话人标签自然也没有——
     双人对话别放进整页画布，否则轮次信息只剩声音（画布上的字得自己画进 SVG）。
 - 分句与句长（`text` / `dialogue` 共用）：断句只认终止标点，逗号不切句。认哪些标点以
@@ -120,9 +119,8 @@
   顶层六个字段是 `title`、`opening_title`、`closing_title`。另有 `opening_tagline`、
   `closing_tagline`、`cta`。段落三个字段是 `title`、`tagline`、`takeaway`。
 - 为什么只拦上墙文字：那一行的行数与列宽都是死的（见上面 `nameTrim` 与下面 agenda 行数预算）。
-  分号说明两件事被挤进同一行。第二件事不是被裁掉就是被压成小字号，两种都是静默丢信息。
-  **口播稿四个字段不在这一条里**：`opening` / `closing` / `text` / `dialogue` 可以写分号。
-  分句器把分号当终止标点，念出来本来就是两次停顿。
+  分号说明两件事被挤进同一行，第二件事不是被裁掉就是被压成小字号。**口播稿四个字段不在这一条里**：
+  `opening` / `closing` / `text` / `dialogue` 可以写分号——分句器把分号当终止标点，念出来本来就是两次停顿。
 - `takeaway`（可选，仅内容段有意义）：一句话要点总结，显示在**结尾 agenda 卡**的对应行。缺省时回退该段 `title`。它写比标题更凝练的那句话，也就是观众该带走的那句话。它必须是**单行**字符串。agenda 每段只占一行，含换行时契约层直接拒绝。
 
 ### 开场/结尾专用顶层字段

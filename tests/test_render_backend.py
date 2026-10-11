@@ -176,5 +176,60 @@ class ProbeVideoDuration(unittest.TestCase):
         self.assertEqual(RB.probe_video_duration(self.out, ff), 12.5)
 
 
+class NodeVersionGate(unittest.TestCase):
+    """渲染前的 Node 版本闸。
+
+    Hyperframes CLI 的 engines 写死 node>=22，而版本不够时这一侧看不出原因：
+    npx/CLI 会以 Unsupported engine、语法错误、或卡在 Chrome 启动上的形态失败，
+    run.py 只拿到一个非零退出码。所以版本必须在开跑前问——但只有**量到了**
+    才配当门禁，量不到就退回旧路径（Popen 失败那条"请确认 Node.js 已安装"）。
+    """
+    @contextlib.contextmanager
+    def _node(self, stdout=b"", side_effect=None):
+        """把 `node --version` 换成给定输出（给了 side_effect 就改成抛异常）。"""
+        with mock.patch.object(RB.shutil, "which", lambda _n: "/usr/bin/node"), \
+             mock.patch.object(RB.subprocess, "run",
+                               side_effect=side_effect or
+                               (lambda *a, **k: mock.Mock(stdout=stdout, stderr=b""))):
+            yield
+
+    def test_recent_node_passes_silently(self):
+        with self._node(b"v22.13.0"):
+            self.assertEqual(RB.node_version_gate(), ("ok", ""))
+        with self._node(b"v24.0.0\n"):
+            self.assertEqual(RB.node_version_gate(), ("ok", ""))
+
+    def test_old_node_blocks_with_the_required_version(self):
+        with self._node(b"v18.20.4"):
+            verdict, msg = RB.node_version_gate()
+        self.assertEqual(verdict, "block")
+        self.assertIn("v18", msg)
+        self.assertIn(str(RB.MIN_NODE_MAJOR), msg)
+
+    def test_no_node_only_warns(self):
+        # 没装 node 时后面的 Popen 本来就会报人话；这里再阻断只是把同一件事
+        # 说两遍，还可能误伤"node 不在 PATH 但环境里有 node"的机器。
+        with mock.patch.object(RB.shutil, "which", lambda _n: None):
+            verdict, msg = RB.node_version_gate()
+        self.assertEqual(verdict, "warn")
+        self.assertIn(str(RB.MIN_NODE_MAJOR), msg)
+
+    def test_unreadable_version_only_warns(self):
+        for out in (b"", b"node: internal error", b"built from source"):
+            with self._node(out):
+                self.assertEqual(RB.node_version_gate()[0], "warn")
+
+    def test_node_call_failure_only_warns(self):
+        with self._node(side_effect=OSError("exec failed")):
+            self.assertEqual(RB.node_version_gate()[0], "warn")
+
+    def test_boundary_is_inclusive(self):
+        # ≥ 22 放行、21 拦下：差一个版本号的机器不该被放过去，也不该被误杀
+        with self._node(b"v21.9.9"):
+            self.assertEqual(RB.node_version_gate()[0], "block")
+        with self._node(b"v22.0.0"):
+            self.assertEqual(RB.node_version_gate()[0], "ok")
+
+
 if __name__ == "__main__":
     unittest.main()

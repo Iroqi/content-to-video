@@ -188,6 +188,12 @@ FACTS = [
         "逐句告警的字长阈值",
     ),
     (
+        "min-node-major",
+        ("const", "scripts/_render_backend.py", "MIN_NODE_MAJOR"), 22,
+        [("SKILL.md", r"Node\.js\s*22\+")],
+        "渲染前置条件：Hyperframes CLI 的 engines 写死 node>=22，低了要在开跑前拦下",
+    ),
+    (
         "long-sentence-hint",
         ("const", "scripts/build_from_structured.py", "LONG_SENTENCE_HINT_CHARS"), 32,
         [("references/writing.md", r"32[–-]45\s*字")],

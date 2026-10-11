@@ -124,10 +124,10 @@ def _validate_layout(value, where, *, content=False):
             "不是这一段自己的文字——内容段用它在画面上印别人的目录")
 
 
-# 開場動畫模式（可選）：目前只收 "apple"（蘋果風開場：標題模糊→銳利 + 微縮放 +
-# 光暈呼吸 + 逐行浮現）。值清單與 _validate_layout 同屬"拼錯即報錯"一族：渲染端
-# 按值分派動畫模式，猜錯方向的那一次靜默退回靜態開場，比報錯難發現得多，所以
-# 嚴格匹配、不做大小寫歸一、不 strip。
+# 开场动画模式（可选）：目前只收 "apple"（苹果风开场：标题模糊→锐利 + 微缩放 +
+# 光晕呼吸 + 逐行浮现）。值清单与 _validate_layout 同属"拼错即报错"一族：渲染端
+# 按值分派动画模式，猜错方向的那一次静默退回静态开场，比报错难发现得多，所以
+# 严格匹配、不做大小写归一、不 strip。
 OPENING_ANIMATION_VALUES = ("apple",)
 
 
@@ -137,9 +137,9 @@ def _validate_opening_animation(value, where):
         return
     if not isinstance(value, str) or value not in OPENING_ANIMATION_VALUES:
         raise ValueError(
-            f"{where} 的 opening_animation={value!r} 不是合法開場動畫模式："
+            f"{where} 的 opening_animation={value!r} 不是合法开场动画模式："
             f"只接受 {'、'.join(repr(v) for v in OPENING_ANIMATION_VALUES)}，"
-            "或整個不寫（不寫 = 靜態開場）")
+            "或整个不写（不写 = 静态开场）")
 
 
 def _validate_sid(sid, where, seen):

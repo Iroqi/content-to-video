@@ -219,14 +219,14 @@ def validate_timing_manifest(data):
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
                          content=is_content_sid(sid))
-        # 開場動畫模式：只属于开屏。内容段/结尾带上它 = 渲染端根本不读（渲染按
-        # 段 id 分派），拼错的模式静默退回静态開場，与 layout 同族在契约层报对。
+        # 开场动画模式：只属于开屏。内容段/结尾带上它 = 渲染端根本不读（渲染按
+        # 段 id 分派），拼错的模式静默退回静态开场，与 layout 同族在契约层报对。
         if sg.get("opening_animation") is not None:
             if sid != "opening":
                 raise ValueError(
                     f"timing_manifest.json 的段落 '{sid}' 写了 opening_animation，"
                     "但它只属于开屏（opening）——其他段落渲染端不读这个字段。"
-                    "要開場動畫请写在 opening 段上")
+                    "要开场动画请写在 opening 段上")
             _validate_opening_animation(
                 sg["opening_animation"],
                 "timing_manifest.json 的段落 'opening'")

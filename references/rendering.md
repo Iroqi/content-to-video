@@ -54,7 +54,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`，压在氛围光 `::after` 与内容之下）。透明卡做 wipe 时上一段文字会从新页底下透出，画面出现双影叠字（逐帧实拍复现）。
 - **整页画布（`layout: "canvas"`）不参与模板转场**：它的 `wipe` 在 clips 预处理里被强制归零，命中既有的"瞬间切"路径——引导线、旧页剥离、底缘暗边三处都以 `wipe<=0` 为闸自动不生成，整页画布在自己的**音频起点**整页出现（不向后借擦除窗口，因此导演每一拍的时间锚点都与画面严格对齐），退场则被下一页直接盖住；相邻的槽位版式/agenda 段转场原样保留（整页画布作为"上一页"时也不被剥走——把一张活 diagram 像纸一样掀起来正是"演"要取代的翻页感）。理由：擦除/剥离是**图层级**的翻页语言，与导演逐拍揭示同一页内部元素是两种叙事，叠在一起只会让第一拍落在还没揭完的页上互相抢戏；整页画布是"一个连续镜头"，不需要转场道具。此规则按**版式**判定而非按擦除档，四档 `style` 下一律生效。代价是硬的：切过去的那一瞬间画布还是空的（导演从空场开始逐拍画），要消除这段空窗就得让导演的第一拍尽早落子（`at_time` 靠前的锚点、或第一拍即为整页底图/坐标轴）——见 `references/directing.md`「SVG 动画：两档」。**同一档硬切还给了另一种页**：images.json 写 `stage: "keep"` 的跨段接续页也被强制 `wipe=0`、也不生成配图入场补间，因为它的起点是上一页演完的那幅画面，再演一次揭页就是穿帮（口径见 `references/directing.md`「跨段接续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
-  **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`（曾因此让竖屏配图的 y 滑入整条失效，实测过程见 `git log`）。
+  **CSS 不得给 GSAP 补间的元素声明 `transform`**（`#title-*` 的 scale、`#img-*` 的 y 滑入都写 inline transform，与样式表里的 `transform` 互斥，只能活一个）。要居中/位移用绝对定位的 auto 外边距，别用 `translateX(-50%)`。
 - 底部 progress bar 与段落时间轴同步。
 - verse 当前句用该段 accent 色高亮（附荧光笔式渐变下划线），字重不切换，避免横向跳动。
   对话段（`dialogue`）在**轮次切换的首句**行首多挂一枚说话人标签 `.verse-who`——谁在说
@@ -65,7 +65,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
   切换在成片里是**瞬时**的：逐帧 seek 的渲染要求每一帧都等于时间线时刻，所以字幕的淡入/滚动补间不在 CSS 里，只由 `preview.js` 在人工预览分支注入。给 `.verse*` 加 `transition` 会把墙上时钟漏进成片（实测 seek 后计算样式停在过渡起点，句子流不跟着滚动），别加。
 - 每段的 accent 会派生一组装饰（一律经 CSS `color-mix`，不引入新的色值令牌）：氛围光（槽位在画面中央一小团，整页画布换成近全屏的宽带柔光，因为整页画布的景深全靠它）、配图槽位的外发光与 1px 内描边、tagline 左侧刻度条、进度条辉光——选 accent 时注意它会染整帧氛围。槽位外发光的半径走 `--ctv-img-glow`（模板 `image.glow`），颜色不写进 inline style；挂 `bare-media` 的 SVG 配图槽位不吃外发光与描边，理由见 `references/canvas.md` 的「不铺满幅底」一节。
 
-### 蘋果風開場（`opening_animation: "apple"`）
+### 苹果风开场（`opening_animation: "apple"`）
 
 开屏 agenda 卡的整页编排，取代通用标题入场（两条补间同元素会打架）。取值与写稿口径见 `references/writing.md` 的 `opening_animation`，参数真源在 `_template.py` 的 `animation.opening.apple`。
 
@@ -124,7 +124,7 @@ hf-project/
 
 **渲染之后还有一道闸：成片时长对账。** 容器完整证明不了内容完整——抓帧超时重抓、worker 崩、Chrome 提前退出都能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子，后几段整段不在片里，而控制台照打"完成"。所以 `run.py` 在成片落盘后拿 ffmpeg 量一次实际时长，与 manifest 的 `total_duration` 对账，容差沿用全仓那条 `max(1s, 2%)`：短于容差**退出码 4** 拦下交付，长于容差与量不到（ffmpeg 不可用）只 `[warn]`。
 
-这一道为什么值得单说：它拦的不是"渲染失败"，而是"渲染成功但内容缺了"——后者容器层面无懈可击，只有对时长才能发现。三种结果与实测秒数都进 `production_report.json` 的 `video` 字段（`check` 取 `ok` / `short` / `long` / `skipped`）。**别把这条 warn 当噪音划走**，它是"成片到底演完没有"唯一的机器证据。真撞上 exit 4 时，终端报错自带成因、该看哪个日志、怎么补救，照它做即可，不必回头查文档。
+三种结果与实测秒数都进 `production_report.json` 的 `video` 字段（`check` 取 `ok` / `short` / `long` / `skipped`）。**别把这条 warn 当噪音划走**——它是"成片到底演完没有"唯一的机器证据：容器完整证明不了内容完整，只有对时长才能发现。真撞上 exit 4 时，终端报错自带成因、该看哪个日志、怎么补救，照它做即可。
 
 ## 性能参数
 
@@ -155,9 +155,9 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   - `gsap_infinite_repeat`（**只有写了 `opening_animation: "apple"` 的稿子才有**，1 条）：题头光晕的慢呼吸挂的是 `repeat:-1,yoyo:true`。官方 determinism 规则写明 `repeat:-1` 只在根元素声明了有限 `data-duration` 时降级为 warning（无限的是硬错误）——本技能的 root 恒带有限 `data-duration`，成片与导出都按那个窗口 seek。改成有限次 `repeat` 反倒要回答"最后一帧停在哪儿"，而那一呼吸本来就该是"页面还在就一直在呼吸"，所以留着。**只有这一条来路是噪声**：别处的 `repeat:-1`，以及揪着同一条无限管线报的生长线无界 duration，都要当真。
   - **判据**：这 6 类之外的任何新增条目一律当真读。条数对不上不用慌（段数变了就变），**类型多出一类就要查**。反过来，Layout 段出现的 `✗` 要当真——它量的是真实版面重叠，`check_svg` 查不到图内两行文字压字（见 `canvas.md`「画布几何」末条）；已知唯一的例外是 `text_occluded`，见下条。
 - Runtime 的 `clip_media_fit` 和 Layout 的 `clipped_text` **不在噪声之列**：前者是音频实际时长短于 `data-duration`（成片被截到音频长度、字幕时间轴对不上），真实 pipeline 产物的 `total_duration` 就是量出来的音频时长，正常不该出现，手写/裁剪 manifest 时它是"manifest 与音频不同步"的唯一信号（实测把 `total_duration` 对齐音频后该条消失）；后者是某行文本被自己的盒子裁掉，竖屏 agenda 行的 `nameTrim` 只能挡字数超限，挡不住半角/混排的实际字宽（Python 侧 warn 与它两道闸各管一头，见 `references/writing.md`「开场/结尾专用顶层字段」）。
-- Layout 的 `text_occluded` **曾经误报，现在不会再报**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。豁免靠 `data-layout-allow-occlusion` 等三个属性，而**检查器只认元素自己身上的标记、不继承祖先的**——原先只打在 `.verse` 上，检查器照样去量它下面的每一行。模板已在**每一行 `.verse-line`** 上也打上（`html_renderer.py`），实测 7 段竖屏稿：只打 `.verse` 时报 1 error，每行补齐后 0 error 且 warning 条数不变。
-  **再往下嵌一层 DOM 就要再打一层**：2026-10 给对话段加了行首说话人标签（`<span class="verse-who">`，见上面 verse 一条），同一份稿子 Layout 立刻报 `text_occluded … span:nth-of-type(1) "主播"` 1 error——判据与那两层完全一样，只是这次被量的是 span。所以那三个属性现在打在 `.verse` / `.verse-line` / `.verse-who` 三层上。**以后再往句子流里嵌任何带文字的元素，先给它自己带上这三个属性**；事后调试的路子是先跑 `check` 看报的是哪一层的选择器，别去改版式。
-  **再见到 `text_occluded` 先别当版面 bug**——先用 `snapshot --at <时刻>` 看画面：文字真被遮（配图压住句子流）就调版式，画面正常则是这个漏判回来了。
+- Layout 的 `text_occluded` 的**判据**：句子流滚出 `.verse-clip` 窗口的行，视觉上被 `overflow:hidden` 裁掉，但静态 DOM rect 仍在原位，逐行量它就会判"文字藏在不透明元素下"。
+  **做法**：给句子流里每一个带文字的元素自己打上 `data-layout-allow-occlusion` 等三个豁免属性——检查器只认元素自己身上的标记，**不继承祖先的**，所以嵌一层 DOM 就要多打一层。模板当前打在 `.verse` / `.verse-line` / `.verse-who` 三层（`html_renderer.py`）。
+  **再见到 `text_occluded`**：先跑 `snapshot --at <时刻>` 看画面。文字真被遮（配图压住句子流）就调版式；画面正常，就是某一层漏打了那三个属性——跑 `check` 看它报的是哪一层的选择器，补那一层，别去改版式。
 - `snapshot --at` 精确取时刻帧并自动拼 contact sheet，比"复制 HTML + 注入 `tl.pause(t)` + Chrome `--screenshot`"省事且不会踩 vendor 相对路径的坑；手搓探针只在需要同一页连取多帧、或 `snapshot` 不可用时作后备。
 - 渲染前判断本机依赖齐不齐，用 `npx -y hyperframes doctor`：全绿就可以直接跑真渲染，不必止步于 HTML 预览（Chrome headless shell 由 Hyperframes 自己下载并缓存在 `~/.cache/hyperframes/chrome/`，FFmpeg 走第 3 步那条查找链）。
 - **三条命令之外的口径**（都是官方 CLI 自己写明的，踩上去不报错，所以单列）：
@@ -196,5 +196,5 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 | 成片里原声被压得太狠，只剩一点底噪 | 没写 `volume` 时渲染端落的是让路默认 0.25。要原声当主体就显式写 `volume: 1.0` 并给 `duck:false` | `imagery.md`「视频素材」的「让路」 |
 | 成片里某一段画面是糊的、虚的 | 素材像素不够铺满它那一页的框：`cover` 只保证填满、不保证清楚，放大 2 倍以上细节就没了，而全流程零报错 | `imagery.md`「三条路线的统一规则」里「统一使用同一个内容画布」的第二条规格 |
 | 配图明明够清晰，生成期却报"不够大" | 按它实际落地的框判：整页画布按整幅（1080×1440 / 1920×1080），槽位按 4:3 那一块。同一张图在槽位够用、换成整页画布就不够 | `imagery.md`「三条路线的统一规则」里「统一使用同一个内容画布」 |
-| 开场动画最后几行像没出现 | 苹果风开场整支舞按可见窗口等比压缩；压到地板仍装不下时收尾会被下一页切走（生成期有 `[warn]`） | `rendering.md`「蘋果風開場」 |
-| 开场动画整体快了一拍，像被赶过 | 同上：窗口装不下就会压。写长 `opening`（说完主题 + 为什么值得看）就能回到原速 | `rendering.md`「蘋果風開場」 |
+| 开场动画最后几行像没出现 | 苹果风开场整支舞按可见窗口等比压缩；压到地板仍装不下时收尾会被下一页切走（生成期有 `[warn]`） | `rendering.md`「苹果风开场」 |
+| 开场动画整体快了一拍，像被赶过 | 同上：窗口装不下就会压。写长 `opening`（说完主题 + 为什么值得看）就能回到原速 | `rendering.md`「苹果风开场」 |

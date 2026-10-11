@@ -137,16 +137,19 @@ DEFAULT_LABEL_SIDE = {"x": "below", "y": "left"}
 # 为什么每 kind 都要有：kind 的键名不通用（text 的正文键是 content 不是 text、
 # bars 吃 base_y 加数组而不是 x/y/w/h），这些正是照文档从零画最容易撞的地方，
 # 而报错时只给"只接受 text、bars"并不能告诉你 bars 长什么样。
+# 片段必须**照抄就能跑**：内容元素（panel / axis 之外）一律带 id，否则作者照抄
+# 拿到的是"是内容元素却缺 id"——而这段清单存在的理由正是省掉那一趟试错。
 MINIMAL = {
     "panel": '{"kind": "panel", "x": 80, "y": 300, "w": 920, "h": 700}',
     "axis": ('{"kind": "axis", "orient": "y", "at": 940, "from": 400, "to": 940, '
              '"ticks": [{"v": 400, "label": "8"}, {"v": 940, "label": "0"}]}'),
-    "polyline": '{"kind": "polyline", "points": [[160, 900], [480, 600], [800, 750]]}',
-    "bars": ('{"kind": "bars", "base_y": 940, '
+    "polyline": ('{"kind": "polyline", "id": "line", '
+                 '"points": [[160, 900], [480, 600], [800, 750]]}'),
+    "bars": ('{"kind": "bars", "id": "bars", "base_y": 940, '
              '"bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"}]}'),
-    "circle": '{"kind": "circle", "cx": 540, "cy": 700, "r": 120}',
-    "text": '{"kind": "text", "x": 80, "y": 200, "content": "季度营收"}',
-    "rule": '{"kind": "rule", "x1": 80, "y1": 1000, "x2": 1000, "y2": 1000}',
+    "circle": '{"kind": "circle", "id": "c", "cx": 540, "cy": 700, "r": 120}',
+    "text": '{"kind": "text", "id": "t", "x": 80, "y": 200, "content": "季度营收"}',
+    "rule": '{"kind": "rule", "id": "r", "x1": 80, "y1": 1000, "x2": 1000, "y2": 1000}',
 }
 
 # 枚举取值 → 实际效果。只写脚本才知道的那一半（渲染端的真实行为、缺省值），

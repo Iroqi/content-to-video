@@ -57,8 +57,13 @@ _RUN_T0 = None
 
 
 def _total_seconds():
-    """本次 run 的真实墙钟时长。"""
-    return round(time.time() - _RUN_T0, 1)
+    """本次 run 的真实墙钟时长。
+
+    起止都用 `time.monotonic()`：量的是间隔，墙钟被 NTP 校正或休眠唤醒改动时
+    会让"合计耗时"变成负数或凭空多出几十分钟——这份数字是排查"这次跑得正常
+    不正常"的依据，不能自己就不可信。
+    """
+    return round(time.monotonic() - _RUN_T0, 1)
 
 
 def _write_report(path):
@@ -118,7 +123,7 @@ def _run_step(fn, argv, step_name):
     用户主动中断不该被当成步骤失败写进报告。
     """
     print(f"\n>>> {step_name} [in-process]: {' '.join(argv)}", flush=True)
-    t0 = time.time()
+    t0 = time.monotonic()
     code = 0
     try:
         fn(argv)
@@ -136,13 +141,13 @@ def _run_step(fn, argv, step_name):
               file=sys.stderr, flush=True)
     if code != 0:
         _REPORT["steps"].append(
-            {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": False})
+            {"name": step_name, "seconds": round(time.monotonic() - t0, 1), "ok": False})
         _write_report(_report_path())
         print(f"[run] 步骤失败（退出码 {code}）：{step_name} {' '.join(argv)}",
               file=sys.stderr)
         sys.exit(code)
     _REPORT["steps"].append(
-        {"name": step_name, "seconds": round(time.time() - t0, 1), "ok": True})
+        {"name": step_name, "seconds": round(time.monotonic() - t0, 1), "ok": True})
 
 
 def _report_path():
@@ -286,7 +291,7 @@ def main():
     # 报告开始。
     _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
     _DRY_RUN = False
-    _RUN_T0 = time.time()
+    _RUN_T0 = time.monotonic()
     parser = _build_parser()
     args = parser.parse_args()
     _DRY_RUN = args.dry_run
@@ -511,14 +516,14 @@ def main():
     # 打底给出充足余量；默认 1800s 硬上限会把长片或 60fps/high quality
     # 的正常渲染误杀成"超时"。
     _render_cap = max(1800.0, float(_tm["total_duration"]) * 10 + 600)
-    t0_render = time.time()
+    t0_render = time.monotonic()
     try:
         render_wait(hf_render, out_video, cwd=project, max_wait=_render_cap)
     except SystemExit:
-        _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": False})
+        _REPORT["steps"].append({"name": "渲染", "seconds": round(time.monotonic() - t0_render, 1), "ok": False})
         _write_report(_report_path())
         raise
-    _REPORT["steps"].append({"name": "渲染", "seconds": round(time.time() - t0_render, 1), "ok": True})
+    _REPORT["steps"].append({"name": "渲染", "seconds": round(time.monotonic() - t0_render, 1), "ok": True})
     # 走到这里成片必已存在且非空：_render_poll_loop 的所有 return 路径都以
     # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
     # 的整容器解码），失败路径一律 SystemExit——不再补一遍 isfile/getsize。

@@ -56,7 +56,7 @@ class SourceValidation(unittest.TestCase):
             contains="opening_animation")
 
     def test_opening_animation_on_canvas_layout_is_rejected(self):
-        """開場編排只对 agenda 卡生效——`opening_layout:"canvas"` 那一页没有它的舞台。
+        """开场编排只对 agenda 卡生效——`opening_layout:"canvas"` 那一页没有它的舞台。
 
         证伪：取值那一层是校验过的，但"这一页会不会真长出 agenda 卡的 DOM"要看
         opening_layout。画布那一页只有一张图，标题层、行列表、光晕的宿主全都不生成，

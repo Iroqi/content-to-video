@@ -782,8 +782,8 @@ def _prepare_card(rc, clip):
     # 库调用方仍带映射时这里也强制忽略。
     layout = seg_layout(seg)
     is_agenda = layout == "agenda"
-    # 蘋果風開場：只对开屏 agenda 卡生效（opening_animation 取值已由契约层把守，
-    # 渲染端只认 "apple"）。其他段/其他值一律不进入这条编排——静态開場是缺省。
+    # 苹果风开场：只对开屏 agenda 卡生效（opening_animation 取值已由契约层把守，
+    # 渲染端只认 "apple"）。其他段/其他值一律不进入这条编排——静态开场是缺省。
     apple_opening = (sid == "opening" and is_agenda
                      and seg.get("opening_animation") == "apple")
     has_image = (sid in rc.images) and not is_agenda
@@ -1189,7 +1189,7 @@ def _director_timeline_lines(rc, card):
 
 
 def _apple_opening_budget(rc, card):
-    """蘋果風開場的等比压缩系数（1.0 = 原速不压）。
+    """苹果风开场的等比压缩系数（1.0 = 原速不压）。
 
     这支舞的收尾时刻由**行数**决定：最后一行浮起 = rows.delay +
     stagger×(行数−1) + duration，7 行 2.12s、1 行 1.40s。而它能用到的时长是
@@ -1232,7 +1232,7 @@ def _apple_opening_budget(rc, card):
 
 
 def _apple_opening_lines(rc, card):
-    """蘋果風開場编排（opening_animation:"apple"）。
+    """苹果风开场编排（opening_animation:"apple"）。
 
     苹果式开场的手感：不是"弹出来"，是"浮出来"——标题带一层高斯模糊由虚到实、
     配一个 1.06→1 的微缩放落定（power3.out 的缓入缓出比 back.out 更"沉"），
@@ -1318,7 +1318,7 @@ def _card_timeline_lines(rc, card):
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
-    # 蘋果風開場：整页编排取代通用标题入场（opening_animation:"apple"）。
+    # 苹果风开场：整页编排取代通用标题入场（opening_animation:"apple"）。
     # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
     # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
     # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。

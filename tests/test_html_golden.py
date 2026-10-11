@@ -357,7 +357,7 @@ class Injection(unittest.TestCase):
 
 
 class AppleOpening(unittest.TestCase):
-    """opening_animation:"apple" 的蘋果風開場编排：halo + 模糊→锐利标题 + 逐行浮现，
+    """opening_animation:"apple" 的苹果风开场编排：halo + 模糊→锐利标题 + 逐行浮现，
     取代通用标题入场；不写该键时开屏维持原状（回归网）。"""
 
     def _render_apple(self):
@@ -393,7 +393,7 @@ class AppleOpening(unittest.TestCase):
         self.assertNotIn('tl.fromTo("#halo-closing"', html)
 
     def test_static_opening_unchanged_without_the_key(self):
-        """不写 opening_animation = 静态開場：没有 halo 元素/编排，通用入场照旧。
+        """不写 opening_animation = 静态开场：没有 halo 元素/编排，通用入场照旧。
 
         样式骨架里的 .apple-halo 规则是静态 CSS（与 .reveal-line 同类：只在
         对应特性启用时被 DOM 引用），所以这里查元素与编排、不查样式表。
@@ -433,7 +433,7 @@ def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
 
 
 class AppleOpeningBudget(unittest.TestCase):
-    """蘋果風開場按可见窗口等比归一：短开场装不下时不静默丢尾巴。
+    """苹果风开场按可见窗口等比归一：短开场装不下时不静默丢尾巴。
 
     这支舞的收尾时刻由 agenda 行数决定（7 行 2.12s、1 行 1.40s），而它能用
     的时长是开屏页的可见窗口。两者原本不挂钩，于是短开场会静默丢掉最后

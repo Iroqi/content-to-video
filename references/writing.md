@@ -34,9 +34,7 @@
 
 **字段集是封闭的**。每一层只认本文件列出的那些键。这些层是顶层、`segments[]` 内、`segments[].dialogue[]` 每轮和 `speakers` 条目内。清单在 `_source_schema.py` 的 `SOURCE_KEYS` / `SEGMENT_KEYS` / `TURN_KEYS` / `SPEAKER_KEYS`。多写一个键，`validate_segments_source()` 就报错，并回列出本层合法清单。
 
-为什么不留"未知键静默忽略"的余地？因为读侧全是 `.get()`。字段名拼错时，它既不生效也不报错。最坏的一类后果是**整页悄悄消失**。
-
-例子：把 `closing` 写成 `closing_text`，结尾 agenda 卡压根不生成。这种成片的帧是两张槽位，`check` 全绿，产物看着完全正常。所以也别拿 `segments_source.json` 当记事本写 `_note`。备注放稿件外面的文件里。
+**多写一个键就报错**，并回列出本层合法清单。读侧全是 `.get()`，字段名拼错时既不生效也不报错——最坏的一类后果是**整页悄悄消失**：把 `closing` 写成 `closing_text`，结尾 agenda 卡压根不生成，而 `check` 全绿、产物看着完全正常。所以也别拿 `segments_source.json` 当记事本写 `_note`，备注放稿件外面的文件里。
 
 对话轮次同理只认 `speaker` / `text`。想给某一句话单独换音色是写不通的。音色只能按说话人在 `speakers` 里声明，见下文「对话字段（顶层）」。
 
@@ -122,7 +120,7 @@
 ### 开场/结尾专用顶层字段
 
 - `opening_layout` / `closing_layout`（可选）：把那一页从 agenda 投影卡换成**整页海报**。写 `"canvas"` 时，那一页就走内容段整页画布同一条路，满幅一张按当前画幅出的图。页面上还剩什么、连 DOM 都不生成什么，见 `references/rendering.md`「画面结构」。下面几条 agenda 字段照旧写。它们仍是数据源，只是不上那一页的画面。标题和要点得你自己画进图里。不写 = `"agenda"`。取值与门禁同段落 `layout: "canvas"`，判据见 `references/canvas.md`「整页画布」。
-- `opening_animation`（可选）：开屏 agenda 卡的**開場動畫模式**。目前只收 `"apple"`（蘋果風開場：标题带高斯模糊由虚到实 + 1.06→1 微缩放的"浮出"落定、kicker 短延迟跟上、agenda 行逐行浮起、题头光晕淡入后慢呼吸），节奏参数见 `_template.py` 的 `animation.opening.apple`（视觉真源）。**整支舞会按开屏页的可见窗口等比压缩**：装得下就原速，装不下按比例压（压到一半为止，再压就成闪烁了），所以 `opening` 写长了不会拖成慢动作、也不会只丢尾巴。压到地板仍装不下时生成期打 `[warn]`，那时该把 `opening` 写长一点。不写 = 静态開場（当前缺省，也就是只有通用入场动效、没有整页编排）。只对开屏 agenda 卡生效：写 `"canvas"` 海报或写在其他段上会被契约层拒绝。取值严格匹配，不做大小写归一——拼错的方向静默退回静态開場，比报错难发现得多，所以宁可报错。
+- `opening_animation`（可选）：开屏 agenda 卡的**开场动画模式**。目前只收 `"apple"`（苹果风开场：标题带高斯模糊由虚到实 + 1.06→1 微缩放的"浮出"落定、kicker 短延迟跟上、agenda 行逐行浮起、题头光晕淡入后慢呼吸），节奏参数见 `_template.py` 的 `animation.opening.apple`（视觉真源）。**整支舞会按开屏页的可见窗口等比压缩**：装得下就原速，装不下按比例压（压到一半为止，再压就成闪烁了），所以 `opening` 写长了不会拖成慢动作、也不会只丢尾巴。压到地板仍装不下时生成期打 `[warn]`，那时该把 `opening` 写长一点。不写 = 静态开场（当前缺省，也就是只有通用入场动效、没有整页编排）。只对开屏 agenda 卡生效：写 `"canvas"` 海报或写在其他段上会被契约层拒绝。取值严格匹配，不做大小写归一——拼错的方向静默退回静态开场，比报错难发现得多，所以宁可报错。
 - `opening_title` / `closing_title`：开场/结尾 agenda 卡的大标题。`opening_title` 缺省回退到
   顶层 `title`，再缺省为"本期内容"。`closing_title` 缺省为"小结"。写稿时应按视频主题
   显式设置，如课程视频设 `opening_title: "第三章：反向传播"`。

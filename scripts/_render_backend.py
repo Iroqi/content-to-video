@@ -380,14 +380,19 @@ def render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
 
 
 def _render_poll_loop(proc, out_path, log_path, max_wait):
-    """轮询成片直到"完成或必须停止等待"；清理与 discard 由调用方兜底。"""
-    t_start = time.time()
+    """轮询成片直到"完成或必须停止等待"；清理与 discard 由调用方兜底。
+
+    计时一律走 `time.monotonic()`：`max_wait` 与 grace 窗口量的是**间隔**，
+    墙钟被 NTP 校正、休眠唤醒或人工改过时会跳——向前一跳就把一次跑了半小时
+    的正常渲染判成超时并杀掉进程树，向后一跳则永不超时。
+    """
+    t_start = time.monotonic()
     last_size = -1
     last_mtime = -1.0
     stable_count = 0
     grace_deadline = None
     while True:
-        elapsed = time.time() - t_start
+        elapsed = time.monotonic() - t_start
         if elapsed > max_wait:
             _print_render_log_tail(log_path)
             raise SystemExit(f"[run] 渲染超过 {max_wait:.0f}s，已停止等待。")
@@ -417,8 +422,8 @@ def _render_poll_loop(proc, out_path, log_path, max_wait):
             last_size, last_mtime = size, mtime
             if stable_count >= _STABLE_SIZE_CHECKS:
                 if grace_deadline is None:
-                    grace_deadline = time.time() + _adaptive_grace(size)
-                elif time.time() >= grace_deadline:
+                    grace_deadline = time.monotonic() + _adaptive_grace(size)
+                elif time.monotonic() >= grace_deadline:
                     _try_kill_process_tree(proc)
                     _verify_killed_render(out_path)
                     return

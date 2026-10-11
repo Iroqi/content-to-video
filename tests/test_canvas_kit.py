@@ -724,12 +724,14 @@ class ContractSinking(unittest.TestCase):
         为什么这条不能省：MINIMAL 是"照文档从零画"的入口，它自己写错一份，
         报错信息就在教人怎么写错——比不写还坏。所以每一条都真跑一遍 validate_spec，
         而不是靠人眼扫一遍觉得对。
+
+        片段**按原样**跑，测试不给它补任何键：--help 里那行标注的是"最小可跑
+        片段"，作者照抄就该跑得通。早先这里替内容元素补了 id，于是片段本身缺
+        id 这件事永远测不出来——守卫替被守卫的东西打了补丁。
         """
         for kind, snippet in K.MINIMAL.items():
             with self.subTest(kind=kind):
                 el = json.loads(snippet)
-                if kind not in K.STRUCTURE_BY_DEFAULT:
-                    el["id"] = "probe"
                 spec = K.validate_spec({"elements": [el]})
                 svg = K.render_svg(spec)   # 渲染层也走一遍：片段要的是"能跑"
                 self.assertIn("<svg", svg)

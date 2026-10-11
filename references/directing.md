@@ -92,15 +92,9 @@
 - `stagger`：可选，**配 class 目标做一组元素的错峰揭示**。数字（`0.12`=每个间隔秒）或对象（GSAP 原生配置 `each`/`amount`/`from`(`"start"`/`"center"`/`"edges"`/序号)/`grid`/`ease`）。`{"at_time":"+0.4","target":".row","from":{"opacity":0,"y":16},"to":{"opacity":1,"y":0},"stagger":0.12}` = 一组 `.row` 依次浮入。只对有补间的 step（`from`/`to`/`fromTo`/`set`）生效；`morph`/`count`/`type`/`draw` 各自负责整段，`stagger` 会被契约层拒（静默失效与 `repeat`/`yoyo` 挂纯 `set` 同类）。
 - `duration` / `ease` / `delay`：可选。缺省 `duration`/`ease` 取模板 `animation.director`（视觉真源单一数据源，别在 JSON 里各处写死）。这三个旋钮连同 `stagger`/`repeat`/`yoyo` **只能写在 step 级**：塞进 `to`/`from`/`set` 的补间变量里会被契约层拒——那种写法要么被渲染端覆盖掉、要么让门禁算的跨度与补间真实跨度分家，两种都是静默的。
 
-- `ease`：缓动档。**这张表不是照 GSAP 文档抄的**，是拿技能实际钉固的那份 `gsap.min.js` 逐个 `gsap.parseEase()` 试出来的，所以**认不出的档当场报错**——不会留成"作者以为演的是弹一下落定、成片里是平稳落定"。
+- `ease`：缓动档。**能用的档不是照 GSAP 文档抄的**，是拿技能实际钉固的那份 `gsap.min.js` 逐个 `gsap.parseEase()` 试出来的，所以**认不出的档当场报错**——不会留成"作者以为演的是弹一下落定、成片里是平稳落定"。写错时报错会列出全部合法族名、方向写法与四种例外（`none` 不带方向、`steps` 带方向必须给档数、`rough`/`slow`/`CustomEase` 属插件不在 core 目录、`elastic` 两个参数必须 > 0），照报错改即可，不必回查这张表。
 
-    写法：族名 `none` `linear` `power0`…`power4` `quad` `cubic` `quart` `quint` `strong` `sine` `expo` `circ` `back` `elastic` `bounce` `steps`；方向 `.in` `.out` `.inOut`，裸名按 `.out`；带参数写 `back.out(1.7)`、`elastic.out(1,0.3)`、`steps(4,true)`、`steps(4).in`。
-
-    三条例外都实测过：`none` 是直通档、不带方向（`none.in` 解析不出）；`steps` 要带方向就必须给档数（`steps.in` 解析不出）；`rough` / `slow` / `CustomEase` 之类属于 EasePack 与插件，core dist 里没有，写了就是无声退化，所以目录不收。
-
-    `elastic` 的两个参数（振幅、周期）**必须 > 0**，写了 0 或负数当场报错：振幅进分母（GSAP 的 `period / (amplitude < 1 ? amplitude : 1)`），0 与负数在 JS 里不崩、只是产出一条负周期或无穷周期的怪曲线且不报任何错——正是这张表要挡的那一类无声退化。振幅 <1 是合法写法（钳到 1、周期按 1/振幅 放大），别当错。
-
-    **选档的手感**：缺省 `power2.out` 是"慢收"，整期都用它，所有动画就都读成"淡入"。物件**进场**用 `.in`（慢起，像被推进来）、**退场**或落定用 `.out`、来回摆与推镜用 `.inOut`，要弹要跳就 `back`/`bounce`/`elastic`。
+    **选档的手感**（报错替代不了的部分，得动笔前知道）：缺省 `power2.out` 是"慢收"，整期都用它，所有动画就都读成"淡入"。物件**进场**用 `.in`（慢起，像被推进来）、**退场**或落定用 `.out`、来回摆与推镜用 `.inOut`，要弹要跳就 `back`/`bounce`/`elastic`。
 
     morph 的缓动是生成期采样定义的（GSAP 不会对 `tl.set` 再缓动），用的就是同一族曲线、同一份实现（`scripts/_ease.py`），与补间同手性。
 

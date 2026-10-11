@@ -22,6 +22,11 @@ dict。顺着真实的存储形式读，才不会读到一份和运行时不同�
 告警阈值、字长上限、时间容差、版式钳制）。实测出来的观感数值（哪档字号好看、PSNR
 多少算接上了）不登记：那些是经验，改版式时连代码一起改，不构成"文档说了不算数"的
 风险。登记标准宽一点就会退化成"数字对不上的噪音源"，那就该关掉了。
+
+docs 为空列表的条目（契约已下沉到脚本、文档不再复述那个数）：只锁代码那一头。
+这不是"放松成一半"，而是下沉之后的正确形态——数字仍然有唯一真源（代码常量），
+而它的传达方式变成了脚本报错，不再是文档里的一句话。写空列表时 why 要说清
+"现在由谁告诉作者"，否则后来人会以为这里漏填了。
 """
 import ast
 import json
@@ -128,8 +133,10 @@ FACTS = [
     (
         "media-volume-max",
         ("const", "scripts/_images_schema.py", "MEDIA_VOLUME_MAX"), 3.98,
-        [("references/imagery.md", r"3\.98")],
-        "volume 取值上限（官方契约 +12 dB）；写高了 schema 直接拒",
+        [],
+        "volume 取值上限（官方契约 +12 dB）；写高了 schema 直接拒。"
+        "契约已下沉：范围由 _images_schema 的越界报错当场带出"
+        "（`_VIDEO_AUDIO_OPTS` 里存着上下限与含义），文档不再复述这个数",
     ),
     (
         "default-speed",
@@ -271,7 +278,10 @@ def main():
     if problems:
         print("\n数字契约漂移 %d 处。改代码就改文档，别只改一边。" % len(problems))
         return 1
-    print("数字契约一致：%d 条代码常量 ↔ 文档说法全部对齐。" % len(FACTS))
+    locked_docs = sum(1 for f in FACTS if f[3])
+    sunk = len(FACTS) - locked_docs
+    print("数字契约一致：%d 条代码常量全部等于登记值（%d 条另锁文档说法，%d 条契约已下沉、"
+          "由脚本报错当场带出）。" % (len(FACTS), locked_docs, sunk))
     return 0
 
 

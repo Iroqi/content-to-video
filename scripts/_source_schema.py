@@ -250,7 +250,45 @@ def validate_segments_source(data):
                 if not isinstance(spk_cfg, dict) or not spk_cfg.get("voice_id"):
                     raise ValueError(f"segments[{i}].dialogue[{j}] 引用了说话人 {spk!r}，"
                                      "但顶层 'speakers' 里没有声明它，或声明里缺少 'voice_id'")
+    _warn_agenda_overflow(data)
     return data
+
+
+def _warn_agenda_overflow(data):
+    """内容段数超过 agenda 行预算时，在写稿阶段就 warn。
+
+    为什么提前到这一步说：截断本身发生在渲染层（html_renderer._agenda_rows），
+    那时配音都渲完了，作者拿到的是一条"后 N 条不会出现在画面上"的 warn——贵到
+    没人愿意回头改。这里在同一份真源（模板的 agenda.maxRows）上先量一次，把
+    "压段数还是合并要点"这个决定提前到写稿那一刻。判据不重抄：maxRows 直接读
+    模板，模板改了这里跟着改。
+
+    为什么是 warn 不是 error：段数超限不违法，7 行是这一版的排版预算而不是契约
+    红线。拦下来会挡掉合法稿子（多写一段、让它不显示，与不写相比并不更坏）。
+    渲染层那道 warn 留着——这里的量按"内容段条数"算，那边按"实际渲染出来的
+    行"算，两者不必相等。
+
+    开屏/结尾都写成 canvas 海报时没有 agenda 卡，不适用这条预算，跳过。
+    """
+    if (data.get("opening_layout") or "agenda") == "canvas" \
+            and (data.get("closing_layout") or "agenda") == "canvas":
+        return
+    try:
+        from _template import load_template
+        max_rows = int(load_template()["layout"]["vertical"]["agenda"]["maxRows"])
+    except (ImportError, KeyError, TypeError, ValueError):
+        return          # 模板结构变了就闭嘴：这条 warn 是提醒，不值得为它拦住写稿
+    n_content = sum(1 for seg in data["segments"]
+                    if isinstance(seg, dict)
+                    and (not seg.get("id") or is_content_sid(seg["id"])))
+    over = n_content - max_rows
+    if over <= 0:
+        return
+    print(f"[warn] segments_source.json 有 {n_content} 个内容段，"
+          f"开屏/结尾 agenda 的行预算是 {max_rows} 行——超 {over} 行，"
+          "成片时开屏章节列表与结尾要点总结会按「要点优先」丢掉尾部几行"
+          "（渲染层还会再报一次）。写稿时压段数或合并要点，见 references/writing.md",
+          file=sys.stderr)
 
 
 def load_segments_source(path):

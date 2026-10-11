@@ -1,3 +1,8 @@
+import contextlib
+import io
+import os
+import subprocess
+import sys
 import unittest
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
@@ -354,6 +359,60 @@ class Speed(unittest.TestCase):
         TL.validate_speed(1.5)
         for badv in (0, -1, float("nan"), float("inf")):
             bad(TL.validate_speed, badv)
+
+
+class ContractSinking(unittest.TestCase):
+    """契约下沉：写错的那一刻脚本就要说清"该改成什么"，而不是只说"哪里错了"。"""
+
+    def _stderr_of(self, fn, *a):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            fn(*a)
+        return err.getvalue()
+
+    def test_library_modules_refuse_to_run_as_scripts(self):
+        """库模块被当脚本误传时必须 exit非零并说清正确入口。
+
+        证伪：这两个模块没有 main()/argparse，直接运行是静默 exit 0、一个字都不
+        打印、也不产出任何文件。调用方（人或agent）看到的是"没报错"，于是以为稿子
+        过了——静默成功比报错更难查，这是全仓最危险的一种失败。
+
+        stderr 合并进 stdout 再断言：Windows 上 capture_output 的 stderr 偶发是
+        None（拿不到独立管道），分成两个流断言会在那边变成 TypeError 而不是
+        一条清楚的失败。合并成一条流，两平台同一条判据。
+        """
+        for mod in ("build_from_structured.py", "html_renderer.py"):
+            with self.subTest(mod=mod):
+                p = subprocess.run(
+                    [sys.executable, os.path.join(H.SCRIPTS_DIR, mod), "--help"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    encoding="utf-8", errors="replace", timeout=60)
+                out = p.stdout or ""
+                self.assertNotEqual(p.returncode, 0, out)
+                self.assertIn("[error]", out)
+                self.assertIn("库模块", out)
+
+    def test_agenda_overflow_warns_at_writing_time(self):
+        """内容段数超 agenda 行预算时，写稿阶段就要 warn（不必等渲完配音）。
+
+        证伪：截断只发生在渲染层，作者拿到 warn 时配音已渲完一条片子——贵到没人
+        愿意回头改。阈值直接读模板 maxRows（不重抄一份），超了给"压段数或合并
+        要点"的改法。
+        """
+        from _template import load_template
+        max_rows = int(load_template()["layout"]["vertical"]["agenda"]["maxRows"])
+        src = H.sample_source()
+        src["segments"] = [
+            {"id": "seg%d" % i, "title": "第%d段" % i, "text": "正文。"}
+            for i in range(1, max_rows + 3)
+        ]
+        out = self._stderr_of(SRC.validate_segments_source, src)
+        self.assertIn("agenda", out)
+        self.assertIn(str(max_rows), out)
+        self.assertIn("合并要点", out)
+
+        quiet = self._stderr_of(SRC.validate_segments_source, H.sample_source())
+        self.assertNotIn("agenda", quiet)
 
 
 if __name__ == "__main__":

@@ -113,11 +113,7 @@
   到句尾还没凑够时，它并进上一行。`停。别动。` 是一行，`停。往左边走三步再停下。` 也是一行。短问
   `A。B。C。D。E。` 是五行标点只上一行。阈值按**字符**数，不区分中英。所以合并规则
   尤其容易吃掉中文的强调短句，两三个字的"停""就这么定"就是这样。**想让一句话独占一行字幕，它得满 5 字**。
-- 上墙的一行只承载一个事实（九个字段）：这些字段会被直接印成画面上的一行，所以**不收分号**。
-  写了 `；` 或 `;`，契约层当场报错，报出字段名和原文。判定在 `_validate._validate_display_text`。
-  名单是两个常量，`_source_schema.ON_SCREEN_TOP_KEYS` 与 `ON_SCREEN_SEGMENT_KEYS`。
-  顶层六个字段是 `title`、`opening_title`、`closing_title`。另有 `opening_tagline`、
-  `closing_tagline`、`cta`。段落三个字段是 `title`、`tagline`、`takeaway`。
+- 上墙的一行只承载一个事实，所以**不收分号**：这些字段会被直接印成画面上的一行，写了 `；` 或 `;` 契约层当场报错并把原文打出来（判定在 `_validate._validate_display_text`，名单是 `_source_schema.ON_SCREEN_TOP_KEYS` 与 `ON_SCREEN_SEGMENT_KEYS`）。**哪几个字段算上墙不必背**——报错按字段名点名，照报错把分号改成句号即可；顶层是三个 `*_title` 加 `opening_tagline` / `closing_tagline` / `cta`，段落是 `title` / `tagline` / `takeaway`。
 - 为什么只拦上墙文字：那一行的行数与列宽都是死的（见上面 `nameTrim` 与下面 agenda 行数预算）。
   分号说明两件事被挤进同一行，第二件事不是被裁掉就是被压成小字号。**口播稿四个字段不在这一条里**：
   `opening` / `closing` / `text` / `dialogue` 可以写分号——分句器把分号当终止标点，念出来本来就是两次停顿。

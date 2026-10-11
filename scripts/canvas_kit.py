@@ -123,6 +123,67 @@ BAR_KEYS = ("x", "w", "h", "label")
 LABEL_SIDES = {"x": ("above", "below"), "y": ("left", "right")}
 DEFAULT_LABEL_SIDE = {"x": "below", "y": "left"}
 
+# ── 契约下沉：报错时"当场把正确写法给出来" ────────────────────────────
+# 为什么要有下面这几张表：作者撞错时的正确写法只写在 references/canvas.md 里，
+# 他要先读完文档才可能不撞上；撞上了又要回头翻文档。文档是"动笔前读的"，
+# 而这里要的是"写错的当场就能改对"——所以把同一份契约在脚本侧再存一份，
+# 报错时连同示例一起吐出来。文档那份留给人做决策与取舍，这份只管把话说全。
+#
+# 成本纪律：下面每张表的内容都必须能从上面的常量表推出来，或者本来就只有脚本知道
+# （渲染端的真实效果）。任何"只存在于文档里的人话"不许进来——那是文档的活。
+# 否则两份会各自漂移，而漂移出来的错误比没有更贵。
+
+# 每个 kind 的最小可跑片段：只给必填键，坐标取竖屏画幅下的实数。
+# 为什么每 kind 都要有：kind 的键名不通用（text 的正文键是 content 不是 text、
+# bars 吃 base_y 加数组而不是 x/y/w/h），这些正是照文档从零画最容易撞的地方，
+# 而报错时只给"只接受 text、bars"并不能告诉你 bars 长什么样。
+MINIMAL = {
+    "panel": '{"kind": "panel", "x": 80, "y": 300, "w": 920, "h": 700}',
+    "axis": ('{"kind": "axis", "orient": "y", "at": 940, "from": 400, "to": 940, '
+             '"ticks": [{"v": 400, "label": "8"}, {"v": 940, "label": "0"}]}'),
+    "polyline": '{"kind": "polyline", "points": [[160, 900], [480, 600], [800, 750]]}',
+    "bars": ('{"kind": "bars", "base_y": 940, '
+             '"bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"}]}'),
+    "circle": '{"kind": "circle", "cx": 540, "cy": 700, "r": 120}',
+    "text": '{"kind": "text", "x": 80, "y": 200, "content": "季度营收"}',
+    "rule": '{"kind": "rule", "x1": 80, "y1": 1000, "x2": 1000, "y2": 1000}',
+}
+
+# 枚举取值 → 实际效果。只写脚本才知道的那一半（渲染端的真实行为、缺省值），
+# 不写文档已经在讲的判断与取舍。
+ENUM_NOTES = {
+    "tier": None,   # 见 _tier_note()：那一档的 px 由模板真源现算，不在这里抄一份
+    "orient": '"x"=横轴（at 是那条横线的 y）/ "y"=竖轴（at 是那条竖线的 x）',
+    "label_side": "刻度线往标签的哪一侧伸：横轴 above/below、竖轴 left/right",
+    "anchor": ("'start'=字左缘落在 x（默认）/ 'middle'=字中线落在 x / 'end'=字右缘落在 x，"
+               "右对齐时x 要按量出来的字宽倒推，别按字数估"),
+    "role": ('"structure"=结构底（第 0 帧就在，不进 director steps） / "content"=内容'
+             "（逐拍点亮，必须给 id）"),
+}
+
+
+def _kind_contract(kind):
+    """某个 kind 的合法键集 + 必填键 + 最小可跑片段，报错时附在后面。"""
+    own, req = ELEMENT_KEYS[kind], REQUIRED_NUMS[kind]
+    return (
+        "\n  kind={!r} 的合法键：{}（公共键：{}）".format(
+            kind, "、".join(own), "、".join(COMMON_KEYS)),
+        "\n  必填：{}".format("、".join(req) if req else "（无，纯数值键不漏）"),
+        "\n  最小可跑片段：{}".format(MINIMAL.get(kind, "")),
+    )
+
+
+def _tier_note():
+    """tier 的三档：语义 + 两画幅的真实 px。
+
+    px 直接取自 TIERS（模板真源，报错时不许抄一份数——抄一份就会漂），语义是
+    "这一档在页面上是什么"：只给 px 作者得回头查模板才知道该选哪档。
+    """
+    sem = {"title": "页内大标题", "body": "正文", "label": "刻度值与标注（最小的一档）"}
+    return "；".join(
+        "{!r}={}px（{}）".format(k, "/".join(str(TIERS[a][k]) for a in ASPECTS), sem[k])
+        for k in TIERS[DEFAULT_ASPECT])
+
 # check_svg 对画布档无条件打的那一条是"知情提示"（说它查了什么、还剩什么查不到），
 # 不是待修的问题；自查把它排除，否则每一页都自带一条永远消不掉的噪声。
 _STANDING_ADVISORY = "字面色的对比度已经按主题页底的最坏一档查过"
@@ -188,24 +249,87 @@ def _need_str(el, key, where):
 
 def _choice(value, allowed, where, what):
     if value not in allowed:
+        note = _tier_note() if what == "tier" else ENUM_NOTES.get(what)
+        extra = "（{}）".format(note) if note else ""
         raise ValueError(f"{where} 的 {what}={value!r} 不是合法取值：只接受 "
-                         f"{'、'.join(repr(a) for a in allowed)}")
+                         f"{'、'.join(repr(a) for a in allowed)}{extra}")
     return value
 
 
+def _kind_catalog():
+    """七种 kind 各一段最小可跑片段。kind 拼错时全列出来，省掉翻文档那一趟。"""
+    out = []
+    for k in sorted(ELEMENT_KEYS):
+        role = "结构底" if k in STRUCTURE_BY_DEFAULT else "内容（必须给 id）"
+        out.append("\n  {:<9} {}｜{}".format(k, MINIMAL[k], role))
+    return out
+
+
 def _validate_element(el, i):
-    """单个元素的键集与取值；返回校验过的 dict（原样返回，解析留给渲染层）。"""
+    """单个元素的键集与取值；返回校验过的 dict（原样返回，解析留给渲染层）。
+
+    为什么要聚合而不是遇错就抛：作者照文档从零画一页要撞七八处错，一次只报一条
+    就得改一轮跑一次，一轮一分钟。分段收集（键集 / 公共旋钮 / kind 专属 / 颜色与 id）
+    让互不依赖的错一次报全；只有段内是 fail-fast（后面的检查常常依赖前面的结果，
+    硬跑只会抛 AttributeError 而不是人话）。
+    """
     where = f"spec 的 elements[{i}]"
     if not isinstance(el, dict):
-        raise ValueError(f"{where} 必须是对象（{{\"kind\": …, …}}）")
+        raise ValueError(f"{where} 必须是对象（{{\"kind\": …, \"id\": …}}）")
     kind = el.get("kind")
     if kind not in ELEMENT_KEYS:
+        # kind 拼错是"照文档从零画"最高频的一撞，而"只接受 7 个名字"并不能告诉作者
+        # 那个名字该配什么键。这里把七种 kind 的最小片段全列出来——多花几行，
+        # 省掉的是回头翻文档那一趟。
         raise ValueError(f"{where} 的 kind={kind!r} 不是已知元素类型：只接受 "
-                         f"{'、'.join(sorted(ELEMENT_KEYS))}")
+                         f"{'、'.join(sorted(ELEMENT_KEYS))}。"
+                         + "".join(_kind_catalog()))
     where = f"{where}（kind={kind!r}）"
-    _reject_unknown_keys(el, ELEMENT_KEYS[kind] + COMMON_KEYS, where)
-    for k in REQUIRED_NUMS[kind]:
-        _need_num(el, k, where, positive=(kind, k) in POSITIVE_NUMS)
+    errs = []
+    # 段 1：键集与必填。kind 已经认了，所以这一段要么过、要么报的都是"这个 kind
+    # 不该有这个键/缺这个键"，后面的段可以继续跑。
+    try:
+        _reject_unknown_keys(el, ELEMENT_KEYS[kind] + COMMON_KEYS, where)
+        for k in REQUIRED_NUMS[kind]:
+            _need_num(el, k, where, positive=(kind, k) in POSITIVE_NUMS)
+    except ValueError as e:
+        # _reject_unknown_keys 只列"本层认哪些键"，不区分必填与可选——而写错键的人
+        # 真正需要的是"那这几个是必填的"。补上必填键与最小片段，这一撞就不用回头
+        # 翻文档了。
+        errs.append(str(e) + "".join(_kind_contract(kind)))
+    # 段 2：公共旋钮。
+    try:
+        _validate_common_keys(el, where)
+    except ValueError as e:
+        errs.append(str(e))
+    # 段 3：kind 专属键。
+    try:
+        _validate_kind_keys(el, kind, where)
+    except ValueError as e:
+        errs.append(str(e))
+    # 段 4：颜色取值。段 5：内容元素的 id。
+    # 颜色与 id 必须分属两段：它们互不依赖，同段里段内 fail-fast 会让"颜色错"盖住
+    # "缺 id"（实测过），作者补完 id 才看到颜色错，白跑一轮。
+    try:
+        _validate_colors(el, where)
+    except ValueError as e:
+        errs.append(str(e))
+    try:
+        _validate_content_id(el, where)
+    except ValueError as e:
+        errs.append(str(e))
+    if errs:
+        raise ValueError("\n".join(errs))
+    return el
+
+
+def _validate_common_keys(el, where):
+    """公共旋钮（role / beat / duration / ease / stagger / repeat / yoyo）的取值判据。
+
+    与 _images_schema 同一套判据（那里管 images.json 的 director，这里管 spec）：
+    整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
+    另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
+    """
     if "role" in el:
         _choice(el["role"], ("structure", "content"), where, "role")
     if "beat" in el:
@@ -216,9 +340,6 @@ def _validate_element(el, i):
         raise ValueError(f"{where} 的 ease 必须是字符串（GSAP 缓动名，如 power2.inOut）")
     if "stagger" in el:
         _validate_stagger(el["stagger"], f"{where} 的 stagger")
-    # repeat / yoyo 与 _images_schema 同一套判据（那里管 images.json 的 director，
-    # 这里管 spec）：整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
-    # 另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
     if "repeat" in el:
         v = el["repeat"]
         if isinstance(v, bool) or not isinstance(v, int) or v < -1:
@@ -237,6 +358,9 @@ def _validate_element(el, i):
                          "一起到位、不进 director steps，没有'哪一拍'可反复。"
                          "要反复的是内容元素")
 
+
+def _validate_kind_keys(el, kind, where):
+    """kind 专属键的键集与取值（ticks / points / bars / count 这些嵌套结构在这里管）。"""
     if kind == "panel":
         _opt_num(el, "r", where, None, nonnegative=True)
         _opt_num(el, "opacity", where, None, nonnegative=True)
@@ -309,11 +433,44 @@ def _validate_element(el, i):
         if "draw" in el and not isinstance(el["draw"], bool):
             raise ValueError(f"{where} 的 draw 必须是 JSON 布尔 true/false"
                              f"（实际: {el['draw']!r}）")
+
+
+def _validate_colors(el, where):
+    """fill / stroke 的取值：命名档是否存在、字面色是否合法（不需要主题就能判）。"""
     for color_key in ("fill", "stroke"):
-        if color_key in el and not isinstance(el[color_key], str):
-            raise ValueError(f"{where} 的 {color_key} 必须是字符串"
-                             f"（实际: {el[color_key]!r}）")
-    return el
+        if color_key in el:
+            _check_color_token(el[color_key], where, color_key)
+
+
+def _validate_content_id(el, where):
+    """内容元素必须给 id。
+
+    这条判据原来在渲染层（render_svg）报，于是它会被渲染层更早抛出的颜色错盖住，
+    作者补完 id 重跑才看到颜色错。契约该在校验层一次报全，所以搬到这里（渲染层
+    那道保留为纵深防御——render_svg 也被 tests 与 pipeline 直接调用）。
+    """
+    if role_of(el) == "content" and "id" not in el:
+        raise ValueError(f"{where} 是内容元素却缺 id：director 的 step 要靠 "
+                         '"#id" 点名它，没有 id 就永远不会被点亮。'
+                         '给它一个 id（或写 "role": "structure" 把它归成结构底）')
+
+
+# fill/stroke 的合法取值：命名档 + 任意 css_color_to_hex 认得的安全颜色。
+# 与 _color 的判定同源（那份要ctx 才能把命名档解析成色值，这份在 spec 校验阶段
+# 就能判"这个名字存不存在"）——两处判据必须一致，所以列表只在这里定义一次。
+COLOR_NAMES = ("accent", "text", "dim", "plate", "line")
+
+
+def _check_color_token(v, where, key):
+    """颜色取值的合法性：不依赖主题就能判的那一半（命名档是否存在、字面色是否合法）。"""
+    if not isinstance(v, str):
+        raise ValueError(f"{where} 的 {key} 必须是字符串（实际: {type(v).__name__}）")
+    if v in COLOR_NAMES or (key == "fill" and v == "none"):
+        return
+    if css_color_to_hex(v) is None:
+        raise ValueError(f"{where} 的 {key}={v!r} 不是合法颜色：给 #rgb/#rrggbb、"
+                         f"CSS 标准色名，或 {'、'.join(COLOR_NAMES)}"
+                         "（+ fill 可以写 'none' 表示不填充）")
 
 
 def validate_spec(data, *, aspect=None, theme=None, accent=None):
@@ -339,7 +496,15 @@ def validate_spec(data, *, aspect=None, theme=None, accent=None):
     elements = data.get("elements")
     if not isinstance(elements, list) or not elements:
         raise ValueError("spec 需要非空的 'elements' 列表（一张画布页至少有一个图元）")
-    els = [_validate_element(el, i) for i, el in enumerate(elements, 1)]
+    els, el_errs = [], []
+    for i, el in enumerate(elements, 1):
+        try:
+            els.append(_validate_element(el, i))
+        except ValueError as e:
+            el_errs.append(str(e))
+    if el_errs:
+        raise ValueError("spec 有{} 个元素不合格：\n{}".format(
+            len(el_errs), "\n".join(el_errs)))
     _check_ids_unique(els)
     return {"aspect": _aspect, "theme": _theme, "accent": css_color_to_hex(_accent),
             "elements": els}
@@ -779,9 +944,51 @@ def _write(path, text):
         f.write(text)
 
 
+def _epilog():
+    """--help 的尾巴：一份能照抄就跑的完整 spec + 七种 kind 的最小片段。
+
+    为什么把它放进 --help 而不是留给文档：spec 的键集是封闭的、七种 kind 的键名
+    各不相同（text 的正文键是 content、bars 吃 base_y 加数组），这些是"照文档从零
+    画"最容易撞的地方。而文档是动笔前读的，--help 是撞错时才会看的——所以正确的
+    写法必须出现在撞错的那一刻能被看到的地方。
+    """
+    lines = ["", "可照抄的完整 spec（竖屏柱状图，实测跑通；写到 spec.json 里直接跑）：",
+             "",
+             "  {",
+             '    "aspect": "portrait",',
+             '    "elements": [',
+             '      {"kind": "panel", "id": "panel", "x": 80, "y": 300, "w": 920, "h": 700},',
+             '      {"kind": "text",  "id": "t",    "x": 80, "y": 200, "content": "季度营收", "tier": "title"},',
+             '      {"kind": "axis",  "id": "ax",   "orient": "y", "at": 940, "from": 400, "to": 940,',
+             '       "ticks": [{"v": 400, "label": "8"}, {"v": 670, "label": "4"}, {"v": 940, "label": "0"}]},',
+             '      {"kind": "bars",  "id": "bars", "base_y": 940,',
+             '       "bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"},',
+             '                {"x": 320, "w": 120, "h": 350, "label": "Q2"},',
+             '                {"x": 480, "w": 120, "h": 280, "label": "Q3"},',
+             '                {"x": 640, "w": 120, "h": 560, "label": "Q4"},',
+             '                {"x": 800, "w": 120, "h": 420, "label": "Q5"}]},',
+             '      {"kind": "text",  "id": "lab",  "x": 500, "y": 1010, "content": "Q1–Q5", "tier": "label"}',
+             "    ]",
+             "  }",
+             "",
+             "七种 kind 的最小可跑片段（键集封闭，写错的键不生效也不被读出）："]
+    for line in _kind_catalog():
+        lines.append(line)
+    lines += [
+        "",
+        "要点：内容元素（除 panel / axis 外）必须给 id，否则导演的 step 点不到它；",
+        "axis 的 from / to 是轴两端的像素坐标，不是起止数据值；",
+        "给上 --sentences N，自动拍的 at 才按句数回绕，草稿可直接塞进 images.json。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="整页画布 SVG 脚手架：spec.json → 画布页 SVG + director 草稿（steps 走 stdout 或 --emit-steps）")
+        description="整页画布 SVG 脚手架：spec.json → 画布页 SVG + director 草稿（steps 走 stdout 或 --emit-steps）",
+        epilog=_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--spec", required=True, help="画布页元素清单 JSON")
     ap.add_argument("-o", "--out", required=True, help="输出 SVG 路径")
     ap.add_argument("--aspect", choices=list(ASPECTS), help="画幅（覆盖 spec 顶层；默认 portrait）")

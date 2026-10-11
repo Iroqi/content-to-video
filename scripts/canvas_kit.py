@@ -40,7 +40,7 @@ import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_stagger, validate_images_json)
 from _script_utils import guard_not_in_skill_dir, read_json_file  # noqa: E402
-from _template import get_canvas, load_template, normalize_aspect  # noqa: E402
+from _template import get_canvas, get_image_box, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
                     get_default_accent, get_theme_colors, mix, theme_bg_stops)
@@ -951,8 +951,19 @@ def _epilog():
     各不相同（text 的正文键是 content、bars 吃 base_y 加数组），这些是"照文档从零
     画"最容易撞的地方。而文档是动笔前读的，--help 是撞错时才会看的——所以正确的
     写法必须出现在撞错的那一刻能被看到的地方。
+
+    **下面这份示例出的图只配 layout:"canvas" 的段落**（本模块就是为那一档写的）：
+    它按整页画幅出图。槽位版式的配图只铺中间那块 4:3，把这份图塞进去，cover
+    会切掉上下边——画在图边缘上的文字跟着消失。槽位版式请按
+    _template.get_image_box 的尺寸自己出图，或改走 imagery.md「位图素材」那条路。
+    尺寸由 get_canvas / get_image_box 现取，不在这里抄一份（抄的会漂）。
     """
+    bw, bh = get_image_box("portrait")
     lines = ["", "可照抄的完整 spec（竖屏柱状图，实测跑通；写到 spec.json 里直接跑）：",
+             "",
+             "  ⚠ 这份 spec 出的 SVG 只配 layout:\"canvas\" 的段落。槽位版式（默认）",
+             "    铺的配图框是 4:3（竖屏 {}×{}），不是整页画幅——尺寸错了不会报".format(bw, bh),
+             "    错，cover 会切掉图边缘上的字。",
              "",
              "  {",
              '    "aspect": "portrait",',

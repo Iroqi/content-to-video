@@ -1490,3 +1490,11 @@ def generate_html(manifest, audio_src, images=None,
     }, "composition.html")
 
     return html
+
+
+if __name__ == "__main__":
+    # 与 build_from_structured 同一条守卫：本模块是库（CLI 编排在 run.py / pipeline.py），
+    # 直接运行会静默 exit 0 且不产出任何文件——"没报错"会被误读成"成功了"。
+    import sys as _sys
+    _sys.exit("[error] html_renderer.py 是库模块，不能直接运行。"
+              "成片渲染的入口是 scripts/run.py。")

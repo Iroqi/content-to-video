@@ -638,5 +638,102 @@ class CommandLine(unittest.TestCase):
         self.assertIn("[error]", err)
 
 
+class ContractSinking(unittest.TestCase):
+    """契约下沉：作者写错时，脚本要当场把正确写法给出来，而不是让人回头翻文档。
+
+    这一组的共同判据是"错误信息里有没有可执行的下一步"。只有"哪里错了"没有
+    "该改成什么"，等于把文档的负担原样留在人身上——那正是这一轮要减掉的东西。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _err_of(self, elements, extra=()):
+        spec = write_json(self.tmp.name, "s.json", {"elements": elements})
+        out = os.path.join(self.tmp.name, "s.svg")
+        rc, _o, err = run_cli(["--spec", spec, "-o", out, "--no-check", *extra])
+        self.assertEqual(rc, 2, err)
+        return err
+
+    def test_unknown_kind_prints_all_seven_minimal_snippets(self):
+        """kind 拼错时把七种kind 的最小可跑片段全列出来。
+
+        证伪：原报错只给"只接受 axis、bars、…"，作者仍不知道 bars 该长什么样——
+        而这正是照文档从零画最高频的一撞（bars 吃 base_y 加数组，不吃 x/y/w/h）。
+        """
+        err = self._err_of([{"kind": "line", "x1": 1, "y1": 2, "x2": 3, "y2": 4}])
+        for kind in K.ELEMENT_KEYS:
+            self.assertIn(kind, err)
+            self.assertIn(K.MINIMAL[kind], err)
+        self.assertIn('"base_y"', err)  # bars 的正确形状，不只是名字
+
+    def test_enum_error_says_what_each_value_does(self):
+        """枚举取值报错附"取值 → 实际效果"，tier 还要带两画幅的真实 px。"""
+        err = self._err_of([{"kind": "text", "id": "t", "x": 1, "y": 2,
+                             "content": "x", "tier": "huge"}])
+        self.assertIn("'title'", err)
+        self.assertIn("大标题", err)
+        # px 取自 TIERS（模板真源），不是抄一份数：这里直接跟 TIERS 对，
+        # 两画幅并排（竖屏/横屏），所以断言的是整段而不只是竖屏那个数
+        self.assertIn("{}/{}px".format(K.TIERS["portrait"]["title"],
+                                       K.TIERS["landscape"]["title"]), err)
+
+    def test_all_bad_elements_reported_in_one_run(self):
+        """多个元素各错一处时一次报全，不必改一轮跑一轮。"""
+        err = self._err_of([
+            {"kind": "text", "x": 1, "y": 2, "content": "a", "fill": "#zzzzzz"},
+            {"kind": "text", "id": "b", "x": 1, "y": 2, "content": "b", "tier": "huge"},
+            {"kind": "circle", "id": "c", "cx": 1, "cy": 2, "r": 3, "fill": "nope"},
+        ])
+        self.assertIn("elements[1]", err)
+        self.assertIn("elements[2]", err)
+        self.assertIn("elements[3]", err)
+        self.assertIn("3 个元素不合格", err)
+
+    def test_missing_id_and_bad_color_are_reported_together(self):
+        """缺 id 与颜色错必须同一轮都报出来——它们原来互相遮蔽。
+
+        证伪：缺 id 原先在 render_svg（渲染层）报，而颜色在渲染层更早的_emit 里报，
+        于是颜色错先抛、缺 id 被吞；作者补完 id 重跑才看到颜色错，白跑一轮。
+        遮蔽是聚合报错最实际的一种失败：不是漏报，是"报了你没看见"。
+        """
+        err = self._err_of([{"kind": "text", "x": 1, "y": 2, "content": "a",
+                             "fill": "#zzzzzz"}])
+        self.assertIn("缺 id", err)
+        self.assertIn("#zzzzzz", err)
+
+    def test_help_carries_a_runnable_spec(self):
+        """--help 里那份完整 spec 必须真能跑通（否则等于给了一份假处方）。"""
+        epilog = K._epilog()
+        # 从 epilog 里抠出那段 spec：它是缩进过的 JSON 块
+        block = re.search(r"  (\{\n(?:.*\n)*?  \})", epilog)
+        self.assertIsNotNone(block, epilog)
+        data = json.loads(block.group(1))
+        spec = K.validate_spec(data)
+        svg = K.render_svg(spec)
+        root = ET.fromstring(svg)
+        self.assertEqual(root.get("width"), str(get_canvas("portrait")[0]))
+        # --help 里那份的每个 id 都得真在SVG 里——少一个就说明处方本身是坏的
+        for el in data["elements"]:
+            self.assertIn(el["id"], svg)
+
+    def test_minimal_snippets_all_validate(self):
+        """七种 kind 的最小片段每一条都得过校验（含内容元素的 id）。
+
+        为什么这条不能省：MINIMAL 是"照文档从零画"的入口，它自己写错一份，
+        报错信息就在教人怎么写错——比不写还坏。所以每一条都真跑一遍 validate_spec，
+        而不是靠人眼扫一遍觉得对。
+        """
+        for kind, snippet in K.MINIMAL.items():
+            with self.subTest(kind=kind):
+                el = json.loads(snippet)
+                if kind not in K.STRUCTURE_BY_DEFAULT:
+                    el["id"] = "probe"
+                spec = K.validate_spec({"elements": [el]})
+                svg = K.render_svg(spec)   # 渲染层也走一遍：片段要的是"能跑"
+                self.assertIn("<svg", svg)
+
+
 if __name__ == "__main__":
     unittest.main()

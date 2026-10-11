@@ -231,20 +231,17 @@ loop muted autoplay playsinline
 
 四个音轨旋钮 + `duck` **只对 video 成立**（位图 / SVG / GIF 没有音轨也没有可裁剪的时间轴，写在它们上面会被契约层按"写了不会生效"拒掉）：
 
-| `images.json` | 落到标签 | 取值范围 | 说明 |
-|---|---|---|---|
-| `volume` | `data-volume` | 0 ~ 3.98 | 增益倍数，1 = 0 dB，`0` = 静音；上限是官方契约的 +12 dB。不写时由渲染端落让路默认 0.25 |
-| `duck` | `data-fx-chain` | `true` / `false`，默认 `true` | 在人声频段上开一条让路 EQ；`false` = 撤掉它（原声当主体时用） |
-| `fade_in` | `data-fade-in` | ≥ 0 秒 | 淡入，锚片段自己的入点 |
-| `fade_out` | `data-fade-out` | ≥ 0 秒 | 淡出，锚片段自己的出点 |
-| `media_start` | `data-media-start` | ≥ 0 秒 | 从源片第几秒起播（trim） |
+| `images.json` | 落到标签 | 说明 |
+|---|---|---|
+| `volume` | `data-volume` | 增益倍数，1 = 0 dB。不写时由渲染端落让路默认 0.25 |
+| `duck` | `data-fx-chain` | 人声频段上开一条让路 EQ；`false` = 撤掉它（原声当主体时用） |
+| `fade_in` | `data-fade-in` | 淡入，锚片段自己的入点 |
+| `fade_out` | `data-fade-out` | 淡出，锚片段自己的出点 |
+| `media_start` | `data-media-start` | 从源片第几秒起播（trim） |
 
-四条容易踩的：
+**取值范围不必查**：写错时报错会带上该旋钮的范围与含义（`volume` 写布尔这种坑也在其中——`isinstance(True, int)` 为真，不挡就会拼成 `data-volume="True"`，症状正是"要了原声、成片没声音"）。两条判据只有渲染端知道，只能在生成期说：**淡入淡出之和超过本段时长会被引擎按比例压进片段内**，写了一段淡变、实际几乎听不出来。
 
-- **`volume` 写 `true` 会被契约层挡**：`isinstance(True, int)` 为真，不单独挡就会一路拼成 `data-volume="True"`——无效增益，症状正是"要了原声、成片没声音"。`duck` 同理只收 JSON 布尔：字符串 `"false"` 是真值，"关掉让路"会变成"永远让路"。
-- **淡入淡出之和超过本段时长会被引擎按比例压进片段内**，写了一段淡变、实际几乎听不出来；只有渲染端知道片段多长，所以这句 `[warn]` 只能在生成期说。
-- **`media_start` 只能叫 `data-media-start`**：官方契约里有两组读取者，喂 ffmpeg `-ss` 的那个音频混音器**只读**这一个名字，写成 `data-playback-start` 会渲染出"裁过的画面配没裁过的声音"。
-- **`data-fx-chain` 里的 JSON 引号必须写成 `&quot;`**：官方的 carve 脚本用 `name="..."` 的正则找这些属性，裸双引号会把整条属性截断（渲染器已转义，别在别处手拼这条属性）。
+两条手拼属性才要记住，它们是本技能交给渲染端的字面量，契约层管不到：**`media_start` 只能叫 `data-media-start`**（官方契约里有两组读取者，喂 ffmpeg `-ss` 的那个音频混音器**只读**这一个名字，写成 `data-playback-start` 会渲染出"裁过的画面配没裁过的声音"）；**`data-fx-chain` 里的 JSON 引号必须写成 `&quot;`**（官方的 carve 脚本用 `name="..."` 的正则找这些属性，裸双引号会把整条属性截断；渲染器已转义，别在别处手拼这条属性）。
 
 ### 动画细则
 

@@ -292,3 +292,15 @@ def build_parts(source):
                   f"（最长 {max(lengths)} 字）：一句一个事实更好念，"
                   "可以在逗号处再断一句", file=sys.stderr)
     return sentences, segments
+
+
+if __name__ == "__main__":
+    # 本模块是库，不是脚本：没有 main()、没有 argparse。`python
+    # scripts/build_from_structured.py --source …` 会静默 exit 0、一个字都不打印、
+    # 也不产出任何文件——调用方（人或 agent）只会看到"没报错"，于是以为稿子过了，
+    # 其实什么都没发生。那是全仓最危险的一种失败：报错了能修，静默成功不能。
+    # 唯一入口是 pipeline.py --source。
+    sys.exit("[error] build_from_structured.py 是库模块，不能直接运行。\n"
+             "结构化输入的唯一入口是：\n"
+             "    python scripts/pipeline.py --source segments_source.json …\n"
+             "（--source 的字段规范见 references/writing.md）")

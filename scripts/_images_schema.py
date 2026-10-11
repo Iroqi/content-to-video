@@ -52,7 +52,7 @@ def validate_relative_project_path(src, where):
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director：方式 C SVG 的"时间轴同步动画"编排（见 references/image_options.md
+    # director：方式 C SVG 的"时间轴同步动画"编排（见 references/directing.md
     # 方式 C「SVG 动画：两档」）。写了它这张 SVG 才走净化内联，否则仍是 <img>。
     "director",
     # stage："keep" = 跨段场景延续（persistent stage，见 _stage_carry）。写在**接续页**
@@ -87,7 +87,7 @@ MEDIA_VOLUME_MAX = 3.98
 
 # 视频原声的**让路默认增益**：关掉 muted 却没写 volume 时，渲染端按它落
 # data-volume（见 html_renderer._video_audio_attrs）。取 0.25 是实测可听档的
-# 下沿（references/image_options.md「音轨」实测 0.15~0.3 还能听清旁白）——
+# 下沿（references/imagery.md「音轨」实测 0.15~0.3 还能听清旁白）——
 # 默认那一版必须是不盖旁白的那一版：把 1.0 留作默认等于默认交付一支旁白被
 # 压住的片子。想要别的响度就显式写 volume，写了就不再自动兜底。
 MEDIA_DUCK_VOLUME = 0.25
@@ -333,7 +333,7 @@ def _validate_director(key, dirval):
                              f"{sorted(_DIRECTOR_STEP_KEYS)}")
         # 锚点二选一：at（句序）或 at_time（段落绝对秒）。两者都写或都不写都是歧义，
         # 一律拒。at_time 让导演档脱离"句子分桶"：整页画布的自由编排可以直接按秒排
-        # 补间，不必迁就旁白句边界（见 references/image_options.md「SVG 动画：两档」）。
+        # 补间，不必迁就旁白句边界（见 references/directing.md「SVG 动画：两档」）。
         has_at, has_time = "at" in step, "at_time" in step
         if has_at == has_time:
             raise ValueError(
@@ -489,7 +489,7 @@ def validate_images_json(data):
     契约层只校验**结构**（路径 / 类型 / 锚点 / 尺寸这类），不读图像像素，因此
     **不要求图片不透明**——带 alpha 通道的透明 PNG/WEBP 与 SVG 等价，渲染端当 <img>
     放进同一 scene 后透明处透出主题渐变与 accent 辉光，可直接叠在画布背景上（无需抠图）；
-    "本该透明却被出图端填了不透明底色"这种信源问题不在本层拦截（见 image_options.md
+    "本该透明却被出图端填了不透明底色"这种信源问题不在本层拦截（见 imagery.md
     「透明通道」一节）。别为"防盖背景"而在契约层加 opacity 校验，那会误伤合法的透明前景图。
     """
     if not isinstance(data, dict):

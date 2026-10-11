@@ -9,6 +9,7 @@ from unittest import mock
 import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
 import check_docs
+import check_numbers
 import gen_hyperframes
 
 
@@ -271,10 +272,29 @@ class DocRefChecker(unittest.TestCase):
 
     def test_target_path_resolves_bare_and_prefixed_forms(self):
         # 裸文件名按 references/ → 根目录解析；带前缀照用；反引号不参与路径
-        self.assertTrue(os.path.isfile(check_docs._target_path("image_options.md")))
+        self.assertTrue(os.path.isfile(check_docs._target_path("canvas.md")))
         self.assertTrue(os.path.isfile(check_docs._target_path("SKILL.md`")))
         self.assertTrue(os.path.isfile(check_docs._target_path("references/writing.md")))
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
+
+
+class NumberChecker(unittest.TestCase):
+    """文档里的数字是代码常量的复制品。这组测试保证复制品没漂。"""
+
+    def test_doc_numbers_match_code(self):
+        self.assertEqual(check_numbers.main(), 0)
+
+    def test_every_fact_reads_a_real_code_value(self):
+        # 登记错路径的检查器会「因为读不到值而永远失败」或者更糟——被临时放宽后
+        # 变成永远绿。所以逐条断言它真能从代码里取到那个数。
+        for fid, spec, expect, _docs, _why in check_numbers.FACTS:
+            with self.subTest(fact=fid):
+                self.assertEqual(check_numbers.read_code_value(spec), expect)
+
+    def test_facts_are_unique(self):
+        # 同一条事实登记两次 = 第二条永远被第一条的命中掩盖，等于没检查。
+        ids = [f[0] for f in check_numbers.FACTS]
+        self.assertEqual(len(ids), len(set(ids)))
 
 
 if __name__ == "__main__":

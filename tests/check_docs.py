@@ -6,6 +6,9 @@
 里的同类引用（references 前缀可省略，裸文件名按 references/ → 根目录解析）。
 改标题、瘦身 SKILL.md 之后跑一次，能抓住"引用了已经不存在的章节"。
 
+顺带量一次 SKILL.md 的行数：它是每次调用必然整份进上下文的那一份，超出上限
+说明细节又爬回主文档了，该下沉到 references/。
+
 用法：python tests/check_docs.py          # 有悬空引用时退出码 1
 """
 import glob
@@ -39,6 +42,17 @@ def headings(path):
                 for ln in f if ln.lstrip().startswith("#")]
 
 
+def skill_md_lines():
+    with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
+
+# SKILL.md 是每次调用**必然整份进上下文**的那一份，所以它的重量直接等于起步
+# 代价。细节属于 references/：路由表指过去，别在这里复述一遍。超线说明该下沉
+# 细节，而不是把上限调大。
+SKILL_MD_MAX_LINES = 150
+
+
 def main():
     cache, bad = {}, []
     sources = [os.path.join(ROOT, "SKILL.md")]
@@ -58,8 +72,12 @@ def main():
                 bad.append((src, os.path.relpath(target, ROOT), name, "没有标题包含该章节名"))
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
+    n = skill_md_lines()
+    if n > SKILL_MD_MAX_LINES:
+        print(f"[too-fat] SKILL.md {n} 行，超过 {SKILL_MD_MAX_LINES} 行上限 —— "
+              "细节下沉到 references/，别在这里复述")
     print(f"\n{len(bad)} 条悬空引用")
-    return 1 if bad else 0
+    return 1 if (bad or n > SKILL_MD_MAX_LINES) else 0
 
 
 if __name__ == "__main__":

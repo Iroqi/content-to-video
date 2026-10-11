@@ -2,7 +2,7 @@
 """timing_manifest.json → Hyperframes composition HTML（html_renderer 的 CLI 壳）。
 
 画幅/主题选择与 vendor 资产装载链见 SKILL.md 第 5 步与 references/rendering.md；
-images.json 字段见 references/image_options.md；完整参数列表见 ``--help``。
+images.json 字段见 references/imagery.md；完整参数列表见 ``--help``。
 """
 import argparse
 import filecmp
@@ -421,7 +421,7 @@ def _svg_intrinsic_size(path):
     return None
 
 
-# 图内文字可读下限（px）：与 references/image_options.md「文字与尺寸」的 26px
+# 图内文字可读下限（px）：与 references/canvas.md「文字与尺寸」的 26px
 # 同一条线，那边是写给画图的约定，这里是门禁端的复读。
 CANVAS_MIN_FONT_PX = 26
 
@@ -437,7 +437,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
       0 error、Contrast 38/38 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
     - SVG 的**缩放档**：等比不等于能读。按 2560×1440 画的 16:9 塞进 1920 画幅，
       比例对、整张图却被缩到 0.75，图内 26px 折算后只剩 19.5px——低于
-      `references/image_options.md`「文字与尺寸」的 26px 下限就是读不出来，
+      `references/canvas.md`「文字与尺寸」的 26px 下限就是读不出来，
       这条也只有在这里量得到。
     - 文案下落：这一段的 N 句旁白不会出现在画面上，图内的 `<text>` 数量是唯一
       能对上的账——warn，因为"把要点画进图里"本来就没有机械判据。
@@ -1089,7 +1089,7 @@ def main(argv=None):
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"
-              f"在 A/B/C 三条路线中选型补图（见 references/image_options.md）"
+              f"在 A/B/C 三条路线中选型补图（见 references/imagery.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
     # GSAP 取用：显式 --gsap-src 直接写进 HTML 引用（不校验），否则走

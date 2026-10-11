@@ -93,11 +93,22 @@ agent 才做最后一步渲染，交给你 MP4。它同时附一份生产报告�
 
 ## 深入文档
 
-给 agent 看的说明书是 [SKILL.md](SKILL.md)。四份深度参考在 `references/`。它们覆盖写稿、配音、配图、渲染四类内容。**人不必读**，你只管和 agent 说话。
+给 agent 看的说明书是 [SKILL.md](SKILL.md)——它只留工作流与红线，开头有一张路由表告诉你「此刻该读哪一份」。深度参考在 `references/`，**按决策时刻分开**，不是按话题捆在一起：
+
+| 文件 | 服务哪一步 |
+| --- | --- |
+| [writing.md](references/writing.md) | 第 2 步：字段规范、哪些段值得交给 canvas、内容类型写法 |
+| [tts_pipeline.md](references/tts_pipeline.md) | 第 3 步：配音参数、音色表、manifest 字段 |
+| [imagery.md](references/imagery.md) | 第 4 步选路线：位图 / 视频 / `images.json` 落盘 |
+| [canvas.md](references/canvas.md) | 第 4 步画 SVG：几何、对比度、密度、自查 |
+| [directing.md](references/directing.md) | 第 4 步让它动起来：`director` 原语、跨段接续 |
+| [rendering.md](references/rendering.md) | 第 5 步：预览、渲染、官方门禁、画面翻车速查表 |
+
+**人不必读**，你只管和 agent 说话。
 
 ## 维护者
 
-改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
+改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空；改了任何写进文档的阈值（画布尺寸、字号下限、告警门限、时间容差…）还要跑 `python tests/check_numbers.py`，它逐条比对代码常量与文档里的数字，改一边不改另一边就报错。两个检查都在 CI 里跑。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
 
 发布时手动压缩技能目录。剔掉这些内容：
 

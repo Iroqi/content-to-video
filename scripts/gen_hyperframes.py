@@ -426,15 +426,66 @@ def _svg_intrinsic_size(path):
 CANVAS_MIN_FONT_PX = 26
 
 
+def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
+    """槽位版式配图里 SVG 的比例失配，返回一条说明（无错时为空列表）。
+
+    为什么槽位版式也要查：配图框是 4:3、画幅是 3:4，SVG 塞进去走 cover。
+    比例对不上时 cover 会**切掉边**去填满框——图里画在边缘上的文字就跟着消失，
+    而作者拿到的 HTML 里它还在。这与画布版式那条同源（都问"图内的字会不会被
+    cover 吃掉"），只是槽位版的判据尺寸不同：画布版式对画幅（1080×1440），
+    槽位版对配图框（980×735）。
+
+    实测的四例（1080×1440 整页画布 / 490×368 小图 / 800×800 方图 / 1600×600
+    横图铺进 980×735 框）说明失配的代价是**裁边**不是"撑破画幅"——配图框本身
+    有框高限制，撑不破；所以别拿"画面溢出"当这里的症状说，那是错的诊断。
+
+    `hyperframes check` 对这类失配只报 container_overflow（元素超出裁切容器），
+    读者看不出该改根节点尺寸还是改内容；所以按文件在这里拦，并直接给出该画
+    幅的槽位尺寸。
+
+    栅格图（照片/视频）不查比例：那张图里没有"画在里面的字"，比例失配只是
+    取景裁边，位图素材那条路本来就是靠 cover 取景的（见 imagery.md）。
+    """
+    errs = []
+    for seg in segments:
+        if seg_layout(seg) == "canvas":
+            continue          # 画布版式由 canvas_layout_errors 按画幅判，判据不同
+        sid = seg["id"]
+        entry = images.get(sid)
+        if not entry:
+            continue          # 缺配图另有出处（覆盖率提示 / 引用完整性校验）
+        src = entry["src"]
+        if not is_svg_path(src):
+            continue
+        size = _svg_intrinsic_size(os.path.join(out_dir, src))
+        if size is None:
+            errs.append(f"段落 '{sid}' 的配图 {src} 读不出固有尺寸：根标签要有"
+                        f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
+            continue
+        sw, sh = size
+        # 同一判据与 canvas_layout_errors 同式（交叉相乘，避免浮点容差写法不一）
+        if abs(sw * box_h - sh * box_w) > 0.002 * box_w * box_h:
+            errs.append(
+                f"段落 '{sid}' 的配图 {src} 是 {sw:g}×{sh:g}，与槽位配图框 "
+                f"{box_w}×{box_h}（4:3）不等比——object-fit:cover 会切掉边去填满"
+                f"这个框，画在图边缘上的字跟着消失（宽高各差 "
+                f"{abs(sw / box_w - 1) * 100:.0f}% / "
+                f"{abs(sh / box_h - 1) * 100:.0f}%）。hyperframes check 对这种"
+                f"失配只说元素超出容器，看不出该改哪。按 {box_w}×{box_h} 重画"
+                f"这张 SVG")
+    return errs
+
+
 def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
     """整页画布（段落 layout: "canvas"）的配图体检，返回 (错误, 警告) 两组说明。
 
     四件事只有这里查得到（画布版式不生成标题层与句子流层，画面全靠那张图）：
     - 有配图：没图就只剩一条进度条空帧——error。
-    - SVG 与当前画幅**等比**：槽位版式里 cover 多裁一点边只是留白变窄；画布
-      版式的标题和文字就画在图内，比例一错就被整块裁到画面外。实测把 3:4 的
-      画布塞进 16:9 段落，标题与 kicker 直接消失，而 hyperframes check 依旧
-      0 error、Contrast 38/38 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
+    - SVG 与当前画幅**等比**：比例一错，cover 就要切边去填满框，画在图边缘的
+      字（画布版式的标题/kicker、槽位版式的边注）随之消失。实测把 3:4 的画布
+      塞进 16:9 段落，标题与 kicker 直接消失，而 hyperframes check 依旧
+      0 error、Contrast 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
+      槽位版式的同类失配走 slot_svg_ratio_errors（那边对的是配图框尺寸）。
     - SVG 的**缩放档**：等比不等于能读。按 2560×1440 画的 16:9 塞进 1920 画幅，
       比例对、整张图却被缩到 0.75，图内 26px 折算后只剩 19.5px——低于
       `references/canvas.md`「文字与尺寸」的 26px 下限就是读不出来，
@@ -1157,10 +1208,14 @@ def main(argv=None):
     # 整页画布的配图体检（为什么只能在这里查，见 canvas_layout_errors）
     _canvas_errs, _canvas_warns = canvas_layout_errors(
         images, manifest["segments"], out_dir, w, h)
+    # 槽位版式那张 SVG 的比例（另一条判据，见 slot_svg_ratio_errors）。它拦的是
+    # "cover 切掉图边缘上的字"，与画布版式那条各管一段版式，互不覆盖，两边都收齐再退。
+    _slot_errs = slot_svg_ratio_errors(
+        images, manifest["segments"], out_dir, *get_image_box(args.aspect))
     for _w in _canvas_warns:
         print(f"[warn] {_w}", file=sys.stderr)
-    if _canvas_errs:
-        for _e in _canvas_errs:
+    if _canvas_errs or _slot_errs:
+        for _e in _canvas_errs + _slot_errs:
             print(f"[error] {_e}", file=sys.stderr)
         sys.exit(1)
 

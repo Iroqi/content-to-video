@@ -137,15 +137,16 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
             self.assertIn(frag, err)
 
     def test_dependent_checks_stay_fail_fast_instead_of_crashing(self):
-        """src 缺失时其余组必须安静跳过，而不是抛 AttributeError。
+        """src 缺失时不许把整段其余的错一起吞掉，也不许抛 AttributeError。
 
-        这是聚合的代价：一旦某组的前提不成立，同组里依赖它的检查硬跑就会
-        抛一条作者看不懂的异常（还盖住了本来能报的那条）。src 不存在时
-        classify_media_path 会炸，所以每处都先判 isinstance(src, str)。
+        两种失败都是真的：吞掉的话，作者补完 src 重跑才发现还有下一处，
+        而且开头那句"有 1 处问题"会让他以为补完就干净了；抛异常的话，他看到
+        的是一条从没见过的栈。
         """
         err = err_of({"seg1": {"muted": "true", "loop": "no"}})
         self.assertIn("缺少 'src'", err)
-        self.assertIn("muted", err)   # 播放组不因缺 src 而被整体跳过
+        self.assertIn("muted", err)
+        self.assertIn("loop", err)
 
     def test_bad_key_stops_only_that_entry(self):
         """key 不合法的那段只报它自己那一条，不牵连别的段。
@@ -160,6 +161,17 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         self.assertIn("合法段 id", err)
         self.assertIn("'seg2'", err)
         self.assertIn("2 处问题", err)
+
+    def test_video_opts_on_entry_without_src_reports_missing_src_not_crash(self):
+        """src 缺失时写了音轨键：报"缺少 src"，不报"不是视频"也不抛异常。
+
+        钉住一条隐式契约：_is_video_src 假定 src 是字符串（它的前提由_validate_entry
+        的早退保证）。哪天有人把调用挪到早退之前，这里就会变成裸 TypeError。
+        """
+        err = err_of({"seg1": {"volume": 1.0, "duck": True}})
+        self.assertIn("缺少 'src'", err)
+        self.assertNotIn("不是视频", err)
+        self.assertNotIn("TypeError", err)
 
     def test_valid_entries_still_pass_and_get_normalized(self):
         """重构没改正常路径：合法条目照过，且 src 仍被归一回正斜杠。"""

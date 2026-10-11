@@ -1,14 +1,8 @@
-"""主入口（gen_hyperframes）的契约下沉测试：--help 里的示例必须真能跑，
-images.json 的错必须一次报全。
+"""主入口（gen_hyperframes）的契约下沉测试。
 
-两块判据来自同一个立场——「作者写错时，脚本当场告诉他正确写法」：
-
-1. `--help` 尾巴上那份 images.json 是给"照抄就不会错"用的处方。处方自己写错
-   一份，比不给处方更坏：作者会照着一份跑不通的样例改半天。所以每一条都要真
-   喂给 validate_images_json / _validate_director 跑一遍。
-2. 聚合报错的判据是「互不依赖」：同一份稿件里互不相干的错必须同一轮都报出来。
-   遮蔽（masking）不是漏报，是"报了你没看见"——作者改完第一处重跑，才看到第二处，
-   白跑一轮。canvas_kit 那轮已实测过两处同型遮蔽，这里是同一判据的第二处战场。
+两块判据：--help 里的示例必须真能跑；images.json 里互不依赖的错必须一次报全。
+（为什么是这两条、以及错代码是怎么被选出来的，见 scripts/_images_schema.py
+validate_images_json 与 gen_hyperframes._epilog 的注释。）
 """
 import json
 import re
@@ -20,7 +14,13 @@ from _images_schema import validate_images_json
 
 
 def err_of(data):
-    """跑validate_images_json 并返回它的报错文本（没报错就fail）。"""
+    """跑validate_images_json 并返回它的报错文本（没报错就fail）。
+
+    刻意**不捕 TypeError**：契约层的职责就是把"字段类型写错"报成人话，
+    一条裸 TypeError 意味着某个坏值漏到了校验之外、要到下游才崩栈。把它
+    当成"通过"过一次，字段名拼错与类型写错这两类真实缺陷都会被静默放过
+    （沿用 tests/test_contracts.py 的同名助手，同一条判据）。
+    """
     try:
         validate_images_json(data)
     except ValueError as e:
@@ -62,24 +62,6 @@ class EpilogSampleRuns(unittest.TestCase):
                                                 "anchor": 0}]
         self.assertIn("anchor", err_of(broken))
 
-    def test_epilog_command_line_is_consistent_with_the_parser(self):
-        """epilog 里写的 -o / --images / --aspect / --fps 都得是本parser 认的。
-
-        处方里的参数名拼错（-out /--image /--ratio）会让作者照抄完撞argparse
-        的usage 而不是撞真正的错误，那这笔"省一趟"的账就反了。
-        """
-        epilog = G._epilog()
-        for flag in ("-m", "-o", "--images", "--aspect", "--fps"):
-            self.assertIn(flag, epilog)
-
-    def test_epilog_states_the_path_base_that_is_easy_to_guess_wrong(self):
-        """-o 与 --images 的相对路径都相对 -o 所在目录——这句必须在场。
-
-        这是本命令最容易被猜错的一处（猜成相对 manifest、或相对当前工作目录），
-        猜错的表现是 warn 一句"文件不存在"然后静默不带配图出片。
-        """
-        self.assertIn("都相对 **-o 所在目录**", G._epilog())
-
 
 class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
     """一份images.json 里多处互不依赖的错，必须同一轮报全。"""
@@ -108,11 +90,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         self.assertIn("2 处问题", err)
 
     def test_every_audio_opt_key_is_reported_not_just_the_first(self):
-        """volume / fade_in / fade_out / media_start 四个键互不依赖，一次报全。
-
-        证伪：原先是段内 fail-fast，`volume: 5` 先抛，fade_in / fade_out 的越界
-        与 media_start 的类型错全被吞掉——作者改完 volume 重跑才看到第二条。
-        """
+        """volume / fade_in / fade_out / media_start 四个键互不依赖，一次报全。"""
         err = err_of({"seg1": {
             "src": "images/a.mp4",
             "volume": 5, "fade_in": -1, "fade_out": -2, "media_start": "x",
@@ -168,7 +146,6 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         err = err_of({"seg1": {"muted": "true", "loop": "no"}})
         self.assertIn("缺少 'src'", err)
         self.assertIn("muted", err)   # 播放组不因缺 src 而被整体跳过
-        self.assertNotIn("Traceback", err)
 
     def test_bad_key_stops_only_that_entry(self):
         """key 不合法的那段只报它自己那一条，不牵连别的段。

@@ -90,12 +90,6 @@
 
 值只能是上面这种对象；裸字符串路径（`{"seg1": "images/seg1.png"}`）会在契约层直接报错。
 
-**校验会一次报全所有问题**，不是修一处重跑一遍：一份稿件里同时写错
-`muted` 的类型、`volume` 的上限、`director` 挂在 PNG 上，脚本会一次列出
-全部几处（开头是「images.json 有 N 处问题：」）。键集与取值范围的清单
-不必背——写错时脚本报错本身就带合法取值与形状；`gen_hyperframes.py --help`
-的尾巴上还挂着一份实测跑通的完整 images.json，可以直接照抄。
-
 **上面这份键清单就是渲染端读的全部**：写了清单外的键（`alt`、`position`、`fit` 这类
 凭空发明的写法）不会生效——归一化配图的 `html_renderer._normalize_images`（由
 `gen_hyperframes.py` 在生成 HTML 时调用）会打一条 `[warn]` 点名是哪几个键，

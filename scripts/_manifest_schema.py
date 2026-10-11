@@ -118,10 +118,8 @@ def validate_timing_manifest(data):
 
     def _check_sentence_fields(s, where):
         if not isinstance(s, dict):
-            # 这条原来只有"必须是对象"五个字，而它是手写 manifest 的头号撞点：
-            # 最常见的错法是把 sentences 写成 sentence 的序号（[1]、[2]）或一句
-            # 台词字符串，因为两者都"看起来像一句话列表"。作者拿到五个字只能回去
-            # 读文档，而这里把形状说清就省掉了那一趟。
+            # 手写 manifest 的头号撞点：把 sentences 写成句序号（[1]、[2]）或
+            # 一句台词字符串，因为两者都"看起来像一句话列表"。
             raise ValueError(
                 f"{where} 必须是对象，不是句序号也不是台词文本。"
                 "每个元素是完整的一句："

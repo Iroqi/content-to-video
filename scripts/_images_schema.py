@@ -494,9 +494,7 @@ def validate_images_json(data):
     """
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
-    # 按段聚合：一份 images.json 里同时写错四处（muted 写成字符串、fade_in 负数、
-    # volume 超上限、director.steps 写错形态）是手写稿的常态，fail-fast 会让作者
-    # 为每处错各跑一轮脚本。段与段之间互不依赖，所以按段收集、段内按组收集。
+    # 分组判据是「互不依赖」：段与段之间互不依赖，按段收集，段内按组收集。
     errs = []
     for key, value in data.items():
         _validate_entry(key, value, errs)
@@ -509,15 +507,15 @@ def validate_images_json(data):
 def _collect(errs, what):
     """跑一项检查，把它的 ValueError 收进 errs 而不是中断整段。
 
-    只收 ValueError：那是本模块自己抛的"写法不对"，值得攒齐一次报全。
-    别的异常（TypeError 之类）照常炸出去——那种是代码有 bug，攒起来只会
-    让报错变成一堆噪声。
+    只收 ValueError：别的异常（TypeError 之类）是代码有 bug，攒起来只会让
+    报错变成一堆噪声。
+
+    按行摊平：一组检查内部可能一次报多条（四个播放开关、四个音轨键各自独立），
+    不摊平的话开头那句"N 处问题"会少数落。
     """
     try:
         what()
     except ValueError as e:
-        # 按行摊平：一组检查内部可能一次报多条（四个播放开关、四个音轨键各自
-        # 独立），不摊平的话开头那句"N 处问题"会少数落，作者也就不知道漏了几条。
         errs.extend(str(e).splitlines())
 
 
@@ -541,9 +539,7 @@ def _validate_entry(key, value, errs):
         return
     src = value.get("src")
     # 四组之间互不依赖：type 组不看播放开关、路径组不判媒体类型、动画组只问
-    # "是不是 SVG"。唯一跨组的前提是 src 得先是个字符串，否则 classify_media_path
-    # 会炸——所以 type 组之外的地方都先判 isinstance(src, str)，缺 src 那条错
-    # 由 type 组统一报，不在这里叠第二句。
+    # "是不是 SVG"。唯一跨组的前提是 src 得先是个字符串。
     _collect(errs, lambda: _check_type(key, value, src))
     _collect(errs, lambda: _check_playback(key, value, src, errs))
     _collect(errs, lambda: _check_paths(key, value, errs))
@@ -564,8 +560,8 @@ def _check_type(key, value, src):
                if _t in ("chart", "formula") else ""))
     if "src" not in value:
         raise ValueError(f"images.json 的 '{key}' 对象格式缺少 'src' 字段（媒体路径）")
-    # 上面 dict 分支已拦缺键；非字符串（数字、列表这类手写 manifest 才会给）
-    # 在这里点名，空串交给 validate_relative_project_path 的统一判定。
+    # 非字符串（数字、列表这类手写 manifest 才会给）在这里点名；空串交给
+    # validate_relative_project_path 的统一判定。
     if not isinstance(src, str):
         raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
 
@@ -573,9 +569,9 @@ def _check_type(key, value, src):
 def _check_playback(key, value, src, errs):
     """播放开关（布尔）+ 视频音轨四件套 + duck。
 
-    内部分三小段、各自聚合，因为这三个小段之间互不依赖：`muted` 写错跟
-    `fade_in` 越界是两处独立的手误，谁也不需要谁先对。真正共享的前置只有
-    一个——「这个 src 是不是视频」，那是每段各算一次的事实，不是三段之间的依赖。
+    内部分三小段、各自聚合，因为这三段互不依赖：`muted` 写错跟 `fade_in`
+    越界是两处独立的手误。共享的前置只有一个——「这个 src 是不是视频」，
+    那是每段各算一次的事实，不是三段之间的依赖。
     """
     _collect(errs, lambda: _check_flags(key, value))
     _collect(errs, lambda: _check_audio_opts(key, value, src))
@@ -689,10 +685,9 @@ def _check_poster(key, value):
 
 def _check_src_path(key, value):
     """src 的路径归一（顺带把越界/绝对路径挡掉）。"""
+    # src 缺失或不是字符串的错由 _check_type 报，这里跳过而不是撞 KeyError——
+    # 聚合报错最怕的就是"帮你报了错、又顺手抛个你没见过的异常"。
     src = value.get("src")
-    # src 缺失或不是字符串的错由 _check_type 报（那里已经点名），这里跳过归一化
-    # 而不是让它撞 KeyError ——聚合报错最怕的就是这种"帮你报了错、又顺手抛个
-    # 你没见过的异常"。空串交给 validate_relative_project_path 的统一判定。
     if not isinstance(src, str):
         return
     # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端

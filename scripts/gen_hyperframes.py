@@ -949,25 +949,26 @@ def audio_fallback_check(audio_path, want_total):
 def _epilog():
     """--help 的尾巴：一条能照抄的命令 + 一份实测跑通的 images.json。
 
-    为什么把它放进--help 而不是留给文档：这条命令有 7 个参数，其中三个
-    （-m / -o / --images）拼错就是静默降级或找不到文件，而 -o 与 --images 的
-    **相对路径基准是同一个**（输出 HTML 所在目录），这一点纯靠猜是猜不出来的。
-    文档是动笔前读的，--help 是撞错时才会看的——所以正确写法必须出现在撞错
-    的那一刻能被看到的地方。
+    只放「看例子比读文字快」的东西：-o 与 --images 的相对路径都相对 -o 所在
+    目录（同一个基准，纯靠猜猜不出），以及三种素材条目各自的完整形状。
+
+    这里刻意**不列**「容易写错的几处」：那些撞一次错就全知道，而且报错比
+    任何清单都具体（写错 volume 越界时报错带出合法区间与这点的含义）。
+    在 --help 里抄一份取值表只会让它看起来像需要背的规则。
     """
     return "\n".join([
         "",
-        "典型调用（run.py 一条命令跑完整条管线；分步执行时用这两步）：",
+        "分步执行时的两步（run.py 一条命令跑完整条管线）：",
         "",
-        "  # 1) 由 pipeline.py 产出 timing_manifest.json（见 run.py --help）",
-        "  # 2) 生成 HTML。-o 与 --images 的相对路径都相对 **-o 所在目录**：",
         "  python scripts/gen_hyperframes.py \\",
         "      -m audio_output/timing_manifest.json \\",
         "      -o hf-project/index.html \\",
         "      --images hf-project/images.json \\",
         "      --aspect portrait --fps 24",
         "",
-        "可直接照抄的 images.json（键=段 id，值=媒体对象；实测跑通）：",
+        "（-o 与 --images 的相对路径都相对 -o 所在目录）",
+        "",
+        "可直接照抄的 images.json（三类素材条目，实测跑通）：",
         "",
         "  {",
         '    "seg1": {"src": "images/seg1.png",',
@@ -981,17 +982,6 @@ def _epilog():
         '              "muted": true, "loop": true, "poster": "images/seg3.png",',
         '              "volume": 1.0, "fade_in": 0.3, "duck": true}',
         "  }",
-        "",
-        "容易写错的几处（写错时的报错比这段说明更具体，但先知道形状省一趟）：",
-        "  · src 必填，且必须是相对项目根的路径；裸字符串（\"images/seg1.png\"）"
-        "不是合法条目",
-        "  · loop / muted / autoplay / playsinline / duck 必须是 JSON 布尔 "
-        "true/false，写字符串 \"false\" 会被拒（它是真值）",
-        "  · volume / fade_in / fade_out / media_start 只对 video 生效，写在"
-        "位图条目上不算错但也不会生效（契约层直接拒）",
-        "  · director 与 stage 只认 .svg；stage 只认 \"keep\"",
-        "  · 只有内容段落（seg* / opening / closing）才消费配图；layout:\"agenda\" "
-        "的页即使写进images.json 也会被弹出",
         "",
     ])
 

@@ -32,3 +32,9 @@ jobs:
 
       - name: Doc cross-reference check
         run: python tests/check_docs.py
+
+      # 文档里的数字是代码常量的复制品。这一步让"改常量忘了改文档"当场失败，
+      # 而不是等某天两个人拿着不同的阈值做决策。check_docs 管"指向哪"，
+      # 它管不了"是几"。
+      - name: Number contract check
+        run: python tests/check_numbers.py

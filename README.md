@@ -108,7 +108,7 @@ agent 才做最后一步渲染，交给你 MP4。它同时附一份生产报告�
 
 ## 维护者
 
-改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空、SKILL.md 与 references/ 是不是又胖回去了；改了任何写进文档的阈值（画布尺寸、字号下限、告警门限、时间容差…）还要跑 `python tests/check_numbers.py`，它逐条比对代码常量与文档里的数字，改一边不改另一边就报错。两个检查都在 CI 里跑。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
+改完代码跑 `python -m unittest discover -s tests`。它只用标准库，约 2 秒，不需要网络 / ffmpeg / Node。改标题或瘦身文档后再跑 `python tests/check_docs.py`，检查「章节」交叉引用有没有悬空、SKILL.md 与 references/ 是不是又胖回去了；改了任何写进文档的阈值（画布尺寸、字号下限、告警门限、时间容差…）还要跑 `python tests/check_numbers.py`，它逐条比对代码常量与文档里的数字，改一边不改另一边就报错。`python tests/check_examples.py` 则把文档里的示例真跑一遍——示例一旦跑不通就退出码非 0。三个检查都在 CI 里跑。有意改视觉导致 HTML 快照变化时，用 `UPDATE_GOLDEN=1` 重新生成 `tests/golden/`。
 
 发布时手动压缩技能目录。剔掉这些内容：
 

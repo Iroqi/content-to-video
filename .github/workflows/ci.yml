@@ -38,3 +38,8 @@ jobs:
       # 它管不了"是几"。
       - name: Number contract check
         run: python tests/check_numbers.py
+
+      # 文档里的示例必须真能跑。示例退化成"看起来对"的那天，读者要自己再撞一遍
+      # 当初试错撞出来的坑——那笔账比一条CI 检查贵得多。
+      - name: Doc example check
+        run: python tests/check_examples.py

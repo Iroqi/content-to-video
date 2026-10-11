@@ -1,10 +1,14 @@
 import contextlib
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import _helpers as H  # noqa: F401  sys.path 装配
 import check_svg
@@ -278,8 +282,20 @@ class DocRefChecker(unittest.TestCase):
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
 
 
+class DocExampleChecker(unittest.TestCase):
+    """文档里的 spec 示例必须真能跑 canvas_kit。
+
+    理由写在 tests/check_examples.py 的模块头：那份示例是从零试错试出来的（撞过
+    9 次），示例跑不通就等于让读者再撞一遍。这里只调main()，不另写一份实现——
+    同一个断言写两遍，改一处忘另一处就是漏网。
+    """
+
+    def test_doc_examples_run(self):
+        import check_examples
+        self.assertEqual(check_examples.main(), 0)
+
+
 class NumberChecker(unittest.TestCase):
-    """文档里的数字是代码常量的复制品。这组测试保证复制品没漂。"""
 
     def test_doc_numbers_match_code(self):
         self.assertEqual(check_numbers.main(), 0)

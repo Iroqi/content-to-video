@@ -538,12 +538,34 @@ def _validate_entry(key, value, errs):
             f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
         return
     src = value.get("src")
-    # 四组之间互不依赖：type 组不看播放开关、路径组不判媒体类型、动画组只问
-    # "是不是 SVG"。唯一跨组的前提是 src 得先是个字符串。
+    # type 组先报src 缺失/类型，之后各组只在 src 是字符串时才查路径与媒体类型——
+    # 早退会把同段里其它键的错一起吞掉（比只报一条更糟：改完 src 重跑才知道
+    # 还有下一处）。四个播放开关不依赖 src，缺 src 也要照报。
     _collect(errs, lambda: _check_type(key, value, src))
-    _collect(errs, lambda: _check_playback(key, value, src, errs))
-    _collect(errs, lambda: _check_paths(key, value, errs))
-    _collect(errs, lambda: _check_animation(key, value, src, errs))
+    _collect(errs, lambda: _check_flags(key, value))
+    _collect(errs, lambda: _check_provenance(key, value))
+    if "inline_svg" in value:
+        errs.append(
+            f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
+            "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
+    if not isinstance(src, str):
+        return
+    _collect(errs, lambda: _check_audio_opts(key, value, src))
+    _collect(errs, lambda: _check_duck(key, value, src))
+    _collect(errs, lambda: _check_poster(key, value))
+    _collect(errs, lambda: _normalize_src(key, value, src))
+    _collect(errs, lambda: _check_director(key, value, src))
+    _collect(errs, lambda: _check_stage(key, value, src))
+
+
+def _normalize_src(key, value, src):
+    """src 路径归一后回写（顺带把越界/绝对路径挡掉）。
+
+    回写是必需的：Windows 手写的 images\\seg1.png 若原样流到渲染端会被
+    quote() 成 images%5Cseg1.png，跨平台即坏图。
+    """
+    value["src"] = validate_relative_project_path(
+        src, f"images.json 的 '{key}' 的 src")
 
 
 def _check_type(key, value, src):
@@ -566,24 +588,10 @@ def _check_type(key, value, src):
         raise ValueError(f"images.json 的 '{key}' 的 src 必须是字符串")
 
 
-def _check_playback(key, value, src, errs):
-    """播放开关（布尔）+ 视频音轨四件套 + duck。
-
-    内部分三小段、各自聚合，因为这三段互不依赖：`muted` 写错跟 `fade_in`
-    越界是两处独立的手误。共享的前置只有一个——「这个 src 是不是视频」，
-    那是每段各算一次的事实，不是三段之间的依赖。
-    """
-    _collect(errs, lambda: _check_flags(key, value))
-    _collect(errs, lambda: _check_audio_opts(key, value, src))
-    _collect(errs, lambda: _check_duck(key, value, src))
-
-
 def _is_video_src(value, src):
-    """这个条目的 src 是不是视频（type 是 "auto" 时按扩展名判，与
-    classify_media_path 同一条路）。src 不是字符串时返回 False——缺 src 的错
-    由 _check_type 报，别让 None 撞进 splitext。"""
-    return (isinstance(src, str)
-            and classify_media_path(src, value.get("type") or "auto") == "video")
+    """src 是不是视频（type 缺省即auto 时按扩展名判，与 classify_media_path
+    同一条路）。调用方保证 src 是字符串。"""
+    return classify_media_path(src, value.get("type") or "auto") == "video"
 
 
 def _check_flags(key, value):
@@ -605,9 +613,9 @@ def _check_audio_opts(key, value, src):
 
     位图/SVG/GIF 没有音轨也没有可 trim 的时间轴，写了不会生效 = 静默丢键，
     按契约层统一口径拒。
+
+    调用方保证 src 是字符串。
     """
-    if not isinstance(src, str):
-        return  # 缺 src 的错让 _check_type 报，不在这里叠第二句
     _errs = []
     for _opt, (_lo, _hi, _hint) in _VIDEO_AUDIO_OPTS.items():
         if _opt not in value:
@@ -646,7 +654,7 @@ def _check_duck(key, value, src):
     if "duck" not in value:
         return
     _errs = []
-    if isinstance(src, str) and not _is_video_src(value, src):
+    if not _is_video_src(value, src):
         _errs.append(
             f"images.json 的 '{key}' 写了 duck，但 src={src!r} 不是视频"
             f"（type={(value.get('type') or 'auto')!r}）——duck 只对 video 生效，"
@@ -657,16 +665,6 @@ def _check_duck(key, value, src):
             f"（实际: {value['duck']!r}）")
     if _errs:
         raise ValueError("\n".join(_errs))
-
-
-def _check_paths(key, value, errs):
-    """poster / src 的路径形态与归一回写，provenance 字段必须是字符串。
-
-    三个小段互不依赖，各自聚合：poster 写成空串不该挡住 source_url 写成数字。
-    """
-    _collect(errs, lambda: _check_poster(key, value))
-    _collect(errs, lambda: _check_src_path(key, value))
-    _collect(errs, lambda: _check_provenance(key, value))
 
 
 def _check_poster(key, value):
@@ -683,19 +681,6 @@ def _check_poster(key, value):
         poster, f"images.json 的 '{key}' 的 poster")
 
 
-def _check_src_path(key, value):
-    """src 的路径归一（顺带把越界/绝对路径挡掉）。"""
-    # src 缺失或不是字符串的错由 _check_type 报，这里跳过而不是撞 KeyError——
-    # 聚合报错最怕的就是"帮你报了错、又顺手抛个你没见过的异常"。
-    src = value.get("src")
-    if not isinstance(src, str):
-        return
-    # 回写归一值：Windows 手写的 images\seg1.png 若原样流到渲染端
-    # 会被 quote() 成 images%5Cseg1.png，跨平台即坏图。
-    value["src"] = validate_relative_project_path(
-        src, f"images.json 的 '{key}' 的 src")
-
-
 def _check_provenance(key, value):
     """provenance 记账字段必须是字符串。"""
     _errs = []
@@ -704,19 +689,6 @@ def _check_provenance(key, value):
             _errs.append(f"images.json 的 '{key}' 的 {field} 必须是字符串")
     if _errs:
         raise ValueError("\n".join(_errs))
-
-
-def _check_animation(key, value, src, errs):
-    """inline_svg / director / stage——三个只在 SVG 上成立的键，各自聚合。"""
-    # inline_svg 是 gen_hyperframes 净化回填的内部键，绝不允许用户在
-    # images.json 里手写——手写等于绕过 _svg_sanitize 把任意字符串塞进
-    # 成片 DOM（内联 SVG 是同源活节点）。
-    if "inline_svg" in value:
-        errs.append(
-            f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
-            "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
-    _collect(errs, lambda: _check_director(key, value, src))
-    _collect(errs, lambda: _check_stage(key, value, src))
 
 
 def _check_director(key, value, src):

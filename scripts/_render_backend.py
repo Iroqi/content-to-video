@@ -17,6 +17,7 @@ render_wait。hyperframes_spec / resolve_command / fmt_cmd 是模块内部的命
 成片容器固定 mp4（由 -o 后缀决定），透明底/mov/webm 已从本技能移除。
 """
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -51,6 +52,62 @@ def hyperframes_command(project: Optional[str] = None) -> list[str]:
         return [local]
     npx = shutil.which("npx")
     return [npx or "npx", "--yes", hyperframes_spec()]
+
+
+# Hyperframes CLI 的 package.json 写着 `"engines": {"node": ">=22"}`。低于它的
+# Node 不会在 run.py 这一侧报"版本不够"——它只看到 npx/CLI 以各种形态失败：
+# npm 的 Unsupported engine、CLI 的语法错误、或者卡在 Chrome 启动上。版本是
+# **渲染前就已知的前提**，不是渲染失败的产物，所以开跑前问一次。
+MIN_NODE_MAJOR = 22
+
+
+def node_major_version():
+    """本机 `node` 的主版本号；没装 node、或输出读不懂时返回 None。
+
+    返回 None 一律按"查不到"处理（调用方只 warn）：PATH 上没有 node 时后面
+    的 Popen 本来就会报"请确认 Node.js 已安装"，这里再拦一次只是把同一件事
+    说两遍，还会把"node 不在 PATH 但有别的 node"这类环境误杀。
+    """
+    exe = shutil.which("node")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = ((r.stdout or b"") + (r.stderr or b"")).decode("utf-8", "replace")
+    # node 恒以 `v22.13.0` 起头；nvm/自定义构建偶有前缀噪声，所以只搜第一个
+    # 三段式版本号，不要求它顶行。
+    m = re.search(r"v?(\d+)\.\d+\.\d+", out)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def node_version_gate():
+    """渲染前的 Node 版本闸，返回 (判定, 说给人听的话)。
+
+    判定为 "ok"（够，或查不到且无需多说）/ "warn"（查不到，交给旧路径报错）/
+    "block"（明确不够，必须拦下）。只有"明确不够"才阻断：拿版本当门禁的前提
+    是量到了版本，没量到就当门禁等于拿未知当已知。
+    """
+    major = node_major_version()
+    if major is None:
+        return ("warn",
+                f"查不到 Node 版本（`node --version` 不可用）：Hyperframes 要求 Node "
+                f"≥ {MIN_NODE_MAJOR}，版本不够会在 CLI 侧以难懂的形态失败。")
+    if major < MIN_NODE_MAJOR:
+        return ("block",
+                f"本机 Node 是 v{major}，Hyperframes CLI 要求 Node ≥ {MIN_NODE_MAJOR}"
+                f"（它的 package.json 里 engines 写死这一条）。旧版 Node 上渲染通常"
+                f"不在这一步失败，而是表现为 npx 报 Unsupported engine、CLI 报语法"
+                f"错误、或卡在 Chrome 启动上——先看 `hyperframes doctor` 确认依赖，"
+                f"再决定升 Node 还是钉一个兼容的 CLI 版本"
+                f"（CTV_HYPERFRAMES_PACKAGE=hyperframes@<版本>）。")
+    return ("ok", "")
 
 
 def _resolve_npx_shim(shim_path):

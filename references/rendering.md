@@ -126,11 +126,11 @@ hf-project/
 
 ## 性能参数
 
-默认值与可用档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality standard`），这里只写"什么时候该动它"：
+默认值与可用档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写"什么时候该动它"：
 
 - `fps`：抓帧耗时与帧数严格线性，是唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`，别拿定稿规格反复试。
 - `workers`：`run.py` 字面透传给 `hyperframes render`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
-- `quality`：draft 约省 15%，预览够用。
+- `quality`：五档**字面透传**给 CLI（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 是 CLI 自己的默认档（standard 编码 + CRF 16），也是本技能的默认；`draft` 约省 15%，预览够用；`delivery` 是 high 的交付档。注意 `standard` / `high` 是**不带 CRF 覆写的裸档**：同样写着 standard，`looks` 多一层 CRF 16、成片更清楚也更大——别把裸档当成"官方标准档"。
 - **固定开销**：每调用一次渲染约白付 8.5s（与帧数无关），冷跑第一次还多约 6s。所以"改一处重渲一次"很不划算：先 `--until html` + 快照看够，再整片渲一次。
 
 ## 官方校验命令（优先于手搓探针）
@@ -158,6 +158,14 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   **再见到 `text_occluded` 先别当版面 bug**——先用 `snapshot --at <时刻>` 看画面：文字真被遮（配图压住句子流）就调版式，画面正常则是这个漏判回来了。
 - `snapshot --at` 精确取时刻帧并自动拼 contact sheet，比"复制 HTML + 注入 `tl.pause(t)` + Chrome `--screenshot`"省事且不会踩 vendor 相对路径的坑；手搓探针只在需要同一页连取多帧、或 `snapshot` 不可用时作后备。
 - 渲染前判断本机依赖齐不齐，用 `npx -y hyperframes doctor`：全绿就可以直接跑真渲染，不必止步于 HTML 预览（Chrome headless shell 由 Hyperframes 自己下载并缓存在 `~/.cache/hyperframes/chrome/`，FFmpeg 走第 3 步那条查找链）。
+- **三条命令之外的口径**（都是官方 CLI 自己写明的，踩上去不报错，所以单列）：
+  - `validate` / `inspect` / `layout` 是**废弃别名**，官方文档写明它们不得出现在新指令或脚本里——一律用 `check`。
+  - `check` 会**先跑 `lint`**：迭代期要快反馈就单跑 `lint`（纯静态、不开浏览器），定稿再跑 `check`；两条连着跑等于把 lint 跑两遍。
+  - `doctor --json` **恒退出 0**——拿它当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`），只看退出码永远"通过"。
+  - `check` 的退出码只由**持久** findings 决定，入场/出场那一瞬的 findings 是信息性的。所以"看到 ✗ 却 exit 0"不是门禁失灵——上面那条噪声清单正建立在这个区分上。
+- 要**跨机逐帧一致**用 `render --docker`：它钉住 Chromium 版本、字体集与 FFmpeg 编码器，让平台本身不再是输入（本机字体/Chrome 差异实测会让同一份稿件差出一像素）。本机迭代不必付这份开销。
+- 要核对装配后的时间轴（尤其嵌套子合成的绝对起止）用 `hyperframes timeline --json`，别去读 `index.html` 自己算。
+- `npx hyperframes preview --background` 起本地预览服务：它跑的是与渲染同一条 runtime，比直接打开 `index.html` 更贴近成片。
 
 ## 画面翻车速查表
 

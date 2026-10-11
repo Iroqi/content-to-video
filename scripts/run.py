@@ -32,7 +32,7 @@ from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, render_wait,
-                             probe_video_duration)
+                             probe_video_duration, node_version_gate)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
@@ -238,9 +238,14 @@ def _build_parser():
                         help="输出帧率（默认 24；12 是快速看画面的低规格迭代档）。"
                              "实测档位与耗时见 references/rendering.md「性能参数」。"
                              "gen_hyperframes 自己还接受 1–240，这里只放行实测过的档位")
-    parser.add_argument("--quality", default="standard",
-                        choices=["draft", "standard", "high"],
-                        help="渲染质量（默认 standard）")
+    parser.add_argument("--quality", default="looks",
+                        choices=["draft", "looks", "standard", "high", "delivery"],
+                        help="渲染质量（默认 looks）。五档是 Hyperframes CLI 自己的取值，"
+                             "字面透传：looks = standard 编码 + CRF 16（CLI 的默认档，"
+                             "定稿用这一档）；draft 约省 15%%，只够预览；delivery = high，"
+                             "交付档。standard / high 是不带 CRF 覆写的裸档——同样写着"
+                             "standard，looks 比它多一层 CRF 16，成片更清楚也更大，"
+                             "所以默认选官方那一档而不是裸档")
     parser.add_argument("--workers", type=int, default=4,
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
                              "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
@@ -489,6 +494,14 @@ def main():
         return
 
     # ── 第 5 步 b：渲染 ───────────────────────────────────────────
+    # 渲染前置条件先问一遍：Node 版本不够时 CLI 侧的失败形态与"没装 Node"看不
+    # 出区别，等它失败再翻日志末尾是拿结果猜原因。
+    _verdict, _node_msg = node_version_gate()
+    if _verdict == "block":
+        raise SystemExit(f"[run] {_node_msg}")
+    if _verdict == "warn":
+        print(f"[run][warn] {_node_msg}", file=sys.stderr)
+
     out_video = os.path.join(project, "out.mp4")
     hf_render = build_render_command(
         out_video, args.quality, args.fps, args.workers, command=_HF_COMMAND,

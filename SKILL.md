@@ -38,9 +38,9 @@ SKILL.md 只留工作流与红线，**细节都在 `references/`，按你此刻�
 | Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
 | **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（即使全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
-| Node.js + `npx hyperframes`，及其驱动的 headless Chrome | 仅第 5 步渲染 | 出不了 MP4，前四步照常 |
+| **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes`，及其驱动的 headless Chrome | 仅第 5 步渲染 | 版本不够在渲染前直接拦下（CLI 侧的失败形态看不出是版本问题）；没装 Node 则出不了 MP4，前四步照常 |
 
-其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖 Hyperframes 包名/版本钉固，默认 `hyperframes`）。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
+其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖 Hyperframes 包名/版本钉固，默认 `hyperframes`）。CLI 默认取最新版，跨机逐帧可复现要钉版本（该变量写 `hyperframes@1.2.3`）或走 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
 
 GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用，新机器第一次生成需联网，之后离线。GSAP 的 sha256 已钉固，每一级取用都重算哈希，不一致则拒绝落盘。HTML 只引用本地 `vendor/`。取不到 CDN 时可用 `gen_hyperframes.py --gsap-src` 指定本地文件。
 

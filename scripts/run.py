@@ -24,7 +24,8 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _timeline import DEFAULT_GAP, DEFAULT_SPEED, validate_speed  # noqa: E402
+from _timeline import (DEFAULT_GAP, DEFAULT_SPEED, validate_speed,  # noqa: E402
+                       duration_tolerance)
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
@@ -534,10 +535,11 @@ def main():
     # 不在片里，字幕、配图、导演节拍全跟着丢，而控制台照打"完成、成片：…"。
     # 这是整条管线唯一没有契约的一段——渲染之前的每一步都有校验拦着，渲染
     # 之后只剩"文件在且非空"。所以这里补最后一道：拿成片实测时长与 manifest
-    # 的 total_duration 对账，容差沿用全仓既有的 max(1s, 2%)（音频与 manifest
-    # 对账就是这一档），量不到（ffmpeg 不可用）只降级 warn，不阻断交付。
+    # 的 total_duration 对账，容差取全仓共用的那份（_timeline.duration_tolerance
+    # ——音频与 manifest 对账就是这一档），量不到（ffmpeg 不可用）只降级 warn，
+    # 不阻断交付。
     _expected = float(_tm["total_duration"])
-    _tol = max(1.0, _expected * 0.02)
+    _tol = duration_tolerance(_expected)
     _actual = probe_video_duration(out_video)
     _REPORT["video"] = {
         "path": out_video,

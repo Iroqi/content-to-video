@@ -164,6 +164,21 @@ FACTS = [
         "末句不得超出 total_duration 的容差（0.25s → 文档写 250ms）",
     ),
     (
+        "duration-tolerance-floor",
+        ("const", "scripts/_timeline.py", "DURATION_TOLERANCE_FLOOR_S"), 1.0,
+        [("SKILL.md", r"max\(1s"),
+         ("references/rendering.md", r"max\(1s, 2%\)")],
+        "实测长度对账的绝对容差下限：短片按绝对量放行，不按 2% 放大到不足一秒",
+    ),
+    (
+        "duration-tolerance-ratio",
+        ("const", "scripts/_timeline.py", "DURATION_TOLERANCE_RATIO"), 0.02,
+        [("SKILL.md", r"2%\)"),
+         ("references/rendering.md", r"max\(1s, 2%\)")],
+        "同上，相对档：长片按比例放宽。音频回落闸与成片时长闸共用这一档，"
+        "两处各写一个数就会漂移",
+    ),
+    (
         "agenda-max-rows",
         ("json", "scripts/_template.py", "layout.vertical.agenda.maxRows"), 7,
         [("references/writing.md", r"7\s*行")],

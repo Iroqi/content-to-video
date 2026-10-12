@@ -8,9 +8,11 @@
 本文件只测闸门本身（退出码、报告字段、降级路径），量具
 `probe_video_duration` 的解析与容错在 tests/test_render_backend.py。
 """
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
 import os
 import unittest
 
+from _timeline import duration_tolerance
 from test_run_orchestration import Harness
 
 
@@ -29,9 +31,10 @@ class DurationGate(unittest.TestCase):
         self.assertEqual(rep["video"]["check"], "ok")
         self.assertAlmostEqual(rep["video"]["seconds"], self.expected, places=2)
         self.assertAlmostEqual(rep["video"]["expected_seconds"], self.expected, places=2)
-        # 容差沿用全仓既有的 max(1s, 2%)（音频与 manifest 对账那一档）
+        # 容差取全仓共用那份（_timeline.duration_tolerance，音频与 manifest
+        # 对账同一档）——两处闸门各写一遍公式就会漂移
         self.assertAlmostEqual(rep["video"]["tolerance_seconds"],
-                               max(1.0, self.expected * 0.02), places=2)
+                               duration_tolerance(self.expected), places=2)
         self.assertEqual(self.h.probe_calls,
                          [os.path.join(self.h.project, "out.mp4")])
 

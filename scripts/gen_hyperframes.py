@@ -157,7 +157,8 @@ from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
-from _timeline import beat_positions, beat_span, beat_cycles  # noqa: E402
+from _timeline import (beat_positions, beat_span, beat_cycles,  # noqa: E402
+                       duration_tolerance)
 
 from html_renderer import (  # noqa: E402
     segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
@@ -990,7 +991,7 @@ def audio_fallback_check(audio_path, want_total):
                 "能解码的音频）——无法证明它属于当前这份 manifest"
                 f"（时间轴 {want:.2f}s）。请重跑 TTS，或显式 --audio 指定这条稿子的"
                 "配音；把 ffmpeg 装回来也可，装好后会重新对账。")
-    if abs(got - want) > max(1.0, 0.02 * want):
+    if abs(got - want) > duration_tolerance(want):
         return (f"回落音频实测 {got:.2f}s 与 manifest 时间轴 {want:.2f}s 相差过大——"
                 "这是另一条时间轴的旧配音，拒绝用新字幕烧旧音轨。"
                 "请重跑 TTS，或显式 --audio。")

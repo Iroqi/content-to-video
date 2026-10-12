@@ -62,6 +62,20 @@ DEFAULT_GAP = 0.4
 # 下游仍按 0.25s 拒收，等于 TTS 额度烧完才告诉用户产物不能用。
 TIMELINE_TOLERANCE = 0.25
 
+# ── "实测长度 vs 时间轴总长"的对账容差────────────────────────────────
+# 同一个判断落在两处：回落音频属于哪条时间轴（gen_hyperframes
+# .audio_fallback_check）与成片是否演完（run.py 的时长闸）。两处各写一遍
+# max(1s, 2%) 就会漂移——音频闸放到 5%、时长闸仍按 2% 拦，用户看到两个
+# 口径。绝对 1s 兜底（短片 2% 不足一秒），相对 2% 封顶（长片按比例放）。
+DURATION_TOLERANCE_FLOOR_S = 1.0
+DURATION_TOLERANCE_RATIO = 0.02
+
+
+def duration_tolerance(expected):
+    """实测与时间轴对账的容差（秒）：max(1s, 2% × 期望时长）。"""
+    expected = float(expected)
+    return max(DURATION_TOLERANCE_FLOOR_S, expected * DURATION_TOLERANCE_RATIO)
+
 
 def estimate_sentence_seconds(sentence, chars_per_sec, speed):
     """单句预计时长（秒）：字数 / 语速 / 倍速。"""

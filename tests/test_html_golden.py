@@ -683,5 +683,62 @@ class CanvasPageAndVideoAttrs(unittest.TestCase):
         self.assertRegex(tag[0], r'poster="[^"]*"\s+data-')
 
 
+class LineWipeGateSingleSource(unittest.TestCase):
+    """「这一页挂不挂引导线」只能有一个判定处。
+
+    分家就会静默错位：引导线元素在 `_reveal_line_html` 里注入、它的补间在
+    `_line_timeline_lines` 里生成。闸门一旦在这两处各算一次而其中一处漏改，
+    产物就是"DOM 里有那条线、但没有任何补间驱动它"——线永远停在初始位置
+    （页底一条accent 横杠），画面照出、全流程零报错。
+
+    这里的判据与 `_peel_shade_html` 同源：clips 阶段算出的 `gets_line` 是
+    唯一真源，三个渲染函数一律读它，不许各自回看模板档位。
+    """
+
+    def _src(self):
+        import html_renderer
+        with open(html_renderer.__file__, encoding="utf-8") as f:
+            return f.read()
+
+    def test_gate_is_computed_once_in_clips(self):
+        """闸门在 clips 阶段算一次并写进 clip，三处渲染只读不算。"""
+        self.assertIn('"gets_line"', self._src())
+        # 三个渲染函数里都不许再直接回看模板档位 + wipe
+        for fn in ("_reveal_line_html", "_peel_shade_html", "_line_timeline_lines"):
+            m = re.search(r"\ndef %s\(.*?\n(?=\ndef |\nclass |\Z)" % fn,
+                          self._src(), re.S)
+            self.assertIsNotNone(m, "%s 应仍存在" % fn)
+            body = m.group(0)
+            self.assertNotIn('segmentWipe"]["style"', body,
+                             "%s 不该自己回看转场档位（闸门已下沉到 gets_line）" % fn)
+
+    def test_line_element_and_its_tween_always_agree(self):
+        """线元素与其补间必须同生共死——分家就是静默错位。"""
+        for style in ("line", "vertical", "diagonal", "circle"):
+            with self.subTest(style=style):
+                html = self._render_with_style(style)
+                has_el = 'id="line-' in html
+                has_tween = "#line-" in html
+                self.assertEqual(has_el, has_tween,
+                                 "%s 档：线元素 %s 而补间 %s，两者必须同时存在"
+                                 % (style, "有" if has_el else "无",
+                                    "有" if has_tween else "无"))
+
+    def _render_with_style(self, style):
+        import html_renderer as hr
+        orig = hr.load_template
+
+        def patched():
+            tpl = orig()
+            tpl["animation"]["segmentWipe"]["style"] = style
+            return tpl
+
+        hr.load_template = patched
+        try:
+            return render()
+        finally:
+            hr.load_template = orig
+
+
 if __name__ == "__main__":
     unittest.main()

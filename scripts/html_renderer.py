@@ -862,6 +862,7 @@ def _prepare_card(rc, clip):
         # 擦除起点，可用时长里还含着入场那段 wipe，短开场段里两者差一整个 gap。
         vis=vis_d,
         peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
+        gets_line=clip["gets_line"],
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, title_size=title_size,
@@ -953,8 +954,9 @@ def _reveal_line_html(rc, card):
     """引导线：进度条的续命——转场时这条 accent 高亮线从页底"脱开"向上扫，
     新页跟着它被画出来（线的下缘 = clip-path 揭示边，同窗同曲线）。它是画面
     本来就有的元素（每段底部都在走的进度条）的下一段生命，不是闯进来的道具。
-    作为新卡的末子注入（绘制在内容之上、随父卡 clip-path 只露出揭示边以下部分）。"""
-    if rc.anim["segmentWipe"]["style"] != "line" or card.wipe <= 0:
+    作为新卡的末子注入（绘制在内容之上、随父卡 clip-path 只露出揭示边以下部分）。
+    闸门读 card.gets_line（唯一真源，在 clips 阶段算好）。"""
+    if not card.gets_line:
         return ""
     lh = rc.anim["propLine"]["thickness"]
     return (f'    <div class="reveal-line" id="line-{card.sid}" '
@@ -966,7 +968,7 @@ def _peel_shade_html(rc, card):
     elevation 的浮起表面边缘变暗）。用覆盖层而非 box-shadow 是两个物理坑：
     卡的外投影会被自身 clip-path 整层裁掉；inset 内阴影又会被后画的 .bg 子层
     盖住。opacity 随 peel 同窗补间（纯属性，seek 确定性不变）。"""
-    if not card.gets_peeled or rc.anim["segmentWipe"]["style"] != "line":
+    if not card.gets_peeled:
         return ""
     sh = round(rc.height * rc.anim["propLine"]["peelShadeFrac"])
     return (f'    <div class="peel-shade" id="shade-{card.sid}" '
@@ -986,7 +988,7 @@ def _line_timeline_lines(rc, card):
     同窗同曲线 _wipe_ease，线的终位 -thickness 让它扫到顶时恰好缩没进边沿）；
     ② 旧页被线犁过之后整层上移剥离（power2.in 加速 + peelRotation 平面逆旋 +
     peelTilt 绕底边的透视后倒，纸真正"揭"起来而不是图层平移）。"""
-    if rc.anim["segmentWipe"]["style"] != "line" or card.wipe <= 0:
+    if not card.gets_line:
         return []
     a_ = rc.anim
     h = rc.height
@@ -1417,6 +1419,7 @@ def generate_html(manifest, audio_src, images=None,
             "start": round(start, 2),
             "duration": round(segment_duration(seg), 2),
             "gets_peeled": False,
+            "gets_line": False,
         })
     # 擦除转场几何一次算齐（_prepare_card 与 timeline 共用）。引擎按
     # data-start/data-duration 硬切 clip 可见性（实测补间排在窗口外等于没写，
@@ -1446,8 +1449,15 @@ def generate_html(manifest, audio_src, images=None,
         # line 档的剥离挂在被犁走的旧卡上：本卡揭开窗口 [win_start, +wipe]
         # 就是上一页的"被推走"窗口（旧卡窗口恰铺到本段音频起点，补间在窗内）。
         # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
-        # 上一页是画布段时也不剥：把一张活 diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
+        # 上一页是画布段时也不剥：把一张活diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
         # 画布页退场同样走硬切（被下一页直接盖住）。
+        #
+        # gets_line 与 gets_peeled 在这里一次算定，是"这一页挂不挂引导线"的**唯一
+        # 真源**：线元素由 _reveal_line_html 注入、它的补间由 _line_timeline_lines 生成、
+        # 底缘暗边由 _peel_shade_html 注入，三处一律读这里算好的标记。闸门分家就会
+        # 静默错位——DOM 里有线、却没有任何补间驱动它，线永远停在初始位置（页底一条
+        # accent 横杠），画面照出、全流程零报错。
+        clip["gets_line"] = bool(_is_line and clip["wipe"] > 0)
         clip["peel"] = None
         if (_is_line and i and clip["wipe"] > 0
                 and seg_layout(clips[i - 1]["seg"]) != "canvas"):

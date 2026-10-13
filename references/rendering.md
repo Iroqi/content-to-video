@@ -10,11 +10,7 @@
 
 ## 主题
 
-整期统一使用一个主题：
-
-- `dark`：默认，近黑极客风（终端绿网格 + 青绿点缀）；适合技术突破、发布、工程、前沿 AI、安全事件。
-
-命令行只在 `run.py` / `gen_hyperframes.py` 选择主题，不提供逐段主题切换。
+整期统一用一个主题，命令行只在 `run.py` / `gen_hyperframes.py` 选，不提供逐段切换：`dark` 是默认（近黑极客风，终端绿网格 + 青绿点缀），适合技术突破、发布、工程、前沿 AI、安全事件。
 
 ## 画面结构
 
@@ -36,7 +32,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 
   整页画布**不要自画满幅底板**：这一页底下模板本来就画着三层——主题渐变 `.bg`、只在页缘显形的网格 `.grid`、本段 accent 的氛围光 `::after`（见 `templates/composition.css` 画布块），SVG 的透明处就是这三层在出景深；一张满幅 `<rect>` 会把三层整个盖掉，画面立刻退回一片死平。为什么留透明、什么时候确实该自铺一张，见 `references/canvas.md`「不铺满幅底」。
 
-  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字。所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 的固有比例与图内 px 字号都要跟当前画幅对账——判据清单与"照片/视频不验比例只给知情 `[warn]`"这一档都写在 `references/canvas.md`「整页画布」，画那张图时按那份执行。想让它真的量一次图内文字，照 `references/canvas.md`「图内文字的对比度」的内联副本 + `check` 程序办。`check_svg.py --layout canvas` 现在会按**主题渐变的最坏一档**给字面 hex 填充算一次对比度，但渐变底、`class` 里的色、局部底板上的字它都管不着，那一次真测仍然要做。底部进度条与段落底轨在这里抬到 `z-index:2`：画布拉满全屏后一张铺到底的照片会把进度整个盖掉。
+  这一版把文字对比度从版式责任变成**画布作者的责任**：`Contrast` 门禁只数 HTML 文本，看不见 SVG 里的字，所以门禁改在生成期**按文件**拦：该段必须有配图（口径与报错见 `references/writing.md` 段落 `layout`），SVG 固有比例与图内 px 字号都要跟当前画幅对账。判据清单、"照片/视频不验比例只给知情 `[warn]`"那一档、以及真要量一次图内文字的办法，都在 `references/canvas.md`「整页画布」与「图内文字的对比度」，画那张图时按那两份执行。底部进度条与段落底轨在这里抬到 `z-index:2`：画布拉满全屏后一张铺到底的照片会把进度整个盖掉。
 
 opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取自顶层 `opening_tagline` / `closing_tagline`）+ 大标题 + 行列表 + verse。这一页自己就是一个版式值 `layout: "agenda"`，由 pipeline 盖章（它不是这一段自己的文字，而是对全片其它段的投影）；作者要把它换成整页海报，用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页就退化成内容段画布那条路：只剩一张满幅配图 + 进度条，标题层、句子流、章节行、`cta` 尾行连 DOM 都不生成。渲染器只按 `layout` 分派三档版式（`_segments.seg_layout()`），不再按 id 猜；漏盖 `layout` 不会报错也不会塌成槽位：`seg_layout()` 按 id 兜回 agenda。开屏/结尾行取哪些字段、行数上限、`nameTrim` 字数（含硬截断不补省略号、仅 CSS 补省略号的情况）、标题长度守卫阈值与截断优先级**以 `references/writing.md` 为准**。agenda 列是定高 flex 列，行列表紧跟题头排布（间距 16px），万一仍被撑满，牺牲的是行列表尾部（`overflow:hidden` 裁切），题头与句子流始终完整。agenda 标题两画幅都居左。
 
@@ -49,8 +45,7 @@ opening / closing 默认是**纯文字 agenda 卡**，不配图：kicker（取�
 - 段落入场默认是**方向擦除（wipe）**：新卡用一条 clip-path 从全遮蔽形状补到全覆盖形状，揭开整页（几何档时长与缓动取模板 `animation.segmentWipe`）；`style` 全片统一一档——`line`（**默认**，引导线：见下）、`vertical`（自下而上 inset 揭屏）、`diagonal`（顶边 30% 斜度、左角先行的斜向擦除）、`circle`（中心向外，71% = 圆心到角点的精确半径，任意画幅同值）；写错档生成期直接报错。wipe 三档旧卡**不淡出**，被新卡盖住后随引擎窗口切走。**整页画布除外**（`layout: "canvas"` 一律硬切，见本节末条）。
 - **`line` 引导线转场（进度条立起来画下一页）**：道具必须是画面本来就有的元素——外来道具（razor / pull 两版刀具都试过、都否）读起来永远是"贴纸在演"。画面里唯一自带方向感的运动体是底部进度条（随朗读从左往右），`line` 档就让它续命：转场时一条 accent 高亮线从页底"脱开"向上扫，**线的下缘就是新卡 clip-path 的揭示边**（同窗同曲线，`_wipe_ease` 单一口径），新页像被这条线画出来；旧页被线犁过之后整层上移剥离（`peelFrac` 屏高 + `peelRotation` 逆旋 + `peelTilt` 绕底边轴（`transformOrigin:"50% 100%"`）的 `rotationX` 透视后倒、`peelPerspective` 焦距；`peelEase` power2.in）。clip-path 在元素自身平面内先裁后变换，3D 不破坏揭开边。光影补全：被揭旧卡挂一层底缘暗边 `.peel-shade`（`peelShadeFrac` 屏高的黑渐变，opacity 与 peel 同窗拉起）；线形用两端渐隐、中心提亮的彗尾渐变。笔程走 `propLine.duration` + `propLine.ease`。线是新卡的末子（`propLine.thickness` px，颜色走新卡的 `--seg-accent`），随父卡 clip-path 只露出揭示边以下部分。wipe 被 gap 钳到 0 的段线与剥离都不生成（瞬间切）。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`（基准：几何档 `segmentWipe.duration`，line 档 `propLine.duration`），入场提前铺到 `win_start = s − wipe`，恰好在本段音频起点完成揭屏（line 档的线与剥离同窗同值）。字幕住在卡里，转场早于上一句念完就开始，等于下一段文字压着还在讲的话。
-- **揭屏能成立的前提是卡元素的 `data-duration` 覆盖整个入场窗口**：hyperframes 引擎按 `data-start`/`data-duration`
-  硬切 clip 可见性，补间排在窗口外等于没写（这正是旧 cross-fade 版查出的 bug：边界帧全黑、那一刻 GSAP opacity 仍是 0.999）。窗口 `[win_start, next_start]` 与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐；末卡窗口铺到成片结束。
+- **揭屏能成立的前提是卡元素的 `data-duration` 覆盖整个入场窗口**：hyperframes 引擎按 `data-start`/`data-duration` 硬切 clip 可见性，补间排在窗口外等于没写。窗口 `[win_start, next_start]` 与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐；末卡窗口铺到成片结束。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`，压在氛围光 `::after` 与内容之下）。透明卡做 wipe 时上一段文字会从新页底下透出，画面出现双影叠字（逐帧实拍复现）。
 - **整页画布（`layout: "canvas"`）不参与模板转场**：它的 `wipe` 在 clips 预处理里被强制归零，命中既有的"瞬间切"路径——引导线、旧页剥离、底缘暗边三处都以 `wipe<=0` 为闸自动不生成，整页画布在自己的**音频起点**整页出现（不向后借擦除窗口，因此导演每一拍的时间锚点都与画面严格对齐），退场则被下一页直接盖住；相邻的槽位版式/agenda 段转场原样保留（整页画布作为"上一页"时也不被剥走）。此规则按**版式**判定而非按擦除档，四档 `style` 下一律生效。代价是硬的：切过去的那一瞬间画布还是空的（导演从空场开始逐拍画），要消除这段空窗就得让导演的第一拍尽早落子（`at_time` 靠前的锚点、或第一拍即为整页底图/坐标轴）——见 `references/directing.md`「SVG 动画：两档」。**同一档硬切还给了另一种页**：images.json 写 `stage: "keep"` 的跨段接续页也被强制 `wipe=0`、也不生成配图入场补间，因为它的起点是上一页演完的那幅画面，再演一次揭页就是穿帮（口径见 `references/directing.md`「跨段接续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
@@ -175,7 +170,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 | 推近的图形压到了旁边静止的标题或旁白上 | 出画 warn 只判"出画"，不判"撞字"；两者都没出画时无人拦 | `directing.md`「SVG 动画：两档」里「运镜 / 相机」条的「机器兜不住的那件事」 |
 | `keep` 接续页界上图形**位置**跳一下（尺寸不变） | 没写原点时 GSAP 绕 `#cam` bbox 左上角，那个角还跟着别的步的 `from` 瞬态飘 | `directing.md`「跨段接续」里「相机绕的那一点是渲染器钉的」 |
 | `keep` 接续页界上整幅换色，但图形其实接上了 | 每页 `--seg-accent` 不同，模板氛围光与进度条在切页那帧整幅换色。**要量连续性就按柱子边沿定位，别拿整幅 PSNR 当判据** | `directing.md`「跨段接续」的实测段 |
-| 图内标签在成片里看不见，全流程零报错 | `<img>` 载入的 SVG 里文字不属于 HTML 文本流，没有一道检查量它 | `canvas.md`「图内文字的对比度」里「为什么只能自己盯」 |
+| 图内标签在成片里看不见，全流程零报错 | `<img>` 载入的 SVG 里文字不属于 HTML 文本流，没有一道检查量它 | `canvas.md`「图内文字的对比度」里「没人会告诉你图内文字看不看得清」 |
 | 图内文字右缘出血（量出来的右缘超过上限） | `text-anchor="end"` 的落点要按量出来的字宽倒推，不是按字符数估 | `canvas.md`「整页画布」里「安全边距照页面走」 |
 | 图里两行文字压在一起（`hyperframes check` 报 `content_overlap`） | 两条 y 只差十来个像素——`canvas_kit` 的柱标签固定落在 `base_y+32`，自己加的说明文字很容易撞上它。`check_svg` 查不到图内压字，只有 `check` 的 Layout 阶段能量 | `canvas.md`「画布几何」的末条 |
 | `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报——豁免标记已由模板打在每一行上，见下 | `rendering.md`「官方校验命令」 |

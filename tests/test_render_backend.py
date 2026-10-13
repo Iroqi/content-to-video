@@ -28,6 +28,36 @@ class Commands(unittest.TestCase):
                           "--quality", "draft", "--fps", "24", "--workers", "4"])
         self.assertNotIn("--format", cmd)
 
+    def test_low_memory_flag_is_tri_state(self):
+        """低内存档三态：不给 = 交给 CLI 自判；给了就字面透传对应旗标。
+
+        低配机器（≤8GB / /dev/shm 偏小）非它不可——此前 run.py 没有这个旗标，
+        只能绕开 run.py 手工拼 `hyperframes render`，于是制作报告、时长闸、
+        抽帧闸全套都跟着丢掉。
+        """
+        base = [sys.executable, "hf"]
+        tail = ["render", "-o", "o.mp4", "--quality", "draft",
+                "--fps", "24", "--workers", "4"]
+        self.assertEqual(
+            RB.build_render_command("o.mp4", "draft", 24, 4, base)[len(base):], tail)
+        self.assertEqual(
+            RB.build_render_command("o.mp4", "draft", 24, 4, base,
+                                    low_memory=True)[len(base):],
+            tail + ["--low-memory-mode"])
+        self.assertEqual(
+            RB.build_render_command("o.mp4", "draft", 24, 4, base,
+                                    low_memory=False)[len(base):],
+            tail + ["--no-low-memory-mode"])
+
+    def test_low_memory_does_not_silently_rewrite_workers(self):
+        """CLI 的低内存档自己把 worker 钉成 1。这里不替它改 --workers——改了
+        用户就看不见自己原本写的是什么，冲突由 run.py 在渲染前出声。"""
+        cmd = RB.build_render_command("o.mp4", "draft", 24, 8,
+                                      [sys.executable, "hf"], low_memory=True)
+        self.assertIn("--workers", cmd)
+        self.assertEqual(cmd[cmd.index("--workers") + 1], "8")
+        self.assertIn("--low-memory-mode", cmd)
+
     def test_resolve_command_is_idempotent_for_strings(self):
         self.assertEqual(RB.resolve_command("cmd /c x"), "cmd /c x")
         self.assertEqual(RB.resolve_command([]), [])

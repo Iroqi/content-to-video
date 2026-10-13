@@ -34,6 +34,30 @@ _DEFAULT_MIN_COLORS = 3     # 量化颜色桶数下限：一两种颜色 ≈ 死
 _MAX_FRAMES = 40            # 抽帧上限：长片也控制在几十秒量级，不把验证拖垮
 
 
+def sample_timestamps(dur, every=_DEFAULT_EVERY, cap=_MAX_FRAMES):
+    """挑抽帧时刻，返回 (时刻列表, 是否被上限放宽)。
+
+    早先是"从 t=0 起每 `every` 秒加一个，加满 `cap` 个就停"——上限一命中，长片
+    就只覆盖开头 `every×(cap-1)` 秒（默认 3×39 = 117s），而报告照样打"通过：
+    40 帧全部过断言"。一支 10 分钟的片子有八成从没被看过一眼，这比不抽帧更糟：
+    它把"抽查"伪装成了"全查"。上限是**成本**上限，不是覆盖范围的许可证。
+
+    装不下就按整片均分（stride = dur / cap，首帧仍是 t=0），并让调用方把"只
+    抽查了一部分、每多少秒一帧"写进报告——被抽查的范围必须和结论一起交付。
+    """
+    dur = float(dur)
+    if not every or every <= 0:
+        every = _DEFAULT_EVERY
+    n = int(dur // every) + 1
+    stride = every
+    relaxed = False
+    if n > cap:
+        n = int(cap)
+        stride = dur / n
+        relaxed = True
+    return [round(i * stride, 3) for i in range(n)], relaxed
+
+
 def _get_ffmpeg():
     try:
         from _audio import get_ffmpeg
@@ -86,11 +110,15 @@ def analyze_frame(png):
     # 颜色桶数：量化到 8 档/通道（//8，32 级）。//32 会把暗部帧（值都在
     # 32 以下）整帧压进 (0,0,0) 一个桶——深色底 + 标题字的正常开场帧会被
     # 误判成"死平"，所以量化粒度取能区分"黑底上一块亮色"的这档。
-    buckets = set()
-    q = (arr // 8).astype(np.uint8)
-    for row in q.reshape(-1, 3):
-        buckets.add((row[0], row[1], row[2]))
-    return {"nonblack_ratio": round(nonblack, 4), "color_buckets": len(buckets)}
+    #
+    # 计数走 np.unique 对打包后的 24 位整数（每通道 ≤31，打包是一一映射，
+    # 桶数与逐像素建 set 严格相等）。原先那个 Python 层 for 循环在 1080×1440
+    # 上单帧 0.4s——采样改成覆盖整片后帧数上限真正用满（40 帧 ≈ 17s 纯开销），
+    # 这个循环就成了这道闸本身的成本瓶颈。等价，快约 80 倍。
+    q = (arr // 8).astype(np.uint32)
+    packed = (q[:, :, 0] << 16) | (q[:, :, 1] << 8) | q[:, :, 2]
+    return {"nonblack_ratio": round(nonblack, 4),
+            "color_buckets": int(np.unique(packed).size)}
 
 
 def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
@@ -111,12 +139,20 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
 
     if timestamps:
         ts = [float(t) for t in timestamps]
+        relaxed = False
     else:
-        n = min(int(dur // every) + 1, _MAX_FRAMES)
-        ts = [round(i * every, 3) for i in range(n)]
+        ts, relaxed = sample_timestamps(dur, every)
     ts = [t for t in ts if t < dur - 1e-3] or [0.0]
 
     failures, report = [], []
+    if relaxed:
+        # 采样被上限放宽过：必须把"抽了多少、覆盖到哪儿"和结论一起交出去，
+        # 否则一句"通过"会让人以为整片都看过了。
+        report.append(
+            f"[coverage] 只抽查了 {len(ts)} 帧：{dur:.1f}s 按 --every {every:g}s 要 "
+            f"{int(dur // every) + 1} 帧，超过 {_MAX_FRAMES} 帧上限，已按整片均分"
+            f"（每 {dur / _MAX_FRAMES:.1f}s 一帧，覆盖到 {ts[-1]:.1f}s）。"
+            f"要逐段细看就分段跑并给 --timestamps。")
     with tempfile.TemporaryDirectory(prefix="check_frames_") as td:
         for i, t in enumerate(ts):
             png = os.path.join(td, f"f{i:03d}.png")
@@ -198,7 +234,9 @@ def main(argv=None):
             print(f"[check_frames][skip] {line}")
         return 0
     for line in report:
-        if args.quiet and "✗" not in line and "跳过" not in line:
+        # coverage 行不是一帧，但它是"这些帧覆盖了什么"的唯一说明，--quiet 也留着
+        if args.quiet and "✗" not in line and "跳过" not in line \
+                and "coverage" not in line:
             continue
         print(f"[check_frames] {line}")
     if failures:
@@ -208,7 +246,8 @@ def main(argv=None):
               "确认是某一段有意全黑（如过场）时，用 --timestamps 绕过该段再核。",
               file=sys.stderr)
         return 1
-    print(f"[check_frames] 通过：{len(report)} 帧全部过断言")
+    _n = len([l for l in report if "coverage" not in l])
+    print(f"[check_frames] 通过：{_n} 帧全部过断言")
     return 0
 
 

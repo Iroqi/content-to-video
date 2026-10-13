@@ -263,6 +263,18 @@ def _build_parser():
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
                              "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
                              "低配机器遇 V8 堆崩溃或配图体积大时建议降到 2")
+    # 低内存档是官方 CLI 的旗标（--help：钉 1 worker + screenshot capture +
+    # 跳过自动 worker 校准，默认按总内存 ≤8GB 自判）。低配机器非它不可——实测
+    # 3.9GB/2 核机上不加就落在抓帧超时重抓。三态：不给 = 交给 CLI 自判，
+    # 显式 --no-low-memory-mode 才能关掉它的自判。
+    _lm = parser.add_mutually_exclusive_group()
+    _lm.add_argument("--low-memory-mode", dest="low_memory", action="store_true",
+                     default=None,
+                     help="强制开 Hyperframes 低内存渲染档（worker 钉 1、screenshot "
+                          "capture、跳过 worker 自动校准）；低配机器（≤8GB、/dev/shm "
+                          "偏小）用它。会覆盖 --workers")
+    _lm.add_argument("--no-low-memory-mode", dest="low_memory", action="store_false",
+                     help="强制关低内存档（CLI 默认按总内存自判，≤8GB 会自动开）")
     parser.add_argument("--allow-degraded", action="store_true",
                         help="允许 TTS 静音兜底等降级产物继续渲染；默认把 degraded artifact 作为交付阻断")
     parser.add_argument("--on-fail", default="abort", choices=["abort", "silence"],
@@ -346,6 +358,8 @@ def main():
         "canvas": "{}x{}".format(*get_canvas(args.aspect)),
         "fps": args.fps,
         "quality": args.quality,
+        "workers": args.workers,
+        "low_memory": args.low_memory,
         "speed": args.speed,
         "voice_id": args.voice_id,
         "on_fail": args.on_fail,
@@ -526,8 +540,15 @@ def main():
         print(f"[run][warn] {_node_msg}", file=sys.stderr)
 
     out_video = os.path.join(project, "out.mp4")
+    if args.low_memory and args.workers != 1:
+        # CLI 的低内存档把 worker 钉成 1（它自己的 --help 写明）。这里不出声，
+        # 用户会以为自己写的 --workers 生效了，然后对着"怎么这么慢"找半天原因。
+        print(f"[run][warn] 已开 --low-memory-mode：Hyperframes 会把抓帧 worker 钉成 1，"
+              f"本次的 --workers {args.workers} 不生效（低内存档靠它避免内存抖动）。",
+              file=sys.stderr)
     hf_render = build_render_command(
         out_video, args.quality, args.fps, args.workers, command=_HF_COMMAND,
+        low_memory=args.low_memory,
     )
     # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
     # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟
@@ -608,7 +629,9 @@ def main():
                 "check": "ok" if not _fails else "failed",
                 "skipped": _fails is None,
                 "seconds": round(time.monotonic() - t0_fr, 1),
-                "detail": [l for l in (_fr or []) if "✗" in l or "跳过" in l],
+                # coverage 行一起留：它是"这些帧覆盖了成片的哪一段"的唯一说明
+                "detail": [l for l in (_fr or []) if "✗" in l or "跳过" in l
+                           or "coverage" in l],
             }
         except Exception as _e:
             # 抽帧断言自己出 bug 不该让整条渲染失败：记进报告降级（画面验证
@@ -619,7 +642,7 @@ def main():
             }
             _fails, _fr = None, []
         for line in _fr:
-            if "✗" in line or "跳过" in line:
+            if "✗" in line or "跳过" in line or "coverage" in line:
                 print(f"[run][frame] {line}", file=sys.stderr)
         if _fails:
             _write_report(_report_path())

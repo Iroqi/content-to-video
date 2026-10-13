@@ -125,6 +125,13 @@ hf-project/
 - `workers`：`run.py` 字面透传给 `hyperframes render`，没有自动校准。8 之前有效、8 之后饱和；迭代片可显式 `--workers 8`；遇 V8 堆崩溃时降到 2。每个 worker 是一个独立 Chrome（约 256MB 常驻）。渲染明显偏慢时先在 `out.render.log` 找 `Parallel capture timed out`（它会重抓全部帧并自动降 worker），别默认是稿件变长了。
 - `quality`：五档**字面透传**给 CLI（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 是 CLI 自己的默认档（standard 编码 + CRF 16），也是本技能的默认；`draft` 约省 15%，预览够用；`delivery` 是 high 的交付档。注意 `standard` / `high` 是**不带 CRF 覆写的裸档**：同样写着 standard，`looks` 多一层 CRF 16、成片更清楚也更大——别把裸档当成"官方标准档"。
 - **固定开销**：每调用一次渲染约白付 8.5s（与帧数无关），冷跑第一次还多约 6s。所以"改一处重渲一次"很不划算：先 `--until html` + 快照看够，再整片渲一次。
+- **低配机器（`--low-memory-mode`）**：CLI 的低内存档会**把 worker 钉成 1**、走 screenshot capture、跳过自动 worker 校准（它自己的 `--help` 写明，默认按总内存 ≤8GB 自判）。实测 3.9GB / 2 核 / `/dev/shm` 224MB 的机器上不加就落在抓帧超时重抓——`hyperframes doctor` 会直接对 `/dev/shm` 报 ✗。低配档位组合：
+
+  ```bash
+  python scripts/run.py --source SOURCE -o OUT --quality draft --workers 1 --low-memory-mode
+  ```
+
+  `--workers` 与低内存档冲突时 **CLI 赢**（它钉 1，你写的数被吃掉），`run.py` 会打一条 `[warn]` 说明这件事——别对着"怎么这么慢"找半天原因。`--no-low-memory-mode` 才能关掉它的自判。卡在 Chrome 启动/协议超时上的机器另有两个旋钮：`--browser-timeout` / `--protocol-timeout`（CLI 旗标，`run.py` 不透传，需要时手工跑 `hyperframes render`）。
 
 ## 官方校验命令（优先于手搓探针）
 
@@ -185,6 +192,8 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 | 关掉了 `muted`，成片里视频还是没声音 | 混音只读 `<audio>` 元素和声明了 `data-has-audio="true"` 的 `<video>`——漏了那句声明就一条都不混，且全流程零报错 | `imagery.md`「视频素材」的「音轨」 |
 | 成片里视频原声盖住旁白（写了 `volume` 还盖） | 压响度只解决一半：人声频段上的掩蔽还在。默认已开让路 EQ（`duck`），要原声当主体才写 `duck:false` | `imagery.md`「视频素材」的「让路」 |
 | 成片里原声被压得太狠，只剩一点底噪 | 没写 `volume` 时渲染端落的是让路默认 0.25。要原声当主体就显式写 `volume: 1.0` 并给 `duck:false` | `imagery.md`「视频素材」的「让路」 |
+| 成片很长，`--check-frames` 说"通过"却总觉得没看全 | 抽帧上限 40 帧：装不下 `every` 就**按整片均分**（不是只抽开头），报告里那条 `[coverage]` 写明实际每几秒一帧、覆盖到哪一秒。要逐段细看就分段跑并给 `--timestamps` | `scripts/check_frames.py` 的 `sample_timestamps` |
+| 开了 `--low-memory-mode`，`--workers 4` 却像没生效 | 低内存档由 CLI 把 worker 钉成 1，它赢。`run.py` 会打一条 `[warn]` | `rendering.md`「性能参数」 |
 | 成片里某一段画面是糊的、虚的 | 素材像素不够铺满它那一页的框：`cover` 只保证填满、不保证清楚，放大 2 倍以上细节就没了，而全流程零报错 | `imagery.md`「三条路线的统一规则」里「统一使用同一个内容画布」的第二条规格 |
 | 配图明明够清晰，生成期却报"不够大" | 按它实际落地的框判：整页画布按整幅（1080×1440 / 1920×1080），槽位按 4:3 那一块。同一张图在槽位够用、换成整页画布就不够 | `imagery.md`「三条路线的统一规则」里「统一使用同一个内容画布」 |
 | 开场动画最后几行像没出现 | 苹果风开场整支舞按可见窗口等比压缩；压到地板仍装不下时收尾会被下一页切走（生成期有 `[warn]`） | `rendering.md`「苹果风开场」 |

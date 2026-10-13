@@ -10,6 +10,7 @@
     python scripts/check_svg.py images/seg1.svg images/seg2.svg
     python scripts/check_svg.py images/                       # 目录：检查其中全部 .svg
     python scripts/check_svg.py images/seg3.svg --layout canvas --aspect landscape
+    python scripts/check_svg.py images/ --layout auto         # 混用目录：逐文件推断档位
 
 检查项（error 让退出码为 1，warn 只提示）：
   - 根节点：纯数字 width/height 或 viewBox；槽位版式必须 4:3，整页画布必须与
@@ -228,6 +229,40 @@ def _largest_empty_band(bands, page_h):
     return max(gaps, key=lambda g: g[1] - g[0])
 
 
+def _resolve_layout(layout, w, h, aspect):
+    """把 `--layout auto` 解成 (档位, 画幅, 推断失败的话)。
+
+    混用目录（槽位图和整页画布同放一个 `images/`）此前必须跑两遍，而且每一遍
+    都会把另一类文件判成"比例不符"的 **error**——那不是图错了，是档位选错了。
+    比例在这一档里够用：槽位两画幅都是 4:3，整页画布竖屏 0.75 / 横屏 1.778，
+    四类互不重叠。
+
+    - 整页画布先判：它的比例随画幅变，命中即**连画幅一起定下来**。`--aspect`
+      写反时不该拿另一档的框去量这张图（1080×1440 被当成横屏画布，折算字号
+      与安全边距全错）。
+    - 槽位保留 `--aspect` 给的画幅：两画幅的槽位框都是 4:3（980×735 与
+      1067×800，比例差 0.03%），比例分辨不出，画幅是作者自己声明的事。
+    - 都命中不了：不猜。报一条点名比例的 error，并按槽位继续查其余项——
+      少报一条比例 error 比"推断不出就整体跳过"划算。
+    """
+    if layout != "auto" or not w or not h:
+        return layout, aspect, ""
+    r = w / h
+    for a in sorted(CANVAS):
+        cw, ch = CANVAS[a]
+        if abs(r - cw / ch) / (cw / ch) <= RATIO_TOL:
+            return "canvas", a, ""
+    for a in sorted(SLOT):
+        sw, sh = SLOT[a]
+        if abs(r - sw / sh) / (sw / sh) <= RATIO_TOL:
+            return "slot", aspect, ""
+    _known = " / ".join(f"{a} {CANVAS[a][0] / CANVAS[a][1]:.3f}" for a in sorted(CANVAS))
+    return "slot", aspect, (
+        f"比例 {w:g}×{h:g}（{r:.3f}）既不是槽位的 4:3，也不是任何画幅的整页画布"
+        f"（{_known}）——`--layout auto` 推断不出该按哪一档查，已按槽位继续查其余项。"
+        f"请确认根节点尺寸，或显式给 --layout 与 --aspect")
+
+
 def _root_size(root):
     """返回 (宽, 高, 说明)；读不出纯数字尺寸则宽高为 None。"""
     w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
@@ -394,7 +429,10 @@ def _check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol):
     return warns
 
 
-def check_file(path, layout, aspect, theme):
+def check_file(path, layout, aspect, theme, resolved=None):
+    """查一个 SVG；`resolved` 给一个 dict 时，把 `--layout auto` 实际用的
+    (档位, 画幅) 写进去——调用方要把"我按哪一档查的"打给人看，不然 auto 的
+    判定是一次没人复核的猜测。"""
     errors, warns = [], []
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -420,6 +458,11 @@ def check_file(path, layout, aspect, theme):
         errors.append("根标签读不出纯数字 width/height 或 viewBox（% / em 不算），没法验比例")
         scale = None
     else:
+        layout, aspect, _infer_err = _resolve_layout(layout, w, h, aspect)
+        if resolved is not None:
+            resolved.update(layout=layout, aspect=aspect)
+        if _infer_err:
+            errors.append(_infer_err)
         if layout == "canvas":
             cw, ch_ = CANVAS[aspect]
             target, label = cw / ch_, f"{cw}×{ch_}（{aspect} 整页画布）"
@@ -429,7 +472,9 @@ def check_file(path, layout, aspect, theme):
             # 1067，26px 会被误判成 24px（假 warn），建议尺寸也永远是竖屏那一档。
             cw, ch_ = SLOT[aspect]
             target, label = 4 / 3, f"4:3（{aspect} 槽位版式，建议 {cw}×{ch_}）"
-        if abs(w / h - target) / target > RATIO_TOL:
+        # 推断失败时不再叠一条"比例不等比"——同一件事说两遍，且第二遍的说法
+        # （目标 4:3）会让人以为是槽位图画错了，其实是谁都不知道它该按哪档查。
+        if not _infer_err and abs(w / h - target) / target > RATIO_TOL:
             errors.append(f"比例 {w:g}×{h:g}（{w / h:.3f}）与目标 {label} 不等比；"
                           f"cover 会裁掉贴边内容，请改根节点尺寸后重排，别缩内容凑比例")
         scale = cw / w
@@ -729,10 +774,13 @@ def collect(paths):
 def main():
     ap = argparse.ArgumentParser(description="手绘 SVG 配图静态自查（尽力而为，不替代人眼复核）")
     ap.add_argument("paths", nargs="+", help="SVG 文件或目录")
-    ap.add_argument("--layout", choices=["slot", "canvas"], default="slot",
-                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布")
+    ap.add_argument("--layout", choices=["slot", "canvas", "auto"], default="slot",
+                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；"
+                         "auto = 按每个文件自身的比例推断（混用目录一次跑完，"
+                         "整页画布还会连画幅一起定下来）")
     ap.add_argument("--aspect", choices=list(CANVAS), default="portrait",
-                    help="画幅（仅 --layout canvas 用到，默认 portrait）")
+                    help="画幅（默认 portrait）。显式 --layout 时按它取框；"
+                         "--layout auto 下整页画布的比例能定画幅，会覆盖它")
     args = ap.parse_args()
 
     files = collect(args.paths)
@@ -741,9 +789,18 @@ def main():
         return 2
     n_err = n_warn = 0
     for f in files:
-        errors, warns = check_file(f, args.layout, args.aspect, DEFAULT_THEME)
+        box = {}
+        errors, warns = check_file(f, args.layout, args.aspect, DEFAULT_THEME,
+                                   resolved=box)
         status = "FAIL" if errors else ("WARN" if warns else "OK")
-        print(f"[{status}] {f}")
+        # auto 判了什么必须打出来：它是按尺寸猜的档位，猜错了要能被一眼看出来
+        how = ""
+        if args.layout == "auto" and box.get("layout"):
+            how = f"  （auto → {box['layout']}"
+            if box.get("aspect") and box["aspect"] != args.aspect:
+                how += f"/{box['aspect']}"
+            how += "）"
+        print(f"[{status}] {f}{how}")
         for e in dict.fromkeys(errors):
             print(f"    error: {e}")
         for w in dict.fromkeys(warns):

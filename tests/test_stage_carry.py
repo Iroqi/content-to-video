@@ -223,6 +223,80 @@ class FoldCamera(unittest.TestCase):
         self.assertTrue(any("#num" in w and "下边" in w for w in warns), warns)
 
 
+class CamStepNonPoseKeys(unittest.TestCase):
+    """相机步（target="#cam"）上**非姿态**的那几键也要搬进接续页。
+
+    证伪：`_settle_step` 早先对 `#cam` 整条 early-return（注释写"相机走
+    _fold_camera，不进元素通道"）。可运行期 GSAP 是把 to/set 里的每条属性写到
+    `#cam` 这个元素上的——整台相机一起淡出（`opacity`）、改个 attr 就是这么写的。
+    那些键于是被静默丢掉：接续页从全亮的画面起跑，作者却"确实演了"。
+    """
+
+    def test_opacity_and_attr_on_camera_step_are_carried(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2, "opacity": 0.4,
+                                                      "attr": {"data-role": "dim"}}}])
+        cam = _find(out, "cam")
+        self.assertIn("opacity:0.4", cam.get("style"))
+        self.assertEqual(cam.get("data-role"), "dim")
+        # 只有折层那一条说明，不得出现"搬不动"（这两键过去是被静默丢掉的）
+        self.assertEqual([n for n in notes if "搬不动" in n], [], notes)
+
+    def test_pose_keys_still_go_to_the_fold_not_the_style(self):
+        """姿态键（scale/x/y + 绕点）仍由 _fold_camera 折进子层，不落到 #cam 上。
+
+        折在子层是刻意的（见模块头）：折到 #cam 自身，这层推近对本段的原点计算
+        就是隐形的，链越长飘得越远。
+        """
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2, "y": 200}}])
+        cam = _find(out, "cam")
+        self.assertIsNone(cam.get("style"), "姿态键不该被写成 #cam 的 style")
+        self.assertIn("scale(1.200000)", cam[0].get("transform"))
+        self.assertTrue(any("相机收尾位" in n for n in notes), notes)
+
+    def test_camera_step_transform_keys_still_reported_not_silently_dropped(self):
+        """写不了的那几键仍要出声：rotation 要以元素自身 bbox 为原点折算，
+        相机折层只认 scale/x/y，搬不了就得说。"""
+        _out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2,
+                                                       "rotation": 30}}])
+        self.assertTrue(any("rotation" in n for n in notes), notes)
+
+
+class CameraFoldRefusals(unittest.TestCase):
+    """折不折得动都必须**出声**：折层是静默搬运，悄悄少折一层就是下一页整体错位。
+
+    两种折不动：① 姿态里有静态几何读不出的分量（`scale:"/=0"` → 运行期
+    Infinity）；② 绕的那一点在动这棵树之前就量不出来（子树里有读不懂的
+    transform）。后者早先会退而"按当前树现算"——那棵树已经被结算改过，量出
+    的点与渲染器当时注入的 svgOrigin 不是同一个，折进去正是这次要消灭的错位。
+    """
+
+    # 子树里有 rotate：_walk 读不懂就整棵跳过 → 占位盒算不出 → 绕点量不出
+    _UNREADABLE = STAGE_SVG.replace(
+        '<g id="cam">', '<g id="cam"><g transform="rotate(30 500 500)">'
+    ).replace("</g></svg>", "</g></g></svg>")
+
+    def _folded(self, markup):
+        return any(el.get(SC.STAGE_ATTR) for el in _find(markup, "cam").iter())
+
+    def test_unresolvable_pose_is_not_folded_and_says_so(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": "/=0"}}])
+        self.assertFalse(self._folded(out), "不该折（手上那不是收尾位）")
+        self.assertTrue(any("读不出" in n for n in notes), notes)
+
+    def test_unmeasurable_origin_is_not_folded_and_says_so(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2}}],
+                           markup=self._UNREADABLE)
+        self.assertFalse(self._folded(out), "量不出绕点就不该折")
+        self.assertTrue(any("量不出" in n for n in notes), notes)
+
+    def test_measurable_camera_still_folds_with_one_note(self):
+        out, notes = _bake([{"target": "#cam", "to": {"scale": 1.2}}])
+        self.assertTrue(self._folded(out), "该折的那一层没折")
+        e, f, s = _stage_pose(out)
+        self.assertEqual(notes, ["相机收尾位已折进本层（scale={:g}、平移=({:g}, {:g})）"
+                                 .format(s, e, f)])
+
+
 class RepeatAndYoyoCarry(unittest.TestCase):
     """`repeat` / `yoyo` 的收尾态：接续烘焙按"最后真的停在哪一头"搬。"""
 

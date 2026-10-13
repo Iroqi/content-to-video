@@ -17,14 +17,15 @@ from _theme import (
     get_theme_colors, get_default_accent, mix, normalize_accent,
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
-from _template import load_template, get_canvas, normalize_aspect
+from _template import (MIN_READABLE_FONT_PX, load_template, get_canvas,
+                       normalize_aspect)
 from _images_schema import (unknown_media_keys, MEDIA_ENTRY_KEYS,  # noqa: E402
                             classify_media_path, is_svg_path,
                             MEDIA_DUCK_VOLUME)
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
-from _timeline import beat_positions, beat_span, beat_cycles
+from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 
 
@@ -270,7 +271,8 @@ _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
 # 装配与动画各自成函数，版式差异只体现在装配一处。
 
 
-def _build_render_context(tpl, aspect, width, height, theme, images, fps=24):
+def _build_render_context(tpl, aspect, width, height, theme, images,
+                          fps=DEFAULT_FPS):
     """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
     :root 变量表。任何一条护栏发现模板配错即 raise。
 
@@ -505,10 +507,17 @@ def _title_font_px(rc, seg, sid, is_agenda):
         # 每行至少 ceil(字数/目标行数) 个字为止。
         _cap = _ag_avail // _title_font_px
         if _tlen > _ag_lines * _cap:
-            _fit = _ag_avail // -(-_tlen // _ag_lines)
+            _raw = _ag_avail // -(-_tlen // _ag_lines)
+            # 压到可读下限就停：标题长度契约层不限（只禁分号），没有下限时 1900 字的
+            # 标题会算出 font-size:0px——成片里这行字整条消失，而 warn 只说"降字号"，
+            # 作者看不到降到了多少。下限与 check_svg / 画布页自查同一条（_template）。
+            _fit = max(MIN_READABLE_FONT_PX, _raw)
+            _tail = (f"——已压到 {MIN_READABLE_FONT_PX}px 可读下限，再长的标题压进 "
+                     f"{_ag_lines} 行仍会溢出，请改写成短句"
+                     if _fit > _raw else "——建议写稿时压到短句")
             print(f"[warn] agenda 标题长 {_tlen} 字（{sid}，单行容量 "
                   f"{_cap} 字），降字号压进 {_ag_lines} 行：{_title_font_px}→{_fit}px"
-                  "——建议写稿时压到短句", file=sys.stderr)
+                  f"{_tail}", file=sys.stderr)
             _title_font_px = _fit
     elif aspect == "landscape":
         _title_font_px = _tl["fontSize"]
@@ -565,8 +574,9 @@ def _duck_chain_attr():
     """让路 EQ 的 `data-fx-chain` 属性（整条，含属性名，末尾无空格）。
 
     属性值里的 JSON 引号必须写成 `&quot;`：官方的 carve 脚本用 `name="..."` 的
-    正则找这些属性，单引号写法它看不见；`&` 同理要转 `&amp;`（本链不含 &，
-    转义仍照做——将来有人往 label 里加 & 时不会突然失联）。
+    正则找这些属性，单引号写法它看不见。转义走本模块唯一的 esc()（= 标准库
+    html.escape）——手写 `.replace("&",…).replace('"',…)` 只覆盖 5 个字符里的 2 个，
+    剩下三个在 label 里出现时就裸插进了属性值。
     """
     nodes = [{
         "type": "peaking",
@@ -576,8 +586,7 @@ def _duck_chain_attr():
     } for i, (freq, gain, q) in enumerate(_DUCK_BANDS, start=1)]
     payload = json.dumps({"version": 1, "nodes": nodes},
                          separators=(",", ":"))
-    escaped = payload.replace("&", "&amp;").replace('"', "&quot;")
-    return f'data-fx-chain="{escaped}"'
+    return f'data-fx-chain="{esc(payload)}"'
 
 
 def _video_audio_attrs(media_opts, sid, d):
@@ -1358,7 +1367,7 @@ def _card_timeline_lines(rc, card):
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme=DEFAULT_THEME, fps=24):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=DEFAULT_FPS):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -1388,8 +1397,9 @@ def generate_html(manifest, audio_src, images=None,
     sentences = manifest["sentences"]
     # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插
     # 会破坏 head 结构（媒体路径都走了 quote/转义；这里不能 URL 编码——
-    # CDN 地址的 :/? 会被 quote 破坏）
-    gsap_src_attr = gsap_src.replace("&", "&amp;").replace('"', "&quot;")
+    # CDN 地址的 :/? 会被 quote 破坏）。转义函数用本模块的 esc()（标准库
+    # html.escape），不再手写只覆盖 & 与 " 的半边 replace。
+    gsap_src_attr = esc(gsap_src)
 
     rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps)
 

@@ -24,8 +24,8 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
 from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
-from _timeline import (DEFAULT_GAP, DEFAULT_SPEED, validate_speed,  # noqa: E402
-                       duration_tolerance)
+from _timeline import (DEFAULT_FPS, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
+                       duration_tolerance, validate_speed)
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
 from _manifest_schema import load_timing_manifest  # noqa: E402
@@ -35,7 +35,7 @@ from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, render_wait,
                              probe_video_duration, node_version_gate)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
-                           guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
+                           is_inside, guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
 import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 
@@ -179,7 +179,7 @@ def _image_coverage(manifest_path, images_json):
     """返回 (tm, all_sids, missing_keys, missing_files)：已校验的 manifest 对象
     （主流程的降级检测直接复用，同一份文件不在一次 run 里 load+全量校验两遍），
     manifest 中需要配图的段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
-    有键但媒体文件不在盘上的（missing_files）。
+    有键但媒体文件不可用的（missing_files：不在盘上，或软链接/绝对路径越出项目目录）。
 
     两类必须分开：missing_keys 只是"图还没画完"，--until html 可以警告放行；
     missing_files 是"映射指向坏路径"，gen_hyperframes 无论跑到哪一步都会
@@ -213,9 +213,15 @@ def _image_coverage(manifest_path, images_json):
     missing_keys = [s for s in sids if s not in mapping]
     proj_dir = os.path.dirname(os.path.abspath(images_json))
 
-    missing_files = [s for s in sids
-                     if s in mapping and not os.path.isfile(
-                         os.path.join(proj_dir, mapping[s]["src"]))]
+    # 存在性判定与 gen_hyperframes.validate_images_files 同一口径：isfile 跟随
+    # 软链接，而对方按 realpath 判"是否越出项目目录"。只查 isfile 时，项目内一条
+    # 指向项目外的软链接会被算成"图在"——覆盖率报告记 matched、这里放行，下一步
+    # gen 才以"越出 HTML 项目目录"失败，同一份文件两道门两个答案。
+    def _unusable(src):
+        p = os.path.join(proj_dir, src)
+        return not (os.path.isfile(p) and is_inside(p, proj_dir))
+
+    missing_files = [s for s in sids if s in mapping and _unusable(mapping[s]["src"])]
     return manifest, sids, missing_keys, missing_files
 
 
@@ -240,7 +246,8 @@ def _build_parser():
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏）或 "
                              "landscape（1920×1080 横屏）")
-    parser.add_argument("--fps", type=int, default=24, choices=[12, 24, 30, 60],
+    parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
+                        choices=[12, 24, 30, 60],
                         help="输出帧率（默认 24；12 是快速看画面的低规格迭代档）。"
                              "实测档位与耗时见 references/rendering.md「性能参数」。"
                              "gen_hyperframes 自己还接受 1–240，这里只放行实测过的档位")
@@ -393,11 +400,12 @@ def main():
 
     images_dir = os.path.join(project, "images")
     if missing_files:
-        # images.json 有键但媒体文件不在盘上（图被删过/路径写错）：
+        # images.json 有键但媒体文件不可用（不在盘上，或软链接/绝对路径越出项目目录）：
         # gen_hyperframes 对这类坏路径无条件 fail-fast，"只警告继续"在这里
         # 兑现不了——与其先打一句"继续生成 HTML"再让 HTML 步骤 exit 1，
         # 不如就地报清病因，并把还没映射的段一并列出来让人一次修完。
-        print("[run] images.json 引用了不存在的媒体文件："
+        print("[run] images.json 映射的媒体文件不可用（不存在，或通过软链接/绝对路径"
+              "越出项目目录）："
               + ", ".join(missing_files) + "。\n"
               f"请补齐 {images_dir} 下的文件，或修正/删除对应映射条目。",
               file=sys.stderr)

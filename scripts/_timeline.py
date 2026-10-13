@@ -42,6 +42,10 @@ def speed_marker_value(speed):
 # ── 跨脚本默认值──────────────────────────────────────────────────
 # "默认 TTS 倍速"的入口一律从这里取，改时只改这一处。
 DEFAULT_SPEED = 1.5
+# 默认输出帧率：run.py 的 --fps、gen_hyperframes 的 --fps 与 html_renderer
+# generate_html(fps=) 都从这里取。此前这三处各写一份字面量 24，改一处会让
+# HTML 的 data-fps、渲染命令的 --fps 与库调用方的默认互相漂移，而三者都不报错。
+DEFAULT_FPS = 24
 # opening/closing 段的默认语速：比正文略慢，凸显开场/收尾的节奏。
 # build_from_structured 造段配置时写入，pipeline 的时长估算/静音占位经
 # 段落 speed 复用同一假设——两处必须一致，所以也收口在这里。

@@ -45,7 +45,7 @@ from _path_morph import y_span
 from _svg_sanitize import _WALLCLOCK_CSS as _CSS_WALLCLOCK
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
-from _template import load_template
+from _template import MIN_READABLE_FONT_PX, load_template
 
 # 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
 # 手抄数值——上一版手抄的页底色就漂过一次（见 PAGE_BG 注释）。
@@ -75,7 +75,6 @@ def _safe_margins():
 
 
 SAFE_MARGIN = _safe_margins()
-MIN_PX = 26
 RATIO_TOL = 0.01
 BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
 # 整页画布的文字真正落在主题背景渐变的中段（45% 位），底色从 _theme 注册表
@@ -133,7 +132,7 @@ def _parse_num(v):
 # 有模板网格兜着构图，画布页的构图责任全在那张 SVG 自己身上，所以只在这里查这一条
 # 最客观的：把可读几何投到 y 轴上，找最大的整幅空带。
 MAX_EMPTY_BAND = 0.25
-_DEFAULT_FS = float(MIN_PX)   # 字号读不出时给文字一个保守高度
+_DEFAULT_FS = float(MIN_READABLE_FONT_PX)   # 字号读不出时给文字一个保守高度
 
 
 def _stroke_pad(el, inherited):
@@ -429,8 +428,9 @@ def check_file(path, layout, aspect, theme):
             if band:
                 ink_bands.append(band)
 
-    if min_eff is not None and min_eff < MIN_PX:
-        warns.append(f"折算后最小字号约 {min_eff:.0f}px（<{MIN_PX}px 下限），两画幅缩放+压缩后读不出来")
+    if min_eff is not None and min_eff < MIN_READABLE_FONT_PX:
+        warns.append(f"折算后最小字号约 {min_eff:.0f}px"
+                     f"（<{MIN_READABLE_FONT_PX}px 下限），两画幅缩放+压缩后读不出来")
     if unknown_size:
         warns.append(f"{unknown_size} 个 <text> 的字号不是 px 数值（em/%/class/缺省），读不出绝对值，请自己按画幅复核")
     if has_cjk and not has_font_family:

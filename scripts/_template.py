@@ -10,6 +10,12 @@ layout.landscape 下（顶层只有 canvas 与 layout 按画幅分块）。
 import copy
 import json
 
+# 图内文字的可读下限（px，成片折算后的最终字号）。单一真源：check_svg 的静态自查、
+# gen_hyperframes 的画布页自查、html_renderer 的 agenda 长标题降字号都判这一条。
+# 三处各写一份 26 的后果是"改了 check_svg 的数、另两处仍按旧数判"，作者按提示把字
+# 调到能读，另一页照样被判超标——三道门给三个答案，没法照着改。
+MIN_READABLE_FONT_PX = 26
+
 _TEMPLATE_PARSED = None
 
 

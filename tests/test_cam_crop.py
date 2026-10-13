@@ -65,6 +65,42 @@ class RestingPose(unittest.TestCase):
         self.assertIn("没有收尾位可查", warns[0])
 
 
+class UnresolvableCameraComponent(unittest.TestCase):
+    """`scale:"/=0"` 这类分量：运行期算得出（Infinity），静态几何算不出。
+
+    证伪：resolve_num 早先对 `/=0` 返回 base（当作"没写"），于是投影按旧 scale
+    报"一切在幅内"——运行期元素其实被推到天上去，那是一句假话；折层也按旧值折出
+    一个空位移，接续页的相机位就悄悄丢了。这一页该说的是"没查"，不是"在幅内"。
+    """
+
+    _BODY = ('<g id="cam">'
+             '<rect id="panel" x="60" y="300" width="960" height="700"/>'
+             "</g>")
+
+    def test_divide_by_zero_is_not_treated_as_a_no_op(self):
+        from _cam_crop import resolve_num
+        self.assertIsNone(resolve_num("/=0", 1.2))
+        self.assertEqual(resolve_num("/=2", 1.2), 0.6)      # 回归网：正常 /= 照旧
+
+    def test_pose_is_flagged_unresolved(self):
+        pose = cam_resting_pose([{"target": "#cam", "to": {"scale": "/=0"}}])
+        self.assertFalse(pose["resolved"])
+        self.assertTrue(cam_resting_pose([{"target": "#cam", "to": {"scale": "*=2"}}])
+                        ["resolved"])
+
+    def test_warns_not_checked_instead_of_all_inside_frame(self):
+        warns = crop_warnings(_svg(self._BODY),
+                              [{"target": "#cam", "to": {"scale": "/=0"}}])
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("读不出", warns[0])
+        self.assertIn("没查", warns[0])
+
+    def test_a_normal_camera_step_is_still_checked(self):
+        self.assertEqual(crop_warnings(_svg(self._BODY),
+                                       [{"target": "#cam", "to": {"scale": "*=2"}}]),
+                         [])
+
+
 class Crop(unittest.TestCase):
     def _band_in_cam(self):
         return _svg('<g id="cam">'

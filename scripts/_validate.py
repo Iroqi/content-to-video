@@ -53,6 +53,19 @@ def _validate_display_text(value, where):
             "把分号改成句号拆成两行，或者删掉后半句")
 
 
+def is_finite_number(value):
+    """有限数值判定（布尔不算数字）：三份契约的数值守卫共用这一个谓词。
+
+    为什么必须连 NaN/±Infinity 一起拒：Python 的 json 解析默认接受这三个字面量
+    （`{"at": NaN}` 不是标准 JSON，但 `json.load` 不拦），而 NaN 的**任何比较都为
+    False**——`nan < 0` 亦然。只写 `isinstance(v, (int, float))` 的守卫会把它整条
+    放行，下游再把 nan 格式化进 style/transform，浏览器整条丢弃：动画停在演之前的
+    样子，而生成期、渲染日志、`hyperframes check` 全都一声不吭。
+    """
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(float(value)))
+
+
 def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):

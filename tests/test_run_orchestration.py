@@ -148,6 +148,29 @@ class FlagPassthrough(unittest.TestCase):
         from _timeline import DEFAULT_GAP
         self.assertIn("默认 {:g}".format(DEFAULT_GAP), R._build_parser().format_help())
 
+    def test_fps_default_has_one_source_across_three_entrypoints(self):
+        """默认帧率只有一份：run --fps / gen --fps / generate_html(fps=)。
+
+        证伪：三处曾各写一份字面量 24，改 _timeline.DEFAULT_FPS 只改到一处——
+        HTML 的 data-fps、渲染命令的 --fps 与库调用方的默认互相漂移，而三者
+        都不报错（fps 漂 1 帧看不出来，成片只是整体快/慢一点）。
+        """
+        import inspect
+        from _timeline import DEFAULT_FPS
+        from html_renderer import generate_html
+        self.assertEqual(DEFAULT_FPS, 24)
+        self.assertEqual(
+            R._build_parser().parse_args(["--source", "s.json"]).fps, DEFAULT_FPS)
+        self.assertEqual(inspect.signature(generate_html).parameters["fps"].default,
+                         DEFAULT_FPS)
+        # gen 的 parser 建在 main() 里（没有独立的 _build_parser 可调），按源码钉住：
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "scripts", "gen_hyperframes.py"),
+                  encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"--fps", type=int, default=DEFAULT_FPS', src)
+        self.assertNotIn('"--fps", type=int, default=24', src)
+
     def test_nan_speed_rejected(self):
         with self.assertRaises(SystemExit) as cm:
             self.h.invoke(["--until", "tts", "--speed", "nan"])
@@ -220,6 +243,30 @@ class Gates(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self.h.invoke(["--until", "html"])
         self.assertEqual(cm.exception.code, 2)
+        self.assertIsNone(self.h.gen_argv)
+
+    def test_symlink_out_of_project_blocks_at_gate(self):
+        """软链接指向项目外：run.py 的缺图闸门必须与 gen 同一口径。
+
+        证伪：run.py 原先只按 os.path.isfile 判（它跟随软链接），于是把这种条目
+        算成"图在"，覆盖率报告记 matched、闸门放行；下一步 gen_hyperframes 用
+        realpath 判"越出 HTML 项目目录"再 fail-fast。同一份文件两道门两个答案，
+        作者先看到一份乐观的覆盖率，再撞上另一道门的报错。
+        """
+        self.h.make_images_complete()
+        outside = os.path.join(self.h.tmp, "outside.svg")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("<svg/>")
+        link = os.path.join(self.h.project, "images", "seg-a.svg")
+        os.remove(link)
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"本机不能建软链接（Windows 未开开发者模式？）: {exc}")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("越出", self.h.last_err)
         self.assertIsNone(self.h.gen_argv)
 
     def _degrade(self):

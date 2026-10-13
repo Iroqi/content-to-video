@@ -62,6 +62,9 @@ _TRANSFORM_KEYS = frozenset({
 })
 # 纯平移：跟原点无关，能精确搬进副本（_carry_translate）。
 _TRANSLATE_KEYS = frozenset({"x", "y"})
+# 相机步里由 `_fold_camera` 折进子层、不走元素通道的那几键：姿态本体（scale/x/y）
+# 与绕点（svgOrigin/transformOrigin，与 _cam_crop.cam_resting_pose 读的是同一组）。
+_CAM_POSE_KEYS = frozenset({"scale", "x", "y", "svgOrigin", "transformOrigin"})
 # 这些键走 attribute，不走 style（GSAP 的 attr:{} 显式通道）。
 _ATTR_KEY = "attr"
 # 纯数字才认的样式：相对写法（"+=0.2"）要有基值可加。
@@ -223,6 +226,32 @@ def _settle_payload(el, payload):
     return skipped
 
 
+def _settle_cam_payload(el, step):
+    """相机步上真会落到 `#cam` 元素本身的那几键（姿态键不在此列）。
+
+    运行期 GSAP 是把 to/set 里的每条属性逐条写到目标元素上的，所以 opacity
+    （整台相机一起淡出）、attr 这类键写给 `#cam` 是**真的生效**的。旧实现对
+    `#cam` 整条 early-return（"相机走 _fold_camera"），把它们静默丢掉了——接续页
+    从没被淡过的画面起跑，而作者确实演了。
+
+    姿态键（scale/x/y 与绕点）交给 `_fold_camera` 折进子层，不写成 #cam 自己的
+    transform：那层推近对本段的原点计算会变成隐形的（见模块头）。
+
+    draw / morph / count 不搬：它们分别要一条 path、一个 d、一处 <text> 才成立，
+    写在 `#cam`（一个 <g>）上运行期同样不成立，没有"最后停在哪儿"可搬。draw 尤其
+    不能照搬终态——`stroke-dasharray:1` 会被所有子元素继承，把整幅画打成虚线。
+    """
+    skipped = []
+    for key in ("set", "to"):
+        payload = step.get(key)
+        if not isinstance(payload, dict):
+            continue
+        payload = {k: v for k, v in payload.items() if k not in _CAM_POSE_KEYS}
+        if payload:
+            skipped += _settle_payload(el, payload)
+    return skipped
+
+
 def _settle_step(root, step):
     """一步的结束态：draw / morph / count / set / to（from-only 是 no-op）。
 
@@ -230,11 +259,12 @@ def _settle_step(root, step):
     出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页怎么回去了"。
     """
     selector = step["target"]
-    if selector == "#" + CAM_ID:
-        return [], []                   # 相机走 _fold_camera，不进元素通道
     transforms, misfires = [], []
     for el in _targets(root, selector):
         tag = el.tag.rsplit("}", 1)[-1]
+        if selector == "#" + CAM_ID:
+            transforms += _settle_cam_payload(el, step)
+            continue
         if step.get("draw"):
             # 演完 = 线长满了：pathLength=1 归一 + dasharray=1 + dashoffset=0（solid）。
             transforms += _settle_payload(el, {
@@ -263,32 +293,41 @@ def _settle_step(root, step):
     return transforms, misfires
 
 
-def _fold_camera(root, steps, center=None):
+def _pose_is_identity(pose):
+    """收尾位就是原位（没推近也没平移）：没什么可折的，也不必说什么。"""
+    return (abs(pose["scale"] - 1.0) < 1e-9 and abs(pose["x"]) < 1e-9
+            and abs(pose["y"]) < 1e-9)
+
+
+def _fold_camera(root, steps, center):
     """把 `#cam` 的收尾姿态折进一层包住其全部子元素的静态 `<g>`。
 
     写法是 `translate(E, F) scale(S)`（不是 matrix）：_cam_crop 只解 translate/scale，
     写成 matrix 就等于对下一环的自查与烘焙双双失明（它按口径跳过读不懂的子树）。
 
-    `center` 是这一页**运行期真正绕的那一点**，由调用方在动这棵树之前量好传进来（见
-    `bake_settled_state`）；省略则按当前树现算——只有不关心与渲染器对齐的场合才该省。
+    `center` 是这一页**运行期真正绕的那一点**，必填：由调用方在动这棵树之前量好传进来
+    （见 `bake_settled_state`）。这里绝不按当前树现算——那棵树已经被结算改过，量出来的
+    点与渲染器当时注入的 svgOrigin 不是同一个，折进去就是一次静默错位。量不出就不折，
+    由调用方出声（宁可少折一层，也不能折在一个错的点上）。
+
+    姿态里有读不出的分量（`scale:"/=0"` 那类，见 `cam_resting_pose.resolved`）时同样
+    不折：手上那组数字不是真实的收尾位。
     """
     pose = cam_resting_pose(steps)
-    if pose is None or not pose.get("rests", True):
+    if pose is None or not pose.get("rests", True) or not pose.get("resolved", True):
         return None
     cam = root.find(".//*[@id='%s']" % CAM_ID)
     if cam is None or not len(cam):
         return None
-    cx_cy = center if center is not None else cam_projection_origin(root, pose)
-    if cx_cy is None:
+    if center is None:
         return None
-    cx, cy = cx_cy
+    cx, cy = center
     s = pose["scale"]
     # p' = C + s·(p − C) + t = s·p + [(1−s)C + t]  →  translate 分量就是方括号那一项。
     e = (1.0 - s) * cx + pose["x"]
     f = (1.0 - s) * cy + pose["y"]
     if abs(s - 1.0) < 1e-9 and abs(e) < 1e-9 and abs(f) < 1e-9:
-        return None                    # 收尾位 = 原位：不包这层，副本与原始内联完全一致
-    # 带命名空间建：序列化结果与裸 "g" 一字不差（默认命名空间继承），但内存里这棵树
+        return None                    # 收尾位 = 原位：不包这层，副本与原始内联完全一致    # 带命名空间建：序列化结果与裸 "g" 一字不差（默认命名空间继承），但内存里这棵树
     # 和"再解析一遍"的树就长得一样——链式接续正是拿产出的字符串再解析一次的。
     stage = ET.Element(f"{{{SVG_NS}}}g",
                        {STAGE_ATTR: "1",
@@ -362,6 +401,19 @@ def bake_settled_state(markup, steps, beats=None):
     cam = _fold_camera(root, steps or [], pre_center)
     if cam:
         notes.append("相机收尾位已折进本层（scale={:g}、平移=({:g}, {:g})）".format(*cam))
+    elif pose and pose.get("rests", True) and not pose.get("resolved", True):
+        # 读不出的分量排在"是不是原位"之前：手上这组数字根本不是收尾位，
+        # 拿它判"收尾位 = 原位、不必折"就是拿一个假姿态当结论。
+        notes.append("相机步里有静态几何读不出的分量（如 scale:\"/=0\"，运行期算成 "
+                     "Infinity）——本页不折 <g data-ctv-stage>，接续页从相机原位起跑"
+                     "（把该分量改写成绝对数，或 /=N（N≠0））")
+    elif (pose and pose.get("rests", True) and not _pose_is_identity(pose)
+            and pre_center is None):
+        # 绕点量不出来（非原位姿态才会走到这）：宁可少折一层，也不能折在一个与运行期
+        # 不同的点上（那正是跨页阶跃的来源）。折层是静默搬运，这一层必须出声。
+        notes.append("相机绕的那一点在动这棵树之前量不出来（子树里有读不懂的 transform，"
+                     "占位盒算不出）——本页不折 <g data-ctv-stage>，接续页从相机原位起跑"
+                     "（把读不懂的 rotate/matrix 换成 translate/scale，或本页不写运镜）")
     return ET.tostring(root, encoding="unicode"), notes
 
 

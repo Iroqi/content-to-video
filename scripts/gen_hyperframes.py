@@ -143,7 +143,8 @@ def ensure_local_gsap(project_dir):
 
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _template import get_canvas, get_image_box, load_template  # noqa: E402
+from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E402
+                       load_template)
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path)
@@ -157,8 +158,8 @@ from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
-from _timeline import (beat_positions, beat_span, beat_cycles,  # noqa: E402
-                       duration_tolerance)
+from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
+                       beat_cycles, duration_tolerance)
 
 from html_renderer import (  # noqa: E402
     segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
@@ -229,16 +230,18 @@ def _warn_if_local_vendor_missing(src, out_dir):
     而每个段落卡都带内联 opacity:0——没有 GSAP 把它抬起来，成片是**全黑**
     的无声空片，不是"停在首帧"。这些只在真正打开浏览器或渲染时才暴露。
     显式值允许指到项目外的本地文件，所以只 warn 不 fail。
+
+    查找基准只有 HTML 输出目录：`<script src="…">` 由浏览器从 index.html 所在
+    目录解析。旧实现把运行命令时的 CWD 也当合法基准，于是"文件恰好在 CWD 下"
+    时这条守卫闭嘴，而 out_dir 里并没有它——假守卫承诺了"文件在"，成片却是全黑
+    无声空片，比不提示更难查。绝对路径由 os.path.join 直接返回它，一并覆盖。
     """
     if "://" in src or src.lower().startswith("data:"):
         return
-    for base in (out_dir, os.getcwd()):
-        if os.path.isfile(os.path.join(base, src)):
-            return
-    if os.path.isfile(src):
+    if os.path.isfile(os.path.join(out_dir, src)):
         return
     print(f"[warn] 显式传入的 GSAP 脚本路径不存在（{src}，相对 HTML 输出目录 "
-          f"{out_dir} 或当前目录都找不到）。HTML 仍会生成，但页面里 gsap 未定义、"
+          f"{out_dir} 找不到）。HTML 仍会生成，但页面里 gsap 未定义、"
           "整条时间线建不起来，每个段落卡都停在内联 opacity:0——成片为全黑无声空片。"
           "请补上该文件，或去掉这个参数走 vendor/ 默认路径。",
           file=sys.stderr)
@@ -422,11 +425,6 @@ def _svg_intrinsic_size(path):
     return None
 
 
-# 图内文字可读下限（px）：与 references/canvas.md「文字与尺寸」的 26px
-# 同一条线，那边是写给画图的约定，这里是门禁端的复读。
-CANVAS_MIN_FONT_PX = 26
-
-
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
     """槽位版式配图里 SVG 的比例失配，返回一条说明（无错时为空列表）。
 
@@ -535,17 +533,17 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
         # 字号都乘这个系数。只有缩小的方向会跌破可读下限。
         scale = canvas_w / sw
         min_px, n_text = _svg_text_metrics(path)
-        if min_px is not None and min_px * scale < CANVAS_MIN_FONT_PX:
+        if min_px is not None and min_px * scale < MIN_READABLE_FONT_PX:
             errs.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，铺进 "
                         f"{canvas_w}×{canvas_h} 会整体缩到 {scale:.2f} 倍，图内最小"
                         f"字号 {min_px:g}px 折算后只有 {min_px * scale:.1f}px，低于 "
-                        f"{CANVAS_MIN_FONT_PX}px 下限（成片压缩编码后读不出来）。"
+                        f"{MIN_READABLE_FONT_PX}px 下限（成片压缩编码后读不出来）。"
                         f"按当前画幅原尺寸重画：竖屏 1080×1440、横屏 1920×1080")
         elif min_px is None and scale < 0.999:
             warns.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，铺进 "
                          f"{canvas_w}×{canvas_h} 会整体缩到 {scale:.2f} 倍，但文件里"
                          f"读不到 px 字号（写成 class / em / 相对单位了）——"
-                         f"折算后是否还够 {CANVAS_MIN_FONT_PX}px 下限没人验得了，"
+                         f"折算后是否还够 {MIN_READABLE_FONT_PX}px 下限没人验得了，"
                          f"按画幅原尺寸画就不用猜")
         warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白不会出现在画面上"
                      f"（标题层与句子流层都不生成），这张 SVG 里有 {n_text} 个"
@@ -1059,7 +1057,7 @@ def main(argv=None):
                         help="画幅：portrait（默认，1080×1440 竖屏 3:4）或 "
                              "landscape（1920×1080 横屏 16:9）。两画幅共用同一套"
                              "组件版式，数值各取 _template.py 对应块。")
-    parser.add_argument("--fps", type=int, default=24,
+    parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
                         help="输出帧率（写入 HTML 的 data-fps；渲染时可用 --fps 覆盖，"
                              "默认 24；本技能推荐 12/24/30/60——12 仅用于快速预览片，"
                              "Hyperframes 当前支持更广的 FPS 范围）")

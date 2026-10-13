@@ -16,6 +16,7 @@ from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
 from _ease import validate_ease  # noqa: E402
+from _validate import is_finite_number  # noqa: E402  数值守卫的单一谓词（拒 NaN/Inf）
 
 
 def validate_relative_project_path(src, where):
@@ -248,8 +249,9 @@ def _validate_count(count, where):
     for nm in ("to", "from"):
         if nm in count:
             v = count[nm]
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                raise ValueError(f"{where} 的 {nm} 必须是数字（实际: {v!r}）")
+            if not is_finite_number(v):
+                raise ValueError(f"{where} 的 {nm} 必须是数字且有限"
+                                 f"（NaN/Infinity 写进补间，浏览器会整条丢弃，实际: {v!r}）")
     if "to" not in count:
         raise ValueError(f"{where} 必须有 to（滚动到的目标值）")
     dec = count.get("decimals", 0)
@@ -283,10 +285,10 @@ def _validate_stagger(stagger, where):
     收两种写法：数字（= 每个间隔秒数，GSAP 的 stagger:0.1），或对象（GSAP 原生
     stagger 配置：each / amount / from / grid / ease）。值仍走标量/数组校验、禁 on*。
     """
-    if isinstance(stagger, bool) or not isinstance(stagger, (int, float, dict)):
-        raise ValueError(f"{where} 必须是数字（每个间隔秒）或对象（GSAP stagger 配置）"
-                         f"（实际: {stagger!r}）")
-    if isinstance(stagger, (int, float)):
+    if not isinstance(stagger, dict):
+        if not is_finite_number(stagger):
+            raise ValueError(f"{where} 必须是数字（每个间隔秒）或对象（GSAP stagger 配置）"
+                             f"，且数字必须有限（NaN/Infinity 不算数；实际: {stagger!r}）")
         if stagger < 0:
             raise ValueError(f"{where} 为数字时必须 ≥0（实际: {stagger!r}）")
         return stagger
@@ -300,13 +302,15 @@ def _validate_stagger(stagger, where):
                     or any(isinstance(x, bool) or not isinstance(x, int) or x < 1 for x in v)):
                 raise ValueError(f"{where} 的 grid 必须是两个 ≥1 的整数 [列, 行]（实际: {v!r}）")
         elif k == "from":
-            if not (isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))):
-                raise ValueError(f"{where} 的 from 必须是字符串或数字（实际: {v!r}）")
+            if not (isinstance(v, str) or is_finite_number(v)):
+                raise ValueError(f"{where} 的 from 必须是字符串或有限数字"
+                                 f"（NaN/Infinity 不算数；实际: {v!r}）")
         elif k == "ease":
             validate_ease(v, f"{where} 的 ease")
         else:  # each / amount
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-                raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
+            if not is_finite_number(v) or v < 0:
+                raise ValueError(f"{where} 的 {k} 必须是 ≥0 的有限数字"
+                                 f"（NaN/Infinity 不算数；实际: {v!r}）")
     return stagger
 
 
@@ -343,10 +347,10 @@ def _validate_director(key, dirval):
                 f"（实际: 写了 {sorted(k for k in ('at', 'at_time') if k in step) or '两者皆无'}）")
         if has_at:
             at = step["at"]
-            if not isinstance(at, (int, float)) or isinstance(at, bool) or at < 0:
+            if not is_finite_number(at) or at < 0:
                 raise ValueError(
                     f"{where} 的 at 必须是非负数（该段内第几句旁白，0 基；小数=句内偏移，"
-                    f"如 1.5=第 2 句念到一半）（实际: {at!r}）")
+                    f"如 1.5=第 2 句念到一半；NaN/Infinity 不算数）（实际: {at!r}）")
         else:
             at_time = step["at_time"]
             # 绝对秒（数字，≥0）或相对链（字符串 "+0.5"/"-0.2" = 上一条 beat 结束后
@@ -357,11 +361,10 @@ def _validate_director(key, dirval):
                     raise ValueError(
                         f"{where} 的 at_time 字符串必须是相对写法 \"+秒\" / \"-秒\""
                         f"（上一条 beat 结束后的偏移；首条从段落起点算）（实际: {at_time!r}）")
-            elif (not isinstance(at_time, (int, float)) or isinstance(at_time, bool)
-                    or at_time < 0):
+            elif not is_finite_number(at_time) or at_time < 0:
                 raise ValueError(
-                    f"{where} 的 at_time 必须是非负数字（从该段音频起点算的秒数）"
-                    f"或相对串 \"+秒\"（实际: {at_time!r}）")
+                    f"{where} 的 at_time 必须是非负数字（从该段音频起点算的秒数，"
+                    f"NaN/Infinity 不算数）或相对串 \"+秒\"（实际: {at_time!r}）")
         target = step.get("target")
         if not isinstance(target, str) or not _DIRECTOR_TARGET_RE.match(target):
             raise ValueError(
@@ -423,8 +426,9 @@ def _validate_director(key, dirval):
         for k in ("duration", "delay"):
             if k in step:
                 v = step[k]
-                if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
-                    raise ValueError(f"{where} 的 {k} 必须是 ≥0 的数字（实际: {v!r}）")
+                if not is_finite_number(v) or v < 0:
+                    raise ValueError(f"{where} 的 {k} 必须是 ≥0 的有限数字"
+                                     f"（NaN/Infinity 不算数；实际: {v!r}）")
         if "ease" in step:
             validate_ease(step["ease"], f"{where} 的 ease")
         # repeat / yoyo：这一拍演完再演几遍、以及来回（GSAP 的同名补间变量）。整数而非
@@ -659,10 +663,10 @@ def _check_audio_opts(key, value, src):
         # 会溜过数值校验、被渲染端拼成 data-volume="True"——那是个无效
         # 增益，症状是"要了原声、成片却没声音"，与本套契约要堵的正是
         # 同一类静默退化。与 loop/muted 的布尔口径保持一致。
-        if isinstance(_v, bool) or not isinstance(_v, (int, float)):
+        if not is_finite_number(_v):
             _errs.append(
-                f"images.json 的 '{key}' 的 {_opt} 必须是数字"
-                f"（{_hint}；实际: {_v!r}）")
+                f"images.json 的 '{key}' 的 {_opt} 必须是数字且有限"
+                f"（{_hint}；NaN/Infinity 不算数；实际: {_v!r}）")
             continue
         if _v < _lo or (_hi is not None and float(_v) > _hi):
             _bound = (f"{_lo} ~ {_hi}" if _hi is not None else f"≥ {_lo}")

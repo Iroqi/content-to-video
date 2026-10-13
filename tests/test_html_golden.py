@@ -356,6 +356,71 @@ class Injection(unittest.TestCase):
         self.assertIn("__CTV_GSAP__", evil)
 
 
+class CliSuppliedSrcEscaping(unittest.TestCase):
+    """CLI 传进来的路径落在属性上下文里，转义只走本模块的 esc()（= html.escape）。
+
+    原先两处手写 `.replace("&","&amp;").replace('"',"&quot;")`——只转了 5 个字符
+    里的 2 个，`<` `>` `'` 直接裸插进属性值。标准库现成的 html.escape 就在同一个
+    文件里（esc()），手抄半边既漏又会在两处分叉。
+    """
+
+    def _render(self, gsap_src):
+        m = H.make_manifest()
+        with contextlib.redirect_stderr(io.StringIO()):
+            return generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m), gsap_src=gsap_src,
+                                 aspect="portrait", theme="dark")
+
+    def test_all_five_attribute_specials_are_escaped(self):
+        html = self._render("vendor/gs&ap<'>\".min.js")
+        self.assertIn("&amp;", html)
+        self.assertIn("&lt;", html)
+        self.assertIn("&gt;", html)
+        self.assertIn("&quot;", html)
+        self.assertIn("&#x27;", html)
+        self.assertNotIn("gs&ap<'>\".min.js", html)
+
+    def test_plain_url_like_src_is_untouched_by_escaping(self):
+        """回归网：不能顺手把 :/? 也编码掉——CDN 地址必须是原样写进 src 的。"""
+        src = "https://cdn.example.com/npm/gsap@3.13.0/dist/gsap.min.js"
+        html = self._render(src)
+        self.assertIn(f'src="{src}"', html)
+
+
+class AgendaTitleShrink(unittest.TestCase):
+    """agenda（开屏/结尾）标题按字数降字号：降到可读下限就停，并说出停在哪。
+
+    标题长度在契约层没有上限（_validate_display_text 只禁分号），所以降字号这条
+    路径必须自己设下限：算出来的字号低于图内文字同一条可读下限时，那行字在成片里
+    就是读不出来的，而 warn 只报"降字号"、不报"降到了多少"，作者无从判断。
+    """
+
+    def _agenda_title_px(self, title, aspect="portrait"):
+        s = H.sample_source()
+        s["opening_title"] = title
+        m = H.make_manifest(s)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect=aspect, theme="dark")
+        mo = re.search(r'id="title-opening"[^>]*font-size:(\d+)px', html)
+        self.assertIsNotNone(mo, "开屏标题上没找到 font-size")
+        return int(mo.group(1))
+
+    def test_long_agenda_title_keeps_readable_font_size(self):
+        """竖屏可用宽 936px、每行按 CJK 字宽≈字号 估：100 字标题会算出 18px、
+        1900 字算出 0px（标题整条消失）。两者都低于 26px 的可读下限。"""
+        from _template import MIN_READABLE_FONT_PX
+        for n in (100, 1900):
+            with self.subTest(chars=n):
+                self.assertGreaterEqual(
+                    self._agenda_title_px("长" * n), MIN_READABLE_FONT_PX)
+
+    def test_short_agenda_title_keeps_template_size(self):
+        """没触发降档时字号仍是模板值（回归网：钳制不能反过来压小正常标题）。"""
+        self.assertEqual(self._agenda_title_px("本期内容"), 84)
+
+
 class AppleOpening(unittest.TestCase):
     """opening_animation:"apple" 的苹果风开场编排：halo + 模糊→锐利标题 + 逐行浮现，
     取代通用标题入场；不写该键时开屏维持原状（回归网）。"""

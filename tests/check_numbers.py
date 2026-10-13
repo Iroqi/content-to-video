@@ -106,9 +106,10 @@ FACTS = [
     ),
     (
         "min-font-px",
-        ("const", "scripts/check_svg.py", "MIN_PX"), 26,
+        ("const", "scripts/_template.py", "MIN_READABLE_FONT_PX"), 26,
         [("references/canvas.md", r"\*\*26px 是下限\*\*")],
-        "图内字号下限的权威定义句；作者照此定字号，改了它所有字号建议都要重算",
+        "图内字号下限的权威定义句；单一真源在 _template（三道门都读它），"
+        "作者照此定字号，改了它所有字号建议都要重算",
     ),
     (
         "empty-band",

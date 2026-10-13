@@ -319,11 +319,37 @@ class DocExampleChecker(unittest.TestCase):
         self.assertEqual(check_examples.main(), 0)
 
 
+class FontFloorSingleSource(unittest.TestCase):
+    """图内文字可读下限只有一份：三个判它的地方必须读同一个对象。
+
+    26px 此前在 check_svg（MIN_PX）与 gen_hyperframes（CANVAS_MIN_FONT_PX）
+    各抄一份。改一边只会让作者"按提示调字号、另一页照样被判超标"，三道门三个答案。
+    """
+
+    def test_all_three_read_the_template_constant(self):
+        import _template
+        self.assertEqual(_template.MIN_READABLE_FONT_PX, 26)
+        for mod in (check_svg, gen_hyperframes):
+            with self.subTest(mod=mod.__name__):
+                self.assertIs(mod.MIN_READABLE_FONT_PX,
+                              _template.MIN_READABLE_FONT_PX)
+
+    def test_no_module_redefines_its_own_floor(self):
+        """有人再抄一份 `= 26` 时这条会红：门禁只锁真源，抄件是抄件查不出来的。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for rel in ("scripts/check_svg.py", "scripts/gen_hyperframes.py",
+                    "scripts/html_renderer.py"):
+            with open(os.path.join(root, rel), encoding="utf-8") as f:
+                src = f.read()
+            with self.subTest(rel=rel):
+                self.assertNotIn("MIN_PX = ", src)
+                self.assertNotIn("FONT_PX = 26", src)
+
+
 class NumberChecker(unittest.TestCase):
 
     def test_doc_numbers_match_code(self):
         self.assertEqual(check_numbers.main(), 0)
-
     def test_every_fact_reads_a_real_code_value(self):
         # 登记错路径的检查器会「因为读不到值而永远失败」或者更糟——被临时放宽后
         # 变成永远绿。所以逐条断言它真能从代码里取到那个数。

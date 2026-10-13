@@ -14,6 +14,9 @@ director steps，所以它没有判据；唯一同时握着 SVG 原文和运镜�
   （GSAP 用 `from` 把元素摆在画外再滑进来是标准入场），报它就是造噪声。
 - `repeat:-1` 的运镜没有收尾位（相机永不停下），这一页就无从判定：这里出声说"没查"，
   绝不说"一切在幅内"——后者在这一页上是假话。
+- 姿态里有**写了却读不出**的分量（`scale:"/=0"`、带单位的串）同样不出判定：GSAP 运行期
+  算得出（`/=0` 是 Infinity，元素被推出画幅），静态几何算不出，于是 pose 标 `resolved=False`，
+  消费方（投影自查与跨段折层）一律先看这个标记、宁可说"没查"也不按旧值编一个结论。
 - `from` 不算收尾，`to`/`set` 才算：`from` 是"从这些值动回原值"，结束态是补间前的姿态；
   `to`/`set` 写的是终值，同一条属性后写的说话（GSAP 缓存 scale/x/y 三个组件，每条
   补间改的就是这三个数，所以这里也在组件空间里逐条结算）。
@@ -56,7 +59,12 @@ _REL_RE = re.compile(r"^\s*([+\-*/])=\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*$")
 def resolve_num(value, current=None):
     """GSAP 属性值 → 绝对数：认数字、绝对数字串，以及 `"+=5"`/`"*=2"` 相对写法
     （`current` 是该属性结算到此刻的值；相对写法没有基值时按中性元 1/0 起算，
-    与 GSAP 从原位开始补间的行为一致）。读不出返回 None。"""
+    与 GSAP 从原位开始补间的行为一致）。读不出返回 None。
+
+    `"/=0"` 读不出（返回 None），不回落成 `current`：GSAP 运行期算出的是
+    Infinity，元素被推出画幅；把它当"没写"会让投影按旧值报"一切在幅内"——
+    那一句在这一页上是假话。返回 None 让上层把这一页判成"没法算"并出声。
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -70,8 +78,9 @@ def resolve_num(value, current=None):
         if m.group(1) in "*/":
             if base is None:
                 base = 1.0
-            return base * operand if m.group(1) == "*" else (
-                base / operand if operand else base)
+            if m.group(1) == "*":
+                return base * operand
+            return base / operand if operand else None
         if base is None:
             base = 0.0
         return base + operand if m.group(1) == "+" else base - operand
@@ -261,8 +270,13 @@ def cam_resting_pose(steps):
     那条走回起点，对静止位没有净贡献，跳过；`repeat:-1` 那条**永不停下**，于是整页没有
     收尾位可言——这里只把 `rests` 标成 False，绝不替它编一个姿态（出画自查与跨段烘焙都
     读这个标记，各自出声）。
+
+    `resolved` 标 False = 姿态里有**写了却读不出**的分量（`scale:"/=0"`、带单位的串）。
+    这时 pose 里的数字是上一条已结算到的值、不是这一页真实的收尾位，绝不能拿去投影
+    （那会报出"一切在幅内"这种假话）或折层（那会折出一个错的位），消费方一律先看这个标记。
     """
-    pose = {"scale": 1.0, "x": 0.0, "y": 0.0, "origin": None, "rests": True}
+    pose = {"scale": 1.0, "x": 0.0, "y": 0.0, "origin": None, "rests": True,
+            "resolved": True}
     seen = False
     for step in steps or []:
         if step.get("target") != "#cam":
@@ -285,7 +299,9 @@ def cam_resting_pose(steps):
             for name in _NUM_KEYS:
                 if name in payload:
                     n = resolve_num(payload[name], pose[name])
-                    if n is not None:
+                    if n is None:
+                        pose["resolved"] = False
+                    else:
                         pose[name] = n
     return pose if seen else None
 
@@ -409,6 +425,13 @@ def crop_warnings(svg_text, steps):
         return ["这一页有 repeat:-1 的运镜，相机不会停在任何一处——出画自查按'收尾位'判定，"
                 "这一页没有收尾位可查。要它演完就写明确遍数（repeat:N），或按最大推近"
                 "幅度自己核一遍"]
+    if not pose.get("resolved", True):
+        # 姿态里有读不出的分量（如 scale:"/=0"，GSAP 运行期算成 Infinity）：手上这组
+        # 数字不是真实的收尾位。按它投影只会报出一句"一切在幅内"的假话，所以这里说
+        # "没查"，与 repeat:-1 那条同一口径。
+        return ["这一页的运镜里有静态几何读不出的分量（如 scale:\"/=0\"，GSAP 运行期"
+                "算成 Infinity，元素会被推出画幅）——收尾位算不出来，出画自查这一页"
+                "没查。要它可查就把该分量改写成绝对数，或 /=N（N≠0）"]
     try:
         root = ET.fromstring(svg_text)
     except ET.ParseError:

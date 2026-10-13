@@ -769,6 +769,10 @@ def _emit_rule(el, ctx, where):
         ("stroke-width", _num(_opt_num(el, "width", where, ctx["line_w"], positive=True)))])
     if el.get("draw"):
         attrs["pathLength"] = "1"
+    # rule 是声明式的装饰线（分隔线/下划线）：两端本来就不接任何东西，属于
+    # "有意悬空的线"。给 check_svg 的端点落点检查一个显式豁免，而不是让它
+    # 每次误报——误报训练人忽略 warn，比漏报更贵。
+    attrs["data-free-ends"] = "1"
     return _node("line", attrs)
 
 

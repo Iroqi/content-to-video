@@ -175,3 +175,78 @@ def x_span(d):
     两轴都得投影。
     """
     return _axis_span(d, _X_INDEX)
+
+
+def _walk(d):
+    """path d → (点序列, 线段序列, 是否含 Z)。单一光标走法，端点与线段共用。
+
+    点序列 = 每个命令终点（含 M 的落点）；线段序列 = 逐命令的直线段近似
+    （曲线取起点→终点，闭合补回段）。给 check_svg 的端点落点检查用：端点
+    语义（相对命令累加、H/V 只动单轴、Z 送回子路径起点）不在这里写两份。
+    """
+    cmds = parse_path(d, "path d")
+    pts = []
+    segs = []
+    cx = cy = sx = sy = 0.0
+    prev = None
+    closed = False
+    for letter, nums in cmds:
+        up = letter.upper()
+        rel = letter.islower()
+        if up == "Z":
+            closed = True
+            if prev is not None and (prev[0] != sx or prev[1] != sy):
+                segs.append((prev[0], prev[1], sx, sy))
+            cx, cy = sx, sy
+            prev = (sx, sy)
+            pts.append((cx, cy))
+            continue
+        arity = _ARITY[up]
+        for i in range(0, len(nums), arity or 1):
+            g = nums[i:i + arity]
+            if up == "H":
+                nx, ny = (cx + g[0], cy) if rel else (g[0], cy)
+            elif up == "V":
+                nx, ny = (cx, cy + g[0]) if rel else (cx, g[0])
+            elif up == "A":
+                nx = cx + g[5] if rel else g[5]
+                ny = cy + g[6] if rel else g[6]
+            else:                       # M / L / C / S / Q / T：末两位是终点
+                nx = cx + g[-2] if rel else g[-2]
+                ny = cy + g[-1] if rel else g[-1]
+            if up == "M":
+                prev = None             # M 是移动不画线，不连到上一段
+            if prev is not None:
+                segs.append((prev[0], prev[1], nx, ny))
+            prev = (nx, ny)
+            cx, cy = nx, ny
+            pts.append((cx, cy))
+            if up == "M":
+                sx, sy = cx, cy
+    return pts, segs, closed
+
+
+def path_endpoints(d):
+    """开 path 的首尾绝对坐标；含 Z（闭合）返回 None。
+
+    给 `scripts/check_svg.py` 的端点落点检查用。Z 出现即视为闭合——闭合轮廓
+    的端点根在自己的轮廓上，不需要查悬空。
+    """
+    if not isinstance(d, str):
+        raise ValueError("path d 必须是字符串")
+    if re.search(r"[zZ]", d):
+        return None
+    pts, _, _ = _walk(d)
+    return (pts[0], pts[-1]) if pts else None
+
+
+def path_segments(d):
+    """path → 直线段序列 [(x1,y1,x2,y2), ...]（曲线按起点→终点近似，闭合补回段）。
+
+    给 `scripts/check_svg.py` 端点落点检查当"落点目标"：另一条线/轮廓的边可以
+    根住端点。近似只影响"少根住"（安全方向），不会把悬空误判成根住。
+    """
+    if not isinstance(d, str):
+        raise ValueError("path d 必须是字符串")
+    _, segs, _ = _walk(d)
+    return segs

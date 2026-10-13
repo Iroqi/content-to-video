@@ -163,6 +163,118 @@ class SvgChecker(unittest.TestCase):
         self.assertTrue(any("色差框" in w for w in sw))
         self.assertEqual([w for w in sw if "满幅底板" in w], [])
 
+    # ── 图元越出画布（error）───────────────────────────────────
+
+    def test_shape_out_of_bounds_is_error(self):
+        # rect 右缘伸出画布 40px：cover 按框裁切，贴边内容必被裁掉
+        errs, _ = self.run_check(GOOD.replace(
+            "</svg>", '<rect x="940" y="20" width="80" height="40" fill="#fff"/></svg>'))
+        self.assertTrue(any("越出画布" in e for e in errs), errs)
+
+    def test_in_bounds_shape_passes(self):
+        errs, _ = self.run_check(GOOD.replace(
+            "</svg>", '<rect x="20" y="600" width="120" height="40" fill="#fff"/></svg>'))
+        self.assertFalse(any("越出画布" in e for e in errs), errs)
+
+    def test_circle_and_polygon_oob_are_errors(self):
+        for body in ('<circle cx="990" cy="60" r="40" fill="#fff"/>',
+                     '<polygon points="0,700 980,700 1100,800" fill="#fff"/>'):
+            with self.subTest(body=body):
+                errs, _ = self.run_check(GOOD.replace("</svg>", body + "</svg>"))
+                self.assertTrue(any("越出画布" in e for e in errs), errs)
+
+    def test_path_oob_uses_real_span(self):
+        # path 越界按 x_span/y_span 的真实跨度（含曲线控制点）判，不靠目测
+        errs, _ = self.run_check(GOOD.replace(
+            "</svg>", '<path d="M0 700 C 300 300 600 300 1000 200" stroke="#fff"/></svg>'))
+        self.assertTrue(any("越出画布" in e for e in errs), errs)
+
+    def test_text_oob_vertical_and_anchor(self):
+        errs, _ = self.run_check(GOOD.replace('y="100"', 'y="730"'))
+        self.assertTrue(any("越出画布" in e for e in errs), errs)
+        errs, _ = self.run_check(GOOD.replace('x="40"', 'x="-20"'))
+        self.assertTrue(any("画布左缘" in e for e in errs), errs)
+
+    def test_full_bleed_plate_is_not_oob(self):
+        # 满幅背景 rect 本来就是铺满，不算越界（比例检查已另行把关）
+        errs, _ = self.run_check(GOOD.replace(
+            "</svg>", '<rect width="980" height="735" fill="#0b1020"/></svg>'))
+        self.assertFalse(any("越出画布" in e for e in errs), errs)
+
+    # ── 线条端点落点（warn）：线要结束在某处 ───────────────────
+
+    def test_loose_line_end_warns(self):
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>", '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/></svg>'))
+        self.assertTrue(any("端点悬空" in w for w in warns), warns)
+
+    def test_line_ending_on_another_stroke_passes(self):
+        # 一条线接到另一条线的端点上，两头都根住了
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/>'
+            '<line x1="400" y1="500" x2="400" y2="300" stroke="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_line_ending_on_dot_or_ring_passes(self):
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/>'
+            '<circle cx="400" cy="500" r="3" fill="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+        # 大圆的圆周带也算根住：端点在圆周附近（圆心 (600,500) r=30，端点取 (630,500)）
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="630" y2="500" stroke="#fff"/>'
+            '<circle cx="600" cy="500" r="30" fill="none" stroke="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_line_ending_on_text_passes(self):
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>", '<line x1="40" y1="100" x2="40" y2="200" stroke="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_closed_and_fill_only_shapes_not_checked(self):
+        # 闭合多边形端点根在自己轮廓上；无描边的 fill path 不是"线"
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<polygon points="100,100 200,100 150,200" fill="#fff" stroke="#fff"/>'
+            '<path d="M100 300 L300 300 L200 400" fill="#123456"/>'
+            '<path d="M100 500 L300 500 L200 600 Z" stroke="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_relative_path_endpoints_resolve_absolutely(self):
+        # 相对命令的端点也要走光标算成绝对坐标，再判是否悬空
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>", '<path d="M100 400 l200 0" stroke="#fff"/></svg>'))
+        self.assertTrue(any("端点悬空" in w for w in warns), warns)
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<path d="M100 400 l200 0" stroke="#fff"/>'
+            '<path d="M300 400 v100" stroke="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_filled_disc_roots_an_endpoint_at_its_center(self):
+        # 实心大圆盘：线画进圆里就算根住（折线终点落在圆心的常见画法）
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<polyline points="100,500 400,500" stroke="#fff"/>'
+            '<circle cx="400" cy="500" r="20" fill="#fff"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+        # 同尺寸但只描边不填充：圆心不算根住，圆周才算
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<polyline points="100,500 400,500" stroke="#fff"/>'
+            '<circle cx="400" cy="500" r="20" fill="none" stroke="#fff"/></svg>'))
+        self.assertTrue(any("端点悬空" in w for w in warns), warns)
+
+    def test_data_free_ends_skips_the_stroke_check(self):
+        # 有意悬空的装饰线（canvas_kit 的 rule 分隔线/下划线）用 data-free-ends 声明豁免
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff" data-free-ends="1"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
 
 class CanvasDensity(unittest.TestCase):
     """整页画布的"整条横向空带"warn：画布页没有模板兜构图，暂停是空页就得说。"""

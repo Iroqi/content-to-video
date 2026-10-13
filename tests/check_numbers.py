@@ -215,6 +215,93 @@ FACTS = [
         [("references/writing.md", r"32[–-]45\s*字")],
         "段落级 hint 的字长下界",
     ),
+    # ── 部件配方（canvas_kit 各元素的一手量）────────────────────────────
+    # 数字全部派生自模板既有键 / 模块常量，文档「部件配方」节照抄；改模板或
+    # 常量必须同步改文档那一节（🔒 标记的就是这里锁的 14 个数）。
+    (
+        "canvas-tier-title-v",
+        ("json", "scripts/_template.py", "layout.vertical.title.fontSize"), 64,
+        [("references/canvas.md", r"64/40/32")],
+        "画布三档字号 title 档（竖屏）；画布页没有 HTML 标题层，图内文字是唯一的字",
+    ),
+    (
+        "canvas-tier-body-v",
+        ("json", "scripts/_template.py", "layout.vertical.subtitle.fontSize"), 40,
+        [("references/canvas.md", r"64/40/32")],
+        "同上，body 档",
+    ),
+    (
+        "canvas-tier-label-v",
+        ("json", "scripts/_template.py", "layout.vertical.tagline.fontSize"), 32,
+        [("references/canvas.md", r"64/40/32")],
+        "同上，label 档（刻度线长按它的一半算）",
+    ),
+    (
+        "canvas-tier-title-l",
+        ("json", "scripts/_template.py", "layout.landscape.title.fontSize"), 62,
+        [("references/canvas.md", r"62/33/28")],
+        "同上，横屏 title 档",
+    ),
+    (
+        "canvas-tier-body-l",
+        ("json", "scripts/_template.py", "layout.landscape.subtitle.fontSize"), 33,
+        [("references/canvas.md", r"62/33/28")],
+        "同上，横屏 body 档",
+    ),
+    (
+        "canvas-tier-label-l",
+        ("json", "scripts/_template.py", "layout.landscape.tagline.fontSize"), 28,
+        [("references/canvas.md", r"62/33/28")],
+        "同上，横屏 label 档",
+    ),
+    (
+        "canvas-line-width-v",
+        ("json", "scripts/_template.py", "layout.vertical.progressBar.height"), 4,
+        [("references/canvas.md", r"4px · 5px")],
+        "画布线宽（竖屏）：轴线/刻度线/rule 与页面进度条同一份量",
+    ),
+    (
+        "canvas-line-width-l",
+        ("json", "scripts/_template.py", "layout.landscape.progressBar.height"), 5,
+        [("references/canvas.md", r"4px · 5px")],
+        "同上，横屏",
+    ),
+    (
+        "canvas-panel-radius-v",
+        ("json", "scripts/_template.py", "layout.vertical.image.borderRadius"), 12,
+        [("references/canvas.md", r"12px · 12px")],
+        "面板圆角（竖屏）：局部底板与槽位配图同一倒角语言",
+    ),
+    (
+        "canvas-panel-radius-l",
+        ("json", "scripts/_template.py", "layout.landscape.image.borderRadius"), 12,
+        [("references/canvas.md", r"12px · 12px")],
+        "同上，横屏",
+    ),
+    (
+        "canvas-tick-frac",
+        ("const", "scripts/canvas_kit.py", "TICK_FRAC"), 0.5,
+        [("references/canvas.md", r"label 档字号的一半")],
+        "刻度线长 = label 档字号的一半；手绘作者按它定刻度长度",
+    ),
+    (
+        "check-svg-dot-max-r",
+        ("const", "scripts/check_svg.py", "DOT_MAX_R"), 4.0,
+        [("references/canvas.md", r"4px 的圆算")],
+        "端点落点检查里“圆点”的半径上限；r≤4 按点算，线头可根在圆盘上",
+    ),
+    (
+        "check-svg-end-tol-frac",
+        ("const", "scripts/check_svg.py", "END_TOL_FRAC"), 0.004,
+        [("references/canvas.md", r"画幅短边 4‰")],
+        "端点落点容差的画幅比例档；改判据必须同步改文档口径",
+    ),
+    (
+        "check-svg-end-tol-min",
+        ("const", "scripts/check_svg.py", "END_TOL_MIN"), 2.0,
+        [("references/canvas.md", r"至少 2px")],
+        "同上，绝对下限档（短画幅不按比例放大到不足 2px）",
+    ),
 ]
 
 

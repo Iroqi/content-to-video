@@ -34,14 +34,27 @@
     挤成一团、以及一根贯穿上下的细线替整页"占位"，它都看不见——构图仍归人眼）
   - 墙钟动画（SMIL <animate*> / CSS animation / transition）：无法与口播
     时间轴同步，提示改用 images.json 的 director                        [warn]
+  - 图元越出画布边界：rect/circle/ellipse/line/polygon/polyline 与 path 的
+    精确几何、以及文字的纵向（基线上下）与锚点位置超出 viewBox。cover 对
+    槽位图按框裁切、画布页就是成片的一页，越界内容必然被裁掉/出画——
+    跟"比例不等"是同一类"贴边内容会丢"的失败模式。带 transform 祖先的
+    元素跳过（最终位置静态算不出，不误报）                          [error]
+  - 线条端点悬空：line/polyline/带描边的开 path，首尾端点 4‰ 画幅内
+    没有落在任何"别的"笔画/描边/圆点/文字上。与 craft 的"线要结束在某
+    处"同一条规则：悬空线头是画到一半的残线。只查 stroke 可见的元素、
+    只以**其他元素**为落点目标（自己的线段不算）；带 `data-free-ends`
+    属性的线条跳过（canvas_kit 的 rule 分隔线/下划线就是有意悬空的装饰
+    线，手绘作者同样可以用它声明"这条线就是悬空的"）。有意悬空的装饰线
+    可忽略本条（warn 不挡 CI）                                        [warn]
 """
 import argparse
+import math
 import os
 import re
 import sys
 import xml.etree.ElementTree as ET
 
-from _path_morph import y_span
+from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import _WALLCLOCK_CSS as _CSS_WALLCLOCK
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
@@ -236,6 +249,151 @@ def _root_size(root):
     return None, None, ""
 
 
+# ── 越界与端点落点（2D 版自证，借鉴"线要结束在某处"那条 craft 规则）────────
+# 端点容差：画幅短边的 4‰，下限 2 个 SVG 单位。短边 735 → 2.94、短边 800 →
+# 3.2：随图缩放而不是拍死一个绝对值，与手绘"贴到就能算根住"的直觉一致。
+END_TOL_FRAC = 0.004
+END_TOL_MIN = 2.0
+# 终端圆点判据：直径 ≤ 8 单位（≈ 短边 1%）的小圆按"落点"算；更大的圆按
+# "圆周带"算（端点需落在圆周附近才算根住）。
+DOT_MAX_R = 4.0
+
+
+def _pt_list(points):
+    """points 属性 → [(x, y), ...]；空/畸形返回 None。"""
+    vals = [float(v) for v in re.split(r"[,\s]+", (points or "").strip())
+            if _NUM.match(v)]
+    if len(vals) < 4 or len(vals) % 2:
+        return None
+    return [(vals[i], vals[i + 1]) for i in range(0, len(vals), 2)]
+
+
+def _shape_bounds(el, tag, vb_w, vb_h):
+    """精确几何元素在画布坐标下的 (x0, y0, x1, y1)；读不出返回 None。
+
+    path 用 x_span/y_span（含曲线控制点，宁可高估——越界是 error，低估会漏报）。
+    """
+    def num(name):
+        return _parse_num(el.get(name))
+
+    if tag == "rect":
+        x, y, w, h = num("x") or 0.0, num("y") or 0.0, num("width"), num("height")
+        if w is None or h is None:
+            return None
+        return (x, y, x + w, y + h)
+    if tag == "circle":
+        cx, cy, r = num("cx"), num("cy"), num("r")
+        if None in (cx, cy, r):
+            return None
+        return (cx - r, cy - r, cx + r, cy + r)
+    if tag == "ellipse":
+        cx, cy, rx, ry = num("cx"), num("cy"), num("rx"), num("ry")
+        if None in (cx, cy, rx, ry):
+            return None
+        return (cx - rx, cy - ry, cx + rx, cy + ry)
+    if tag == "line":
+        x1, y1, x2, y2 = num("x1"), num("y1"), num("x2"), num("y2")
+        if None in (x1, y1, x2, y2):
+            return None
+        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+    if tag in ("polygon", "polyline"):
+        pts = _pt_list(el.get("points"))
+        if not pts:
+            return None
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return (min(xs), min(ys), max(xs), max(ys))
+    if tag == "path":
+        d = el.get("d") or ""
+        try:
+            xs = x_span(d)
+            ys = y_span(d)
+        except ValueError:
+            return None
+        if xs is None or ys is None:
+            return None
+        return (xs[0], ys[0], xs[1], ys[1])
+    return None
+
+
+def _text_oob(el, inherited, vb_w, vb_h):
+    """文字越界：纵向按基线 ± 字身（上方 fs、下方 0.3fs，与 _ink_band 同一
+    口径），横向按锚点。text-anchor=middle 的宽度静态算不出，只查纵向。
+    返回错误文案或 None。"""
+    fs = inherited(el, "font-size")
+    px = _parse_num(fs) if fs else None
+    if px is None:
+        return None
+    y = _parse_num(el.get("y")) or 0.0
+    if y - px < -1e-6 or y + px * 0.3 > vb_h + 1e-6:
+        top = y - px < -1e-6
+        return (f"文字越出画布{'上' if top else '下'}边缘"
+                f"（基线 y={y:g}，字身 {px:g}px）——cover 会裁掉贴边内容，"
+                f"把文字整体移进画布")
+    x = _parse_num(el.get("x"))
+    if x is not None:
+        anchor = inherited(el, "text-anchor") or "start"
+        if anchor == "start" and x < -1e-6:
+            return f"文字起点 x={x:g} 在画布左缘之外——把文字移进画布"
+        if anchor == "end" and x > vb_w + 1e-6:
+            return f"文字终点 x={x:g} 在画布右缘之外——把文字移进画布"
+    return None
+
+
+def _dist_pt_seg(px, py, x1, y1, x2, y2):
+    """点到线段的距离（退化线段按点算）。"""
+    dx, dy = x2 - x1, y2 - y1
+    if dx == 0 and dy == 0:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+    qx, qy = x1 + t * dx, y1 + t * dy
+    return math.hypot(px - qx, py - qy)
+
+
+def _in_box(px, py, box, pad):
+    x0, y0, x1, y1 = box
+    return x0 - pad <= px <= x1 + pad and y0 - pad <= py <= y1 + pad
+
+
+def _check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol):
+    """线条端点是否都悬空：首尾端点没有一个落在"别的"元素上 → warn 一次。
+
+    落点目标 = 其他元素（线段集带归属 owner，自己的线段不算）：线段集 /
+    终端圆点 / 大圆圆周带（仅描边） / 实心圆盘（圆心在内即根住） / 文字盒。
+    任一端点根住即放过——线只要有一头接上东西就不算画到一半。
+    """
+    warns = []
+    for st in strokes:
+        rooted = False
+        for ex, ey in st["ends"]:
+            if any(_dist_pt_seg(ex, ey, s[0], s[1], s[2], s[3]) <= tol
+                   for s in segs if s[4] is not st["owner"]):
+                rooted = True
+                break
+            if any((ex - cx) ** 2 + (ey - cy) ** 2 <= (r + tol) ** 2
+                   for (cx, cy, r) in dots):
+                rooted = True
+                break
+            if any(abs(math.hypot(ex - cx, ey - cy) - r) <= tol
+                   for (cx, cy, r) in rings):
+                rooted = True
+                break
+            if any((ex - cx) ** 2 + (ey - cy) ** 2 <= (r + tol) ** 2
+                   for (cx, cy, r) in discs):
+                rooted = True
+                break
+            if any(_in_box(ex, ey, b, tol) for b in boxes):
+                rooted = True
+                break
+        if not rooted:
+            ex, ey = st["ends"][0]
+            warns.append(
+                f"{st['desc']} 的端点悬空：({ex:g}, {ey:g}) 距最近的笔画/圆点/"
+                f"文字 > {tol:g}px——按 craft 的“线要结束在某处”，把端点接到"
+                f"另一条线、圆点或文字上（有意悬空的装饰线可加 data-free-ends 声明）")
+    return warns
+
+
 def check_file(path, layout, aspect, theme):
     errors, warns = [], []
     try:
@@ -304,6 +462,12 @@ def check_file(path, layout, aspect, theme):
         return False
 
     vb_w, vb_h = w, h
+    strokes = []      # 待查端点悬空的线条：{desc, ends, owner}
+    segs = []         # 落点目标：线段（line / polyline / polygon / rect 边 / path），带归属元素
+    dots = []         # 落点目标：终端圆点（r ≤ DOT_MAX_R）
+    rings = []        # 落点目标：大圆的圆周带（仅描边，圆心在内不算）
+    discs = []        # 落点目标：实心大圆盘（圆心在内即根住，覆盖"线画进圆里"）
+    boxes = []        # 落点目标：文字盒（粗估宽，只用于根住判定）
     for el in root.iter():
         tag = _local(el.tag)
 
@@ -402,6 +566,25 @@ def check_file(path, layout, aspect, theme):
                     if anchor == "end" and px_x > cw - m:
                         warns.append(f"文字 {content.strip()[:12]!r} 终点 x≈{px_x:.0f}px 进了右安全边距（{cw - m}px）")
 
+            # 文字越界（error）+ 端点落点的文字盒素材
+            if w and h and not has_transform_ancestor(el):
+                msg = _text_oob(el, inherited, w, h)
+                if msg:
+                    errors.append(msg)
+                ty = _parse_num(el.get("y")) or 0.0
+                tx = _parse_num(el.get("x"))
+                if px is not None and tx is not None:
+                    anchor = inherited(el, "text-anchor") or "start"
+                    # 文字宽按"CJK≈1em、拉丁≈0.55em"粗估——只用于端点落点（多算
+                    # 只会少报 warn，安全方向）；越界判定刻意不用它（会误报）。
+                    est_w = px * sum(1.0 if _CJK.search(ch) else 0.55 for ch in content)
+                    if anchor == "end":
+                        boxes.append((tx - est_w, ty - px, tx, ty + px * 0.3))
+                    elif anchor == "middle":
+                        boxes.append((tx - est_w / 2, ty - px, tx + est_w / 2, ty + px * 0.3))
+                    else:
+                        boxes.append((tx, ty - px, tx + est_w, ty + px * 0.3))
+
         if el.get("font-family") or _style_map(el).get("font-family"):
             has_font_family = True
         if tag == "style" and el.text and "font-family" in el.text:
@@ -422,11 +605,84 @@ def check_file(path, layout, aspect, theme):
                                  "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 canvas.md"
                                  "「整页画布的密度与层次」）。确实要把整页换成另一种底色时可忽略本条")
 
+        # ── 图元越界（error）+ 端点落点素材收集（2D 自证）────────────
+        # transform 祖先的元素最终位置静态算不出，跳过（与安全边距同一取舍）。
+        if w and h and not has_transform_ancestor(el):
+            if tag in ("rect", "circle", "ellipse", "line", "polygon", "polyline", "path"):
+                b = _shape_bounds(el, tag, w, h)
+                if b:
+                    x0, y0, x1, y1 = b
+                    if x0 < -1e-6 or y0 < -1e-6 or x1 > w + 1e-6 or y1 > h + 1e-6:
+                        errors.append(
+                            f"图元越出画布（{x0:g},{y0:g}–{x1:g},{y1:g}，画布 {w:g}×{h:g}）"
+                            "——cover 会裁掉贴边内容，把图元整体移进画布")
+        _fill = _prop(el, "fill")
+        _stroke = _prop(el, "stroke")
+        fill_on = _fill is None or (_fill.strip().lower() != "none")
+        stroke_on = _stroke is not None and _stroke.strip().lower() != "none"
+        if w and h and not has_transform_ancestor(el):
+            if tag == "rect" and (fill_on or stroke_on):
+                rx = _parse_num(el.get("x")) or 0.0
+                ry = _parse_num(el.get("y")) or 0.0
+                rw = _parse_num(el.get("width"))
+                rh = _parse_num(el.get("height"))
+                if rw is not None and rh is not None:
+                    segs += [(rx, ry, rx + rw, ry, el), (rx + rw, ry, rx + rw, ry + rh, el),
+                             (rx + rw, ry + rh, rx, ry + rh, el), (rx, ry + rh, rx, ry, el)]
+            elif tag in ("polygon", "polyline") and (fill_on or stroke_on):
+                pts = _pt_list(el.get("points"))
+                if pts:
+                    for i in range(len(pts) - 1):
+                        segs.append((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], el))
+                    if tag == "polygon":
+                        segs.append((pts[-1][0], pts[-1][1], pts[0][0], pts[0][1], el))
+                    if tag == "polyline" and stroke_on and el.get("data-free-ends") is None:
+                        strokes.append({"desc": f"<polyline>（起 {pts[0][0]:g},{pts[0][1]:g}）",
+                                        "ends": [pts[0], pts[-1]], "owner": el})
+            elif tag == "line" and stroke_on:
+                x1_, y1_, x2_, y2_ = (_parse_num(el.get(k)) for k in ("x1", "y1", "x2", "y2"))
+                if None not in (x1_, y1_, x2_, y2_):
+                    segs.append((x1_, y1_, x2_, y2_, el))
+                    if el.get("data-free-ends") is None:
+                        strokes.append({"desc": f"<line>（起 {x1_:g},{y1_:g}）",
+                                        "ends": [(x1_, y1_), (x2_, y2_)], "owner": el})
+            elif tag == "circle" and (fill_on or stroke_on):
+                cx, cy, r = _parse_num(el.get("cx")), _parse_num(el.get("cy")), _parse_num(el.get("r"))
+                if None not in (cx, cy, r):
+                    if r <= DOT_MAX_R:
+                        dots.append((cx, cy, r))
+                    elif fill_on:
+                        discs.append((cx, cy, r))
+                    else:
+                        rings.append((cx, cy, r))
+            elif tag == "ellipse" and (fill_on or stroke_on):
+                cx, cy, rx, ry = (_parse_num(el.get(k)) for k in ("cx", "cy", "rx", "ry"))
+                if None not in (cx, cy, rx, ry):
+                    rr = max(rx, ry)
+                    if rr <= DOT_MAX_R:
+                        dots.append((cx, cy, rr))
+                    elif fill_on:
+                        discs.append((cx, cy, rr))
+                    else:
+                        rings.append((cx, cy, rr))
+            elif tag == "path" and stroke_on:
+                segs.extend((s[0], s[1], s[2], s[3], el) for s in path_segments(el.get("d") or ""))
+                if el.get("data-free-ends") is None:
+                    ends = path_endpoints(el.get("d") or "")
+                    if ends:
+                        strokes.append({"desc": f"<path>（起 {ends[0][0]:g},{ends[0][1]:g}）",
+                                        "ends": list(ends), "owner": el})
+
         # 竖向占位登记（只有画布档用得上：整页构图没有模板兜底，空带得自己发现）
         if layout == "canvas" and w and h:
             band = _ink_band(el, tag, inherited, w, h)
             if band:
                 ink_bands.append(band)
+
+    # 线条端点落点（warn）：容差按画幅短边 4‰，至少 2 单位
+    if w and h:
+        tol = max(END_TOL_MIN, min(w, h) * END_TOL_FRAC)
+        warns.extend(_check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol))
 
     if min_eff is not None and min_eff < MIN_READABLE_FONT_PX:
         warns.append(f"折算后最小字号约 {min_eff:.0f}px"

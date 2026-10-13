@@ -287,6 +287,15 @@ def _build_parser():
                         help="只预检 TTS 链路（分句/段检测/稿件契约），不合成、"
                              "不写任何文件；--until 在 dry-run 下不生效（HTML/"
                              "渲染步骤整体跳过）")
+    parser.add_argument("--check-frames", action="store_true",
+                        help="渲染完成后自动抽帧断言成片画面（非黑占比/颜色桶数；"
+                             "装了 tesseract 可再加 --check-frames-ocr）。默认关闭："
+                             "抽查是渲染后的一道额外闸，抽帧每几秒一帧，量不到只降级"
+                             "不阻断，断言失败会阻断交付——黑屏/死平/整段空帧的片子"
+                             "不该照打'完成'")
+    parser.add_argument("--check-frames-ocr", action="store_true",
+                        help="配合 --check-frames：整帧 OCR 断言至少认出一个词"
+                             "（字幕/大字版式整段丢失会暴露；tesseract 缺失只降级）")
     return parser
 
 
@@ -583,6 +592,46 @@ def main():
               "最后一段。", file=sys.stderr)
     else:
         _REPORT["video"]["check"] = "ok"
+
+    # ── 第 5 步 c：成片抽帧断言（可选，--check-frames）──────────────────
+    # 时长契约证明"演完了"，抽帧断言证明"画面里真的长出了内容"：抓帧超时、
+    # worker 崩、Chrome 提前退出可能产出一支时长刚好、画面整段黑屏/死平的
+    # 片子，而时长对账根本看不出。默认关闭（抽查是渲染后的一道额外闸，抽帧
+    # 有成本）；打开后量不到只降级（与时长契约同口径），断言失败阻断交付。
+    if args.check_frames:
+        try:
+            import check_frames
+            t0_fr = time.monotonic()
+            _fails, _fr = check_frames.check_video(
+                out_video, ocr=args.check_frames_ocr)
+            _REPORT["video"]["frames"] = {
+                "check": "ok" if not _fails else "failed",
+                "skipped": _fails is None,
+                "seconds": round(time.monotonic() - t0_fr, 1),
+                "detail": [l for l in (_fr or []) if "✗" in l or "跳过" in l],
+            }
+        except Exception as _e:
+            # 抽帧断言自己出 bug 不该让整条渲染失败：记进报告降级（画面验证
+            # 是附加闸，不是交付前提）。
+            _REPORT["video"]["frames"] = {
+                "check": "error", "skipped": True,
+                "detail": [f"抽帧断言执行异常：{type(_e).__name__}: {_e}"],
+            }
+            _fails, _fr = None, []
+        for line in _fr:
+            if "✗" in line or "跳过" in line:
+                print(f"[run][frame] {line}", file=sys.stderr)
+        if _fails:
+            _write_report(_report_path())
+            _print_report_summary()
+            print(
+                f"[run] 成片抽帧断言失败（{len(_fails)} 帧）：画面不是预期的"
+                f"内容（黑屏/死平/空帧）。\n"
+                "      先看渲染日志（成片同目录的 out.render.log）里有没有"
+                "`Parallel capture timed out`；有的话降 --workers 重渲。\n"
+                "      确认是某一段有意全黑（如过场）时，用 --timestamps 绕过"
+                f"该段再核。成片已留在 {out_video}，未删除。", file=sys.stderr)
+            sys.exit(5)
 
     print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())

@@ -698,6 +698,80 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
     return out
 
 
+def _zorder_warnings(markup, steps):
+    """GSAP 揭示顺序 ↔ SVG 叠压顺序的自证（Anatomy 的"次序规则"）。
+
+    导演的 reveal 顺序就是作者声明的意图：后亮的元素应当叠在先亮的上面——"现在看
+    这里"要浮在已经可见的内容之上，垫在旧内容下面的是结构底，不是新内容。SVG 没有
+    z-index，叠压顺序 = DOM 顺序（后写者在上）。于是机械核对：凡两个**都被步骤揭示**
+    的内容元素、且包围盒相交，若"先亮的反而写在 DOM 后面"，就是揭示顺序与叠压顺序
+    相反——后亮的那个元素在它最该显眼的那一刻被压在旧内容底下。warn 不 error：包围
+    盒相交是保守近似（不相交也可能同盒），且"把新内容刻意垫在旧内容下面"的取舍存在
+    （如提示框垫在主体底下）。只查步骤揭示过的元素：结构底没有揭示顺序，不参与；
+    class 选择器可命中多个元素，判据要单元素 id 才成立，跳过。
+    """
+    from check_svg import _shape_bounds
+    order = {}                       # target id → 最早揭示的步骤下标
+    for i, step in enumerate(steps):
+        t = (step.get("target") or "").strip()
+        if t.startswith("#") and len(t) > 1 and t[1:] not in order:
+            order[t[1:]] = i
+    if len(order) < 2:
+        return []
+    try:
+        root = ET.fromstring(markup)
+    except ET.ParseError:
+        return []
+    vb_w = vb_h = None
+    parts = (root.get("viewBox") or "").replace(",", " ").split()
+    if len(parts) == 4:
+        try:
+            vb_w, vb_h = float(parts[2]), float(parts[3])
+        except ValueError:
+            pass
+    parent = {c: p for p in root.iter() for c in p}
+    dom = []
+    for el in root.iter():
+        if el.get("id"):
+            dom.append(el)
+    pos = {el.get("id"): j for j, el in enumerate(dom)}
+    ids = [i for i in order if i in pos]
+    by_id = {el.get("id"): el for el in dom}
+
+    def bounds_of(eid):
+        el = by_id.get(eid)
+        if el is None:
+            return None
+        cur = el
+        while cur is not None:
+            if cur.get("transform"):
+                return None      # 静态算不出 transform 后的最终位置，跳过
+            cur = parent.get(cur)
+        tag = el.tag.rsplit("}", 1)[-1]
+        return _shape_bounds(el, tag, vb_w, vb_h)
+
+    warns = []
+    for k in range(len(ids)):
+        for j in range(k + 1, len(ids)):
+            a, b = ids[k], ids[j]
+            if order[a] == order[b]:
+                continue          # 同一拍揭示，没有先后可言
+            ba, bb = bounds_of(a), bounds_of(b)
+            if not ba or not bb:
+                continue
+            if ba[2] <= bb[0] or bb[2] <= ba[0] or ba[3] <= bb[1] or bb[3] <= ba[1]:
+                continue          # 包围盒不相交：叠压顺序无从生效
+            earlier, later = (a, b) if order[a] < order[b] else (b, a)
+            if pos[earlier] > pos[later]:
+                warns.append(
+                    f"z 序与揭示顺序相反：#{earlier} 在第 {order[earlier]} 步先亮，"
+                    f"却写在 #{later}（第 {order[later]} 步后亮）的 DOM 后面——两者在"
+                    f"画面上重叠，先亮的会把后亮的盖住。SVG 的叠压顺序 = DOM 顺序，"
+                    f"后亮的内容要写在后面（上面）；把 #{earlier} 挪到 #{later} 前面，"
+                    f"或确认这是故意垫底")
+    return warns
+
+
 def next_speech_start(segments, sid):
     """紧邻其后的那一段旁白起点（绝对秒）；没有下一段返回 None。
 
@@ -838,6 +912,15 @@ def director_prepare(images, segments, out_dir):
         # 由 _stage_carry_pass 拿烘焙后的副本重算，免得两遍各报一套互相矛盾的越界。
         if not carried:
             for w in crop_warnings(markup, director.get("steps")):
+                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+        # z 序自证：SVG 叠压顺序 = DOM 顺序，而导演揭示顺序是作者声明的意图——
+        # 后亮的元素要叠在先亮的上面。两个都被步骤揭示的内容元素包围盒相交时，
+        # 若先亮的反而写在 DOM 后面，成片里它会把后亮的盖住（后亮的在它最该显眼
+        # 的那一刻被压在旧内容底下）。warn 不 error：包围盒相交是保守近似，故意
+        # 垫底的取舍也存在。接续页（stage:"keep"）跳过：起点是上一页演完的画面，
+        # 盘上原图的 DOM 顺序对接续页的可见层是假话。
+        if not carried:
+            for w in _zorder_warnings(markup, director.get("steps")):
                 warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
         # 节拍↔旁白对轴：at_time 是按某一版配音手算的绝对秒，重配音/改句长/动 --gap
         # 之后它整体错位，而落在 clip 窗口外的那一拍是**静默不演**（引擎按

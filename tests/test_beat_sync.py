@@ -300,5 +300,91 @@ class Report(unittest.TestCase):
         self.assertEqual(G.beat_report_lines(images, SEGS, 0.5), [])
 
 
+class ZOrder(unittest.TestCase):
+    """z 序自证：揭示顺序 ↔ DOM 叠压顺序相反时 warn（Anatomy 的次序规则）。
+
+    SVG 没有 z-index，叠压顺序 = DOM 顺序（后写者在上）。导演步骤的 reveal
+    顺序是作者声明的意图：后亮的要叠在先亮的上面。两个都被揭示的内容元素
+    包围盒相交、先亮的却写在 DOM 后面 → 成片里后亮的会被先亮的盖住。
+    """
+
+    def _svg(self, body):
+        return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">'
+                + body + "</svg>")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    _BODY = '<rect id="panel" x="100" y="100" width="400" height="300"/>' \
+            '<circle id="dot" cx="300" cy="250" r="40"/>'
+
+    def test_inverted_reveal_order_warns(self):
+        # panel 后亮（第 1 步）却写在 DOM 前面 → 面板会把先亮的 dot 盖住
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 0, "target": "#dot"}, {"at": 1, "target": "#panel"}])
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("z 序与揭示顺序相反", warns[0])
+        self.assertIn("#dot", warns[0])
+        self.assertIn("#panel", warns[0])
+
+    def test_reveal_order_matching_dom_is_silent(self):
+        # dot 后亮且写在后面：dot 叠在 panel 上，正是"现在看这里"
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 0, "target": "#panel"}, {"at": 1, "target": "#dot"}])
+        self.assertEqual(warns, [])
+
+    def test_non_overlapping_elements_are_silent(self):
+        body = '<circle id="a" cx="100" cy="100" r="30"/>' \
+               '<circle id="b" cx="900" cy="1300" r="30"/>'
+        warns = G._zorder_warnings(
+            self._svg(body),
+            [{"at": 0, "target": "#a"}, {"at": 1, "target": "#b"}])
+        self.assertEqual(warns, [])
+
+    def test_same_beat_steps_are_still_ordered_by_timeline(self):
+        # 同一拍的多个步骤在 GSAP 时间线上仍是先后两个 tween：终态两者都亮，
+        # 叠压顺序照样由 DOM 决定。dot 先亮却写在 panel 前面（DOM 前面），
+        # 后亮的 panel 终态照样盖住 dot——同一拍不豁免这条。
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 0, "target": "#dot"}, {"at": 0, "target": "#panel"}])
+        self.assertEqual(len(warns), 1, warns)
+
+    def test_class_targets_are_skipped(self):
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 0, "target": ".dot"}, {"at": 1, "target": "#panel"}])
+        self.assertEqual(warns, [])
+
+    def test_transformed_element_bounds_are_skipped(self):
+        body = '<g transform="translate(200 200)">' \
+               '<rect id="panel" x="100" y="100" width="400" height="300"/></g>' \
+               '<circle id="dot" cx="300" cy="250" r="40"/>'
+        warns = G._zorder_warnings(
+            self._svg(body),
+            [{"at": 0, "target": "#dot"}, {"at": 1, "target": "#panel"}])
+        # panel 有 transform 祖先 → 包围盒算不出，跳过而不是误报
+        self.assertEqual(warns, [])
+
+    def test_through_director_prepare(self):
+        # 集成：生成期体检必须带出这条 warn（判据要 steps + SVG 两份输入，
+        # 渲染端手里没有，只能在这层做）
+        d = os.path.join(self.tmp.name, "images")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "seg-a.svg"), "w", encoding="utf-8") as f:
+            f.write(self._svg(self._BODY))
+        images = {"seg-a": {"src": "images/seg-a.svg", "director": {"steps": [
+            {"at": 0, "target": "#dot"},
+            {"at": 1, "target": "#panel"}]}}}
+        errs, warns = G.director_prepare(images, SEGS, self.tmp.name)
+        self.assertEqual(errs, [])
+        hits = [w for w in warns if "z 序与揭示顺序相反" in w]
+        self.assertEqual(len(hits), 1, warns)
+        self.assertIn("段落 'seg-a'", hits[0])
+
+
 if __name__ == "__main__":
     unittest.main()

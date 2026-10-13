@@ -1,6 +1,7 @@
 """_path_morph：同拓扑 path 解析、校验与线性插值的回归（纯函数，不碰渲染）。"""
 import unittest
 
+import _helpers as H  # noqa: F401  sys.path 装配（scripts/），本文件可独立运行
 import _path_morph as P
 
 
@@ -55,6 +56,61 @@ class Interp(unittest.TestCase):
         d = P.interp(pf, pt, 1 / 3)
         self.assertNotIn(".", d.split()[1])          # 坐标被格式化，无 0.3333333 尾巴
         self.assertTrue(all(len(tok.split(".")[-1]) <= 3 for tok in d.split()[1:]))
+
+
+class Endpoints(unittest.TestCase):
+    """path_endpoints：开 path 的首尾绝对坐标（给 check_svg 端点落点用）。"""
+
+    def test_absolute_first_last(self):
+        self.assertEqual(P.path_endpoints("M 10 20 L 30 40 C 1 2 3 4 50 60"),
+                         ((10.0, 20.0), (50.0, 60.0)))
+
+    def test_relative_cursor_walk(self):
+        self.assertEqual(P.path_endpoints("M 10 20 l 5 0 h 3 v 4"), ((10.0, 20.0), (18.0, 24.0)))
+
+    def test_arc_endpoint_is_last_two_args(self):
+        self.assertEqual(P.path_endpoints("M 0 0 A 5 5 0 0 1 9 9"), ((0.0, 0.0), (9.0, 9.0)))
+
+    def test_any_z_means_closed(self):
+        self.assertIsNone(P.path_endpoints("M 0 0 L 10 0 Z"))
+        self.assertIsNone(P.path_endpoints("M 0 0 L 10 0 L 0 10 z"))
+        self.assertIsNone(P.path_endpoints("M 0 0 L 10 0 Z M 20 0 L 30 0"))
+
+    def test_single_m_is_degenerate_but_readable(self):
+        self.assertEqual(P.path_endpoints("M 4 5"), ((4.0, 5.0), (4.0, 5.0)))
+
+    def test_non_string_rejected(self):
+        with self.assertRaises(ValueError):
+            P.path_endpoints(123)
+
+
+class Segments(unittest.TestCase):
+    """path_segments：直线段序列（曲线近似、闭合补回段）。"""
+
+    def test_lines_and_moves(self):
+        self.assertEqual(P.path_segments("M 0 0 L 10 0 L 10 10"),
+                         [(0.0, 0.0, 10.0, 0.0), (10.0, 0.0, 10.0, 10.0)])
+
+    def test_relative_and_single_axis(self):
+        self.assertEqual(P.path_segments("M 10 20 h 5 v 4"),
+                         [(10.0, 20.0, 15.0, 20.0), (15.0, 20.0, 15.0, 24.0)])
+
+    def test_curve_approximated_by_endpoints(self):
+        self.assertEqual(P.path_segments("M 0 0 C 5 5 5 5 10 0"),
+                         [(0.0, 0.0, 10.0, 0.0)])
+
+    def test_closed_adds_return_segment(self):
+        self.assertEqual(P.path_segments("M 0 0 L 10 0 Z"),
+                         [(0.0, 0.0, 10.0, 0.0), (10.0, 0.0, 0.0, 0.0)])
+
+    def test_move_breaks_connection(self):
+        # M 移动不画线：子路径起点不连到上一段终点
+        self.assertEqual(P.path_segments("M 0 0 L 10 0 M 20 20 L 30 20"),
+                         [(0.0, 0.0, 10.0, 0.0), (20.0, 20.0, 30.0, 20.0)])
+
+    def test_non_string_rejected(self):
+        with self.assertRaises(ValueError):
+            P.path_segments(None)
 
 
 if __name__ == "__main__":

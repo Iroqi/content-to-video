@@ -83,6 +83,30 @@ class SvgChecker(unittest.TestCase):
         _, warns = self.run_check(GOOD.replace('font-size="36"', 'font-size="18"'))
         self.assertTrue(any("26px" in w for w in warns))
 
+    def test_slot_font_scale_follows_the_aspects_own_box(self):
+        """槽位字号折算必须按**当前画幅的框**算，不能一律用竖屏 980。
+
+        横屏图栏是 1067×800（_template.layout.landscape.image），拿 980 去折
+        会把 26px 算成 24px——一张本来达标的图被误报"小于 26px 下限"，且建议
+        尺寸恒写竖屏的 980×735。同一张 1067×800、26px 的图在横屏必须不报，
+        换成 980×735 的竖屏框才该报。
+        """
+        body = ('<svg xmlns="http://www.w3.org/2000/svg" width="1067" height="800">'
+                '<style>text{font-family:"Microsoft YaHei",sans-serif}</style>'
+                '<text x="40" y="100" font-size="26" fill="#dbe6f5">标签</text></svg>')
+        _, landscape_warns = self.run_check(body, layout="slot", aspect="landscape")
+        self.assertEqual([w for w in landscape_warns if "26px" in w], [])
+        # 同一张图按竖屏框判（980/1067 ≈ 0.918）就该报——证明警告不是关掉了
+        _, portrait_warns = self.run_check(body, layout="slot", aspect="portrait")
+        self.assertTrue(any("26px" in w for w in portrait_warns))
+
+    def test_slot_ratio_hint_names_the_aspects_own_box(self):
+        """比例不符的报错文案要点名当前画幅的槽位尺寸。"""
+        body = ('<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800">'
+                '<text x="40" y="100" font-size="36" fill="#dbe6f5">标签</text></svg>')
+        errs, _ = self.run_check(body, layout="slot", aspect="landscape")
+        self.assertTrue(any("1067×800" in e for e in errs), errs)
+
     def test_canvas_needs_matching_aspect(self):
         errs, _ = self.run_check(GOOD, layout="canvas", aspect="landscape")
         self.assertTrue(any("不等比" in e for e in errs))

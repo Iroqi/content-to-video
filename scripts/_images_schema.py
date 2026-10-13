@@ -550,12 +550,40 @@ def _validate_entry(key, value, errs):
             "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
     if not isinstance(src, str):
         return
+    _collect(errs, lambda: _check_video_only_opts(key, value, src))
     _collect(errs, lambda: _check_audio_opts(key, value, src))
     _collect(errs, lambda: _check_duck(key, value, src))
     _collect(errs, lambda: _check_poster(key, value))
     _collect(errs, lambda: _normalize_src(key, value, src))
     _collect(errs, lambda: _check_director(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
+
+
+def _check_video_only_opts(key, value, src):
+    """poster 与四个播放开关：只对 video 成立，写在非 video 上一律拒。
+
+    与 `_check_audio_opts`（volume/fade_*/media_start）同一条口径，而且理由
+    是同一个：**渲染端的 `<img>` 分支只输出 `src`**（见
+    `html_renderer._media_html`），这几个键写在位图/SVG/GIF 上会被静默丢弃，
+    没有 warn、没有 unknown-key 提示——它们都在 MEDIA_ENTRY_KEYS 里，"写了
+    poster 但封面根本没出现"会变成无解的困惑。
+
+    早先只有音轨四件套做了 video-only 门禁，这一组漏了：同一个文件里两种
+    口径，作者从报错文案里学到的规则就是错的。
+
+    调用方保证 src 是字符串。
+    """
+    if _is_video_src(value, src):
+        return
+    _errs = []
+    for _opt in ("poster", "loop", "muted", "autoplay", "playsinline"):
+        if _opt in value:
+            _errs.append(
+                f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
+                f"（type={(value.get('type') or 'auto')!r}）——{_opt} 只对 video"
+                "生效，位图 / SVG / GIF 走 <img>，这些键会被静默丢掉")
+    if _errs:
+        raise ValueError("\n".join(_errs))
 
 
 def _normalize_src(key, value, src):

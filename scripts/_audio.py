@@ -199,8 +199,16 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     `prev_speed`（可选）：当前 wav 已被施加过的语速（来自 .spd sidecar，
     pipeline 的 resume 分支传入）。仅在 `<wav_path>.orig.wav` 原始备份丢失
     时生效：此时无法回到原速再变速，改为补偿变速 atempo(speed/prev_speed)
-    ——数学上等价于从原速一次变速到 speed，避免"已 1.5x 的文件被当作原速
-    备份、再叠 1.2x 实际变成 1.8x"的静默叠加变速。
+    ——避免"已 1.5x 的文件被当作原速备份、再叠 1.2x 实际变成 1.8x"的静默
+    叠加变速。
+
+    **补偿是近似，不是数学等价。** atempo 的输出长度由 WSOLA 的搜索窗决定，
+    并不严格等于 时长/atempo（实测 0.5s 音频：atempo=1.5 得 0.3385s 而非
+    0.3333s）。两次 atempo 的误差会部分抵消但不会归零——实测
+    prev→speed 各档补偿后与目标时长相差 **0.98~1.03 倍**（最坏 1.5→2.0 差
+    2.6%，约 0.03 个半音）。所以这条路径只该在"原速备份丢了"时用，且必须
+    出声（见下方 `[speed-compensate]` warn）：它换回来的是"不再叠加"，不是
+    "与新合成逐样本一致"。
     """
     filt = build_atempo_filter(speed)
     orig_path = wav_path + ".orig.wav"
@@ -216,6 +224,16 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         if comp_filt is None:
             return True  # speed == prev_speed，文件已在目标速率
         filt = comp_filt
+        # 补偿变速是"不再叠加"的次优解：见函数 docstring 的实测区间。这条
+        # 路径只在 .orig.wav 丢失时走到，而它又是静默的——不打印的话，
+        # "语速好像差一点点"永远查不到这儿。点名备份缺失与近似程度，
+        # 并给出恢复精确解的那一步（删掉重合成）。
+        print(f"  [speed-compensate] {os.path.basename(wav_path)} 的原速备份"
+              f"（{os.path.basename(orig_path)}）缺失，改用补偿变速 "
+              f"atempo={speed / prev_speed:.4f}（{prev_speed:g}→{speed:g}）——"
+              "近似解，与目标语速有约 ±3% 偏差（atempo 自身的长度误差）。"
+              "要精确值就删掉该句音频与 sidecar 重新合成。",
+              file=sys.stderr)
 
     # speed=1.0 means "restore original pace": copy the backup (if any) back over
     # wav_path. Without this branch, a previous 1.5x run stays at 1.5x.

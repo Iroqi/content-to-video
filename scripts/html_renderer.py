@@ -581,7 +581,7 @@ def _duck_chain_attr():
 
 
 def _video_audio_attrs(media_opts, sid, d):
-    """视频音轨那几个 data-* 属性（一行一个，末尾带空格）。
+    """视频音轨那几个 data-* 属性（每项自带一个尾随空格，见末行）。
 
     Hyperframes 的 ffmpeg 混音只读两类源：`<audio>` 元素，和声明了
     `data-has-audio="true"` 的 `<video>`。**不写就一条都不混**——所以
@@ -597,6 +597,11 @@ def _video_audio_attrs(media_opts, sid, d):
 
     反过来，`muted: true`（默认）时**不能**写 data-has-audio：契约是二选一，
     同时挂 muted 和 data-has-audio 会让 lint 的 video_missing_muted 判据失效。
+
+    **每项都以一个空格收尾**（`" ".join(a + " ")`）：调用方把它直接拼在
+    `poster="…"` 后面，两边都不带空格就会产出
+    `poster="x.png"data-has-audio="true"` ——两个属性粘成一个畸形属性名。
+    主流解析器会自行恢复，但拼接这件事本身不该靠解析器的容错兜底。
     """
     attrs = []
     muted = media_opts.get("muted", True)
@@ -661,7 +666,7 @@ def _media_html(rc, sid, s, d):
         # autoplay 同样读 images.json 选项（与其余 video 选项一致）
         autoplay = "autoplay" if media_opts.get("autoplay", True) else ""
         poster = media_opts.get("poster", "")
-        poster_attr = f'poster="{quote(poster)}"' if poster else ""
+        poster_attr = f'poster="{quote(poster)}" ' if poster else ""
         return (
             f'\n    <div class="seg-image" id="img-{sid}">\n'
             f'      <video id="vid-{sid}" src="{quote(media_path)}" '
@@ -799,7 +804,12 @@ def _prepare_card(rc, clip):
             "请在 images.json 给该段配一张按当前画幅出的图，或去掉 layout 字段"
             "回到槽位版式。")
 
-    title_size = _title_font_px(rc, seg, sid, is_agenda)
+    # 整页画布不生成标题层（连 DOM 都没有），所以标题字号这条守卫**整条都不该
+    # 触发**：_title_font_px 里横屏降字号那条 [warn] 说的是"HTML 标题层会把
+    # 字号降到 48px"，而画布页的标题是作者自己在 SVG 里画的，与 48px 无关。
+    # 照旧调用只会产出一条内容为假的告警——把作者引去改一段根本不存在的标题。
+    title_size = ("" if is_canvas
+                  else _title_font_px(rc, seg, sid, is_agenda))
     tagline_html = _tagline_html(rc, seg, sid, ac)
     # <video> 必须落在**卡片那个可见窗口**上，不能用口播段长：
     # hyperframes 给每个带 data-start 的元素按**它自己**的窗口独立判显隐

@@ -92,6 +92,17 @@ class MimoRequestShape(unittest.TestCase):
             "data 是整数": {"choices": [{"message": {"audio": {"data": 123}}}]},
             "data 不是 base64": {"choices": [{"message": {"audio": {"data": "@@not-b64@@"}}}]},
             "data 是列表": {"choices": [{"message": {"audio": {"data": ["a"]}}}]},
+            # 下面四条是**宽松解码**（base64.b64decode 默认 validate=False）会
+            # 静默放过、而结果完全错的三类形态。它把字母表外的字符直接丢掉：
+            #   "!!!!"      → b''（0 字节"音频"，直到 measure_duration 量出 0 才降级）
+            #   "!!!!AAAA"  → 3 字节垃圾
+            #   "QUJD!!!!"  → b'ABC'（尾部垃圾被吃掉，截断的音频照样写盘）
+            #   "zz zz\tzz" → 4 字节垃圾（空白在宽松模式下不算错，但会被并进去）
+            # 三种都不抛错，于是 docstring 承诺的"端点配错当场报出"永远打不出来，
+            # 失败分类与病因脱节。validate=True + 先剥空白把三条一起堵住。
+            "纯垃圾且长度为 4 的倍数": {"choices": [{"message": {"audio": {"data": "!!!!"}}}]},
+            "垃圾前缀 + 合法尾段": {"choices": [{"message": {"audio": {"data": "!!!!AAAA"}}}]},
+            "合法前缀 + 垃圾尾段": {"choices": [{"message": {"audio": {"data": "QUJD!!!!"}}}]},
         }
         for name, payload in cases.items():
             with self.subTest(case=name):
@@ -103,6 +114,10 @@ class MimoRequestShape(unittest.TestCase):
     def test_valid_payload_still_decodes(self):
         """类型防线不能误伤正常响应。"""
         self.assertEqual(T._audio_from_response(_audio_payload(b"RIFFx")), b"RIFFx")
+        # RFC 2045 允许 base64 带换行/空格：先剥空白再严格校验，两者都要成立
+        # （b"RIFFRIFF" 的 base64 是 "UklGRlJJRkY="，按 4 字符折三行）
+        wrapped = {"choices": [{"message": {"audio": {"data": "UklG\n RlJJ\n RkY="}}}]}
+        self.assertEqual(T._audio_from_response(wrapped), b"RIFF" * 2)
         # 空 choices 是"端点返回了空结果"，同样没有音频
         with self.assertRaises(T.BadAudioResponseError):
             T._audio_from_response({"choices": []})

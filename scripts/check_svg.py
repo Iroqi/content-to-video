@@ -55,7 +55,14 @@ CANVAS = {"portrait": (_TPL["canvas"]["vertical"]["width"],
           "landscape": (_TPL["canvas"]["landscape"]["width"],
                         _TPL["canvas"]["landscape"]["height"])}
 _IMG = _TPL["layout"]["vertical"]["image"]
-SLOT_W, SLOT_H = _IMG["width"], _IMG["height"]
+_IMG_L = _TPL["layout"]["landscape"]["image"]
+# 槽位尺寸**按画幅**取：竖屏是 4:3 主图槽（980×735），横屏是右侧图栏
+# （1067×800，也是 4:3 但更大）。早期这里只读 vertical 一份，于是横屏槽位
+# 也按 980 折算字号——系统性低估 8.2%，一张 1067×800 上 26px 的字会被算成
+# 24px 而误报"小于下限"，且建议尺寸恒写竖屏的 980×735。封面式的"整幅一图"
+# 与槽位共用一个 cover 语义，但框的大小由版式决定，不由素材决定。
+SLOT = {"portrait": (_IMG["width"], _IMG["height"]),
+        "landscape": (_IMG_L["width"], _IMG_L["height"])}
 
 
 def _safe_margins():
@@ -260,8 +267,11 @@ def check_file(path, layout, aspect, theme):
             cw, ch_ = CANVAS[aspect]
             target, label = cw / ch_, f"{cw}×{ch_}（{aspect} 整页画布）"
         else:
-            cw, ch_ = SLOT_W, SLOT_H
-            target, label = 4 / 3, "4:3（槽位版式，建议 980×735）"
+            # 槽位框随画幅变（竖屏 980×735 / 横屏 1067×800，都是 4:3）。
+            # 折算字号与建议尺寸都必须按当前画幅算——拿竖屏的 980 去折横屏的
+            # 1067，26px 会被误判成 24px（假 warn），建议尺寸也永远是竖屏那一档。
+            cw, ch_ = SLOT[aspect]
+            target, label = 4 / 3, f"4:3（{aspect} 槽位版式，建议 {cw}×{ch_}）"
         if abs(w / h - target) / target > RATIO_TOL:
             errors.append(f"比例 {w:g}×{h:g}（{w / h:.3f}）与目标 {label} 不等比；"
                           f"cover 会裁掉贴边内容，请改根节点尺寸后重排，别缩内容凑比例")

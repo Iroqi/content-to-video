@@ -188,5 +188,150 @@ class DegradedChainIntegration(unittest.TestCase):
             gen_silence.assert_not_called()
 
 
+class ResumeFingerprintCoversEndpoint(unittest.TestCase):
+    """--resume 的缓存指纹必须覆盖**每一个真正影响音频字节**的入参。
+
+    指纹漏一项的后果都是同一种：manifest 与日志声明的是新参数，嘴里播的是
+    旧参数合成的音频，而两边都不报错。voice_id/voice_style/model 三项早有
+    守卫；base_url 是第四个——同一个模型名可以由官方 API 与自建网关分别提供，
+    它们的音色实现未必一致。
+    """
+
+    @unittest.skipUnless(_have_ffmpeg(), "需要 ffmpeg")
+    def test_changing_base_url_invalidates_the_cache(self):
+        """换 --base-url 后 --resume 必须重新合成，不能复用旧端点的音频。"""
+        with tempfile.TemporaryDirectory() as td:
+            src_path = os.path.join(td, "src.json")
+            with open(src_path, "w", encoding="utf-8") as f:
+                json.dump({"title": "指纹测试",
+                           "segments": [{"id": "seg-a", "title": "段一",
+                                         "text": "这是第一句。这是第二句。"}]}, f)
+            out = os.path.join(td, "out")
+
+            first = _FakeClient()
+            argv = ["pipeline.py", "--source", src_path, "-o", out,
+                    "--api-key", "test-key", "--base-url", "https://a.example/v1",
+                    "--speed", "1.0", "--workers", "1"]
+            with mock.patch.object(P.sys, "argv", argv), \
+                    mock.patch.object(P, "MimoTtsClient", return_value=first), \
+                    mock.patch.object(P.time, "sleep"):
+                P.main()
+            self.assertEqual(len(first.calls), 2, "第一轮两句都该合成")
+
+            # 第二轮：同稿件、同音色，只换 base-url，带 --resume
+            second = _FakeClient()
+            argv2 = ["pipeline.py", "--source", src_path, "-o", out, "--resume",
+                     "--api-key", "test-key", "--base-url", "https://b.example/v1",
+                     "--speed", "1.0", "--workers", "1"]
+            with mock.patch.object(P.sys, "argv", argv2), \
+                    mock.patch.object(P, "MimoTtsClient", return_value=second), \
+                    mock.patch.object(P.time, "sleep"):
+                P.main()
+            self.assertEqual(
+                len(second.calls), 2,
+                "换 base-url 后指纹必须失配——否则复用另一个端点合成的音频，"
+                "而 manifest 与日志都打着新端点（静默错位，两边都不报错）")
+
+    @unittest.skipUnless(_have_ffmpeg(), "需要 ffmpeg")
+    def test_same_base_url_still_reuses_the_cache(self):
+        """门禁不能误伤：同端点重复跑 --resume 仍要命中缓存（不重烧额度）。"""
+        with tempfile.TemporaryDirectory() as td:
+            src_path = os.path.join(td, "src.json")
+            with open(src_path, "w", encoding="utf-8") as f:
+                json.dump({"title": "指纹测试",
+                           "segments": [{"id": "seg-a", "title": "段一",
+                                         "text": "这是第一句。这是第二句。"}]}, f)
+            out = os.path.join(td, "out")
+            argv = ["pipeline.py", "--source", src_path, "-o", out,
+                    "--api-key", "test-key", "--base-url", "https://a.example/v1",
+                    "--speed", "1.0", "--workers", "1"]
+
+            first = _FakeClient()
+            with mock.patch.object(P.sys, "argv", argv), \
+                    mock.patch.object(P, "MimoTtsClient", return_value=first), \
+                    mock.patch.object(P.time, "sleep"):
+                P.main()
+
+            second = _FakeClient()
+            argv2 = list(argv) + ["--resume"]
+            with mock.patch.object(P.sys, "argv", argv2), \
+                    mock.patch.object(P, "MimoTtsClient", return_value=second), \
+                    mock.patch.object(P.time, "sleep"):
+                P.main()
+            self.assertEqual(second.calls, [],
+                             "同端点同稿件的 --resume 应全命中缓存")
+
+
+class FailedMarkerLossIsNotSilent(unittest.TestCase):
+    """.failed marker 写不成功时，不能留一份"看起来像正常缓存"的静音。"""
+
+    @unittest.skipUnless(_have_ffmpeg(), "需要 ffmpeg 生成静音占位")
+    def test_marker_write_failure_skips_the_fingerprint(self):
+        """marker 落不下去就不写 .sha：下次 --resume 必须重试合成。
+
+        静音占位与真实配音在缓存里只差这一个 marker。缺了它还照写 .sha 的话，
+        下次 --resume 会按"合成成功"复用这段静音——synth_failed 与
+        silence_fallback_count 一起从 manifest 里消失，run.py 的 degraded
+        闸门（exit 3）就此静默失效。宁可贵一次合成，也不放一段假装正常的
+        静音洞过去。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            src_path = os.path.join(td, "src.json")
+            with open(src_path, "w", encoding="utf-8") as f:
+                json.dump({"title": "marker 失败测试",
+                           "segments": [{"id": "seg-a", "title": "段一",
+                                         "text": "这句是坏的。这句正常，能合成。"}]}, f)
+            out = os.path.join(td, "out")
+
+            real_open = open
+
+            def failing_open(file, mode="r", *a, **kw):
+                # 只让 .failed marker 写不进去，其余文件照常
+                if isinstance(file, str) and file.endswith(".failed") and "w" in mode:
+                    raise OSError(28, "No space left on device")
+                return real_open(file, mode, *a, **kw)
+
+            client = _FakeClient()
+            argv = ["pipeline.py", "--source", src_path, "-o", out,
+                    "--api-key", "test-key", "--base-url", "https://x.example/v1",
+                    "--on-fail", "silence", "--speed", "1.0", "--workers", "1"]
+            with mock.patch.object(P.sys, "argv", argv), \
+                    mock.patch.object(P, "MimoTtsClient", return_value=client), \
+                    mock.patch("builtins.open", failing_open), \
+                    mock.patch.object(P.time, "sleep"):
+                P.main()
+
+            sent_dir = os.path.join(out, "sentences")
+            wavs = sorted(n for n in os.listdir(sent_dir)
+                          if n.endswith(".wav") and not n.endswith(".orig.wav"))
+            self.assertEqual(len(wavs), 2)
+            # marker 一个都没落成（open 被 mock 成只对 .failed 失败）
+            self.assertEqual([n for n in wavs
+                              if os.path.exists(os.path.join(sent_dir, n + ".failed"))], [])
+            # 本次 manifest 仍如实标 degraded（marker 丢不影响这一次的交付告知）
+            with open(os.path.join(out, "timing_manifest.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["status"], "degraded")
+            self.assertEqual(manifest["degraded"]["tts_silence_fallback_count"], 1)
+            # 关键判据：**静音那句没有指纹**。有指纹没 marker 等于把静音登记成
+            # 正常缓存，下次 --resume 会复用这段静音、degraded 状态整段消失。
+            # 正常那句照旧有指纹（它没走降级分支，不该被牵连）。
+            # 文件名由 index 推导：pipeline 里 out_path = s{index+1:03d}.wav
+            # （index 从 0 起，见 pipeline 句级合成循环），manifest 行本身
+            # 不带 file 键。
+            failed_files = {f"s{s['index'] + 1:03d}.wav"
+                            for s in manifest["sentences"] if s.get("synth_failed")}
+            ok_files = {f"s{s['index'] + 1:03d}.wav"
+                        for s in manifest["sentences"] if not s.get("synth_failed")}
+            self.assertEqual(failed_files, {"s001.wav"})
+            self.assertEqual(ok_files, {"s002.wav"})
+            for name in failed_files:
+                self.assertFalse(os.path.exists(os.path.join(sent_dir, name + ".sha")),
+                                 f"{name} 是静音兜底句，没有 .failed marker 就不该有指纹")
+            for name in ok_files:
+                self.assertTrue(os.path.exists(os.path.join(sent_dir, name + ".sha")),
+                                f"{name} 是正常合成句，指纹该照常落")
+
+
 if __name__ == "__main__":
     unittest.main()

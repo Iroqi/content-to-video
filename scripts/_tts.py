@@ -16,6 +16,7 @@ MiMo 实现细节。第二个提供方到达时：在本文件（或新模块）
 import base64
 import binascii
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -104,6 +105,13 @@ def _audio_from_response(payload):
     base64）时，下钻会抛 AttributeError/TypeError/binascii.Error。这些同样是
     确定性失败——同一个错配的端点重试 100 次还是那个响应，而每句要白烧 3 次
     计费调用。裸异常不带 status_code，is_non_retryable 会放它进重试队列。
+
+    base64 必须**严格**解码（validate=True）：宽松模式会把字母表外的字符**静默
+    丢弃**——`b64decode("!!!!")` 返回 b'' 而不抛错，`b64decode("!!!!AAAA")`
+    返回 3 字节。于是"端点回了垃圾"这条确定性失败被解码成一个 0 字节 WAV，
+    直到下游 measure_duration 量出 0 才降级：失败分类与病因脱节，本函数
+    docstring 承诺的"当场报出端点配错"永远打不出来。空白（换行/空格）是合法
+    传输噪声，先剥掉再验。
     """
     if not isinstance(payload, dict):
         raise BadAudioResponseError(
@@ -120,7 +128,10 @@ def _audio_from_response(payload):
             "检查 --model/--base-url 是否指向支持 audio 参数的"
             f" TTS 模型（默认 {DEFAULT_MODEL}），不要指向普通对话模型")
     try:
-        return base64.b64decode(data)
+        # 先剥空白再严格校验：RFC 2045 允许 base64 带换行，而 validate=True 会把
+        # 它当非法字符。剥掉后 "!!!!" 这类垃圾才会被 binascii.Error 抓住。
+        compact = re.sub(r"\s+", "", data) if isinstance(data, str) else data
+        return base64.b64decode(compact, validate=True)
     except (binascii.Error, TypeError, ValueError) as e:
         raise BadAudioResponseError(
             f"TTS 响应的 audio.data 不是合法 base64（{e}）——端点返回了"

@@ -558,5 +558,65 @@ class AppleOpeningBudget(unittest.TestCase):
         self.assertNotIn("可见窗口", err)
 
 
+class CanvasPageAndVideoAttrs(unittest.TestCase):
+    """两处"能跑但结果是错的"的守卫：告警说假话、属性粘成一团。
+
+    都属于"产物看着对、但作者被误导"的一类：一条内容为假的 warn 会把人引去
+    改一段根本不存在的标题，一个缺空格的属性拼接则把 HTML 的合法性押在解析
+    器的容错上。
+    """
+
+    def _canvas_manifest(self, title):
+        s = H.sample_source()
+        # seg-b 在样例里就是 layout:"canvas"
+        s["segments"][1]["title"] = title
+        return H.make_manifest(s)
+
+    def test_canvas_page_does_not_warn_about_a_title_it_never_renders(self):
+        """整页画布不生成标题层，横屏降字号的 warn 对它是一条假话。
+
+        标题是作者在 SVG 里自己画的，与 _title_font_px 算出来的 48px 无关。
+        照旧打印会让作者去改一段 DOM 里不存在的标题——而他真正该做的是把字
+        画进图里。
+        """
+        long_title = "这是一个非常长的标题用来触发横屏降字号守卫逻辑"
+        m = self._canvas_manifest(long_title)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m), aspect="landscape")
+        self.assertNotIn("字号降为", err.getvalue())
+        # 反向证明 warn 本身还有效：同一个长标题换到槽位段（seg-a）必须报
+        s2 = H.sample_source()
+        s2["segments"][0]["title"] = long_title
+        err2 = io.StringIO()
+        with contextlib.redirect_stderr(err2):
+            generate_html(H.make_manifest(s2), "audio/combined.wav",
+                          images=H.sample_images(H.make_manifest(s2)),
+                          aspect="landscape")
+        self.assertIn("字号降为", err2.getvalue())
+
+    def test_poster_and_audio_attrs_are_space_separated(self):
+        """poster 与音轨属性之间必须有空格。
+
+        `poster="…"data-has-audio="true"` 会被解析成一个畸形属性名。主流
+        解析器会自行恢复，但拼接的正确性不该靠容错兜底。
+        """
+        m = self._canvas_manifest("标题")
+        images = {"seg-b": {"src": "images/seg-b.mp4", "type": "video",
+                            "muted": False, "poster": "images/cover.png"}}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            html = generate_html(m, "audio/combined.wav", images=images,
+                                 aspect="portrait")
+        self.assertIn('poster="images/cover.png"', html)
+        self.assertIn('data-has-audio="true"', html)
+        self.assertNotIn('"data-has-audio', html)   # 前一个属性的引号直接贴上来
+        # 视频标签整体仍是合法属性串：poster 之后是空白再接 data-*
+        tag = [l for l in html.splitlines() if 'id="vid-' in l]
+        self.assertEqual(len(tag), 1, "应只有一个 <video> 标签")
+        self.assertRegex(tag[0], r'poster="[^"]*"\s+data-')
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -286,8 +286,9 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
 # ===================================================================
 
 
-def _sentence_hash(text, voice_id=None, voice_style=None, model=None):
-    """句子 TTS 输入（文本+音色+风格+模型）的内容指纹（resume 缓存键）。
+def _sentence_hash(text, voice_id=None, voice_style=None, model=None,
+                   base_url=None):
+    """句子 TTS 输入（文本+音色+风格+模型+端点）的内容指纹（resume 缓存键）。
 
     缓存 wav 文件名只有句序号（s005.wav），不含内容——改了第 5 句文案后
     带 --resume 重跑会复用旧音频，而 manifest 的 text 用新稿，配音与
@@ -297,8 +298,15 @@ def _sentence_hash(text, voice_id=None, voice_style=None, model=None):
     换音色后带 --resume 重跑会静默复用旧音色音频（manifest 声明的
     是新音色、实际音频是旧音色，且无任何警告）。旧缓存（纯文本指纹）
     会统一失配重合成（宁可多花一次合成时间，也不复用指纹对不上的音频）。
+
+    **base_url 也在指纹里**，理由与上面那条一模一样：同一个模型名可以由不同
+    端点提供（官方 API / 自建网关 / 代理），它们的音色实现、采样率、甚至响应的
+    音频编码都未必相同。换 --base-url 后若指纹不含它，`--resume` 会静默复用
+    另一个端点的音频——"请求发给了新端点、嘴里播的是旧端点合成的"这种错位
+    比换音色更难查（两边都不报错，日志里还都打着新 base_url）。
     """
-    payload = "\x1f".join([text, voice_id or "", voice_style or "", model or ""])
+    payload = "\x1f".join([text, voice_id or "", voice_style or "",
+                           model or "", base_url or ""])
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 def _write_spd(out_path, value, label, on_error_hint):
@@ -320,7 +328,8 @@ def _write_spd(out_path, value, label, on_error_hint):
 
 
 def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
-                             voice_id=None, voice_style=None, model=None):
+                             voice_id=None, voice_style=None, model=None,
+                             base_url=None):
     """合成/兜底成功后统一落 sidecar：内容指纹 .sha + 已施加语速 .spd。
 
     .spd 记录的是"当前 WAV 确实处于哪个语速"（事实），不是"用户想要哪个语速"。
@@ -331,7 +340,7 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
     atempo。绝不能在此写请求语速（那才会把原速音频永久钉成"已在目标速率"）。
     """
     with open(out_path + ".sha", "w", encoding="utf-8") as f:
-        f.write(_sentence_hash(text, voice_id, voice_style, model))
+        f.write(_sentence_hash(text, voice_id, voice_style, model, base_url))
     if needs_speed_change(speed):
         # 已施加的写实际语速、未施加的写显式 "1.0"（两种都是"事实"，见
         # 函数 docstring：绝不能写请求语速）。同一段 open/write 不需要两份。
@@ -341,7 +350,8 @@ def _write_sentence_sidecars(out_path, text, speed, speed_applied=True,
         remove_if_exists(out_path + ".spd")
 
 def _record_sentence_cache(out_path, text, speed, speed_applied=True,
-                           voice_id=None, voice_style=None, model=None):
+                           voice_id=None, voice_style=None, model=None,
+                           base_url=None):
     """落 resume sidecar，写失败只警告、不向上抛。
 
     音频此刻已在盘上，sidecar 只是缓存元数据：让它抛 OSError 会被调用方的
@@ -353,7 +363,7 @@ def _record_sentence_cache(out_path, text, speed, speed_applied=True,
         _write_sentence_sidecars(out_path, text, speed,
                                  speed_applied=speed_applied,
                                  voice_id=voice_id, voice_style=voice_style,
-                                 model=model)
+                                 model=model, base_url=base_url)
     except OSError as e:
         print(f"    [sidecar][warn] {os.path.basename(out_path)} 的 .sha/.spd "
               f"写入失败（{e}）：音频可用，但下次 --resume 会重合成这一句",
@@ -464,7 +474,8 @@ def resolve_resume_state(facts, requested_speed):
                           restore_first=restore_first,
                           synth_failed=facts.failed_marker_exists)
 
-def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style, model):
+def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style,
+                          model, base_url=None):
     sha_path, spd_path = out_path + ".sha", out_path + ".spd"
     sha_exists = os.path.exists(sha_path)
     sha_matches = False
@@ -474,7 +485,8 @@ def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style, mo
                 cached = f.read().strip()
         except (OSError, UnicodeDecodeError):
             cached = ""
-        sha_matches = (cached == _sentence_hash(text, voice_id, voice_style, model))
+        sha_matches = (cached == _sentence_hash(text, voice_id, voice_style,
+                                                model, base_url))
     audio_exists = os.path.exists(out_path)
     audio_duration_ok = False
     audio_duration = 0.0
@@ -1014,7 +1026,8 @@ def main(argv=None):
         # 稿件时才跳过（判定全在 resolve_resume_state，这里只执行副作用）
         if args.resume and os.path.exists(out_path):
             facts = _observe_resume_state(out_path, ffmpeg_path, sent_tts,
-                                          sent_voice_id, sent_voice_style, model)
+                                          sent_voice_id, sent_voice_style,
+                                          model, base_url)
             decision = resolve_resume_state(facts, sent_speed)
             if decision.action == "regen":
                 # 失效成因由 decision.reason 报（regen 的六种成因与为什么不报
@@ -1166,7 +1179,8 @@ def main(argv=None):
                             out_path, task["text_tts"], task["speed"],
                             speed_applied=speed_applied,
                             voice_id=task["voice_id"],
-                            voice_style=task["voice_style"], model=model)
+                            voice_style=task["voice_style"], model=model,
+                            base_url=base_url)
                         sd = {
                             "index": idx, "text": sent_orig,
                             "file": out_path, "duration": round(dur, 3)
@@ -1189,7 +1203,8 @@ def main(argv=None):
                     # 降级：该句反复失败（如触发内容审核）时不再直接丢弃，改为
                     # 生成一段静音占位，时长用 estimate_sentence_seconds 同款启发式
                     # （字数/语速）估算——没有真实语速可测，只能估，与
-                    # DEFAULT_CHARS_PER_SEC 假设保持一致，乘上该句实际 speed。
+                    # DEFAULT_CHARS_PER_SEC 假设保持一致，除上该句实际 speed
+                    # （estimate_sentence_seconds 的 speed 是除数，见 _timeline）。
                     fallback_dur = max(
                         estimate_sentence_seconds(sent_orig, DEFAULT_CHARS_PER_SEC, task["speed"]),
                         0.3,
@@ -1221,24 +1236,39 @@ def main(argv=None):
                         # 分支重建 sentence_data，那个分支不知道这个文件其实是
                         # 静音兜底——synth_failed 标记会悄悄从 manifest 里消失，
                         # 事后再也看不出这句需要人工补录。
+                        #
+                        # marker 写不成功时**不落 .sha/.spd**：静音占位与真实
+                        # 配音在缓存里只差这一个 marker，缺了它下次 --resume 会
+                        # 按"合成成功"复用这段静音，degraded 状态连带
+                        # silence_fallback_count 一起从 manifest 里消失，
+                        # run.py 的 degraded 闸门（exit 3）就此静默失效。不写
+                        # 指纹只是让下次多试一次合成，代价远小于放走一段
+                        # 假装正常的静音洞。
+                        _marker_ok = True
                         try:
                             with open(out_path + ".failed", "w",
                                        encoding="utf-8"):
                                 pass
                         except OSError as _e:
+                            _marker_ok = False
                             print(f"    [{label}][warn] .failed marker 写入"
-                                  f"失败（{_e}），下次 --resume 可能漏标"
-                                  f"synth_failed", file=sys.stderr)
-                        # 静音时长估算已除过 speed（estimate_sentence_seconds），
-                        # 必须写 .spd marker 声明"已施加语速"——否则下次 --resume
-                        # 会把这段静音再 atempo 一遍，占位时长被压缩到 2/3。
-                        # .sha 内容指纹也一并落盘，跟正常合成句子的缓存语义一致。
-                        # 用带兜底的写入：sidecar OSError 不该冒到下面的外层
-                        # except——静音 WAV 已经在盘上，丢这句等于兜底失败。
-                        _record_sentence_cache(
-                            out_path, task["text_tts"], task["speed"],
-                            voice_id=task["voice_id"],
-                            voice_style=task["voice_style"], model=model)
+                                  f"失败（{_e}）：本次仍按静音兜底走完整时间轴，"
+                                  f"但不写内容指纹——下次 --resume 会重新尝试"
+                                  f"合成该句（缺 marker 的静音洞会被 run.py 的"
+                                  f"degraded 闸门当成正常成片放行，宁可贵一次"
+                                  f"也不放它过去）", file=sys.stderr)
+                        if _marker_ok:
+                            # 静音时长估算已除过 speed（estimate_sentence_seconds），
+                            # 必须写 .spd marker 声明"已施加语速"——否则下次 --resume
+                            # 会把这段静音再 atempo 一遍，占位时长被压缩到 2/3。
+                            # .sha 内容指纹也一并落盘，跟正常合成句子的缓存语义一致。
+                            # 用带兜底的写入：sidecar OSError 不该冒到下面的外层
+                            # except——静音 WAV 已经在盘上，丢这句等于兜底失败。
+                            _record_sentence_cache(
+                                out_path, task["text_tts"], task["speed"],
+                                voice_id=task["voice_id"],
+                                voice_style=task["voice_style"], model=model,
+                                base_url=base_url)
                         sd = {
                             "index": idx, "text": sent_orig,
                             "file": out_path, "duration": round(fallback_dur, 3),

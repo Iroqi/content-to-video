@@ -69,7 +69,10 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
     def test_unrelated_entry_errors_are_all_reported(self):
         """三段各错一处：三段之间互不依赖，报错里三段都要点名。"""
         err = err_of({
-            "seg1": {"src": "images/a.png", "muted": "true"},
+            # src 用 mp4：这条要的是"muted 类型写错"这一处，换成 png 会连带
+            # 触发 video-only 门禁（poster/loop/muted/autoplay/playsinline 只对
+            # video 生效），把计数变成 4 而掩盖这里想钉的"三段各一处"
+            "seg1": {"src": "images/a.mp4", "muted": "true"},
             "seg 2": {"src": "images/b.png"},
             "seg3": "images/c.png",
         })
@@ -82,7 +85,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
     def test_same_entry_playback_and_animation_errors_are_all_reported(self):
         """同一段里 muted 写错 + director 挂在 PNG 上——两处互不依赖，都要报。"""
         err = err_of({
-            "seg1": {"src": "images/a.png", "muted": "true",
+            "seg1": {"src": "images/a.mp4", "muted": "true",
                      "director": {"steps": "no"}},
         })
         self.assertIn("muted", err)
@@ -112,7 +115,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
     def test_provenance_and_poster_errors_are_not_masked_by_each_other(self):
         """poster 写错不该遮住 provenance 字段的错（两组互不依赖）。"""
         err = err_of({"seg1": {
-            "src": "images/a.png", "poster": "", "source_url": 3, "license": 5,
+            "src": "images/a.mp4", "poster": "", "source_url": 3, "license": 5,
         }})
         self.assertIn("poster", err)
         self.assertIn("source_url", err)
@@ -156,7 +159,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         """
         err = err_of({
             "seg 1": {"src": "images/a.png", "muted": "true"},
-            "seg2": {"src": "images/b.png", "loop": "no"},
+            "seg2": {"src": "images/b.mp4", "loop": "no"},
         })
         self.assertIn("合法段 id", err)
         self.assertIn("'seg2'", err)
@@ -168,10 +171,36 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         钉住一条隐式契约：_is_video_src 假定 src 是字符串（它的前提由_validate_entry
         的早退保证）。哪天有人把调用挪到早退之前，这里就会变成裸 TypeError。
         """
-        err = err_of({"seg1": {"volume": 1.0, "duck": True}})
+        err = err_of({"seg1": {"volume": 1.0, "duck": True, "poster": "images/p.png",
+                               "muted": True}})
         self.assertIn("缺少 'src'", err)
         self.assertNotIn("不是视频", err)
         self.assertNotIn("TypeError", err)
+
+    def test_video_only_opts_on_bitmap_are_rejected_not_silently_dropped(self):
+        """poster / loop / muted / autoplay / playsinline 写在非 video 上要拒。
+
+        渲染端的 <img> 分支只输出 src（html_renderer._media_html），这几个键写在
+        位图/SVG/GIF 上会被静默丢掉——而它们都在 MEDIA_ENTRY_KEYS 里，连
+        unknown-key 提示都不会打。口径必须与音轨四件套（_check_audio_opts）
+        一致：写了不会生效就拒，别让作者从报错文案里学到两套规则。
+        """
+        for key, val in (("poster", "images/c.png"), ("loop", False),
+                         ("muted", False), ("autoplay", False),
+                         ("playsinline", False)):
+            for src, typ in (("images/a.png", None), ("images/a.svg", None),
+                             ("images/a.gif", None)):
+                entry = {"src": src, key: val}
+                if typ:
+                    entry["type"] = typ
+                err = err_of({"seg1": entry})
+                self.assertIn(f"写了 {key}", err)
+                self.assertIn("不是视频", err)
+        # 视频上照过：同一条门禁不能误伤合法写法
+        ok = validate_images_json({"seg1": {
+            "src": "images/a.mp4", "poster": "images/c.png", "loop": True,
+            "muted": True, "autoplay": True, "playsinline": True}})
+        self.assertEqual(ok["seg1"]["poster"], "images/c.png")
 
     def test_valid_entries_still_pass_and_get_normalized(self):
         """重构没改正常路径：合法条目照过，且 src 仍被归一回正斜杠。"""

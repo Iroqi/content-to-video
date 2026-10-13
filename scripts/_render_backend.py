@@ -169,16 +169,25 @@ def resolve_command(cmd):
 
 
 def build_render_command(output: str, quality: str, fps: int, workers: int,
-                         command: List[str]) -> List[str]:
+                         command: List[str],
+                         low_memory: Optional[bool] = None) -> List[str]:
     """拼一条 `hyperframes render`，输出容器由 ``-o`` 后缀决定（恒为 mp4）。
 
     透明底/非 mp4 容器已从本技能移除，无需 --format 旗标。
+
+    ``low_memory`` 三态（None = 不提这个旗标，交给 CLI 按总内存自判）：
+    CLI 的 --help 写明低内存档会把 **worker 钉成 1**、走 screenshot capture、
+    跳过自动 worker 校准。所以 `True` 与 `--workers N>1` 同时出现时，那个 N
+    会被 CLI 自己吃掉——拼命令这里不替它改（改了就看不见用户原本要什么），
+    冲突由 run.py 在渲染前出声。
     """
     base = list(command)
     cmd = base + ["render"]
     cmd += ["-o", output]
     cmd += ["--quality", quality,
             "--fps", str(fps), "--workers", str(workers)]
+    if low_memory is not None:
+        cmd += ["--low-memory-mode" if low_memory else "--no-low-memory-mode"]
     # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve
     # 再加参数会把参数丢在字符串外面（等于丢进 cmd 的重解析）。
     return resolve_command(cmd)

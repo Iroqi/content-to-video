@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -404,6 +405,87 @@ class CheckSvgCommandLine(unittest.TestCase):
         rc, _out, err = self._main([empty])
         self.assertEqual(rc, 2)
         self.assertIn("没找到", err)
+
+
+class LayoutAuto(unittest.TestCase):
+    """`--layout auto`：混用目录必须一次跑完，且不再把另一类文件误判成 error。
+
+    起因是实测复现的一条摩擦：一个 `images/` 里同时放着槽位图（980×735）和整页
+    画布（1080×1440），`--layout slot` 把画布报成比例 error、`--layout canvas`
+    把槽位报成比例 error——两类文件都是对的，错的只是"一次只能选一档"。于是混用
+    目录必须跑两遍，每一次都带着一批假 FAIL。
+    """
+
+    SLOT_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+                'viewBox="0 0 980 735"><style>text{font-family:sans-serif}</style>'
+                '<text x="40" y="100" font-size="36" fill="#dbe6f5">槽位</text></svg>')
+    CANVAS_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                  'viewBox="0 0 1080 1440"><style>text{font-family:sans-serif}</style>'
+                  '<text x="90" y="150" font-size="64" fill="#dbe6f5">整页</text>'
+                  '<rect x="90" y="900" width="900" height="400" fill="#1e293b"/></svg>')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["check_svg.py"] + list(argv)):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = check_svg.main()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_mixed_directory_passes_in_one_run(self):
+        write(self.tmp.name, "slot.svg", self.SLOT_SVG)
+        write(self.tmp.name, "canvas.svg", self.CANVAS_SVG)
+        rc, out, _err = self._main([self.tmp.name, "--layout", "auto"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(re.findall(r"\[FAIL\]", out)), 0, out)
+        self.assertIn("auto → slot", out)
+        self.assertIn("auto → canvas", out)
+
+    def test_forced_layout_still_false_reports_the_other_kind(self):
+        """同一份混用目录在旧口径下必然互相误报——留着这条，防止 auto 哪天退化成
+        "干脆什么都不判"。"""
+        write(self.tmp.name, "slot.svg", self.SLOT_SVG)
+        write(self.tmp.name, "canvas.svg", self.CANVAS_SVG)
+        rc, out, _err = self._main([self.tmp.name, "--layout", "slot"])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("canvas.svg", out.split("[FAIL]")[1].split("\n")[0])
+
+    def test_auto_pins_aspect_for_full_canvas(self):
+        """整页画布的比例自带画幅信息：--aspect 写反时按图本身的比例定画幅，
+        不拿另一档的框（安全边距、折算字号）去量它。"""
+        p = write(self.tmp.name, "c.svg", self.CANVAS_SVG)
+        box = {}
+        check_svg.check_file(p, "auto", "landscape", "dark", resolved=box)
+        self.assertEqual(box["layout"], "canvas")
+        self.assertEqual(box["aspect"], "portrait")
+
+    def test_auto_keeps_declared_aspect_for_slots(self):
+        """槽位两画幅都是 4:3，比例分辨不出——画幅是作者声明的事，不替他改。"""
+        p = write(self.tmp.name, "s.svg", self.SLOT_SVG)
+        box = {}
+        check_svg.check_file(p, "auto", "landscape", "dark", resolved=box)
+        self.assertEqual(box["layout"], "slot")
+        self.assertEqual(box["aspect"], "landscape")
+
+    def test_uninferable_ratio_errors_without_a_second_ratio_error(self):
+        """推断不出就是推断不出：一条点名比例的 error，不叠第二句"目标 4:3"
+        （第二句会把"不知道按哪档查"说成"槽位图画错了"）。"""
+        bad = ('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1000" '
+               'viewBox="0 0 900 1000"><style>text{font-family:sans-serif}</style>'
+               '<text x="40" y="100" font-size="36" fill="#dbe6f5">x</text></svg>')
+        p = write(self.tmp.name, "b.svg", bad)
+        errs, _ = check_svg.check_file(p, "auto", "portrait", "dark")
+        self.assertEqual(len([e for e in errs if "推断不出" in e]), 1, errs)
+        self.assertEqual(len([e for e in errs if "不等比" in e]), 0, errs)
+
+    def test_explicit_layout_is_untouched(self):
+        """auto 只解 auto：显式给档位时必须原样走老路径（含那条比例 error）。"""
+        p = write(self.tmp.name, "b.svg", self.CANVAS_SVG)
+        errs, _ = check_svg.check_file(p, "slot", "portrait", "dark")
+        self.assertTrue(any("不等比" in e for e in errs), errs)
 
 
 class DocRefChecker(unittest.TestCase):

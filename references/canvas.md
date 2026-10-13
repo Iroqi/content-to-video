@@ -64,7 +64,7 @@
 - 尺寸真源在模板里，**别在 SVG 里手写 px 当权威值**。用 `python scripts/canvas_kit.py --aspect portrait -o …` 出图，它按模板尺寸出并自带 `check_svg` 画布门禁自查。
 - **图内两行文字压字只有 `hyperframes check` 能量到**（Layout 阶段的 `content_overlap`）。最常踩的一处：`canvas_kit` 的 `bars` 把数值标签写在 `base_y + label 档字号`（竖屏 32px、横屏 28px，取自 `canvas_kit.TIERS` 的 label 档），你在同一块面板下方另起一行说明文字时，两行很容易只差十来个像素。留够一行字号（`TIERS` 里最大那档的 1.2 倍以上）的间距。`check_svg` 静态查不到这件事——它不解析图内元素的两两关系。
 
-**这两条管线都不检查**：`gen_hyperframes.py` 只校验文件存在，量不到根节点比例。画完跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect portrait|landscape`，**档位与 `--layout` 必须与稿件对得上**，否则判的是另一套标准）。它报出来的每一条都自带口径与免责——例如对比度那条会说明"压在自画的浅色底板上时不成立"——照它说的改即可，不必回头查文档；本文件只写它**管不到**的那部分。图内文字是否真的溢出、**图内文字之间是否互相压字**、数据图的刻度与比例是否画对，它都查不到——压字那条只有 `hyperframes check` 的 Layout 阶段能测（它对净化内联的 SVG 逐帧量），仍要自己盯，见下面几节。
+**这两条管线都不检查**：`gen_hyperframes.py` 只校验文件存在，量不到根节点比例。画完跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect portrait|landscape`，**档位与 `--layout` 必须与稿件对得上**，否则判的是另一套标准）。**一份稿子里两种版式混用时给 `--layout auto`**：它按每个文件自身的比例推断档位（整页画布的比例自带画幅信息，会连 `--aspect` 一起定下来），一次跑完整个 `images/`——不给就得跑两遍，而每一遍都会把另一类文件判成"比例不符"的 error。它报出来的每一条都自带口径与免责——例如对比度那条会说明"压在自画的浅色底板上时不成立"——照它说的改即可，不必回头查文档；本文件只写它**管不到**的那部分。图内文字是否真的溢出、**图内文字之间是否互相压字**、数据图的刻度与比例是否画对，它都查不到——压字那条只有 `hyperframes check` 的 Layout 阶段能测（它对净化内联的 SVG 逐帧量），仍要自己盯，见下面几节。
 
 ### 不铺满幅底：配图直接画在页面上
 

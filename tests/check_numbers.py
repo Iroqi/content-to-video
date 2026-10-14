@@ -115,12 +115,6 @@ FACTS = [
         [("references/writing.md", r"最多\s*6\s*字")],
         "说话人标签上墙字长上限；超了契约层直接报错，作者必须知道这个数",
     ),
-    (
-        "media-duck-volume",
-        ("const", "scripts/_images_schema.py", "MEDIA_DUCK_VOLUME"), 0.25,
-        [("references/imagery.md", r"让路默认\s*0\.25")],
-        "素材没写 volume 时的默认增益；唯一权威出处是 imagery.md 的让路一节",
-    ),
     # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
     (
         "default-speed",

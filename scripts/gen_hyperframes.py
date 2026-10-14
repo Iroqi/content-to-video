@@ -1264,7 +1264,7 @@ def main(argv=None):
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"
-              f"在 A/B/C 三条路线中选型补图（见 references/imagery.md）"
+              f"在两种形式（位图 imageGen / SVG）中选型补图（见 references/imagery.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
     # GSAP 取用：显式 --gsap-src 直接写进 HTML 引用（不校验），否则走

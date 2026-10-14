@@ -87,7 +87,7 @@ class SvgChecker(unittest.TestCase):
     def test_slot_font_scale_follows_the_aspects_own_box(self):
         """槽位字号折算必须按**当前画幅的框**算，不能一律用竖屏 980。
 
-        横屏图栏是 1067×800（_template.layout.landscape.image），拿 980 去折
+        横屏槽位是 1067×800（_template.layout.landscape.image），拿 980 去折
         会把 26px 算成 24px——一张本来达标的图被误报"小于 26px 下限"，且建议
         尺寸恒写竖屏的 980×735。同一张 1067×800、26px 的图在横屏必须不报，
         换成 980×735 的竖屏框才该报。

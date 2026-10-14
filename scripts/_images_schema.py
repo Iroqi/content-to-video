@@ -48,8 +48,8 @@ def validate_relative_project_path(src, where):
 # 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
 # 之外的键（`position`/`fit`/`alt` 这类凭空发明的写法）过去会被静默丢掉：
 # "我明明写了 alt，画面上什么都没有"变成无解的困惑。判定收口在这一个函数，
-# warn 只在丢键的那一处（html_renderer
-# ._normalize_images）打；run.py/gen_hyperframes 的预检走 validate_images_json。
+# warn 只在预检（validate_images_json）打；html_renderer._normalize_images
+# 契约要求入参已过本预检，不重复打（见该函数 docstring）。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
@@ -111,7 +111,7 @@ MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 def is_svg_path(path):
     """这条路径是不是 SVG（"能不能被净化内联、有没有图内命名元素"那一问）。
 
-    生成端有三处各自问过它（缺图探测跳过、画布段必须 SVG、渲染端加 bare-media
+    生成端有三处各自问过它（缺图探测跳过、整页画布段必须 SVG、渲染端加 bare-media
     类），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
     endswith/splitext 就是五份真源：将来认一个 .svgz、或把大小写规则改一下，
     只改到的一处会和其他四处分家，症状是"契约说能挂 director、渲染端却不内联"。
@@ -315,7 +315,7 @@ def _validate_stagger(stagger, where):
 
 
 def _validate_director(key, dirval):
-    """校验 images.json 条目的 director 编排块（时间轴同步的 SVG 动画）。"""
+    """校验 images.json 条目的导演档编排块（时间轴同步的 SVG 动画）。"""
     if not isinstance(dirval, dict):
         raise ValueError(f"images.json 的 '{key}' 的 director 必须是对象")
     unknown = set(dirval) - {"steps"}
@@ -505,6 +505,21 @@ def validate_images_json(data):
     if errs:
         raise ValueError("images.json 有{} 处问题：\n{}".format(
             len(errs), "\n".join(errs)))
+    # 未知键：清单外键会跟着进 opts 而无人读（静默丢 = "明明写了 alt，画面
+    # 上什么都没有"变成无解的困惑）。在**预检**阶段点名叫出，与渲染端
+    # （html_renderer._normalize_images 的丢键路径）同一判据，但只打一次——
+    # 渲染端不再重复（见 _normalize_images 注释）。不阻断：封闭字段集只对
+    # source JSON 强制，images.json 保留宽松（历史写法多，先提醒不拦）。
+    for key, value in data.items():
+        if isinstance(value, dict):
+            unknown = unknown_media_keys(value)
+            if unknown:
+                print(f"[warn] images.json 的 '{key}' 含渲染端不读的字段："
+                      f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
+                      f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
+                      "写错了就删掉。"
+                      "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
+                      file=sys.stderr)
     return data
 
 

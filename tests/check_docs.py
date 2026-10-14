@@ -21,6 +21,13 @@ REF = re.compile(
     r"(SKILL\.md|references/[\w.]+\.md|[\w.]+\.md)`?"
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
+# references/ 的 H1 模板：`第 N 步 · 主题`（N ∈ 2..6，步骤文档都带这一步号）。
+# 术语表是唯一例外，它的 H1 是「术语表」。锁模板是为了不让下一份新文档自创
+# 「第 N 步深度参考：…」之类的第二套——第 4 步三份与第 2/3/5 步三份曾经就是
+# 两套模板并存，读者对不上"哪份是第几步的正文"。
+H1_REF = re.compile(r"^# 第 [2-6] 步 · ")
+GLOSSARY_REL = os.path.join("references", "glossary.md")
+
 
 def _target_path(matched):
     """引用目标 → 仓库内路径：带前缀照用；裸文件名先试 references/ 再试根目录。"""
@@ -45,6 +52,28 @@ def headings(path):
 def skill_md_lines():
     with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
         return sum(1 for _ in f)
+
+
+def glossary_aliases():
+    """从术语表读「别称（一律改用规范词）」列。别称只允许出现在 glossary 自身，
+    其它文件再用就是术语漂移——一义一词靠这个锁住。"""
+    path = os.path.join(ROOT, GLOSSARY_REL)
+    aliases = []
+    with open(path, encoding="utf-8") as f:
+        for ln in f:
+            if not ln.lstrip().startswith("|"):
+                continue
+            parts = [p.strip() for p in ln.strip().strip("|").split("|")]
+            if len(parts) < 2:
+                continue
+            alias_col = parts[1]
+            if alias_col.startswith("别称") or not alias_col or alias_col == "---":
+                continue
+            for a in re.split(r"[、，,]", alias_col):
+                a = a.strip()
+                if a:
+                    aliases.append(a)
+    return aliases
 
 
 # SKILL.md 是每次调用**必然整份进上下文**的那一份，所以它的重量直接等于起步
@@ -80,6 +109,27 @@ def main():
             hs = cache.setdefault(target, headings(target))
             if not any(name in h for h in hs):
                 bad.append((src, os.path.relpath(target, ROOT), name, "没有标题包含该章节名"))
+    # 术语表锁：别称只能活在 glossary 自身，其它文件再用就是漂移。
+    # 词边界匹配（前后都不是中文字符/字母数字）：「整页画布段」不算用了别称
+    # 「画布段」（后者是前者的简称，正文一律写完整形式）；单独出现才报。
+    for alias in glossary_aliases():
+        pat = re.compile(r"(?<![\w\u4e00-\u9fff])" + re.escape(alias) + r"(?![\w\u4e00-\u9fff])")
+        for src in sorted(sources):
+            if src == os.path.join(ROOT, GLOSSARY_REL):
+                continue
+            with open(src, encoding="utf-8") as f:
+                text = f.read()
+            if pat.search(text):
+                bad.append((src, GLOSSARY_REL, alias, "用了术语表登记的别称，改回规范词"))
+    # H1 模板锁：步骤文档的 H1 必须长成 `第 N 步 · 主题`（术语表除外）
+    for ref in sorted(glob.glob(os.path.join(ROOT, "references", "*.md"))):
+        if os.path.relpath(ref, ROOT) == GLOSSARY_REL:
+            continue
+        with open(ref, encoding="utf-8") as f:
+            first = f.readline().strip()
+        if not H1_REF.match(first):
+            bad.append((ref, os.path.relpath(ref, ROOT), first,
+                        "H1 不是 `第 N 步 · 主题` 模板，改标题或改检查"))
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
     n = skill_md_lines()

@@ -71,7 +71,7 @@ CANVAS = {"portrait": (_TPL["canvas"]["vertical"]["width"],
                         _TPL["canvas"]["landscape"]["height"])}
 _IMG = _TPL["layout"]["vertical"]["image"]
 _IMG_L = _TPL["layout"]["landscape"]["image"]
-# 槽位尺寸**按画幅**取：竖屏是 4:3 主图槽（980×735），横屏是右侧图栏
+# 槽位尺寸**按画幅**取：竖屏是 4:3 主图槽（980×735），横屏是右侧槽位
 # （1067×800，也是 4:3 但更大）。早期这里只读 vertical 一份，于是横屏槽位
 # 也按 980 折算字号——系统性低估 8.2%，一张 1067×800 上 26px 的字会被算成
 # 24px 而误报"小于下限"，且建议尺寸恒写竖屏的 980×735。封面式的"整幅一图"

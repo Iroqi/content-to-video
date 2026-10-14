@@ -43,7 +43,7 @@ FACTS = [
         ("json", "scripts/_template.py", "layout.vertical.image.width"), 980,
         [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|"),
          ("references/imagery.md", r"竖屏 980×735")],
-        "槽位图栏宽度；作者按这个尺寸出图，差一截就被 cover 裁掉",
+        "槽位宽度；作者按这个尺寸出图，差一截就被 cover 裁掉",
     ),
     (
         "canvas-slot-vertical-height",
@@ -55,9 +55,9 @@ FACTS = [
         "canvas-slot-landscape",
         ("json", "scripts/_template.py", "layout.landscape.image.width"), 1067,
         [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|"),
-         ("references/imagery.md", r"横屏右侧图栏 1067×800"),
-         ("references/rendering.md", r"右侧图栏 1067×800")],
-        "横屏图栏宽度；改版式必须同步改文档里所有手写示例",
+         ("references/imagery.md", r"横屏右侧槽位 1067×800"),
+         ("references/rendering.md", r"右侧槽位 1067×800")],
+        "横屏槽位宽度；改版式必须同步改文档里所有手写示例",
     ),
     (
         "canvas-slot-landscape-height",
@@ -301,6 +301,18 @@ FACTS = [
         ("const", "scripts/check_svg.py", "END_TOL_MIN"), 2.0,
         [("references/canvas.md", r"至少 2px")],
         "同上，绝对下限档（短画幅不按比例放大到不足 2px）",
+    ),
+    (
+        "landscape-text-col-width",
+        ("json", "scripts/_template.py", "layout.landscape.textCol.width"), 613,
+        [("references/rendering.md", r"613px")],
+        "横屏左文字栏宽度；rendering.md「画面结构」手写同数，改版式必须同步改文档",
+    ),
+    (
+        "tts-default-model",
+        ("const", "scripts/_tts.py", "DEFAULT_MODEL"), "mimo-v2.5-tts",
+        [("SKILL.md", r"mimo-v2\.5-tts")],
+        "TTS 默认模型；SKILL.md「环境」节写了默认值，改默认模型必须同步文档",
     ),
 ]
 

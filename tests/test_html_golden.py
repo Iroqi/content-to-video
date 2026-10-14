@@ -263,9 +263,11 @@ class Structure(unittest.TestCase):
         # 逐拍 at/at_time 的时间锚点因此与画面严格对齐（导演第一拍不会落在擦除中途）。
         self.assertIn('<div id="seg-b" class="clip seg-card seg-canvas" '
                       'data-start="7.20"', html)
-        # clip-path 补间时长归零 = 整页瞬间出现；运动全部由 director 时间线承担
+        # clip-path 补间时长取 0.01（瞬间切：0 时长会被 GSAP 当作 set()，加载即渲染
+        # 不裁剪态、预览首帧被画布页盖住；0.01s 不足一帧、视觉仍是瞬间出现），
+        # 运动全部由 director 时间线承担
         self.assertIn('tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},'
-                      '{clipPath:"inset(0% 0 0 0)",duration:0.00,'
+                      '{clipPath:"inset(0% 0 0 0)",duration:0.01,'
                       'ease:"power2.inOut"},7.20)', html)
         # 画布页自己没有引导线、不被剥走（末页 closing 直接盖住它），也不挂暗边
         self.assertNotIn('id="line-seg-b"', html)
@@ -278,9 +280,9 @@ class Structure(unittest.TestCase):
         self.assertIn('tl.to("#opening",{y:-432', html)
         self.assertIn('id="line-closing"', html)
         # 归零按版式判定而非按擦除档：几何档（vertical，自己的 0.28s + expo.out 曲线）
-        # 下画布段同样是硬切，相邻 slot 段的擦除不受影响
+        # 下画布段同样是硬切（0.01s 瞬间切），相邻 slot 段的擦除不受影响
         vertical = self._render_with_style("vertical")
-        self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.00,ease:"expo.out"},7.20)',
+        self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.01,ease:"expo.out"},7.20)',
                       vertical)
         self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.28,ease:"expo.out"},2.12)',
                       vertical)

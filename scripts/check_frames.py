@@ -197,7 +197,17 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
                     # 整支全黑片会报"0 帧失败、通过"。
                     line += "  OCR 不可用（像素断言仍生效）"
                 elif not text.strip():
-                    probs.append("OCR 认不出任何词（字幕/大字版式疑似丢失）")
+                    if (t == 0.0
+                            and metrics["nonblack_ratio"] >= min_bright
+                            and metrics["color_buckets"] >= min_colors):
+                        # 首帧 t=0 恰是开场擦除转场帧：整页从 clip-path inset(100%)
+                        # 揭开，0 时刻全被裁剪，画面里没有任何文字是**预期**（像素
+                        # 断言已过）。把它当字幕丢失误报，会让 --check-frames-ocr
+                        # 对默认开场形态必然失败。字幕层真丢时 t>0 的帧照常无词、
+                        # 照常失败——这里只豁免转场那一帧，门禁不削弱。
+                        line += "  OCR（首帧转场帧，无词属预期，跳过判定）"
+                    else:
+                        probs.append("OCR 认不出任何词（字幕/大字版式疑似丢失）")
                 else:
                     line += f"  OCR「{text.strip()[:24]}」"
             if probs:

@@ -86,7 +86,7 @@ def get_canvas(aspect):
 
 
 def get_image_box(aspect):
-    """按画幅返回**槽位配图框**尺寸 (width, height)——4:3 的那一块。
+    """按画幅返回**槽位框**尺寸 (width, height)——4:3 的那一块。
 
     与 get_canvas 是两件事：整页画布（`layout: "canvas"`）铺的是整个画幅，走
     get_canvas；槽位版式的配图只占中间那一块 4:3，尺寸挂在 layout 下。"素材够

@@ -43,6 +43,23 @@ EXAMPLES = [
         # 收场。那是构图选择，不是示例错——这里只验"这份 spec 造得出 SVG"。
         "must_render": True,
     },
+    # writing.md 的三份稿件示例：真实文本、无占位符，dry-run 必须整稿通过
+    # （分句/字段契约/上墙分号/对话轮次都过一遍）。锚点各自唯一。
+    {
+        "doc": os.path.join("references", "writing.md"),
+        "anchor": '"speaker": "host"',
+        "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
+    },
+    {
+        "doc": os.path.join("references", "writing.md"),
+        "anchor": '"opening": "大家好，这是我这一周的工作播报。"',
+        "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
+    },
+    {
+        "doc": os.path.join("references", "writing.md"),
+        "anchor": '"title": "营收同比增长"',
+        "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
+    },
 ]
 
 
@@ -54,10 +71,10 @@ def _fenced_block(text, anchor):
     start = text.rfind(fence, 0, i) + len(fence)
     if start < len(fence):
         raise LookupError("锚点 %s 不在任何 ```json 围栏里" % anchor)
-    end = text.find("\n    ```", start)
-    if end < 0:
+    m = re.search(r"\n[ \t]*```", text[start:])
+    if not m:
         raise ValueError("围栏没闭合")
-    return text[start:end]
+    return text[start:start + m.start()]
 
 
 def check_one(spec_conf):
@@ -84,7 +101,7 @@ def check_one(spec_conf):
                            text=True, cwd=tmp)
         if r.returncode != 0:
             return "跑不通（exit %d）：%s" % (r.returncode, (r.stderr or "").strip()[-400:])
-        if spec_conf["must_render"]:
+        if spec_conf.get("must_render"):
             if not os.path.isfile(out):
                 return "跑通了但没产出 SVG"
             with open(out, encoding="utf-8") as f:

@@ -574,10 +574,12 @@ class CarriedPageIsNotReintroduced(unittest.TestCase):
 
     def test_keep_page_hard_cuts_and_its_picture_is_already_in_place(self):
         html = self._html(True)
-        # 挂载即音频起点（2.40 = 首句 start_time），擦除时长归零
+        # 挂载即音频起点（2.40 = 首句 start_time），擦除时长取 0.01（瞬间切，
+        # 见 html_renderer._card_timeline_lines 的注释：0 时长会被 GSAP 视作
+        # set() 而让预览首帧提前显形）
         self.assertIn('id="seg-a" class="clip seg-card" data-start="2.40"', html)
         self.assertIn('tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},'
-                      '{clipPath:"inset(0% 0 0 0)",duration:0.00,'
+                      '{clipPath:"inset(0% 0 0 0)",duration:0.01,'
                       'ease:"power2.inOut"},2.40)', html)
         # 引导线整条不生成（DOM 与补间都没有），配图卡自己的滑入也撤掉
         self.assertNotIn('id="line-seg-a"', html)

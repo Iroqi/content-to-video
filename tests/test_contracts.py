@@ -302,7 +302,8 @@ class ImagesJson(unittest.TestCase):
         bad(IMG.validate_images_json, {"seg-a": "images/a.png"})
 
     def test_unknown_key_is_reported_not_rejected(self):
-        # 设计如此：未知键只在渲染端丢弃时告警，不阻断；判定收口在 unknown_media_keys
+        # 设计如此：未知键在预检（validate_images_json）打 [warn] 但不阻断；
+        # 判定收口在 unknown_media_keys
         entry = {"src": "images/a.png", "scr": "typo", "alt": "x"}
         IMG.validate_images_json({"seg-a": entry})
         self.assertEqual(IMG.unknown_media_keys(entry), ["alt", "scr"])

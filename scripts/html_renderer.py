@@ -19,8 +19,7 @@ from _theme import (
 )
 from _template import (MIN_READABLE_FONT_PX, load_template, get_canvas,
                        normalize_aspect)
-from _images_schema import (unknown_media_keys, MEDIA_ENTRY_KEYS,  # noqa: E402
-                            classify_media_path, is_svg_path,
+from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME)
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
@@ -219,17 +218,8 @@ def _normalize_images(images):
     """
     normalized = {}
     for sid, media in (images or {}).items():
-        # 清单外的键会跟着进 opts 而无人读。静默丢会让
-        # "images.json 里明明写了 alt，画面上什么都没有"变成无解的困惑，
-        # 所以点名叫出它们——清单定义在 _images_schema。
-        unknown = unknown_media_keys(media)
-        if unknown:
-            print(f"[warn] images.json 的 '{sid}' 含渲染端不读的字段："
-                  f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
-                  f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
-                  "写错了就删掉。"
-                  "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
-                  file=sys.stderr)
+        # 未知键的告警已在 _images_schema.validate_images_json（预检）打过——
+        # 本函数契约要求入参必须过那道预检（见 docstring），这里不重复打。
         media_path = media["src"]
         media_type = classify_media_path(media_path, media.get("type", "auto"))
         media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
@@ -686,7 +676,7 @@ def _media_html(rc, sid, s, d):
             f'      </video>\n'
             f'    </div>'
         )
-    # 导演模式（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
+    # 导演档（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
@@ -1321,10 +1311,17 @@ def _card_timeline_lines(rc, card):
     # 消失再出现，PPT 观感的来源），不选容器位移（clip-path 只裁切，满幅海报
     # 不露页底），纯属性补间逐帧 seek 确定性。
     # 擦除时长被 gap 钳住：字幕活在卡片里，侵入上一页说话期=字幕跟着页被擦走。
+    # wipe=0（整页画布段/接续页的"瞬间切"）：GSAP 把 duration:0 的 fromTo 视作 set()，
+    # immediateRender 在页面加载时即渲染 to 态（不裁剪）——预览首帧被画布页直接
+    # 盖住、全程覆盖前面页面（渲染端因并行/回退 seek 会回滚 set 而不受影响，
+    # 于是预览与成片分家）。给 0.01s 让它成为真 tween：加载时渲染 from 态
+    # （inset 100%，与内联样式一致），回退 seek 时也回滚到 from 态，预览/渲染
+    # 两端口径一致；0.01s 在 30fps 下不足一帧，视觉上仍是"瞬间切"。
     w_from, w_to = _wipe_pair(rc)
+    wipe_dur = max(card.wipe, 0.01)
     lines.append(
         f'tl.fromTo("#{sid}",{{clipPath:"{w_from}"}},'
-        f'{{clipPath:"{w_to}",duration:{card.wipe:.2f},'
+        f'{{clipPath:"{w_to}",duration:{wipe_dur:.2f},'
         f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
     )
     lines.extend(_line_timeline_lines(rc, card))
@@ -1449,7 +1446,7 @@ def generate_html(manifest, audio_src, images=None,
         # line 档的剥离挂在被犁走的旧卡上：本卡揭开窗口 [win_start, +wipe]
         # 就是上一页的"被推走"窗口（旧卡窗口恰铺到本段音频起点，补间在窗内）。
         # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
-        # 上一页是画布段时也不剥：把一张活diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
+        # 上一页是整页画布段时也不剥：把一张活diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
         # 画布页退场同样走硬切（被下一页直接盖住）。
         #
         # gets_line 与 gets_peeled 在这里一次算定，是"这一页挂不挂引导线"的**唯一

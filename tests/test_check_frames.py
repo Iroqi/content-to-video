@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 import check_frames as CF  # noqa: E402
@@ -56,6 +57,23 @@ class FrameAssertion(unittest.TestCase):
     def test_lively_frame_passes(self):
         fails, report = CF.check_video(self.lively, timestamps=[0.0])
         self.assertEqual(fails, [], report)
+
+    def test_first_frame_no_words_is_expected_when_pixels_pass(self):
+        """P2：t=0 恰是开场擦除转场帧，画面里没有文字是预期。
+
+        像素断言已过（非黑/颜色桶达标）时，首帧无词**豁免** OCR 判定——否则
+        --check-frames-ocr 对默认开场形态必然失败，拦掉干净的成片。
+        """
+        with mock.patch.object(CF, "_ocr_text", return_value="  "):
+            fails, report = CF.check_video(self.lively, timestamps=[0.0], ocr=True)
+        self.assertEqual(fails, [], report)
+        self.assertTrue(any("首帧转场帧" in l for l in report), report)
+
+    def test_nonfirst_frame_without_words_still_fails(self):
+        """P2 边界：豁免只给转场那一帧。t>0 无词（字幕层真丢）照常失败。"""
+        with mock.patch.object(CF, "_ocr_text", return_value=""):
+            fails, report = CF.check_video(self.lively, timestamps=[0.5], ocr=True)
+        self.assertTrue(any("OCR 认不出任何词" in f for f in fails), fails)
 
     def test_ffmpeg_missing_degrades_not_fails(self):
         orig = CF._get_ffmpeg

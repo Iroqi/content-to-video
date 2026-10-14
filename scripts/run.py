@@ -448,7 +448,7 @@ def main():
         # 唯一例外是整页画布：那一页没有标题层也没有句子流层，配图就是整个
         # 画面，gen_hyperframes 在生成期必然 exit 1（canvas_layout_errors）。
         # 对它承诺"继续生成 HTML 供预览"是兑现不了的承诺——打印完这句紧接着
-        # 就是一条 [error]，两条信息自相矛盾。所以画布段缺图不分 --until，
+        # 就是一条 [error]，两条信息自相矛盾。所以整页画布段缺图不分 --until，
         # 与 missing_files 同样就地拦下并点名病因。
         _layout_by_sid = {s["id"]: seg_layout(s) for s in _tm["segments"]}
         _canvas_missing = [s for s in missing_keys

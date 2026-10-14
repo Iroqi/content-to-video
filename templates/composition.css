@@ -95,7 +95,7 @@ body{font-family:var(--ctv-font-family)}
    所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
    三处并存时改一处不生效。 */
 .seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
-/* 导演模式的内联 SVG（.svg-inline）：铺满槽位，和 <img>+object-fit:cover 同款。
+/* 导演档的内联 SVG（.svg-inline）：铺满槽位，和 <img>+object-fit:cover 同款。
    cover 语义由 SVG 根节点自带的 preserveAspectRatio="xMidYMid slice" 承担（净化时
    写入，见 _svg_sanitize），这里只负责把它撑到 100%×100%；z-index 与 img 一致，
    让内描边 ::after 照常收边（bare-media 时又被撤掉，与 <img> SVG 同路径）。 */

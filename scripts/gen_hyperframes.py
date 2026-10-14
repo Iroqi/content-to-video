@@ -428,14 +428,14 @@ def _svg_intrinsic_size(path):
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
     """槽位版式配图里 SVG 的比例失配，返回一条说明（无错时为空列表）。
 
-    为什么槽位版式也要查：配图框是 4:3、画幅是 3:4，SVG 塞进去走 cover。
+    为什么槽位版式也要查：槽位框是 4:3、画幅是 3:4，SVG 塞进去走 cover。
     比例对不上时 cover 会**切掉边**去填满框——图里画在边缘上的文字就跟着消失，
     而作者拿到的 HTML 里它还在。这与画布版式那条同源（都问"图内的字会不会被
     cover 吃掉"），只是槽位版的判据尺寸不同：画布版式对画幅（1080×1440），
-    槽位版对配图框（980×735）。
+    槽位版对槽位框（980×735）。
 
     实测的四例（1080×1440 整页画布 / 490×368 小图 / 800×800 方图 / 1600×600
-    横图铺进 980×735 框）说明失配的代价是**裁边**不是"撑破画幅"——配图框本身
+    横图铺进 980×735 框）说明失配的代价是**裁边**不是"撑破画幅"——槽位框本身
     有框高限制，撑不破；所以别拿"画面溢出"当这里的症状说，那是错的诊断。
 
     `hyperframes check` 对这类失配只报 container_overflow（元素超出裁切容器），
@@ -466,7 +466,7 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
         # 个问题（"cover 会不会裁掉贴边的字"），容差只有一份（SVG_ASPECT_TOL）。
         if not same_aspect(sw, sh, (box_w, box_h)):
             errs.append(
-                f"段落 '{sid}' 的配图 {src} 是 {sw:g}×{sh:g}，与槽位配图框 "
+                f"段落 '{sid}' 的配图 {src} 是 {sw:g}×{sh:g}，与槽位框 "
                 f"{box_w}×{box_h}（4:3）不等比——object-fit:cover 会切掉边去填满"
                 f"这个框，画在图边缘上的字跟着消失（宽高各差 "
                 f"{abs(sw / box_w - 1) * 100:.0f}% / "
@@ -485,7 +485,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
       字（画布版式的标题/kicker、槽位版式的边注）随之消失。实测把 3:4 的画布
       塞进 16:9 段落，标题与 kicker 直接消失，而 hyperframes check 依旧
       0 error、Contrast 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
-      槽位版式的同类失配走 slot_svg_ratio_errors（那边对的是配图框尺寸）。
+      槽位版式的同类失配走 slot_svg_ratio_errors（那边对的是槽位框尺寸）。
     - SVG 的**缩放档**：等比不等于能读。按 2560×1440 画的 16:9 塞进 1920 画幅，
       比例对、整张图却被缩到 0.75，图内 26px 折算后只剩 19.5px——低于
       `references/canvas.md`「文字与尺寸」的 26px 下限就是读不出来，

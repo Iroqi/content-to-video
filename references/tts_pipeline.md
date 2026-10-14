@@ -1,6 +1,6 @@
-# 第 3 步深度参考：TTS 管线参数、预置音色与 manifest 字段
+# 第 3 步 · TTS：管线参数、预置音色与 manifest 字段
 
-本文件是 SKILL.md 第 3 步（运行 TTS 管线）的深度参考，主流程与示例命令见 SKILL.md。
+本文件是 SKILL.md 第 3 步（运行 TTS 管线）的展开参考，主流程与示例命令见 SKILL.md。
 
 ## pipeline.py 参数说明
 

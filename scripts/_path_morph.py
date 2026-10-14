@@ -34,10 +34,7 @@ _TOKEN = re.compile(
 _NUM_ONLY = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
 
 
-def _fmt(x):
-    """把插值后的坐标格式化成尽量短的合法数值串（去多余 0，整数不带小数点）。"""
-    s = f"{x:.3f}".rstrip("0").rstrip(".")
-    return "0" if s in ("", "-") else s
+from _script_utils import num_fmt  # noqa: E402  与 transform/opacity 的写法同源
 
 
 def parse_path(d, where):
@@ -114,7 +111,7 @@ def interp(pf, pt, k):
     parts = []
     for (letter, nf), (_, nt) in zip(pf, pt):
         vals = [a + (b - a) * k for a, b in zip(nf, nt)]
-        parts.append(letter + " ".join(_fmt(v) for v in vals) if vals else letter)
+        parts.append(letter + " ".join(num_fmt(v) for v in vals) if vals else letter)
     return " ".join(parts)
 
 

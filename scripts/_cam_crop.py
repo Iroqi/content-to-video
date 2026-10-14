@@ -44,6 +44,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from _path_morph import x_span, y_span
+from _svg_sanitize import _local  # noqa: E402  剥命名空间只有这一份实现
 from _timeline import beat_cycles, ends_at_start
 from _template import svg_text_band
 
@@ -86,10 +87,6 @@ def resolve_num(value, current=None):
             base = 0.0
         return base + operand if m.group(1) == "+" else base - operand
     return _num(value)
-
-
-def _local(tag):
-    return tag.rsplit("}", 1)[-1]
 
 
 def _num(value):

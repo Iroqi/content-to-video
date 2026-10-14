@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
 
+from _script_utils import num_fmt  # noqa: E402  数值字面形态的单一实现
 from _theme import (
     get_theme_colors, get_default_accent, mix, normalize_accent,
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
@@ -559,8 +560,11 @@ def _fmt_attr_num(v):
     固定 6 位小数再剥尾零：`2` 不写成 `2.0`（多余），`0.5` 不写成
     `0.5000000000000001`（浮点噪音）。同一份稿件两次生成必须字节一致——
     直接 repr(float) 会让 1/3 这类值带上二进制余尾，diff 里全是假改动。
+
+    这个"定点去尾零"的写法与 `_script_utils.num_fmt` 是同一件事：这里只钉住
+    6 位档，实现只有那一份。
     """
-    return f"{float(v):.6f}".rstrip("0").rstrip(".")
+    return num_fmt(v, 6)
 
 
 # ── 视频原声的让路 EQ ────────────────────────────────────────────────

@@ -42,12 +42,23 @@ import re
 import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
-                       decompose_transform, resolve_num)
+                       crop_warnings, decompose_transform, resolve_num)
+from _svg_sanitize import _local, _style_map  # noqa: E402  SVG DOM 的两个读法只有一份
+from _script_utils import num_fmt  # noqa: E402
 from _timeline import beat_cycles, ends_at_start
 
 SVG_NS = "http://www.w3.org/2000/svg"
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
 ET.register_namespace("", SVG_NS)
+
+
+def _fmt(v):
+    """本模块写 style/transform，精度锁六位。
+
+    `num_fmt` 是唯一的实现，这里只钉住精度档：本模块的数值会一路叠加（opacity
+    的 `+=` 增量、平移量的带单位换算），三位小数在这种链路上会肉眼可见地漂。
+    """
+    return num_fmt(v, 6)
 
 # 相机烘焙层的标记：纯给人看的（成片 DOM 里一眼认得出哪层是接续带进来的），引擎不读它。
 STAGE_ATTR = "data-ctv-stage"
@@ -83,18 +94,6 @@ def _kebab(prop):
     return re.sub(r"(?<!^)(?=[A-Z])", "-", prop).lower()
 
 
-def _style_map(el):
-    """现有 inline style → 有序 {小写属性名: 值}（重复属性按后者说话，与 CSS 一致）。"""
-    out = {}
-    for decl in (el.get("style") or "").split(";"):
-        if ":" in decl:
-            name, _, value = decl.partition(":")
-            name = name.strip().lower()
-            if name:
-                out[name] = value.strip()
-    return out
-
-
 def _css_num(v):
     if isinstance(v, bool):
         return None
@@ -103,14 +102,6 @@ def _css_num(v):
     return float(v) if _NUMERIC_STYLE.match(str(v).strip()) else None
 
 
-def _fmt(v):
-    """数值得写成 CSS 能吃的样子：定点 6 位再去尾零——1.0 → "1"，而 0.4+0.2 那种
-    浮点尾巴（0.6000000000000001）不能原样进 style，它既难读也没多准。"""
-    if isinstance(v, bool):
-        return "1" if v else "0"
-    if isinstance(v, (int, float)):
-        return f"{float(v):.6f}".rstrip("0").rstrip(".") or "0"
-    return str(v)
 
 
 def _set_style(el, prop, value):

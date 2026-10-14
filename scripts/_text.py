@@ -86,10 +86,13 @@ def _join_fragment(head, tail, sep):
     """
     if sep == "explicit":
         return head + " " + tail
-    if (tail[0].isascii() and tail[0].isalnum()
-            and (sep == "inferred"
-                 and head[-1:].isascii() and head[-1:].isalnum()
-                 or head[-1:] in ".!?;:")):
+    # 括号不可省：`and` 优先级高于 `or`，实际语义是
+    #   (inferred 且两侧都是 ASCII 字母数字) 或 (head 末位是句末标点)
+    # 依赖隐式优先级时，后来加一个分支就会静默改写语义。
+    tail_ascii = tail[0].isascii() and tail[0].isalnum()
+    head_ascii = head[-1:].isascii() and head[-1:].isalnum()
+    if tail_ascii and ((sep == "inferred" and head_ascii)
+                       or head[-1:] in (".", "!", "?", ";", ":")):
         return head + " " + tail
     return head + tail
 

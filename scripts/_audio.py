@@ -53,7 +53,12 @@ def _wav_duration(audio_path):
             rate = w.getframerate()
             if frames > 0 and rate > 0:
                 return frames / float(rate)
-    except Exception:
+    except (wave.Error, EOFError, OSError):
+        # 只吞"读不出样本数"的三种真实形态：非 WAV（wave.Error）、头部截断
+        # （EOFError）、打不开或无权限（OSError）。非 WAV 是预期路径
+        # （measure_duration 也量 media 文件），不打 warn。
+        # 其余异常必须穿透：静默吞掉会退回 ffmpeg 的两位小数时长，而绕开那份
+        # 量化误差正是本函数存在的理由——宁可见到报错，不要悄悄丢精度。
         pass
     return None
 

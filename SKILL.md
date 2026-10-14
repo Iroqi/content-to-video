@@ -85,7 +85,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 用浏览器打开 `hf-project/index.html` 预览：默认停在首帧，点播放后时间线与音频一起走。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致、agenda 有没有行被截掉。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号）都要回头处理。
 
-**渲染前跑官方门禁**（渲染阶段本身没有自动版式检查）：`hyperframes check` + `snapshot` 两条命令，已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。画面出了别的问题，先查同文件的「画面翻车速查表」，按症状定位。
+**渲染前跑 `hyperframes check`**（渲染阶段本身没有自动版式检查），它的已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖（Chrome/ffmpeg 齐不齐），`snapshot --at <秒>` 按时刻取 PNG 看画面——**它是取帧工具，不是门禁**，按症状定位问题走同文件的「画面翻车速查表」。
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。配图是最花时间的一环，不在 `run.py` 计时里。
 

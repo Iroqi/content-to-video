@@ -28,7 +28,7 @@ from _timeline import (DEFAULT_FPS, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
                        duration_tolerance, validate_speed)
 from _voices import list_voice_ids  # noqa: E402
 from _segments import sids_needing_image, seg_layout  # noqa: E402
-from _manifest_schema import load_timing_manifest  # noqa: E402
+from _manifest_schema import load_timing_manifest, MANIFEST_FILENAME  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
@@ -389,7 +389,9 @@ def main():
     # 手绘 SVG 矢量示意（方式 C），落进 images/ 并把映射写进 images.json。
     # run.py 只负责统计这份映射的覆盖率，并只在真要渲染时拦缺图
     # （--until html 只警告）。
-    manifest = os.path.join(out, "timing_manifest.json")
+    # 文件名与 pipeline 写侧同源（MANIFEST_FILENAME）：各拼一遍的话，改一侧
+    # 就等于把"manifest 不存在"这条分支永久打开。
+    manifest = os.path.join(out, MANIFEST_FILENAME)
     images_json = os.path.join(project, "images.json")
     has_images = os.path.isfile(images_json)
 
@@ -626,7 +628,10 @@ def main():
             _fails, _fr = check_frames.check_video(
                 out_video, ocr=args.check_frames_ocr)
             _REPORT["video"]["frames"] = {
-                "check": "ok" if not _fails else "failed",
+                # _fails 为 None = 一帧都没量到（"没查"），不能和空列表（"查了、
+                # 全过"）混成同一个 ok——报告里这两个结论的处置完全不同。
+                "check": "skipped" if _fails is None else (
+                    "ok" if not _fails else "failed"),
                 "skipped": _fails is None,
                 "seconds": round(time.monotonic() - t0_fr, 1),
                 # coverage 行一起留：它是"这些帧覆盖了成片的哪一段"的唯一说明

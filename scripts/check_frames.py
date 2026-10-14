@@ -142,9 +142,26 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
         relaxed = False
     else:
         ts, relaxed = sample_timestamps(dur, every)
-    ts = [t for t in ts if t < dur - 1e-3] or [0.0]
 
     failures, report = [], []
+    # 超出成片的时刻抽不到帧（seek 到片尾之后 ffmpeg 给不出画面），必须**说出去**：
+    # 静默把这些点丢掉、退回 [0.0]，等于把"你指定的时刻一帧都没看"报成"看过了、
+    # 全过"——run.py 侧把它记成 check:ok，正是假守卫那一类。
+    kept = [t for t in ts if t < dur - 1e-3]
+    if not kept:
+        report.append(
+            f"[coverage] {'--timestamps 给的' if timestamps else '算出来的'}时刻"
+            f"（{', '.join(f'{t:g}s' for t in ts[:5])}）全都在成片 {dur:.1f}s 之外，"
+            f"只能退到首帧——{'' if timestamps else '这次'}抽帧覆盖不到你要看的时刻。"
+            + ("请给成片范围内的 --timestamps。" if timestamps else ""))
+        kept = [0.0]
+    elif timestamps and len(kept) < len(ts):
+        # 只对显式 --timestamps 出声：自动抽样的末点落在片尾是预期的（它本来就
+        # 只是"抽查"），点名要的时刻被丢掉才是该说的那件事。
+        report.append(
+            f"[coverage] --timestamps 里有 {len(ts) - len(kept)} 个时刻超出成片 "
+            f"{dur:.1f}s 已跳过（留在范围内的 {len(kept)} 个照抽）。")
+    ts = kept
     if relaxed:
         # 采样被上限放宽过：必须把"抽了多少、覆盖到哪儿"和结论一起交出去，
         # 否则一句"通过"会让人以为整片都看过了。
@@ -153,6 +170,7 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
             f"{int(dur // every) + 1} 帧，超过 {_MAX_FRAMES} 帧上限，已按整片均分"
             f"（每 {dur / _MAX_FRAMES:.1f}s 一帧，覆盖到 {ts[-1]:.1f}s）。"
             f"要逐段细看就分段跑并给 --timestamps。")
+    measured = 0
     with tempfile.TemporaryDirectory(prefix="check_frames_") as td:
         for i, t in enumerate(ts):
             png = os.path.join(td, f"f{i:03d}.png")
@@ -162,6 +180,7 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
             if metrics is None:
                 report.append(f"{line} 抽帧/分析失败：跳过（不判失败，但这条没人证明）")
                 continue
+            measured += 1
             line += (f" 非黑 {metrics['nonblack_ratio']*100:5.1f}%  "
                      f"颜色桶 {metrics['color_buckets']}")
             probs = []
@@ -173,9 +192,11 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
             if ocr:
                 text = _ocr_text(png)
                 if text is None:
-                    report.append(line + "  OCR 不可用：跳过（像素断言仍生效）")
-                    continue
-                if not text.strip():
+                    # OCR 降级只降级 OCR 那一条：不能 `continue`——那会把这一帧已经
+                    # 量出来的黑屏/死平断言一起吞掉，--ocr 开着又没装 tesseract 时
+                    # 整支全黑片会报"0 帧失败、通过"。
+                    line += "  OCR 不可用（像素断言仍生效）"
+                elif not text.strip():
                     probs.append("OCR 认不出任何词（字幕/大字版式疑似丢失）")
                 else:
                     line += f"  OCR「{text.strip()[:24]}」"
@@ -184,6 +205,12 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
             else:
                 line += "  ✓"
             report.append(line)
+    if measured == 0:
+        # 一帧都没量到（PIL/numpy 缺失，或每帧抽帧/分析都失败）不是"全过"：
+        # 返回 None 让调用方按"没量到"降级，与 ffmpeg 不可用同一口径。
+        return None, report + [
+            f"[coverage] {len(ts)} 帧一帧都没量到：跳过抽帧断言"
+            "（装好 Pillow+numpy 后像素断言自动生效；ffmpeg 在但抽帧失败时看上一行原因）"]
     return failures, report
 
 
@@ -246,8 +273,10 @@ def main(argv=None):
               "确认是某一段有意全黑（如过场）时，用 --timestamps 绕过该段再核。",
               file=sys.stderr)
         return 1
-    _n = len([l for l in report if "coverage" not in l])
-    print(f"[check_frames] 通过：{_n} 帧全部过断言")
+    _lines = [l for l in report if "coverage" not in l]
+    _missed = len([l for l in _lines if "失败：跳过" in l])
+    print(f"[check_frames] 通过：{len(_lines) - _missed} 帧过断言"
+          + (f"，{_missed} 帧没量到（不算通过，只是没人证明）" if _missed else ""))
     return 0
 
 

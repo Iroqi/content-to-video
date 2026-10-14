@@ -59,7 +59,8 @@ from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import _WALLCLOCK_CSS as _CSS_WALLCLOCK
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
-from _template import MIN_READABLE_FONT_PX, load_template
+from _template import (MIN_READABLE_FONT_PX, load_template,  # noqa: E401
+                       same_aspect, svg_text_band)
 
 # 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
 # 手抄数值——上一版手抄的页底色就漂过一次（见 PAGE_BG 注释）。
@@ -89,7 +90,6 @@ def _safe_margins():
 
 
 SAFE_MARGIN = _safe_margins()
-RATIO_TOL = 0.01
 BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
 # 整页画布的文字真正落在主题背景渐变的中段（45% 位），底色从 _theme 注册表
 # 派生而不是抄一份字面量——上一版手抄的 dark 底色是旧主题遗留，与真实页底
@@ -146,7 +146,6 @@ def _parse_num(v):
 # 有模板网格兜着构图，画布页的构图责任全在那张 SVG 自己身上，所以只在这里查这一条
 # 最客观的：把可读几何投到 y 轴上，找最大的整幅空带。
 MAX_EMPTY_BAND = 0.25
-_DEFAULT_FS = float(MIN_READABLE_FONT_PX)   # 字号读不出时给文字一个保守高度
 
 
 def _stroke_pad(el, inherited):
@@ -203,9 +202,10 @@ def _ink_band(el, tag, inherited, page_w, page_h):
         p = _stroke_pad(el, inherited)      # 一条水平轴本身零高度，不补就漏成"空带"
         return (span[0] - p, span[1] + p)
     if tag == "text":
-        fs = _parse_num(inherited(el, "font-size")) or _DEFAULT_FS
-        y = num("y") or 0.0
-        return (y - fs, y + fs * 0.3)       # 基线上方是字身，下方留一点下伸部
+        # 口径在 _template.svg_text_band（含读不到 font-size 时的兜底字号）——
+        # 同文件的「文字越界」与 _cam_crop 的运镜切边都读同一份，三处不再各写一遍。
+        return svg_text_band(num("y") or 0.0,
+                             _parse_num(inherited(el, "font-size")))
     if tag == "image":
         y, hh = num("y"), num("height")
         return None if y is None or hh is None else (y, y + hh)
@@ -214,7 +214,11 @@ def _ink_band(el, tag, inherited, page_w, page_h):
 
 def _largest_empty_band(bands, page_h):
     """合并 y 占位区间后，返回页面里最大的整幅横向空带 (y0, y1)。"""
-    spans = sorted((max(0.0, a), min(page_h, b)) for a, b in bands if b > a)
+    # 先裁到页内再判有效：`b > a` 判未裁剪值的写法会让越界图元（y=3000 的文字）
+    # 通过判定，裁完变成 (2940, 1440) 这种**逆序区间**混进合并，算出"空带占页高
+    # 189%"的假告警——它盖掉的正是真正该看的构图问题。
+    clipped = [(max(0.0, a), min(page_h, b)) for a, b in bands]
+    spans = sorted(s for s in clipped if s[1] > s[0])
     merged = []
     for a, b in spans:
         if merged and a <= merged[-1][1]:
@@ -250,11 +254,10 @@ def _resolve_layout(layout, w, h, aspect):
     r = w / h
     for a in sorted(CANVAS):
         cw, ch = CANVAS[a]
-        if abs(r - cw / ch) / (cw / ch) <= RATIO_TOL:
+        if same_aspect(w, h, (cw, ch)):
             return "canvas", a, ""
     for a in sorted(SLOT):
-        sw, sh = SLOT[a]
-        if abs(r - sw / sh) / (sw / sh) <= RATIO_TOL:
+        if same_aspect(w, h, SLOT[a]):
             return "slot", aspect, ""
     _known = " / ".join(f"{a} {CANVAS[a][0] / CANVAS[a][1]:.3f}" for a in sorted(CANVAS))
     return "slot", aspect, (
@@ -276,7 +279,7 @@ def _root_size(root):
             except ValueError:
                 pass
     if w and h:
-        if vbw and vbh and abs(w / h - vbw / vbh) > RATIO_TOL:
+        if vbw and vbh and not same_aspect(w, h, (vbw, vbh)):
             return w, h, f"width/height 比例 {w / h:.3f} 与 viewBox 比例 {vbw / vbh:.3f} 不一致"
         return w, h, ""
     if vbw and vbh:
@@ -357,13 +360,17 @@ def _text_oob(el, inherited, vb_w, vb_h):
     返回错误文案或 None。"""
     fs = inherited(el, "font-size")
     px = _parse_num(fs) if fs else None
-    if px is None:
-        return None
     y = _parse_num(el.get("y")) or 0.0
-    if y - px < -1e-6 or y + px * 0.3 > vb_h + 1e-6:
-        top = y - px < -1e-6
+    # 读不到 px（写在 <style> 的 class 里）时按可读下限兜底，与空带自查同一口径：
+    # 早先这里直接 return None（"没法验"），而密度自查已经按 26px 给它算了一格
+    # 占位——同一份图两道自查一个说"越界"一个说"没事"，且越界那条连出声都没有。
+    # 兜底取能读的下限：宁可多报一条让作者确认，也不让贴边的字静默被 cover 裁掉。
+    y0, y1 = svg_text_band(y, px)
+    if y0 < -1e-6 or y1 > vb_h + 1e-6:
+        top = y0 < -1e-6
+        _fs = f"{px:g}px" if px else f"字号读不出，按 {MIN_READABLE_FONT_PX}px 估"
         return (f"文字越出画布{'上' if top else '下'}边缘"
-                f"（基线 y={y:g}，字身 {px:g}px）——cover 会裁掉贴边内容，"
+                f"（基线 y={y:g}，字身 {_fs}）——cover 会裁掉贴边内容，"
                 f"把文字整体移进画布")
     x = _parse_num(el.get("x"))
     if x is not None:
@@ -465,16 +472,16 @@ def check_file(path, layout, aspect, theme, resolved=None):
             errors.append(_infer_err)
         if layout == "canvas":
             cw, ch_ = CANVAS[aspect]
-            target, label = cw / ch_, f"{cw}×{ch_}（{aspect} 整页画布）"
+            label = f"{cw}×{ch_}（{aspect} 整页画布）"
         else:
             # 槽位框随画幅变（竖屏 980×735 / 横屏 1067×800，都是 4:3）。
             # 折算字号与建议尺寸都必须按当前画幅算——拿竖屏的 980 去折横屏的
             # 1067，26px 会被误判成 24px（假 warn），建议尺寸也永远是竖屏那一档。
             cw, ch_ = SLOT[aspect]
-            target, label = 4 / 3, f"4:3（{aspect} 槽位版式，建议 {cw}×{ch_}）"
+            label = f"4:3（{aspect} 槽位版式，建议 {cw}×{ch_}）"
         # 推断失败时不再叠一条"比例不等比"——同一件事说两遍，且第二遍的说法
         # （目标 4:3）会让人以为是槽位图画错了，其实是谁都不知道它该按哪档查。
-        if not _infer_err and abs(w / h - target) / target > RATIO_TOL:
+        if not _infer_err and not same_aspect(w, h, (cw, ch_)):
             errors.append(f"比例 {w:g}×{h:g}（{w / h:.3f}）与目标 {label} 不等比；"
                           f"cover 会裁掉贴边内容，请改根节点尺寸后重排，别缩内容凑比例")
         scale = cw / w
@@ -623,12 +630,13 @@ def check_file(path, layout, aspect, theme, resolved=None):
                     # 文字宽按"CJK≈1em、拉丁≈0.55em"粗估——只用于端点落点（多算
                     # 只会少报 warn，安全方向）；越界判定刻意不用它（会误报）。
                     est_w = px * sum(1.0 if _CJK.search(ch) else 0.55 for ch in content)
+                    ty0, ty1 = svg_text_band(ty, px)
                     if anchor == "end":
-                        boxes.append((tx - est_w, ty - px, tx, ty + px * 0.3))
+                        boxes.append((tx - est_w, ty0, tx, ty1))
                     elif anchor == "middle":
-                        boxes.append((tx - est_w / 2, ty - px, tx + est_w / 2, ty + px * 0.3))
+                        boxes.append((tx - est_w / 2, ty0, tx + est_w / 2, ty1))
                     else:
-                        boxes.append((tx, ty - px, tx + est_w, ty + px * 0.3))
+                        boxes.append((tx, ty0, tx + est_w, ty1))
 
         if el.get("font-family") or _style_map(el).get("font-family"):
             has_font_family = True

@@ -20,6 +20,10 @@ from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                         _validate_finite_number, _validate_text)
 from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 
+# 时间轴产物文件名：pipeline 写（output 根）、run.py 读（同一处）、gen_hyperframes
+# 由 -m 收下。写侧与读侧各拼一遍时，改一侧 = run.py 静默走"文件不存在"分支。
+MANIFEST_FILENAME = "timing_manifest.json"
+
 # timing_manifest.degraded 的全部合法键 = _degraded.KEYS（注册表派生，见 _degraded.py 文件头）。
 
 # timing_manifest 的两个对象层同样字段集封闭（清单 = pipeline 写侧的原样产出，

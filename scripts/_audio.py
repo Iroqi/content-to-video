@@ -15,6 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _timeline import validate_speed, needs_speed_change  # noqa: E402
 from _script_utils import remove_if_exists  # noqa: E402  失败清理用的删文件
 
+# 整条配音轨的文件名：pipeline 写它（output 根），gen_hyperframes 在 manifest 的
+# combined_audio 失效时按它回落（output 的 audio/ 下，由 _stage_audio_file 暂存）。
+# 两边各写一份字面量时，改一侧 = 回落那条路静默退化成"永远找不到"，而报错文案
+# 还写着一个不存在的文件名。
+COMBINED_AUDIO_NAME = "combined.wav"
+
 
 def _run_ff(args, timeout):
     """ffmpeg 子进程统一入口：捕获输出、超时返回 None。

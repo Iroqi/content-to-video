@@ -144,7 +144,7 @@ def ensure_local_gsap(project_dir):
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E402
-                       load_template)
+                       load_template, same_aspect)
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path)
@@ -153,7 +153,7 @@ from _segments import (sids_needing_image, seg_layout,  # noqa: E402
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir)
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
-                    parse_duration, parse_video_size)
+                    parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
@@ -462,8 +462,9 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
         sw, sh = size
-        # 同一判据与 canvas_layout_errors 同式（交叉相乘，避免浮点容差写法不一）
-        if abs(sw * box_h - sh * box_w) > 0.002 * box_w * box_h:
+        # 判据走 _template.same_aspect：check_svg 的自查与这里的生成期门禁是同一
+        # 个问题（"cover 会不会裁掉贴边的字"），容差只有一份（SVG_ASPECT_TOL）。
+        if not same_aspect(sw, sh, (box_w, box_h)):
             errs.append(
                 f"段落 '{sid}' 的配图 {src} 是 {sw:g}×{sh:g}，与槽位配图框 "
                 f"{box_w}×{box_h}（4:3）不等比——object-fit:cover 会切掉边去填满"
@@ -523,7 +524,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
         sw, sh = size
-        if abs(sw * canvas_h - sh * canvas_w) > 0.002 * canvas_w * canvas_h:
+        if not same_aspect(sw, sh, (canvas_w, canvas_h)):
             errs.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，与当前画幅 "
                         f"{canvas_w}×{canvas_h} 不等比——object-fit:cover 会把画在"
                         f"图内的标题整块裁到画面外，而 check 看不见这种丢失。"
@@ -1336,13 +1337,17 @@ def main(argv=None):
         else:
             audio_path = None
         fell_back = audio_path is None
+        # 回落名与 pipeline 写侧同源（_audio.COMBINED_AUDIO_NAME）：它落在
+        # audio/ 下（_stage_audio_file 暂存进项目目录时按 basename 存），两边各
+        # 拼一份的话改名只改一侧，回落路径就永远找不到、报错文案写着不存在的文件。
+        _default_rel = os.path.join("audio", COMBINED_AUDIO_NAME)
         if audio_path is None:
-            default_audio = os.path.join(out_dir, "audio", "combined.wav")
+            default_audio = os.path.join(out_dir, _default_rel)
             audio_path = default_audio if os.path.isfile(default_audio) else None
         if audio_path is None:
             raise SystemExit(
                 "[error] manifest 未提供可用音频，且默认路径不存在: "
-                f"{os.path.join(out_dir, 'audio', 'combined.wav')}。"
+                f"{os.path.join(out_dir, _default_rel)}。"
                 "请重跑 TTS，或显式传入 --audio <文件路径>。")
         if fell_back:
             # 走到这里 = manifest 的音频路径不存在（OUTPUT 被清过/搬走过）

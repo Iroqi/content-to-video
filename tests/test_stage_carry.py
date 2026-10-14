@@ -211,7 +211,11 @@ class FoldCamera(unittest.TestCase):
         self.assertIn("translate(0.0000,300.0000)", outer.get("transform"))
         self.assertIn("translate(0.0000,200.0000)", inner.get("transform"))
         num_box = [b[1] for b in cam_geometry(ET.fromstring(two))[2] if b[0] == "#num"][0]
-        self.assertAlmostEqual(num_box[2], 883.0 + 500.0, places=3)   # 两层都吃进去了
+        # 883（旧）→ 874：`<text id="num">` 没写 font-size，占位盒的兜底字号从
+        # _cam_crop 自己那个字面量 17.0 换成 _template.svg_text_band 的
+        # MIN_READABLE_FONT_PX（26）——与 check_svg 的密度/越界自查同一口径。
+        # 两层平移 200+300 都吃进去了：900 − 26 + 500。
+        self.assertAlmostEqual(num_box[2], 874.0 + 500.0, places=3)
 
     def test_baked_frame_is_what_crop_warnings_sees(self):
         """同一拍运镜，接在推近过的画面之后就出画了——只看盘上原图会报"一切在幅内"。"""

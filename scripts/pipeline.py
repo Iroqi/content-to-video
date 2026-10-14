@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _audio import (apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
-                    wav_data_consistent)
+                    wav_data_consistent, COMBINED_AUDIO_NAME)
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从契约模块取
 from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
@@ -29,7 +29,7 @@ from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: 
 from _segments import is_content_sid  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
 from _source_schema import load_segments_source  # noqa: E402
-from _manifest_schema import validate_timing_manifest  # noqa: E402
+from _manifest_schema import validate_timing_manifest, MANIFEST_FILENAME  # noqa: E402
 import _degraded as D  # noqa: E402  降级键常量（拼错即 AttributeError）
 from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  重定向场景 UTF-8 + 产物路径守卫
                            write_json_atomic, remove_if_exists)
@@ -610,7 +610,7 @@ def _concat_voice_audio(args, ffmpeg_path, sentence_data):
     # ── Concatenate ────────────────────────────────────────────────
     print(f"\n[concat] {len(sentence_data)} clips (gap {args.gap}s)...", flush=True)
     audio_files = [s["file"] for s in sentence_data]
-    combined_path = os.path.join(args.output, "combined.wav")
+    combined_path = os.path.join(args.output, COMBINED_AUDIO_NAME)
     concat_ok = concat_audio(ffmpeg_path, audio_files, args.gap, combined_path)
 
     if not concat_ok:
@@ -801,7 +801,7 @@ def _validate_and_write_manifest(args, manifest, degraded):
     # 唯一的时间轴数据源，写到一半被 Ctrl-C 打断会留下一份
     # 截断的 JSON——下次 --resume 直接崩在 json.load，且堆栈完全不指向
     # "上次中断了，重跑一遍就好"。先写 .tmp 再 replace，要么完整要么不存在。
-    manifest_path = os.path.join(args.output, "timing_manifest.json")
+    manifest_path = os.path.join(args.output, MANIFEST_FILENAME)
     write_json_atomic(manifest_path, manifest, indent=2)
 
     print(f"\n[manifest] {manifest_path}", flush=True)

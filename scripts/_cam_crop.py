@@ -45,6 +45,7 @@ import xml.etree.ElementTree as ET
 
 from _path_morph import x_span, y_span
 from _timeline import beat_cycles, ends_at_start
+from _template import svg_text_band
 
 CAM_ID = "cam"
 # 一条运镜步骤里能改变姿态的属性：scale 各向同性地放大，x/y 是平移（用户单位）。
@@ -198,10 +199,12 @@ def _box(el, tag):
         x, y = num("x"), num("y")
         if y is None:
             return None
-        fs = _num(el.get("font-size")) or 17.0
+        # 竖向占位走 _template.svg_text_band（与 check_svg 的空带/越界同一口径）。
+        # 这里原先读不到 font-size 时兜 17.0，而 check_svg 兜 26——同一份 SVG 在
+        # 运镜自查里比在密度自查里矮 9px，"推镜把底栏推出画幅"就没人报。
+        y0, y1 = svg_text_band(y, _num(el.get("font-size")))
         # 横向只拿锚点当点：宽度要布局引擎，硬编一个只会在"竖向切边"之外多造误报。
-        return (x if x is not None else 0.0, x if x is not None else 0.0,
-                y - fs, y + fs * 0.3)
+        return (x if x is not None else 0.0, x if x is not None else 0.0, y0, y1)
     if tag == "image":
         x, y, w, h = num("x"), num("y"), num("width"), num("height")
         if None in (x, y, w, h):

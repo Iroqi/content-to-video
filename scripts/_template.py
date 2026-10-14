@@ -16,6 +16,44 @@ import json
 # 调到能读，另一页照样被判超标——三道门给三个答案，没法照着改。
 MIN_READABLE_FONT_PX = 26
 
+# ── 没有布局引擎时的两条几何口径 ────────────────────────────────────
+# 静态自查（`check_svg` 的越界/空带、`_cam_crop` 的运镜切边、`gen_hyperframes`
+# 的配图比例）都在没有浏览器的前提下量 SVG，所以"这块图元占哪儿"只能是近似式。
+# 近似式必须由一处定义：此前`<text>` 的竖向占位在四个地方各写一遍 `y-fs, y+fs*0.3`，
+# 而读不到 font-size 时的兜底字号一边是 MIN_READABLE_FONT_PX（26）、另一边是字面量
+# 17.0——同一张图两道门算出差 9px 的占位盒，一道报越界、一道说没事。
+# 比例容差同样两档并存过（0.01 与 0.002，差 5 倍）：check_svg 放过的图被
+# gen_hyperframes 判 error，"照着自查改完还是过不去"。
+TEXT_ASCENT_RATIO = 1.0     # 基线上方算一个字身
+TEXT_DESCENDER_RATIO = 0.3  # 基线下方留一点下伸部（g/y/j 的尾巴）
+# 等比判据的相对容差：cover 靠裁边填满框，失配多少就裁掉多少，取严的那一档
+# （原 gen_hyperframes 的 0.002）——自查工具与最终门禁必须给同一个答案。
+SVG_ASPECT_TOL = 0.002
+
+
+def svg_text_band(y, font_size=None):
+    """`<text>` 在 y 轴上的占位区间 (y0, y1)：基线上方一个字身、下方一点下伸部。
+
+    font_size 读不出（写成 class / em / 相对单位）时按 MIN_READABLE_FONT_PX 兜底——
+    取**能读的下限**而不是随便一个数：兜底越保守，占位盒越大，"越界/被裁"越容易
+    报出来；报了可以确认是误报，漏了就是成片里真的少一行字。
+    """
+    fs = font_size if font_size else MIN_READABLE_FONT_PX
+    return (float(y) - fs * TEXT_ASCENT_RATIO, float(y) + fs * TEXT_DESCENDER_RATIO)
+
+
+def same_aspect(w, h, box):
+    """SVG 固有尺寸 (w,h) 与目标框 box=(bw,bh) 是否等比（容差 SVG_ASPECT_TOL）。
+
+    两边都按"交叉相乘"写，避免浮点除法写法不一带来的第二重口径差：
+    |w·bh − h·bw| / (bw·bh) ≤ tol。
+    """
+    bw, bh = float(box[0]), float(box[1])
+    if not (w and h and bw and bh):
+        return False
+    return abs(float(w) * bh - float(h) * bw) <= SVG_ASPECT_TOL * bw * bh
+
+
 _TEMPLATE_PARSED = None
 
 

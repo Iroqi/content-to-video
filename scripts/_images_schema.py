@@ -53,7 +53,7 @@ def validate_relative_project_path(src, where):
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director：SVG 的"时间轴同步动画"编排（见 references/directing.md
+    # director：SVG 的"时间轴同步动画"编排（见 references/canvas.md
     # 「SVG 动画：两档」）。写了它这张 SVG 才走净化内联，否则仍是 <img>。
     "director",
     # stage："keep" = 跨段场景延续（persistent stage，见 _stage_carry）。写在**接续页**
@@ -337,7 +337,7 @@ def _validate_director(key, dirval):
                              f"{sorted(_DIRECTOR_STEP_KEYS)}")
         # 锚点二选一：at（句序）或 at_time（段落绝对秒）。两者都写或都不写都是歧义，
         # 一律拒。at_time 让导演档脱离"句子分桶"：整页画布的自由编排可以直接按秒排
-        # 补间，不必迁就旁白句边界（见 references/directing.md「SVG 动画：两档」）。
+        # 补间，不必迁就旁白句边界（见 references/canvas.md「SVG 动画：两档」）。
         has_at, has_time = "at" in step, "at_time" in step
         if has_at == has_time:
             raise ValueError(

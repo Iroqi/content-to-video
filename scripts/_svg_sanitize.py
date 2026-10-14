@@ -4,7 +4,7 @@
 背景：`references/canvas.md`「图内文字的对比度」记的那条老规矩是
 "交付 HTML 必须保持 `<img>`"——理由是 `<img>` 载入的 SVG 按 data 处理，
 浏览器不执行它的 `<script>`；一旦内联进 DOM 它就成了同源活 SVG，脚本照跑。
-"导演"（时间轴同步的 SVG 动画，见 `references/directing.md`「SVG 动画：两档」）必须内联才能让
+"导演"（时间轴同步的 SVG 动画，见 `references/canvas.md`「SVG 动画：两档」）必须内联才能让
 GSAP 逐帧驱动图内元素，所以内联不再是禁区，但**必须先净化**：这一层就是把
 "内联会执行脚本"的风险拆掉，让内联回到和 `<img>` 同样安全的水位。
 
@@ -12,7 +12,7 @@ GSAP 逐帧驱动图内元素，所以内联不再是禁区，但**必须先净�
 渲染器按时间线时刻 seek 每一帧，凡按墙上时钟自走的东西（CSS `@keyframes` /
 `transition`、SMIL `<animate*>`）都会在成片里漂移、不可复现。所以净化时把这
 类墙钟动画一并剥掉；导演的运动全部改由时间线补间驱动。要"氛围循环"就别写
-director，走 `<img>` 那条路（墙钟循环，见 `references/directing.md`「SVG 动画：两档」）。
+director，走 `<img>` 那条路（墙钟循环，见 `references/canvas.md`「SVG 动画：两档」）。
 
 只用标准库。净化基于 ElementTree 结构化改写，不做正则删标签那种能被绕过的活。
 """

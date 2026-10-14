@@ -39,7 +39,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`。
 - **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`）。透明卡做 wipe 会双影叠字。
-- **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前锚点），见 `references/directing.md`「SVG 动画：两档」。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/directing.md`「跨段接续」）。
+- **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前锚点），见 `references/canvas.md`「SVG 动画：两档」。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/canvas.md`「跨段接续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。**CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
 - verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）；`speakers[].label` 有 6 字上限。字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
 - 每段 accent 派生一组装饰（一律经 `color-mix`）：氛围光、槽位外发光与 1px 内描边（半径 `--ctv-img-glow`）、tagline 刻度条、进度条辉光——选 accent 时注意它染整帧氛围。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
@@ -63,7 +63,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 
 - 画布尺寸与配图规格见 `references/imagery.md`（第 4 步规则以它为准）；素材一律 `cover` 铺满画布。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片）。
-- **SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `directing.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
+- **SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `canvas.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
 
 ## HTML 预览与渲染
 
@@ -142,17 +142,17 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 
 | 看到的症状 | 成因 | 去处 |
 | --- | --- | --- |
-| 推镜时页底标签不见了、页顶标题贴着边 | `scale>1` 以 `svgOrigin` 为中心放大，离焦点越远位移越大。**留白要按"推完那一帧"算，不是按 SVG 源码算** | `directing.md`「SVG 动画：两档」里「运镜 / 相机」条的「为什么」 |
-| 推近的图形压到了旁边静止的标题或旁白上 | 出画 warn 只判"出画"，不判"撞字"；两者都没出画时无人拦 | `directing.md`「SVG 动画：两档」里「运镜 / 相机」条的「机器兜不住的那件事」 |
-| `keep` 接续页界上图形**位置**跳一下（尺寸不变） | 没写原点时 GSAP 绕 `#cam` bbox 左上角，那个角还跟着别的步的 `from` 瞬态飘 | `directing.md`「跨段接续」里「相机绕的那一点是渲染器钉的」 |
-| `keep` 接续页界上整幅换色，但图形其实接上了 | 每页 `--seg-accent` 不同，模板氛围光与进度条在切页那帧整幅换色。**要量连续性就按柱子边沿定位，别拿整幅 PSNR 当判据** | `directing.md`「跨段接续」的实测段 |
+| 推镜时页底标签不见了、页顶标题贴着边 | `scale>1` 以 `svgOrigin` 为中心放大，离焦点越远位移越大。**留白要按"推完那一帧"算，不是按 SVG 源码算** | `canvas.md`「SVG 动画：两档」里「运镜 / 相机」条的「为什么」 |
+| 推近的图形压到了旁边静止的标题或旁白上 | 出画 warn 只判"出画"，不判"撞字"；两者都没出画时无人拦 | `canvas.md`「SVG 动画：两档」里「运镜 / 相机」条的「机器兜不住的那件事」 |
+| `keep` 接续页界上图形**位置**跳一下（尺寸不变） | 没写原点时 GSAP 绕 `#cam` bbox 左上角，那个角还跟着别的步的 `from` 瞬态飘 | `canvas.md`「跨段接续」里「相机绕的那一点是渲染器钉的」 |
+| `keep` 接续页界上整幅换色，但图形其实接上了 | 每页 `--seg-accent` 不同，模板氛围光与进度条在切页那帧整幅换色。**要量连续性就按柱子边沿定位，别拿整幅 PSNR 当判据** | `canvas.md`「跨段接续」的实测段 |
 | 图内标签在成片里看不见，全流程零报错 | `<img>` 载入的 SVG 里文字不属于 HTML 文本流，没有一道检查量它 | `canvas.md`「图内文字的对比度」里「没有任何一道检查会量它」 |
 | 图内文字右缘出血（量出来的右缘超过上限） | `text-anchor="end"` 的落点要按量出来的字宽倒推，不是按字符数估 | `canvas.md`「整页画布」里「安全边距照页面走」 |
 | 图里两行文字压在一起（`hyperframes check` 报 `content_overlap`） | 两条 y 只差十来个像素——`canvas_kit` 的柱标签固定落在 `base_y+32`，自己加的说明文字很容易撞上它。`check_svg` 查不到图内压字，只有 `check` 的 Layout 阶段能量 | `canvas.md`「画布几何」的末条 |
 | `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报——豁免标记已由模板打在每一行上，见下 | `rendering.md`「官方校验命令」 |
 | 压缩成片后轴线/网格/分隔线像是没画 | 色档太暗 + 线宽不足 3px 在压缩后被抹平 | `canvas.md`「整页画布的密度与层次」里「辅助线要敢用亮档」 |
 | 暂停一帧像一页空白（中段整条空带） | 标题/主视觉/注脚没分成三段并用中景连起来 | `canvas.md`「整页画布的密度与层次」里「竖向不许有整条空带」 |
-| 动画与旁白差 0.1s 量级 | 句内小数是线性猜的（**整数句序是准的**） | `directing.md`「SVG 动画：两档」里 `at` 条的「整数句序是准的，小数是线性猜的」 |
+| 动画与旁白差 0.1s 量级 | 句内小数是线性猜的（**整数句序是准的**） | `canvas.md`「SVG 动画：两档」里 `at` 条的「整数句序是准的，小数是线性猜的」 |
 | 浏览器里颜色分明、成片里发闷 | 图内最大档与最小档字号比值不足 2，观众分不出主次 | `canvas.md`「整页画布」里「图内可以有标题，字号按整页读」 |
 | 整页画布在浏览器里是均匀一块死色 | 铺了满幅底板，把模板背景三层盖掉了 | `canvas.md`「不铺满幅底」里那条整页画布的说明 |
 | 只有开头一秒是空的 | 整页画布没有转场遮，逐拍揭示意味着前 1 秒画面是空的 | `canvas.md`「整页画布的密度与层次」里谈导演页起始帧那条 |

@@ -485,8 +485,7 @@ def validate_images_json(data):
     两种写法：
         {"seg1": {"src": "images/seg1.png"},
          "seg2": {"src": "images/seg2.svg", "director": {...}},
-         "seg3": {"src": "images/seg3.mp4", "type": "video", "loop": true,
-                  "muted": true, "autoplay": true, "poster": "...png"}}
+         "seg3": {"src": "images/seg3.gif"}}
       "type" 可选（auto=按扩展名判断；image/video/gif 显式指定），其余字段均为
       可选（静态图只需 src）。不接受裸字符串路径。gif 也走 <img>，与 image 同档。
 

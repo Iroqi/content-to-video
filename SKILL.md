@@ -71,7 +71,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 **三问按顺序回答：这一页要不要演 → 观众应该看到什么 → 素材从哪里来。**
 
 - **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有方式 C 的 SVG 能进导演档——位图只能当静态素材贴进画面。
-- **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——位图（imageGen：A 真实照片检索 / B 生图，同档）与 SVG（方式 C，手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
+- **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——位图（imageGen 生图）与 SVG（方式 C，手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
 - **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布再加「整页画布的密度与层次」。让它逐拍演另读 `references/directing.md`。画完跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`；混用给 `--layout auto`）。
 
 两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）。走页面墙钟的运动破坏逐帧可复现，所以只有 SVG 的导演档能"演"——固定画面交给位图即可。

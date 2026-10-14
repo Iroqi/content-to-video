@@ -1,66 +1,59 @@
 # 第 3 步 · TTS：管线参数、预置音色与 manifest 字段
 
-本文件是 SKILL.md 第 3 步（运行 TTS 管线）的展开参考，主流程与示例命令见 SKILL.md。
+主流程与示例命令见 SKILL.md 第 3 步。完整参数以 `python scripts/pipeline.py --help` 为准。
 
-## pipeline.py 参数说明
+## pipeline.py 参数
 
-- `--api-key`：可选，默认从环境变量或 `~/.config/ai-video/.env` 读取 `MIMO_API_KEY`
-- `--source segments_source.json`：结构化输入（必填）。逐段独立分句，直接产出带 segments 分组的 manifest
-- `--voice-id`：预置音色 ID（默认 `冰糖`）。下表只写**听感与选型建议**；可用音色的名单以 `python scripts/pipeline.py --help` 的 choices 为准——它由 `_voices.list_voice_ids()` 现生成，跟着音色注册表走，本表只可能是它的滞后副本。
-- `--voice-style`：自然语言风格描述，控制语气情绪（如"清晰沉稳的讲解风格，语速适中"）
-- `--gap 0.4`：相邻两句之间的静音间隔（秒，默认 `0.4`）。拼接音频与 manifest 时间轴都会在句间插入这段静音
-- `--speed 1.5`：**语速倍率**，默认 `1.5`（比正常快一半）。通过 ffmpeg `atempo` 对每句合成音频做精确变速，**与 TTS 模型自然语速无关、完全确定**。设 `1.0` 即原始语速。字幕时间轴按变速后实测时长对齐，依然精准同步
-- `--resume`：仅在文本、音色、模型、音频时长以及语速状态都可证明一致时跳过已有 WAV。以下都算失效缓存、直接重合成：缺 `.sha` 内容指纹（被手删、或上次 sidecar 写入失败）、`.spd` 不可读且没有 `.orig.wav` 可回退、WAV 头部声明的样本数超出文件实际字节（上次写入被截断——这种文件 ffmpeg 仍量得出正常时长，只看时长检不出）。失效时终端打印 `缓存失效（原因）`，命中时按是否本次重放过变速分别打印 `[skip,cached]`（纯复用，一句 ffmpeg 都没跑）或 `[skip,respeed]`（本次重新施加了语速）。日常反复调试同一份稿件时**始终建议加上**
-- `--model` / `--base-url`：TTS 模型名 / API base URL，一般不需要改，默认读 env
-- `--dry-run`：仅断句 + 段落预览，不调 TTS、不写任何文件（验证稿件格式用，零额度消耗）；此模式下 `-o` 可省略
-- `--workers 4`：并行 TTS 调用数（默认 4）。句子数多时能明显缩短总耗时；调大会更快触及 API 限速，遇到大量 `[retry]` 日志时调小
-- `--api-timeout`：单次 TTS API 调用超时（默认 30s，必须是 `>0` 的有限秒数）。`0`/负数/`NaN` 在 argparse 阶段就被拒
-- `--on-fail {abort,silence}`：单句 TTS 失败时的处理方式（默认 `abort`，任何句子失败都阻断管线）。`silence` 改为静音占位继续：时长按字数/语速启发式估算折算、落 `.failed` marker、manifest 对应句子带 `synth_failed: true`，不阻断整条视频，事后可定位补录
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--source` | 必填 | `segments_source.json`；逐段独立分句，直接产出带 segments 分组的 manifest |
+| `--api-key` | env / `~/.config/ai-video/.env` | 读 `MIMO_API_KEY` |
+| `--voice-id` | `冰糖` | 预置音色 ID；可用名单以 `--help` 的 choices 为准（`_voices.list_voice_ids()` 现生成，下表音色名只补搭配建议） |
+| `--voice-style` | — | 自然语言风格描述（如"清晰沉稳的讲解风格，语速适中"） |
+| `--gap` | `0.4` | 句间静音（秒，默认 `0.4`）；拼接音频与 manifest 时间轴同步插入 |
+| `--speed` | `1.5` | 语速倍率（默认 `1.5`），经 ffmpeg `atempo` 精确变速、完全确定（`1.0` = 原始语速）；字幕按变速后实测时长对齐 |
+| `--resume` | off | 文本/音色/模型/时长/语速状态可证明一致时跳过已有 WAV；缺 `.sha`、`.spd` 不可读且无 `.orig.wav` 回退、WAV 声明样本数超实际字节 → 缓存失效重合成。日常调试建议始终加 |
+| `--model` / `--base-url` | env | 一般不改 |
+| `--dry-run` | off | 仅断句 + 段落预览，不调 TTS、不写文件（零额度）；`-o` 可省略 |
+| `--workers` | 4 | TTS 并发；大量 `[retry]` 日志时调小 |
+| `--api-timeout` | 30s | 必须 `>0` 的有限秒数 |
+| `--on-fail` | `abort` | `abort` = 任一失败阻断；`silence` = 静音占位继续（时长按字数/语速估算、落 `.failed` marker、句子带 `synth_failed: true`） |
 
-> **manifest 的降级字段**：`status` 只有 `ok` / `degraded` 两种，`degraded` 是明细对象。
-> 它的键是一份**封闭集合**，由 `scripts/_degraded.py` 的注册表 `KINDS` 派生（`_manifest_schema.DEGRADED_KEYS` 是它的别名），并在 `validate_timing_manifest`
-> 拦截未知键。新增一档降级只改 `_degraded.py` 一处登记（加键名常量 + reader + 在 `KINDS` 里登记一行），`pipeline.py` 写入时用该常量（`D.<常量>`，拼错是 NameError，不会静默丢失）；
-> 目前会出现的键：
-> - `tts_silence_fallback_count`：静音占位句数；
-> - `tts_lost_sentence_count`：**连静音都没生成、已从成片里消失**的句数（按"应产出句数 − 实际句数"算）；
-> - `segments_dropped`：整段没有任何可用音频、已从 manifest 剔除的段 id 列表（不是计数）；
-> - `audio_shorter_than_timeline`：拼接/混音后的音频实测比时间轴终点短超过 250ms 的秒数，
->   片尾那几秒有字幕没声音（`total_duration` 仍按时间轴取值，保证契约自洽）。
->
-> 只要 `degraded` 非空，`run.py` 正式渲染前就会停住（exit 3）要求显式 `--allow-degraded`，
-> 并把原因念给人看。`--until html` 只警告不阻断，方便先看版式。
->
-> **补录（解除粘性降级）**：静音占位句带内容指纹与 `.failed` marker，`--resume` 会一直复用
-> 同一份静音——修好 TTS 后不清理，隔天重跑仍命中静音并再次被阻断。补录 = 删除该句缓存：
-> 删掉 `音频输出目录/sentences/` 下对应句子的 `.wav`（连同 `.sha`/`.spd`/`.failed` sidecar），
-> 下次带 `--resume` 重跑即自动重合成；真合成成功后 `.failed` marker 由管线自动清理。
+## 降级与补录
 
-完整参数列表见 `python scripts/pipeline.py --help`——本文只列核心参数。
+`manifest.status` 只取 `ok` / `degraded`；`degraded` 是封闭键集对象（由 `scripts/_degraded.py` 的 `KINDS` 派生，新增降级只改那一处）：
 
-**拼接产物会跟时间轴对账**：拼接本体是标准库 `wave` 逐帧串接（ffmpeg 只负责格式归一），`combined.wav` 的总时长本应等于"逐句时长之和 + 句间静音"；若实测比它短过 250ms（固定值，与下游契约"最后一句不得超出 total_duration + 250ms"同档），管线直接报错退出而不是继续——它兜住的是"某句 WAV 头部声明一个长度、实际只写了一半字节"这类 ffmpeg 仍量得出名义时长的静默截断。真触发时删掉 `combined.wav` 重跑——`--resume` 会把坏句判成失效缓存自动重合成，正常句子照常复用。
+- `tts_silence_fallback_count`：静音占位句数。
+- `tts_lost_sentence_count`：连静音都没有、已从成片消失的句数（应产出 − 实际）。
+- `segments_dropped`：整段无可用音频、被剔除的段 id 列表。
+- `audio_shorter_than_timeline`：拼接/混音后音频比时间轴终点短超过 250ms 的秒数（片尾有字幕没声音；`total_duration` 仍按时间轴取值）。
+
+`degraded` 非空时 `run.py` 正式渲染前停住（exit 3），须显式 `--allow-degraded`；`--until html` 只警告。
+
+**补录**：静音占位句带 `.failed` marker，`--resume` 会一直复用同一份静音。补录 = 删该句 `sentences/` 下的 `.wav`（连同 `.sha`/`.spd`/`.failed`），重跑 `--resume` 自动重合成；成功后 marker 自动清理。
+
+**拼接产物与时间轴对账**：`combined.wav` 总时长应等于"逐句时长之和 + 句间静音"；实测短过 250ms（与下游"末句不得超出 total_duration + 250ms"同档）直接报错退出——兜住 WAV 头部声明长度、实际只写一半的静默截断。触发就删 `combined.wav` 重跑。
 
 ## 预置音色表
 
-> 音色 ID 列表的权威来源是 `scripts/_voices.py` 的 voice registry；下表只补充性别与搭配建议。
+音色 ID 权威来源是 `scripts/_voices.py` 的 registry；下表只补性别与搭配建议。
 
 | voice-id | 语言 | 性别 | 适用场景 |
 |----------|------|------|----------|
 | `冰糖` | 中文 | 女 | 默认推荐，清晰自然，适合讲解播报 |
 | `茉莉` | 中文 | 女 | 温柔娓娓道来，适合故事/科普 |
-| `苏打` | 中文 | 男 | 中文男声，沉稳有力 |
-| `白桦` | 中文 | 男 | 中文男声，低沉浑厚 |
-| `Mia` | 英文 | 女 | 中文稿件里偶尔出现的英文术语/品牌名 |
-| `Chloe` | 英文 | 女 | 中文稿件里偶尔出现的英文术语/品牌名 |
-| `Milo` | 英文 | 男 | 中文稿件里偶尔出现的英文术语/品牌名，正式播报 |
-| `Dean` | 英文 | 男 | 中文稿件里偶尔出现的英文术语/品牌名 |
+| `苏打` | 中文 | 男 | 沉稳有力 |
+| `白桦` | 中文 | 男 | 低沉浑厚 |
+| `Mia` | 英文 | 女 | 中文稿件里的英文术语/品牌名 |
+| `Chloe` | 英文 | 女 | 同上 |
+| `Milo` | 英文 | 男 | 同上，正式播报 |
+| `Dean` | 英文 | 男 | 同上 |
 
-> **中文内容推荐使用 `冰糖` 或 `苏打`**，中英混合发音更自然。`Milo`/`Chloe` 等英文音色在朗读中文时效果欠佳；这四个英文音色只用于中文稿件里的英文术语/品牌名朗读。
->
-> **双人对话推荐搭配**：`茉莉`（女，温柔）+ `苏打`（男，沉稳）或 `冰糖`（女）+ `白桦`（男）——一男一女音色反差明显。画面上另有字幕行首的说话人标签兜底（轮次切换的首句挂一次，见 `references/writing.md` 的 `dialogue` 条目），但避免选两个音域接近的同性别音色做对话。
+中文内容推荐 `冰糖`/`苏打`（中英混读更自然）；英文音色读中文欠佳，只用于英文术语。双人对话推荐一男一女反差组合（`茉莉`+`苏打` 或 `冰糖`+`白桦`），避免音域接近的同性别组合。
 
-## manifest 的 `segments` 字段格式
+## manifest 的 segments 字段
 
-manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 manifest 少见，以 pipeline 产出为准**；确需手写/裁剪时按下述格式提供。契约层校验，**缺字段和多字段都直接报错**：顶层 / `segments[i]` / 句子对象三层的字段集都封闭，清单在 `_manifest_schema.MANIFEST_TOP_KEYS` / `MANIFEST_SEGMENT_KEYS` / `MANIFEST_SENTENCE_KEYS`（`takeaway` 拼成 `take_away`、`layout` 拼错、`combined_audio` 拼错，三类都不出声，照清单写）：
+manifest 由 pipeline 自动产出，手写少见；确需手写/裁剪时按此格式。字段集封闭（`_manifest_schema.MANIFEST_TOP_KEYS` / `SEGMENT_KEYS` / `SENTENCE_KEYS`），缺字段和多字段都直接报错：
 
 ```json
 {
@@ -90,13 +83,8 @@ manifest 由 pipeline 从 `segments_source.json` 自动产出——**手写 mani
 }
 ```
 
-- 顶层 `schema_version`（只能是 `2`）、`status`（`ok` / `degraded`）、`sentences`（非空列表）、`segments`（非空列表）与数值 `total_duration`（ffmpeg 实测总时长）必填；`degraded` 只在 `status` 为 `degraded` 时必须是非空对象。每个句子对象含 `index`/`text`/`start_time`/`duration` 四个字段（对话段落的句子另有 `speaker`，TTS 失败降级为静音的句子带 `synth_failed: true`）
-- 顶层 `closing_cta`（可选，单行字符串）：结尾 agenda 卡的 `→` 尾行，pipeline 从稿件顶层 `cta` 原样透传。它只在存在 `closing` 段、且那一页是 agenda 版式时才有地方画；两种"无处可画"（没有 closing 段 / `closing_layout: "canvas"`）生成阶段都打同一条 `[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它`
-- `segments` 每段必须自带**非空** `sentences` 列表（分组渲染的数据源，缺失或为空会被契约校验直接拒绝）。段落的**版面**字段只有 `id`/`title`/`tagline`/`accent` 四个——段内不再有任何其它文字来源，画面上的正文全部来自句子流；其余出现的键（`layout`/`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是版式、语音与 agenda 的元数据，随段携带但不参与内容段排版（见下节"可选字段"）。`layout` 只在显式时才出现：opening/closing 由 pipeline 必盖——默认 `"agenda"`，稿件写了顶层 `opening_layout` / `closing_layout: "canvas"` 就改盖 `"canvas"`；内容段只在作者声明时带 `"canvas"`（不带 = 槽位版式）
-
-**可选字段**：
-- `speed`（float）：段落级语速倍率，覆盖全局 `--speed`。例如开场/结尾用 `1.2`、正文段用 `1.5`。仅影响 TTS atempo 变速，不影响字幕时间轴精度
-- `voice_id` / `voice_style`（string）：内容段级的音色覆盖，覆盖全局 `--voice-id`/`--voice-style`；opening/closing 不支持这两个字段（规则见 `references/writing.md` 的段落级字段一节）
-- `turns`（数组）：仅对话段落出现，由 pipeline 从 `segments_source.json` 的 `dialogue` 自动产出（`{start, end, speaker, label, voice_id?, voice_style?}`，全局句子区间），手写 manifest 一般不需要自己拼
-
-`segments` 必须按时间轴顺序排列，并且恰好覆盖顶层每个 sentence index；缺句、重复句或乱序都会在 HTML 生成前直接拒绝。另外两条同样会被拒收：相邻两句的 `[start_time, start_time+duration)` 区间不得重叠（正常管线里句间至少隔 `--gap`，重叠说明时间轴被手改坏），以及段内句子的 `text` / `start_time` / `duration` 必须与顶层同 index 的句子逐字段一致。
+- 顶层必填：`schema_version`（只能 `2`）、`status`（`ok`/`degraded`）、`sentences`、`segments`（均非空）、数值 `total_duration`；`degraded` 仅 `status=degraded` 时必为非空对象。句子对象含 `index`/`text`/`start_time`/`duration`（对话段另有 `speaker`，降级句带 `synth_failed`）。
+- `closing_cta`（可选，单行字符串）：结尾 agenda 卡的 `→` 尾行，pipeline 从稿件顶层 `cta` 原样透传；无 agenda 版式结尾页可承载时打 `[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它`。
+- 每段必须自带**非空** `sentences`（分组渲染的数据源）；段内版面字段只有 `id`/`title`/`tagline`/`accent`，其余（`layout`/`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是元数据、随段携带但不参与排版。`layout` 只在显式时才出现：opening/closing 由 pipeline 必盖（默认 `"agenda"`，稿件写 `opening_layout`/`closing_layout:"canvas"` 时改盖 `"canvas"`）。
+- 可选：`speed`（段级语速倍率，覆盖全局，例如开场/结尾用 `1.2`、正文段用 `1.5`，仅影响 atempo 变速，不影响字幕时间轴精度）；`voice_id`/`voice_style`（段级音色覆盖；opening/closing 不支持）；`turns`（对话段自动产出，`{start, end, speaker, label, voice_id?, voice_style?}`）。
+- `segments` 必须按时间轴顺序排列、恰好覆盖顶层每个 sentence index；缺句/重复/乱序直接拒。相邻两句区间不得重叠（正常至少隔 `--gap`，重叠说明时间轴被手改坏）；段内句子与顶层同 index 句子逐字段一致。

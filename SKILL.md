@@ -9,7 +9,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 
 ## 这份文档怎么用
 
-SKILL.md 只留工作流与红线，**细节都在 `references/`，按你此刻这一步去读那一份**：
+SKILL.md 只留工作流与红线，**细节在 `references/`，按此刻这一步去读那一份**：
 
 | 你正要做的事 | 读这一份 | 什么时候可以跳过 |
 | --- | --- | --- |
@@ -29,20 +29,20 @@ SKILL.md 只留工作流与红线，**细节都在 `references/`，按你此刻�
 - **时间轴单一来源**：`timing_manifest.json` 的句子时间轴同时驱动字幕、段落和动画，不要在 HTML 里另维护一份时长。
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，且渲染必须再加 `--allow-degraded`。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
-- **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`（经 `--ctv-*` 变量注入），配色在 `scripts/_theme.py`。`templates/` 只放结构与选择器；凡随画幅变、或要和模板数值联动的观感常量，一律加到那两个 py，别在 CSS 里存第二份。
+- **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`。`templates/` 只放结构与选择器；随画幅变、或要与模板数值联动的观感常量一律加到那两个 py，别在 CSS 里存第二份。
 
 ## 环境
 
 | 依赖 | 用途 | 缺了会怎样 |
 | --- | --- | --- |
 | Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
-| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（即使全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
+| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
-| **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes`，及其驱动的 headless Chrome | 仅第 5 步渲染 | 版本不够在渲染前直接拦下（CLI 侧的失败形态看不出是版本问题）；没装 Node 则出不了 MP4，前四步照常 |
+| **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 5 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前四步照常 |
 
-其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖 Hyperframes 包名/版本钉固，默认 `hyperframes`）。CLI 默认取最新版，跨机逐帧可复现要钉版本（该变量写 `hyperframes@1.2.3`）或走 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内的 `.env` 不参与读取。
+其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本钉固，默认 `hyperframes`）。CLI 默认取最新版，跨机逐帧可复现要钉版本（写 `hyperframes@1.2.3`）或走 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
 
-GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用（sha256 已钉固，每一级取用都重算哈希，不一致则拒绝落盘），新机器第一次生成需联网，之后离线。HTML 只引用本地 `vendor/`；取不到 CDN 时用 `gen_hyperframes.py --gsap-src` 指定本地文件。
+GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用（sha256 钉固，每级取用重算哈希，不一致拒绝落盘），新机器第一次生成需联网，之后离线。HTML 只引用本地 `vendor/`；取不到 CDN 用 `gen_hyperframes.py --gsap-src` 指定本地文件。
 
 ## 核心工作流
 
@@ -52,7 +52,7 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 ### 2. 写结构化稿
 
-生成 `segments_source.json`。每个 segment 至少有 `title` 和 `text`（或 `dialogue`）；建议给显式 `id`（`seg` 前缀），改稿重排后 `images.json` 的键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述；`speakers[].label` 是**上墙文字**（单行、不收分号、≤6 字，超限契约层直接报错）。双人对话别放进 `layout:"canvas"` 段——整页画布没有字幕层，轮次信息就只剩声音了。
+生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述；`speakers[].label` 是**上墙文字**（单行、不收分号、≤6 字，超限契约层报错）。双人对话别放进 `layout:"canvas"` 段——整页画布没有字幕层，轮次信息只剩声音。
 
 内容段最多 7 段（≤6 段才放得下 `cta`）。字段集封闭：顶层 / 段落 / 对话轮次 / `speakers` 各层只认清单里的键，写错直接报错。
 
@@ -70,11 +70,11 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 **三问按顺序回答：这一页要不要演 → 观众应该看到什么 → 素材从哪里来。**
 
-- **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有方式 C 的 SVG 能进导演档——位图与视频只能当素材贴进画面，逐拍驱动不了它们。
-- **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。三条路线——位图（A 真实照片检索 / B ImageGen，两者同档）、C 手绘 SVG、视频（VideoGen 出片或现成 mp4/gif），统一落进 `--project` 的 `images/` 并写进同目录 `images.json`（`src` 写相对项目根的路径，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`。动笔前先读 canvas.md 的「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布（`layout:"canvas"`）再加一节「整页画布的密度与层次」。让它跟着旁白逐拍演，另读 `references/directing.md`。画完跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`；两种版式混用就给 `--layout auto`，逐文件推断档位，一次跑完）。
+- **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有方式 C 的 SVG 能进导演档——位图与视频只能当素材贴进画面。
+- **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。三条路线——位图（A 真实照片检索 / B ImageGen，同档）、C 手绘 SVG、视频（VideoGen 或现成 mp4/gif），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
+- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布再加「整页画布的密度与层次」。让它逐拍演另读 `references/directing.md`。画完跑 `python scripts/check_svg.py images/`（整页画布加 `--layout canvas --aspect ...`；混用给 `--layout auto`）。
 
-两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期会按段 warn）；**视频原声**要关掉 `muted` 才有声，且默认让路压旁白，口径见 `imagery.md`「视频素材」。走页面墙钟的运动破坏逐帧可复现——只有"运动本身携带信息"才值得用视频，固定镜头能画成 SVG 就别用视频。
+两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）；**视频原声**要关掉 `muted` 才有声，且默认让路压旁白，口径见 `imagery.md`「视频素材」。走页面墙钟的运动破坏逐帧可复现——只有"运动本身携带信息"才值得用视频，固定镜头能画成 SVG 就别用视频。
 
 ### 5. 生成 HTML、预览、检查、渲染
 
@@ -85,7 +85,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 用浏览器打开 `hf-project/index.html` 预览：默认停在首帧，点播放后时间线与音频一起走。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致、agenda 有没有行被截掉。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号）都要回头处理。
 
-**渲染前跑 `hyperframes check`**（渲染阶段本身没有自动版式检查），它的已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖（Chrome/ffmpeg 齐不齐），`snapshot --at <秒>` 按时刻取 PNG 看画面——**它是取帧工具，不是门禁**，按症状定位问题走同文件的「画面翻车速查表」。
+**渲染前跑 `hyperframes check`**（渲染阶段没有自动版式检查），已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG——**是取帧工具，不是门禁**，按症状定位走同文件「画面翻车速查表」。
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。配图是最花时间的一环，不在 `run.py` 计时里。
 

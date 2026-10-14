@@ -24,8 +24,7 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 
 - **portrait**：标题区定高（模板派生）、两行钳制，超出裁切；4:3 画布（980×735）居中，verse 钉底。标题区压到画布顶边时报 `[template] 竖屏标题区放不进`。
 - **landscape**：左文字栏固定 613px 宽，右侧槽位 1067×800。**没有行数钳制**，守卫只降字号：超 16 字降到 54px、超 22 字降到 48px；超 16 字打 `[warn]`。
-- **整页画布（`layout: "canvas"`，两画幅同一份规则）**：三层塌成一层——配图拉满（1080×1440 / 1920×1080，圆角/外发光/1px 内描边全撤），标题层与句子流层**不生成**；**不要自画满幅底板**（见 `references/canvas.md`「不铺满幅底」）。
-  文字对比度是**画布作者的责任**：`Contrast` 门禁看不见 SVG 里的字，改为生成期按文件拦——该段必须有配图，SVG 比例与图内 px 字号跟画幅对账（见 `references/canvas.md`「整页画布」「图内文字的对比度」）。进度条与底轨抬到 `z-index:2`。
+- **整页画布（`layout: "canvas"`，两画幅同一份规则）**：三层塌成一层——配图拉满（1080×1440 / 1920×1080，圆角/外发光/1px 内描边全撤），标题层与句子流层**不生成**；**不要自画满幅底板**（见 `references/canvas.md`「不铺满幅底」）。文字对比度是**画布作者的责任**：`Contrast` 门禁看不见 SVG 里的字，生成期按文件拦——该段必须有配图，SVG 比例与图内 px 字号跟画幅对账（见 `references/canvas.md`「整页画布」「图内文字的对比度」）。进度条与底轨抬到 `z-index:2`。
 
 opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agenda"` 由 pipeline 盖章）。要换成整页海报用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页只剩一张满幅配图 + 进度条。字段、行数上限、`nameTrim`、守卫阈值**以 `references/writing.md` 为准**。agenda 列撑满时牺牲行列表尾部。
 
@@ -35,24 +34,19 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 
 动画参数全部来自 `_template.py` 的 `animation` 数据：
 
-- 段落入场默认是**方向擦除（wipe）**：新卡用 clip-path 从全遮蔽补到全覆盖（时长与缓动取 `animation.segmentWipe`）。`style` 全片统一：`line`（**默认**，见下）/ `vertical` / `diagonal` / `circle`（71%）；写错档生成期报错。旧卡**不淡出**。整页画布除外（硬切）。
-- **`line` 引导线转场**：线是新卡末子，其下缘即新卡 clip-path 的揭示边；旧页随后整层剥离并挂 `.peel-shade`（参数见 `_template.py`）。`wipe` 钳到 0 时段线与剥离不生成。
-- 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`（几何档 `segmentWipe.duration`、line 档 `propLine.duration`），入场提前铺到 `win_start = s − wipe`。
+- 段落入场默认**方向擦除（wipe）**：新卡用 clip-path 从全遮蔽补到全覆盖（时长与缓动取 `animation.segmentWipe`）。`style` 全片统一：`line`（**默认**）/ `vertical` / `diagonal` / `circle`（71%）；写错档生成期报错。旧卡**不淡出**。整页画布除外（硬切）。
+- **`line` 引导线转场**：线是新卡末子，其下缘即新卡 clip-path 的揭示边；旧页随后整层剥离并挂 `.peel-shade`。`wipe` 钳到 0 时段线与剥离不生成。
+- 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`。
 - **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`）。透明卡做 wipe 会双影叠字。
-- **整页画布（`layout: "canvas"`）不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前的锚点），见 `references/directing.md`「SVG 动画：两档」。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/directing.md`「跨段接续」）。
-- title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。
-  **CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
-- verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。
-  对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）；字号/间隔走 `verse.whoFontSize` / `whoGap`。`speakers[].label` 有 6 字上限。
-  字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
-- 每段的 accent 派生一组装饰（一律经 `color-mix`）：氛围光、槽位外发光与 1px 内描边（半径 `--ctv-img-glow`）、tagline 刻度条、进度条辉光——选 accent 时注意它染整帧氛围。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
+- **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前锚点），见 `references/directing.md`「SVG 动画：两档」。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/directing.md`「跨段接续」）。
+- title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。**CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
+- verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）；`speakers[].label` 有 6 字上限。字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
+- 每段 accent 派生一组装饰（一律经 `color-mix`）：氛围光、槽位外发光与 1px 内描边（半径 `--ctv-img-glow`）、tagline 刻度条、进度条辉光——选 accent 时注意它染整帧氛围。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
 
 ### 苹果风开场（开屏 agenda 卡默认强绑定）
 
-开屏页（sid=`opening`）且为 agenda 版式时**默认强绑定**苹果风整页编排，无契约
-键、无需配置（`opening_animation` 键已随默认强绑定移除，写过旧键的稿件契约层
-会报"请删掉这个键"）。参数真源在 `_template.py` 的 `animation.opening.apple`。
+开屏页（sid=`opening`）且为 agenda 版式时**默认强绑定**苹果风整页编排，无契约键、无需配置（`opening_animation` 键已随默认强绑定移除，写过旧键的稿件契约层会报"请删掉这个键"）。参数真源在 `_template.py` 的 `animation.opening.apple`。
 
 - 整支舞按**可见窗口**（`[擦除起点, 被下一页盖住]`，不是口播段长）等比归一：收尾时刻由**标题字数与行数**共同决定（`标题字符波次尾 = stagger×(非空格字数−1) + duration`，`行内容滑入尾 = rows.content.delay + stagger×(行数−1) + duration`）；装得下走原速，装不下按 `可见窗口 ÷ 收尾时刻` 压缩，地板 0.5。
 - 光晕主光呼吸与副光漂移的时长不参与压缩，压缩只落在淡入时长与起点。
@@ -109,9 +103,9 @@ hf-project/
 
 默认值与档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写"什么时候该动它"：
 
-- `fps`：抓帧耗时与帧数线性，唯一的一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
+- `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
 - `workers`：字面透传给 `hyperframes render`，无自动校准。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
-- `quality`：五档字面透传给 CLI（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 默认（standard + CRF 16）；`draft` 省约 15%、预览够用；`delivery` 是交付档。`standard` / `high` 是裸档（不带 CRF 覆写）。
+- `quality`：五档透传（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 默认（standard + CRF 16）；`draft` 省约 15%、预览够用；`delivery` 是交付档；`standard`/`high` 是裸档。
 - **固定开销**：每调用一次约白付 8.5s，冷跑第一次多约 6s。先 `--until html` + 快照看够，再整片渲一次。
 - **低配机器（`--low-memory-mode`）**：CLI 把 worker 钉成 1（按总内存 ≤8GB 自判）：
 
@@ -119,7 +113,7 @@ hf-project/
   python scripts/run.py --source SOURCE -o OUT --quality draft --workers 1 --low-memory-mode
   ```
 
-  `--workers` 与它冲突时 **CLI 赢**，`run.py` 打一条 `[warn]`；`--no-low-memory-mode` 关自判。**容器里自判读的是宿主机总内存、不是 cgroup 限额**——小限额容器跑在大内存宿主上不会自动进低内存档，要显式 `PRODUCER_LOW_MEMORY_MODE=1`（低内存档 = 1 worker + 截图抓帧 + 关自动校准）。Chrome 启动/协议超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
+  `--workers` 与它冲突时 **CLI 赢**，`run.py` 打 `[warn]`；`--no-low-memory-mode` 关自判。**容器里自判读宿主机总内存、不是 cgroup 限额**——小限额容器跑在大内存宿主上不会自动进低内存档，要显式 `PRODUCER_LOW_MEMORY_MODE=1`（低内存档 = 1 worker + 截图抓帧 + 关自动校准）。Chrome 启动/协议超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 
 ## 官方校验命令（优先于手搓探针）
 
@@ -129,26 +123,18 @@ npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时�
 npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
 
-- `check` 会真报问题：字体栈里出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
+- `check` 会真报问题：字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - 干净产物的 `check` 基线：**Lint 12 条 warning 全是下面 6 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看**类型**不看条数：
-  - `gsap_callback_dom_measurement`（1 条）、`nested_structure_needs_subcomposition`（**每段一条**）、`timeline_track_too_dense`（1 条）、`composition_file_too_large`（1 条）：噪声。
-  - `negative_z_index`（**每条 `z-index:-1/-2` 规则一条**）：误报，Fix 就是加 `isolation: isolate`（已加）。
+  - 噪声：`gsap_callback_dom_measurement`（1 条）、`nested_structure_needs_subcomposition`（**每段一条**）、`timeline_track_too_dense`（1 条）、`composition_file_too_large`（1 条）。
+  - 误报：`negative_z_index`（**每条 `z-index:-1/-2` 规则一条**），Fix 是 `isolation: isolate`（已加）。
   - `gsap_infinite_repeat`（**开屏页才有**，1 条，默认强绑定）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
   - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
 - `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
-- Layout 的 `text_occluded` 的**判据**：句子流滚出 `.verse-clip` 的行被 `overflow:hidden` 裁掉，但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。
-  **做法**：给句子流里每个带文字的元素自己打上 `data-layout-allow-occlusion` 等三个豁免属性——检查器只认元素自己身上的标记，**不继承祖先的**，嵌一层 DOM 就多打一层（模板打在 `.verse` / `.verse-line` / `.verse-who`）。
-  **再见到它**：先 `snapshot --at <时刻>` 看画面。真被遮就调版式；画面正常就是某层漏打了那三个属性——看 `check` 报的选择器补那一层。
+- Layout 的 `text_occluded`：句子流滚出 `.verse-clip` 的行被裁掉但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。**做法**：给句子流里每个带文字的元素打 `data-layout-allow-occlusion` 等三个豁免属性——检查器只认元素自己身上的标记、**不继承祖先的**（模板已打在 `.verse` / `.verse-line` / `.verse-who`）。**再见到它**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了属性，按 `check` 报的选择器补那一层。
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
-- 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿就直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
-- **三条命令之外的口径**（CLI 写明、踩上不报错）：
-  - `validate` / `inspect` / `layout` 是**废弃别名**，用 `check`。
-  - `check` 会先跑 `lint`：迭代期单跑 `lint`，定稿再跑 `check`。
-  - `doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）。
-  - `check` 的退出码只由**持久** findings 决定。
-- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。
-- 核对时间轴用 `hyperframes timeline --json`。
-- `npx hyperframes preview --background` 起预览服务：与渲染同一条 runtime。
+- 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
+- **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` / `layout` 是**废弃别名**，用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定。
+- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`。`npx hyperframes preview --background` 起预览服务：与渲染同一条 runtime。
 
 ## 画面翻车速查表
 

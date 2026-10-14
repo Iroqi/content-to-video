@@ -42,7 +42,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
-                       crop_warnings, decompose_transform, resolve_num)
+                       decompose_transform, resolve_num)
 from _svg_sanitize import _local, _style_map  # noqa: E402  SVG DOM 的两个读法只有一份
 from _script_utils import num_fmt  # noqa: E402
 from _timeline import beat_cycles, ends_at_start

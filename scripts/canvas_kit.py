@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而不是重算一遍
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_stagger, validate_images_json)
-from _script_utils import guard_not_in_skill_dir, read_json_file  # noqa: E402
+from _script_utils import guard_not_in_skill_dir, num_fmt, read_json_file  # noqa: E402
 from _template import get_canvas, get_image_box, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
@@ -195,10 +195,7 @@ _STANDING_ADVISORY = "字面色的对比度已经按主题页底的最坏一档�
 # ── 数值与转义 ────────────────────────────────────────────────
 def _num(v):
     """坐标落进 SVG 的口径：整数值不带小数点，分数值保留三位（产物可读、diff 稳定）。"""
-    f = float(v)
-    if f == int(f):
-        return str(int(f))
-    return ("%.3f" % f).rstrip("0").rstrip(".")
+    return num_fmt(float(v), 3)
 
 
 def _attr_text(s):

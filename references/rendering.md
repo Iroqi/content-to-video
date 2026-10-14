@@ -104,7 +104,7 @@ hf-project/
 默认值与档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写"什么时候该动它"：
 
 - `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
-- `workers`：字面透传给 `hyperframes render`，无自动校准。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
+- `workers`：字面透传给 `hyperframes render`。CLI 不给时默认是 `auto`（自己按机器校准），但 `run.py` **恒显式传 `--workers`**——走本技能就永远拿不到那份自动校准，要多少显式写。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
 - `quality`：五档透传（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 默认（standard + CRF 16）；`draft` 省约 15%、预览够用；`delivery` 是交付档；`standard`/`high` 是裸档。
 - **固定开销**：每调用一次约白付 8.5s，冷跑第一次多约 6s。先 `--until html` + 快照看够，再整片渲一次。
 - **低配机器（`--low-memory-mode`）**：CLI 把 worker 钉成 1（按总内存 ≤8GB 自判）：
@@ -113,7 +113,7 @@ hf-project/
   python scripts/run.py --source SOURCE -o OUT --quality draft --workers 1 --low-memory-mode
   ```
 
-  `--workers` 与它冲突时 **CLI 赢**，`run.py` 打 `[warn]`；`--no-low-memory-mode` 关自判。**容器里自判读宿主机总内存、不是 cgroup 限额**——小限额容器跑在大内存宿主上不会自动进低内存档，要显式 `PRODUCER_LOW_MEMORY_MODE=1`（低内存档 = 1 worker + 截图抓帧 + 关自动校准）。Chrome 启动/协议超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
+  `--workers` 与它冲突时 **CLI 赢**，`run.py` 打 `[warn]`；`--no-low-memory-mode` 关自判。**容器里自判读宿主机总内存、不是 cgroup 限额**——小限额容器跑在大内存宿主上不会自动进低内存档，要显式 `PRODUCER_LOW_MEMORY_MODE=1`（低内存档 = worker 钉 1 + 截图抓帧）。Chrome 启动/协议超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 
 ## 官方校验命令（优先于手搓探针）
 
@@ -122,6 +122,8 @@ npx -y hyperframes check <项目目录>          # lint + runtime + layout + mot
 npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
 npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
+
+本节口径对着 **v0.8.158** 的 `hyperframes` 实测过（含翻 CLI 源码逐条印证豁免属性的判定方式）。CLI 迭代快，升级后先看 `--help` 再照这里改写法。
 
 - `check` 会真报问题：字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
@@ -135,10 +137,12 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：检查器只认元素**自己身上**的标记、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带，漏一层就报那一层。
   - `data-layout-allow-overflow`：**继承到子树**（感知探针向上遍历祖先），打在 `.verse`（`overflow:hidden` 所在层）一个地方就覆盖整棵子树，逐行重复写是冗余的（实测删掉行上那份，Layout 输出逐条不变）。
   - 留着 `overflow` 的理由：撤掉它，长段滚动时 `check` 会报一批 info 级 `text_box_overflow` / `container_overflow`——行滚出窗口本就是歌词式滚动的预期行为，那批 info 随段落长度线性增长、会把真正的噪声清单淹掉。代价是它顺带抑制子树内的 `text-clipping` / `content-cramped-container` / `foreground-over-panel`，这三样在 verse 里本就无意义（行天生要被窗口裁）。
-  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了 `occlusion`/`overlap`，按 `check` 报的选择器补那一层（补 `overflow` 不管用）。
+  - **同一个属性在两个阶段规则不同，别按一套写**：上面说的是 **Layout 阶段**（`layout-audit`，判 `text_occluded`/overlap 用的是元素**自己身上**的 `hasAttribute`）；**Contrast 阶段**（`contrast-audit`）的 `occlusion` 走的是 `closest()`，打任一祖先上都覆盖整棵子树。所以只用两句话：Layout 要豁免就打在报出来的那一层，Contrast 要豁免打祖先层即可；补 `overflow` 对 Layout 的 `text_occluded` 不管用。
+  - **调 `proseCoverageFloor` 优于层层打标**：成句/成段的长文本（`text_occluded` 判据里叫 prose）要被盖住超过 15% 才报，这个后验门限可以压——`npx -y hyperframes check <项目目录> --layout "proseCoverageFloor=0.05"`。原子标签（单词级的短 label）不受它保护，**沾到就算**。
+  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了 `occlusion`/`overlap`，按 `check` 报的选择器补那一层。
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
 - 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
-- **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` / `layout` 是**废弃别名**，用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定。
+- **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` 是**废弃别名**（`layout` 在新版已整个移除），都用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定；要 warning 也卡住交付，给 `--strict`。
 - 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`。`npx hyperframes preview --background` 起预览服务：与渲染同一条 runtime。
 
 ## 画面翻车速查表

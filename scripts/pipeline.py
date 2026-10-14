@@ -12,6 +12,7 @@ import hashlib
 import math
 import os
 import random
+import shlex
 import sys
 import time
 
@@ -116,15 +117,18 @@ def _parse_env_file(path):
             if k.startswith("export "):
                 k = k[len("export "):].strip()
             v = v.strip()
-            # 先剥未加引号值的行内注释（KEY=value # 说明），只认"空格 + #"，
-            # 紧贴的 #（色值、口令片段）不动；引号值取成对引号之间的内容，
-            # 闭引号之后的注释自然丢弃。顺序不能反：`KEY="x" # 注释` 若先判
-            # 成对引号会失败，剥完注释又把带引号的 "x" 交给 API → 401
+            # 引号与转义交给 shlex：手写 find(引号) 吃不下 `"a\"b"` 这类转义，
+            # 而这一步错了直接变成 401。闭引号之后的东西（行内注释 / 多余词）
+            # 理所当然地丢掉。
             if v[:1] in ("\"", "'"):
-                close = v.find(v[0], 1)
-                if close != -1:
-                    v = v[1:close]
+                try:
+                    parts = shlex.split(v)
+                except ValueError:
+                    parts = [v]      # 引号不成对：原样保留，别静默改值
+                v = parts[0] if parts else ""
             elif " #" in v:
+                # 未加引号的值才可能有行内注释；只认"空格 + #"，紧贴的 # 是值
+                # 本身（色值 `#f59e0b`、`a#b` 片段），不能动。
                 v = v.split(" #", 1)[0].rstrip()
             if k:
                 result[k] = v

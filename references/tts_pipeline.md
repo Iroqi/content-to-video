@@ -8,7 +8,6 @@
 
 - 三个默认值：全局语速默认 `1.5`（`--speed`）；开场/结尾用 `1.2`（段级 `speed` 覆盖）；句间静音默认 `0.4`（`--gap`）。
 - 四个连带：`--gap` 同时决定转场宽度（见 `references/rendering.md`「动画」）；`--speed` 变速后字幕按实测时长对齐；`--resume` 日常调试建议始终加（缓存失效条件在 help 里）；`--on-fail silence` 的句子带 `synth_failed`，正式渲染须 `--allow-degraded`（见下节）。
-- 密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取（见 `SKILL.md`「环境」）。
 
 ## 降级与补录
 

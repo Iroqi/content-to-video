@@ -64,7 +64,23 @@ _KEYFRAMES_AT = re.compile(r"@-?[a-z]*-?keyframes\b", re.I)
 
 
 def _local(tag):
+    """剥 XML 命名空间（`{ns}tag` → `tag`）；非字符串一律按空串处理。"""
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _style_map(el):
+    """inline style → {小写属性名: 值}（重复属性按后者说话，与 CSS 一致）。
+
+    错别字/空白声明（`"a:1;;b:2"`、`";color:red"`）在本层丢掉空名条目——让它们
+    落进字典会让下游 `styles.get("")` 之类的查询返回 None 而不是报错，属于把错
+    误藏远。取源码里的值之前都先 `_local` 过 k，这里不需要再剥一次命名空间。
+    """
+    out = {}
+    for decl in (el.get("style") or "").split(";"):
+        name, sep, value = decl.partition(":")
+        if sep and name.strip():
+            out[name.strip().lower()] = value.strip()
+    return out
 
 
 def _is_external_href(value):

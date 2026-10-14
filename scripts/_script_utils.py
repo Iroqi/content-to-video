@@ -59,6 +59,35 @@ def write_text_atomic(path, text):
     _atomic_replace(path, _write)
 
 
+def num_fmt(v, nd=3):
+    """数值得写成 CSS/SVG 能吃的样子：定点 nd 位再去尾零，只留一处答案。
+
+    三条规则各管一件事：
+      - 去尾零：`1.0` → `"1"`，产物可读、diff 稳定；
+      - 吃掉浮点尾巴：`0.4+0.2` 的 `0.6000000000000001` 原样进属性既难读也没更准；
+      - bool 单独转 `"1"/"0"`：走 int 分支会写成 `1.000`，进 transform 是错的。
+
+    nd 之所以是参数而不是拆成两份函数：path 的 `d` 串坐标三位小数绰绰有余
+    （帧间位移早已小于 1px），而 style/transform 上的值会跨多步叠加误差，需要
+    六位。让精度成为一次调用的选择，而不是再抄袭一个实现。
+
+    >>> num_fmt(1.0)
+    '1'
+    >>> num_fmt(0.4 + 0.2)
+    '0.6'
+    >>> num_fmt(True)
+    '1'
+    >>> num_fmt(0.0001, 6)
+    '0.0001'
+    """
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, (int, float)):
+        s = f"{float(v):.{nd}f}".rstrip("0").rstrip(".")
+        return s if s not in ("", "-") else "0"
+    return str(v)
+
+
 def sha256_file(path):
     """文件内容的 sha256。"""
     h = hashlib.sha256()

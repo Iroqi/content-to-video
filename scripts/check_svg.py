@@ -56,7 +56,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 from _path_morph import path_endpoints, path_segments, x_span, y_span
-from _svg_sanitize import _WALLCLOCK_CSS as _CSS_WALLCLOCK
+from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
+                           _local, _style_map)  # noqa: E402  与净化同一份 DOM 读法
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 from _template import (MIN_READABLE_FONT_PX, load_template,  # noqa: E401
@@ -112,19 +113,6 @@ def _bg_family(theme):
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$")
-
-
-def _local(tag):
-    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
-
-
-def _style_map(el):
-    out = {}
-    for part in (el.get("style") or "").split(";"):
-        if ":" in part:
-            k, v = part.split(":", 1)
-            out[k.strip().lower()] = v.strip()
-    return out
 
 
 def _prop(el, name):

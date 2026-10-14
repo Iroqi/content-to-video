@@ -14,19 +14,14 @@
   ("json",  文件, 点分路径)——文件里那段内嵌 JSON 模板（`_template.py` 的
   `_TEMPLATE_JSON`）里逐层下钻，如 "layout.vertical.agenda.maxRows"。
 
-为什么模板要用 "json" 而不是 "dict"：`_template.py` 把版式装在一个 r'''...''' 字符串里
-再 json.loads（为了保住 CSS 里的花括号不被 f-string 吃掉），源码里并不存在字面量
-dict。顺着真实的存储形式读，才不会读到一份和运行时不同的数据。
-
-登记标准：只登记**决策阈值**——改了它，作者的写法就得跟着变的那种数字（几何尺寸、
-告警阈值、字长上限、时间容差、版式钳制）。实测出来的观感数值（哪档字号好看、PSNR
-多少算接上了）不登记：那些是经验，改版式时连代码一起改，不构成"文档说了不算数"的
-风险。登记标准宽一点就会退化成"数字对不上的噪音源"，那就该关掉了。
-
-docs 为空列表的条目（契约已下沉到脚本、文档不再复述那个数）：只锁代码那一头。
-这不是"放松成一半"，而是下沉之后的正确形态——数字仍然有唯一真源（代码常量），
-而它的传达方式变成了脚本报错，不再是文档里的一句话。写空列表时 why 要说清
-"现在由谁告诉作者"，否则后来人会以为这里漏填了。
+登记标准（最小必要契约）：只登记**作者的决策阈值**——改了它，作者的写法就得
+跟着变的那种数字（几何尺寸、告警阈值、字长上限、时间容差、版式钳制）。以下两
+类**不登记**，它们在更近的一层自文档化：
+  - 内部实现细节（canvas_kit 的刻度比例/基线修正、check_svg 的端点容差/圆点判据、
+    局部底板明度等）：由 `canvas_kit.py` / `check_svg.py` 的报错与注释当场带出，
+    改判据不影响作者写法，不构成"文档说了不算数"的风险。
+  - 同一数字的重复表述：只在**一处权威文档**上锁（字段规范 / 版式表 / 参数表），
+    症状表、正文复述不重复上锁——数字只有一个真源，重复锁只会放大文档改动的成本。
 """
 import ast
 import json
@@ -38,12 +33,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # id, 取值方式, 期望值, 必须命中的文档与正则, 为什么它重要
 FACTS = [
+    # ── 画布几何：作者按这个尺寸出图/画 SVG，差一截就被 cover 裁掉或判比例不符 ──
     (
         "canvas-slot-vertical",
         ("json", "scripts/_template.py", "layout.vertical.image.width"), 980,
-        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|"),
-         ("references/imagery.md", r"竖屏 980×735")],
-        "槽位宽度；作者按这个尺寸出图，差一截就被 cover 裁掉",
+        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|")],
+        "槽位宽度（竖屏）；作者按 4:3 出图，差一截就被 cover 裁掉",
     ),
     (
         "canvas-slot-vertical-height",
@@ -54,10 +49,8 @@ FACTS = [
     (
         "canvas-slot-landscape",
         ("json", "scripts/_template.py", "layout.landscape.image.width"), 1067,
-        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|"),
-         ("references/imagery.md", r"横屏右侧槽位 1067×800"),
-         ("references/rendering.md", r"右侧槽位 1067×800")],
-        "横屏槽位宽度；改版式必须同步改文档里所有手写示例",
+        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|")],
+        "槽位宽度（横屏）；画布 4:3 的权威出处",
     ),
     (
         "canvas-slot-landscape-height",
@@ -69,7 +62,6 @@ FACTS = [
         "canvas-full-vertical",
         ("json", "scripts/_template.py", "canvas.vertical.width"), 1080,
         [("references/canvas.md", r"1080[×x]1440"),
-         ("references/imagery.md", r"1080[×x]1440"),
          ("SKILL.md", r"1080[×x]1440")],
         "整页画布竖屏原生宽度；照错尺寸画会被 check_svg 判比例不符",
     ),
@@ -92,6 +84,7 @@ FACTS = [
         [("references/canvas.md", r"1920[×x]1080")],
         "同上，高度",
     ),
+    # ── 素材与可读性：作者据此判断素材够不够糊、字号能不能读 ──
     (
         "upscale-warn",
         ("const", "scripts/_media_size.py", "UPSCALE_WARN"), 1.25,
@@ -108,37 +101,27 @@ FACTS = [
         "min-font-px",
         ("const", "scripts/_template.py", "MIN_READABLE_FONT_PX"), 26,
         [("references/canvas.md", r"\*\*26px 是下限\*\*")],
-        "图内字号下限的权威定义句；单一真源在 _template（三道门都读它），"
-        "作者照此定字号，改了它所有字号建议都要重算",
+        "图内字号下限的权威定义句；作者照此定字号，改了它所有字号建议都要重算",
     ),
     (
         "empty-band",
         ("const", "scripts/check_svg.py", "MAX_EMPTY_BAND"), 0.25,
         [("references/canvas.md", r"25%\s*页高")],
-        "整页画布横向空带阈值（0.25 → 文档写百分比）；调它等于改密度自查法",
+        "整页画布横向空带阈值（0.25 → 文档写百分比）",
     ),
     (
         "speaker-label-max",
         ("const", "scripts/_source_schema.py", "SPEAKER_LABEL_MAX_CHARS"), 6,
-        [("references/writing.md", r"最多\s*6\s*字"),
-         ("references/rendering.md", r"6\s*字上限")],
+        [("references/writing.md", r"最多\s*6\s*字")],
         "说话人标签上墙字长上限；超了契约层直接报错，作者必须知道这个数",
     ),
     (
         "media-duck-volume",
         ("const", "scripts/_images_schema.py", "MEDIA_DUCK_VOLUME"), 0.25,
-        [("references/imagery.md", r"让路默认\s*0\.25"),
-         ("references/rendering.md", r"让路默认\s*0\.25")],
-        "素材没写 volume 时的默认增益；两处症状表都引用这个数",
+        [("references/imagery.md", r"让路默认\s*0\.25")],
+        "素材没写 volume 时的默认增益；唯一权威出处是 imagery.md 的让路一节",
     ),
-    (
-        "media-volume-max",
-        ("const", "scripts/_images_schema.py", "MEDIA_VOLUME_MAX"), 3.98,
-        [],
-        "volume 取值上限（官方契约 +12 dB）；写高了 schema 直接拒。"
-        "契约已下沉：范围由 _images_schema 的越界报错当场带出"
-        "（`_VIDEO_AUDIO_OPTS` 里存着上下限与含义），文档不再复述这个数",
-    ),
+    # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
     (
         "default-speed",
         ("const", "scripts/_timeline.py", "DEFAULT_SPEED"), 1.5,
@@ -154,8 +137,7 @@ FACTS = [
     (
         "default-gap",
         ("const", "scripts/_timeline.py", "DEFAULT_GAP"), 0.4,
-        [("references/tts_pipeline.md", r"默认\s*`?0\.4"),
-         ("references/rendering.md", r"默认\s*0\.4\s*s")],
+        [("references/tts_pipeline.md", r"默认\s*`?0\.4")],
         "句间静音默认；直接影响转场宽度",
     ),
     (
@@ -176,9 +158,9 @@ FACTS = [
         ("const", "scripts/_timeline.py", "DURATION_TOLERANCE_RATIO"), 0.02,
         [("SKILL.md", r"2%\)"),
          ("references/rendering.md", r"max\(1s, 2%\)")],
-        "同上，相对档：长片按比例放宽。音频回落闸与成片时长闸共用这一档，"
-        "两处各写一个数就会漂移",
+        "同上，相对档：长片按比例放宽。音频回落闸与成片时长闸共用这一档",
     ),
+    # ── 写稿预算：超过直接不上画面 / 直接被拒，作者写稿时就知道 ──
     (
         "agenda-max-rows",
         ("json", "scripts/_template.py", "layout.vertical.agenda.maxRows"), 7,
@@ -204,20 +186,31 @@ FACTS = [
         "逐句告警的字长阈值",
     ),
     (
-        "min-node-major",
-        ("const", "scripts/_render_backend.py", "MIN_NODE_MAJOR"), 22,
-        [("SKILL.md", r"Node\.js\s*22\+")],
-        "渲染前置条件：Hyperframes CLI 的 engines 写死 node>=22，低了要在开跑前拦下",
-    ),
-    (
         "long-sentence-hint",
         ("const", "scripts/build_from_structured.py", "LONG_SENTENCE_HINT_CHARS"), 32,
         [("references/writing.md", r"32[–-]45\s*字")],
         "段落级 hint 的字长下界",
     ),
-    # ── 部件配方（canvas_kit 各元素的一手量）────────────────────────────
-    # 数字全部派生自模板既有键 / 模块常量，文档「部件配方」节照抄；改模板或
-    # 常量必须同步改文档那一节（🔒 标记的就是这里锁的 14 个数）。
+    # ── 环境与版式：SKILL.md 环境表与画面结构手写的数 ──
+    (
+        "min-node-major",
+        ("const", "scripts/_render_backend.py", "MIN_NODE_MAJOR"), 22,
+        [("SKILL.md", r"Node\.js\s*22\+")],
+        "渲染前置条件：Hyperframes CLI 的 engines 写死 node>=22",
+    ),
+    (
+        "tts-default-model",
+        ("const", "scripts/_tts.py", "DEFAULT_MODEL"), "mimo-v2.5-tts",
+        [("SKILL.md", r"mimo-v2\.5-tts")],
+        "TTS 默认模型；SKILL.md「环境」节写了默认值",
+    ),
+    (
+        "landscape-text-col-width",
+        ("json", "scripts/_template.py", "layout.landscape.textCol.width"), 613,
+        [("references/rendering.md", r"613px")],
+        "横屏左文字栏宽度；rendering.md「画面结构」手写同数",
+    ),
+    # ── 画布三档字号（竖屏/横屏各锁一组，label 档=刻度线长的分母）──
     (
         "canvas-tier-title-v",
         ("json", "scripts/_template.py", "layout.vertical.title.fontSize"), 64,
@@ -225,94 +218,10 @@ FACTS = [
         "画布三档字号 title 档（竖屏）；画布页没有 HTML 标题层，图内文字是唯一的字",
     ),
     (
-        "canvas-tier-body-v",
-        ("json", "scripts/_template.py", "layout.vertical.subtitle.fontSize"), 40,
-        [("references/canvas.md", r"64/40/32")],
-        "同上，body 档",
-    ),
-    (
-        "canvas-tier-label-v",
-        ("json", "scripts/_template.py", "layout.vertical.tagline.fontSize"), 32,
-        [("references/canvas.md", r"64/40/32")],
-        "同上，label 档（刻度线长按它的一半算）",
-    ),
-    (
         "canvas-tier-title-l",
         ("json", "scripts/_template.py", "layout.landscape.title.fontSize"), 62,
         [("references/canvas.md", r"62/33/28")],
         "同上，横屏 title 档",
-    ),
-    (
-        "canvas-tier-body-l",
-        ("json", "scripts/_template.py", "layout.landscape.subtitle.fontSize"), 33,
-        [("references/canvas.md", r"62/33/28")],
-        "同上，横屏 body 档",
-    ),
-    (
-        "canvas-tier-label-l",
-        ("json", "scripts/_template.py", "layout.landscape.tagline.fontSize"), 28,
-        [("references/canvas.md", r"62/33/28")],
-        "同上，横屏 label 档",
-    ),
-    (
-        "canvas-line-width-v",
-        ("json", "scripts/_template.py", "layout.vertical.progressBar.height"), 4,
-        [("references/canvas.md", r"4px · 5px")],
-        "画布线宽（竖屏）：轴线/刻度线/rule 与页面进度条同一份量",
-    ),
-    (
-        "canvas-line-width-l",
-        ("json", "scripts/_template.py", "layout.landscape.progressBar.height"), 5,
-        [("references/canvas.md", r"4px · 5px")],
-        "同上，横屏",
-    ),
-    (
-        "canvas-panel-radius-v",
-        ("json", "scripts/_template.py", "layout.vertical.image.borderRadius"), 12,
-        [("references/canvas.md", r"12px · 12px")],
-        "面板圆角（竖屏）：局部底板与槽位配图同一倒角语言",
-    ),
-    (
-        "canvas-panel-radius-l",
-        ("json", "scripts/_template.py", "layout.landscape.image.borderRadius"), 12,
-        [("references/canvas.md", r"12px · 12px")],
-        "同上，横屏",
-    ),
-    (
-        "canvas-tick-frac",
-        ("const", "scripts/canvas_kit.py", "TICK_FRAC"), 0.5,
-        [("references/canvas.md", r"label 档字号的一半")],
-        "刻度线长 = label 档字号的一半；手绘作者按它定刻度长度",
-    ),
-    (
-        "check-svg-dot-max-r",
-        ("const", "scripts/check_svg.py", "DOT_MAX_R"), 4.0,
-        [("references/canvas.md", r"4px 的圆算")],
-        "端点落点检查里“圆点”的半径上限；r≤4 按点算，线头可根在圆盘上",
-    ),
-    (
-        "check-svg-end-tol-frac",
-        ("const", "scripts/check_svg.py", "END_TOL_FRAC"), 0.004,
-        [("references/canvas.md", r"画幅短边 4‰")],
-        "端点落点容差的画幅比例档；改判据必须同步改文档口径",
-    ),
-    (
-        "check-svg-end-tol-min",
-        ("const", "scripts/check_svg.py", "END_TOL_MIN"), 2.0,
-        [("references/canvas.md", r"至少 2px")],
-        "同上，绝对下限档（短画幅不按比例放大到不足 2px）",
-    ),
-    (
-        "landscape-text-col-width",
-        ("json", "scripts/_template.py", "layout.landscape.textCol.width"), 613,
-        [("references/rendering.md", r"613px")],
-        "横屏左文字栏宽度；rendering.md「画面结构」手写同数，改版式必须同步改文档",
-    ),
-    (
-        "tts-default-model",
-        ("const", "scripts/_tts.py", "DEFAULT_MODEL"), "mimo-v2.5-tts",
-        [("SKILL.md", r"mimo-v2\.5-tts")],
-        "TTS 默认模型；SKILL.md「环境」节写了默认值，改默认模型必须同步文档",
     ),
 ]
 
@@ -399,10 +308,7 @@ def main():
     if problems:
         print("\n数字契约漂移 %d 处。改代码就改文档，别只改一边。" % len(problems))
         return 1
-    locked_docs = sum(1 for f in FACTS if f[3])
-    sunk = len(FACTS) - locked_docs
-    print("数字契约一致：%d 条代码常量全部等于登记值（%d 条另锁文档说法，%d 条契约已下沉、"
-          "由脚本报错当场带出）。" % (len(FACTS), locked_docs, sunk))
+    print("数字契约一致：%d 条决策阈值全部等于登记值，文档表述均在场。" % len(FACTS))
     return 0
 
 

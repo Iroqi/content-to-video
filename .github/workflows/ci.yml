@@ -30,16 +30,14 @@ jobs:
         run: python -m unittest discover -s tests -v
         timeout-minutes: 5
 
-      - name: Doc cross-reference check
-        run: python tests/check_docs.py
-
-      # 文档里的数字是代码常量的复制品。这一步让"改常量忘了改文档"当场失败，
-      # 而不是等某天两个人拿着不同的阈值做决策。check_docs 管"指向哪"，
-      # 它管不了"是几"。
-      - name: Number contract check
-        run: python tests/check_numbers.py
-
-      # 文档里的示例必须真能跑。示例退化成"看起来对"的那天，读者要自己再撞一遍
-      # 当初试错撞出来的坑——那笔账比一条CI 检查贵得多。
-      - name: Doc example check
-        run: python tests/check_examples.py
+      # 三道文档契约检查（cross-refs · numbers · examples）都是"文档与代码
+      # 是否还诚实"的同一件事，并成一步；本地维护者跑法相同：
+      #   check_docs   ——「指向哪」：章节交叉引用有没有悬空、文档有没有重新膨胀
+      #   check_numbers——「是几」：文档里的数字必须等于代码常量（决策阈值最小集）
+      #   check_examples——「能不能跑」：文档示例退化成"看起来对"的那天，读者要
+      #                    自己再撞一遍当初试错撞出来的坑
+      - name: Doc contracts
+        run: |
+          python tests/check_docs.py
+          python tests/check_numbers.py
+          python tests/check_examples.py

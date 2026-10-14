@@ -163,25 +163,6 @@
 - **数信息单元**：一页有几个独立可看的东西（一块图、一行结论、一组标注各算一个）？**少于 3 个就别当整页画布做**——那它本质是字卡，按海报重写，或退回槽位版式。
 - **导演页还要看"起始帧"**：前 1 秒画面是空的，而整页画布**没有转场遮这一下**（见 `references/rendering.md`「动画」）。只要不铺满幅底，第一帧至少不是死平一块色；把**结构底**（坐标轴、外框、分隔带、面板格子）不写进 `director.steps`，让它和页面同时到位、只逐拍长"内容"，或把第一拍放在 `at_time` 0.1s。
 
-### 部件配方：canvas_kit 各元素的一手量从哪来
-
-手工画整页 SVG 时照这组配方取值。改它们要连带改每一处，下表带 🔒 的数字与代码常量是一份：
-
-| 部件 | 配方（竖屏 / 横屏） | 真源 |
-|---|---|---|
-| 三档字号 title/body/label 🔒 | 64/40/32 px · 62/33/28 px | 模板 `layout.<画幅>.{title,subtitle,tagline}.fontSize` |
-| 线宽（轴线/刻度线/rule）🔒 | 4px · 5px | 模板 `layout.<画幅>.progressBar.height` |
-| 面板圆角 🔒 | 12px · 12px | 模板 `layout.<画幅>.image.borderRadius` |
-| 局部底板明度台阶 | 页底中段往文字色偏 14% | `canvas_kit.PLATE_FRAC` |
-| 次要文字压暗 | 文字色往页底压 60%，再按 ≥7:1 兜底 | `canvas_kit.DIM_FRAC` / `DIM_CONTRAST_TARGET` |
-| 轴线/刻度线明度 | 比次要文字再暗一档（0.45），下限 ≥3:1 | `canvas_kit.LINE_FRAC` / `LINE_CONTRAST_FLOOR` |
-| 刻度线长 🔒 | label 档字号的一半（16px · 14px） | `canvas_kit.TICK_FRAC` |
-| 竖排刻度 label 基线修正 | 字身中线对齐刻度（0.35 档字号） | `canvas_kit.TEXT_BASE_FRAC` |
-| 圆点判据 🔒 | r ≤ 4px 的圆算"点" | `check_svg.DOT_MAX_R` |
-| 端点落点容差 🔒 | 画幅短边 4‰、至少 2px | `check_svg.END_TOL_FRAC` / `END_TOL_MIN` |
-
-两处不给"配方"：**坐标与构图**（x/y/w/h 全由 spec 给，脚本不做自动布局），以及 **`tier` 只有三档**（别写不存在的小数档）。
-
 ### 数据图的几何自查
 
 手绘数据图（柱状、折线、饼环、散点、时间轴）里**长度/角度/坐标本身就是数据**，而这条错误链上没有任何检查看得到：

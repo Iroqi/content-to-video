@@ -835,7 +835,7 @@ def beat_report_lines(images, segments, dflt_dur):
 
 
 def director_prepare(images, segments, out_dir):
-    """方式 C SVG「导演」编排的生成期体检 + 净化内联，返回 (错误, 警告)。
+    """SVG「导演」编排的生成期体检 + 净化内联，返回 (错误, 警告)。
 
     写了 director 的条目才走这条路：读盘 → 净化（_svg_sanitize 去掉 script/on*/
     外链/SMIL/墙钟动画，root 改成 cover 语义）→ 回填 entry["inline_svg"]，渲染端

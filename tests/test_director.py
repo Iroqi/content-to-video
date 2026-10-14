@@ -1,4 +1,4 @@
-"""方式 C SVG「导演」（时间轴同步动画）：净化、schema、渲染、生成期门禁的回归。"""
+"""SVG「导演」（时间轴同步动画）：净化、schema、渲染、生成期门禁的回归。"""
 import os
 import tempfile
 import unittest

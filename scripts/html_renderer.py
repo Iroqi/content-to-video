@@ -1037,7 +1037,7 @@ def _cycle_js(step):
 
 
 def _director_timeline_lines(rc, card):
-    """方式 C SVG「导演」补间：把 images.json 的 director.steps 展开成挂在同一条
+    """SVG「导演」补间：把 images.json 的 director.steps 展开成挂在同一条
     时间线上的 GSAP 补间，位置取自该段旁白的句子（可为句内小数偏移）——于是图内
     元素的状态变化、描边生长、运镜都和口播对齐，且因为是时间线属性补间（非墙钟），
     逐帧 seek 完全可复现。

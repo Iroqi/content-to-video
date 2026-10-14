@@ -63,7 +63,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 
 - 画布尺寸与配图规格见 `references/imagery.md`（第 4 步规则以它为准）；素材一律 `cover` 铺满画布。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片）。
-- **方式 C SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `directing.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
+- **SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `directing.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
 
 ## HTML 预览与渲染
 

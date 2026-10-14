@@ -53,8 +53,8 @@ def validate_relative_project_path(src, where):
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director：方式 C SVG 的"时间轴同步动画"编排（见 references/directing.md
-    # 方式 C「SVG 动画：两档」）。写了它这张 SVG 才走净化内联，否则仍是 <img>。
+    # director：SVG 的"时间轴同步动画"编排（见 references/directing.md
+    # 「SVG 动画：两档」）。写了它这张 SVG 才走净化内联，否则仍是 <img>。
     "director",
     # stage："keep" = 跨段场景延续（persistent stage，见 _stage_carry）。写在**接续页**
     # 上：本页画面从上一页演完的样子起跑。只有这一个取值，所以是枚举而不是布尔——
@@ -738,7 +738,7 @@ def _check_provenance(key, value):
 
 
 def _check_director(key, value, src):
-    """director：方式 C SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
+    """director：SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
     没有可被 GSAP 逐帧驱动的图内命名元素）。"""
     if "director" not in value:
         return

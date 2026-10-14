@@ -157,5 +157,5 @@ def upscale_note(src, size, box):
     return (f"{src} 只有 {sw}×{sh} 像素，铺进 {bw}×{bh} 要放大 {scale:.2f} 倍"
             + ("（糊到细节基本没了）——" if _severe else "（会软一点）——")
             + f"换成 ≥ {bw}×{bh} 的素材"
-            + ("，或改走方式 C 手绘 SVG（矢量放大不失真）。"
-               if _severe else "；内容是数据/结构就改走方式 C 手绘 SVG。"))
+            + ("，或改走手绘 SVG（矢量放大不失真）。"
+               if _severe else "；内容是数据/结构就改走手绘 SVG。"))

@@ -385,8 +385,8 @@ def main():
     _run_step(pipeline.main, tts_args, "TTS")
 
     # ── 第 4 步：配图 ─────────────────────────────────────────────
-    # 配图不由本脚本产出：agent 在第 4 步用 ImageGen 生图（方式 B）、
-    # 手绘 SVG 矢量示意（方式 C），落进 images/ 并把映射写进 images.json。
+    # 配图不由本脚本产出：agent 在第 4 步用 ImageGen 生图、
+    # 手绘 SVG 矢量示意，落进 images/ 并把映射写进 images.json。
     # run.py 只负责统计这份映射的覆盖率，并只在真要渲染时拦缺图
     # （--until html 只警告）。
     # 文件名与 pipeline 写侧同源（MANIFEST_FILENAME）：各拼一遍的话，改一侧
@@ -456,7 +456,7 @@ def main():
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
               "请按第 4 步补图：ImageGen 生图（位图）、手绘 SVG 矢量示意图"
-              "（方式 C），把文件放进 "
+              "，把文件放进 "
               f"{images_dir}。\n"
               f"然后在 {images_json} 写好各段映射后重跑本命令。",
               file=sys.stderr)

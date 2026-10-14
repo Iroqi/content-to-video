@@ -333,8 +333,10 @@ body{font-family:var(--ctv-font-family)}
   <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
     <div class="bg"></div>
     <div class="grid"></div>
-    <div class="agenda-col">
-      <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40">本期内容</div></div>
+    <div class="agenda-col" data-opening-anim="apple">
+    <div class="apple-halo" id="halo-opening"></div>
+    <div class="apple-glow" id="glow-opening"></div>
+      <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:96px;text-shadow:0 0 48px #2dd4bf40"><span class="t-ch">本</span><span class="t-ch">期</span><span class="t-ch">内</span><span class="t-ch">容</span></div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
     
     <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf" style="--ctv-verse-who-color:#2dd4bf"><div class="verse-line" data-i="0" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion>大家好，今天聊两件事。</div></div></div>
@@ -398,7 +400,13 @@ window.__timelines = window.__timelines || {};
 const tl = gsap.timeline({paused:true});
 tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},0.00)
   tl.fromTo("#line-opening",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},0.00)
-  tl.from("#title-opening",{scale:0.5,duration:0.25,ease:"back.out(1.7)"},0.00)
+  tl.fromTo("#halo-opening",{opacity:0},{opacity:0.50,duration:1.20,ease:"sine.out"},0.00)
+  tl.to("#halo-opening",{opacity:0.32,duration:1.30,repeat:-1,yoyo:true,ease:"sine.inOut"},1.20)
+  tl.fromTo("#glow-opening",{opacity:0},{opacity:0.50,duration:0.30,ease:"sine.out"},0.00)
+  tl.to("#glow-opening",{x:90,y:60,scale:1.35,opacity:0.28,duration:2.60,repeat:-1,yoyo:true,ease:"sine.inOut"},0.30)
+  tl.from("#opening .t-ch:not(.t-sp)",{opacity:0,y:18,scale:1.04,filter:"blur(12px)",duration:0.55,stagger:0.04,ease:"power3.out"},0.00)
+  tl.from("#opening .agenda-row .ag-idx",{opacity:0,scale:1.25,filter:"blur(6px)",duration:0.45,stagger:0.12,ease:"power2.out"},0.15)
+  tl.from("#opening .agenda-row .ag-name",{opacity:0,x:10,duration:0.55,stagger:0.12,ease:"power2.out"},0.30)
   tl.to("#prog-opening",{width:"100%",duration:2.00,ease:"none"},0.00)
   tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},2.00)
   tl.fromTo("#line-seg-a",{y:1080.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},2.00)

@@ -6,6 +6,11 @@
 里的同类引用（references 前缀可省略，裸文件名按 references/ → 根目录解析）。
 改标题、瘦身 SKILL.md 之后跑一次，能抓住"引用了已经不存在的章节"。
 
+术语表锁：别称清单**内联**在这里（曾用 references/glossary.md 登记，术语表
+文件已随"各文档一致化"删除——一致化的成果就是正文只用规范词，锁只保留防
+回潮的扫描，不保留第二份文档）。别称出现在正文里就是术语漂移，一义一词
+靠这个锁住。
+
 顺带量一次 SKILL.md 的行数：它是每次调用必然整份进上下文的那一份，超出上限
 说明细节又爬回主文档了，该下沉到 references/。
 
@@ -22,11 +27,17 @@ REF = re.compile(
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
 # references/ 的 H1 模板：`第 N 步 · 主题`（N ∈ 2..6，步骤文档都带这一步号）。
-# 术语表是唯一例外，它的 H1 是「术语表」。锁模板是为了不让下一份新文档自创
-# 「第 N 步深度参考：…」之类的第二套——第 4 步三份与第 2/3/5 步三份曾经就是
-# 两套模板并存，读者对不上"哪份是第几步的正文"。
+# 锁模板是为了不让下一份新文档自创「第 N 步深度参考：…」之类的第二套——第 4 步
+# 三份与第 2/3/5 步三份曾经就是两套模板并存，读者对不上"哪份是第几步的正文"。
 H1_REF = re.compile(r"^# 第 [2-6] 步 · ")
-GLOSSARY_REL = os.path.join("references", "glossary.md")
+
+# 术语表锁（内联，原 glossary.md 的别称列）：别称只允许出现在正文之外，其它
+# 文件再用就是漂移。词边界匹配（前后都不是中文字符/字母数字）：「整页画布段」
+# 不算用了别称「画布段」（后者是前者的简称，正文一律写完整形式）；单独出现
+# 才报。规范词列（槽位/方式 C/整页画布/导演档/句子流）是正文唯一允许的写法，
+# 不需要在这里登记。
+ALIASES = ("图栏", "配图框", "C 路线", "画布段", "canvas 段",
+           "导演模式", "director 编排", "字幕带")
 
 
 def _target_path(matched):
@@ -52,28 +63,6 @@ def headings(path):
 def skill_md_lines():
     with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
         return sum(1 for _ in f)
-
-
-def glossary_aliases():
-    """从术语表读「别称（一律改用规范词）」列。别称只允许出现在 glossary 自身，
-    其它文件再用就是术语漂移——一义一词靠这个锁住。"""
-    path = os.path.join(ROOT, GLOSSARY_REL)
-    aliases = []
-    with open(path, encoding="utf-8") as f:
-        for ln in f:
-            if not ln.lstrip().startswith("|"):
-                continue
-            parts = [p.strip() for p in ln.strip().strip("|").split("|")]
-            if len(parts) < 2:
-                continue
-            alias_col = parts[1]
-            if alias_col.startswith("别称") or not alias_col or alias_col == "---":
-                continue
-            for a in re.split(r"[、，,]", alias_col):
-                a = a.strip()
-                if a:
-                    aliases.append(a)
-    return aliases
 
 
 # SKILL.md 是每次调用**必然整份进上下文**的那一份，所以它的重量直接等于起步
@@ -109,22 +98,18 @@ def main():
             hs = cache.setdefault(target, headings(target))
             if not any(name in h for h in hs):
                 bad.append((src, os.path.relpath(target, ROOT), name, "没有标题包含该章节名"))
-    # 术语表锁：别称只能活在 glossary 自身，其它文件再用就是漂移。
+    # 术语表锁（内联 ALIASES）：别称出现在正文里就是漂移。
     # 词边界匹配（前后都不是中文字符/字母数字）：「整页画布段」不算用了别称
     # 「画布段」（后者是前者的简称，正文一律写完整形式）；单独出现才报。
-    for alias in glossary_aliases():
+    for alias in ALIASES:
         pat = re.compile(r"(?<![\w\u4e00-\u9fff])" + re.escape(alias) + r"(?![\w\u4e00-\u9fff])")
         for src in sorted(sources):
-            if src == os.path.join(ROOT, GLOSSARY_REL):
-                continue
             with open(src, encoding="utf-8") as f:
                 text = f.read()
             if pat.search(text):
-                bad.append((src, GLOSSARY_REL, alias, "用了术语表登记的别称，改回规范词"))
-    # H1 模板锁：步骤文档的 H1 必须长成 `第 N 步 · 主题`（术语表除外）
+                bad.append((src, "术语表锁", alias, "用了登记的别称，改回规范词"))
+    # H1 模板锁：步骤文档的 H1 必须长成 `第 N 步 · 主题`
     for ref in sorted(glob.glob(os.path.join(ROOT, "references", "*.md"))):
-        if os.path.relpath(ref, ROOT) == GLOSSARY_REL:
-            continue
         with open(ref, encoding="utf-8") as f:
             first = f.readline().strip()
         if not H1_REF.match(first):

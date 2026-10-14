@@ -42,35 +42,37 @@ class SourceValidation(unittest.TestCase):
         s["closing_text"] = "拼错的结尾键"
         bad(SRC.validate_segments_source, s, contains="closing_text")
 
-    def test_opening_animation_apple_accepted(self):
-        SRC.validate_segments_source(dict(H.sample_source(), opening_animation="apple"))
+    def test_opening_animation_key_is_removed(self):
+        """开屏页默认强绑定苹果风开场：`opening_animation` 键已从契约移除。
 
-    def test_opening_animation_unknown_value_rejected(self):
+        写了旧键 = 报错并带指引（而不是泛化的"未知键"）——字段集封闭时多出的
+        键本来就报错，这里把报错信息写成"默认强绑定"的迁移指引。
+        """
+        bad(SRC.validate_segments_source,
+            dict(H.sample_source(), opening_animation="apple"),
+            contains="默认强绑定")
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_animation="glow"),
             contains="opening_animation")
-
-    def test_opening_animation_bad_type_rejected(self):
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_animation=True),
             contains="opening_animation")
-
-    def test_opening_animation_on_canvas_layout_is_rejected(self):
-        """开场编排只对 agenda 卡生效——`opening_layout:"canvas"` 那一页没有它的舞台。
-
-        证伪：取值那一层是校验过的，但"这一页会不会真长出 agenda 卡的 DOM"要看
-        opening_layout。画布那一页只有一张图，标题层、行列表、光晕的宿主全都不生成，
-        "apple" 会整支舞静默退回静态海报——writing.md 承诺了这种组合会被拒。
-        """
+        # 旧键 + canvas 组合同样被拦（键已不存在，写 canvas 只有版式生效）
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_layout="canvas",
                  opening_animation="apple"),
             contains="opening_animation")
 
     def test_opening_animation_still_ok_on_agenda_layout(self):
-        """显式写 agenda（=缺省那一档）不受这条限制：那一页确实是 agenda 卡。"""
-        SRC.validate_segments_source(dict(H.sample_source(), opening_layout="agenda",
-                                          opening_animation="apple"))
+        """显式写 agenda（=缺省那一档）不受这条限制：那一页确实是 agenda 卡。
+
+        旧键 + 显式 agenda 仍被拦（键已移除）；这条保留是为了守住"agenda 版式
+        本身合法"——报错来自旧键、不是来自版式。
+        """
+        bad(SRC.validate_segments_source,
+            dict(H.sample_source(), opening_layout="agenda",
+                 opening_animation="apple"),
+            contains="opening_animation")
 
     def test_unknown_segment_key_rejected(self):
         s = H.sample_source()
@@ -184,25 +186,26 @@ class ManifestValidation(unittest.TestCase):
     def test_built_manifest_ok(self):
         MAN.validate_timing_manifest(H.make_manifest())
 
-    def test_manifest_opening_animation_flows_through_build_parts(self):
-        """source 的 opening_animation 应原样出现在 manifest 的 opening 段上。"""
+    def test_manifest_has_no_opening_animation_key(self):
+        """开屏页默认强绑定：manifest 不再透传 opening_animation 键。
+
+        build_parts 不再把 source 的旧键带进 manifest；即使手写 manifest 硬塞，
+        契约层按未知字段拦（报错信息含键名，且不再有专属的"只属于开屏"分支）。
+        """
         m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
         opening = next(s for s in m["segments"] if s["id"] == "opening")
-        self.assertEqual(opening.get("opening_animation"), "apple")
+        self.assertNotIn("opening_animation", opening)
         MAN.validate_timing_manifest(m)
-
-    def test_manifest_opening_animation_scoped_to_opening(self):
-        """内容段/结尾带 opening_animation = 渲染端根本不读，契约层报对。"""
-        for sid in ("seg-a", "closing"):
+        # 手写 manifest 硬塞旧键：任何段都按未知字段拦
+        for sid in ("opening", "seg-a", "closing"):
             with self.subTest(sid=sid):
-                m = H.make_manifest()
-                self._seg(m, sid)["opening_animation"] = "apple"
-                bad(MAN.validate_timing_manifest, m, contains="只属于开屏")
-
-    def test_manifest_opening_animation_value_validated(self):
-        m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
-        self._seg(m, "opening")["opening_animation"] = "glow"
-        bad(MAN.validate_timing_manifest, m, contains="opening_animation")
+                m2 = H.make_manifest()
+                self._seg(m2, sid)["opening_animation"] = "apple"
+                bad(MAN.validate_timing_manifest, m2, contains="opening_animation")
+        # 旧值非法也一样走未知字段（值校验分支已随键一起移除）
+        m3 = H.make_manifest()
+        self._seg(m3, "opening")["opening_animation"] = "glow"
+        bad(MAN.validate_timing_manifest, m3, contains="opening_animation")
 
     def _seg(self, m, sid="seg-a"):
         return next(s for s in m["segments"] if s["id"] == sid)

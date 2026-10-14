@@ -48,13 +48,15 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
   字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
 - 每段的 accent 派生一组装饰（一律经 `color-mix`）：氛围光、槽位外发光与 1px 内描边（半径 `--ctv-img-glow`）、tagline 刻度条、进度条辉光——选 accent 时注意它染整帧氛围。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
 
-### 苹果风开场（`opening_animation: "apple"`）
+### 苹果风开场（开屏 agenda 卡默认强绑定）
 
-开屏 agenda 卡的整页编排。取值见 `references/writing.md` 的 `opening_animation`，参数在 `_template.py`。
+开屏页（sid=`opening`）且为 agenda 版式时**默认强绑定**苹果风整页编排，无契约
+键、无需配置（`opening_animation` 键已随默认强绑定移除，写过旧键的稿件契约层
+会报"请删掉这个键"）。参数真源在 `_template.py` 的 `animation.opening.apple`。
 
-- 整支舞按**可见窗口**（`[擦除起点, 被下一页盖住]`，不是口播段长）等比归一：收尾时刻 = `rows.delay + stagger×(行数−1) + duration`；装得下走原速，装不下按 `可见窗口 ÷ 收尾时刻` 压缩，地板 0.5。
-- 光晕呼吸的时长不参与压缩，压缩只落在淡入时长与呼吸起点。
-- 装不下时打 `[warn]`（可见窗口、需要的时长、行数），症状见「画面翻车速查表」。
+- 整支舞按**可见窗口**（`[擦除起点, 被下一页盖住]`，不是口播段长）等比归一：收尾时刻由**标题字数与行数**共同决定（`标题字符波次尾 = stagger×(非空格字数−1) + duration`，`行内容滑入尾 = rows.content.delay + stagger×(行数−1) + duration`）；装得下走原速，装不下按 `可见窗口 ÷ 收尾时刻` 压缩，地板 0.5。
+- 光晕主光呼吸与副光漂移的时长不参与压缩，压缩只落在淡入时长与起点。
+- 装不下时打 `[warn]`（可见窗口、需要的时长、行数与字数），症状见「画面翻车速查表」。
 - 锚点是**擦除起点 `win_start`** 而不是段起点。
 
 ## 版式真源
@@ -131,7 +133,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 - 干净产物的 `check` 基线：**Lint 12 条 warning 全是下面 6 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看**类型**不看条数：
   - `gsap_callback_dom_measurement`（1 条）、`nested_structure_needs_subcomposition`（**每段一条**）、`timeline_track_too_dense`（1 条）、`composition_file_too_large`（1 条）：噪声。
   - `negative_z_index`（**每条 `z-index:-1/-2` 规则一条**）：误报，Fix 就是加 `isolation: isolate`（已加）。
-  - `gsap_infinite_repeat`（**只有 `opening_animation: "apple"` 的稿才有**，1 条）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
+  - `gsap_infinite_repeat`（**开屏页才有**，1 条，默认强绑定）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
   - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
 - `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
 - Layout 的 `text_occluded` 的**判据**：句子流滚出 `.verse-clip` 的行被 `overflow:hidden` 裁掉，但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。

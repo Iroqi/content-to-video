@@ -424,13 +424,13 @@ class AgendaTitleShrink(unittest.TestCase):
 
 
 class AppleOpening(unittest.TestCase):
-    """opening_animation:"apple" 的 v2 苹果风开场编排：主/副双光斑 + 标题逐字浮出
-    + kicker 字距展开 + agenda 行两拍（编号先行、内容滑入），取代通用标题入场；
-    不写该键时开屏维持原状（回归网）。"""
+    """开屏 agenda 卡**默认强绑定**的 v2 苹果风开场编排：主/副双光斑 + 标题逐字
+    浮出 + kicker 字距展开 + agenda 行两拍（编号先行、内容滑入），取代通用标题
+    入场。作者不写任何键即生效（契约键已随默认强绑定移除）。"""
 
     def _render_apple(self):
-        s = dict(H.sample_source(), opening_animation="apple",
-                 opening_tagline="AI WEEKLY")
+        # 注意：这里刻意**不写** opening_animation——默认强绑定，无键即开启。
+        s = dict(H.sample_source(), opening_tagline="AI WEEKLY")
         m = H.make_manifest(s)
         with contextlib.redirect_stderr(io.StringIO()):
             return generate_html(m, "audio/combined.wav",
@@ -439,7 +439,7 @@ class AppleOpening(unittest.TestCase):
 
     def test_apple_opening_emits_choreography(self):
         html = self._render_apple()
-        # 主光晕元素 + 副光斑元素 + 编排标记
+        # 主光晕元素 + 副光斑元素 + 编排标记（无键也生成）
         self.assertIn('class="apple-halo" id="halo-opening"', html)
         self.assertIn('class="apple-glow" id="glow-opening"', html)
         self.assertIn('data-opening-anim="apple"', html)
@@ -471,20 +471,24 @@ class AppleOpening(unittest.TestCase):
         self.assertNotIn('tl.fromTo("#halo-closing"', html)
         self.assertNotIn('id="glow-closing"', html)
 
-    def test_static_opening_unchanged_without_the_key(self):
-        """不写 opening_animation = 静态开场：没有 halo/glow 元素、标题不拆字、
-        编排不生成，通用入场照旧。
+    def test_canvas_opening_has_no_text_choreography(self):
+        """开屏页写 canvas 版式（整页海报）= 无文本编排：没有 halo/glow 元素、
+        标题不拆字、编排不生成，通用标题入场也没有（画布页连标题层都不渲染）。
 
-        样式骨架里的 .apple-halo / .apple-glow / .t-ch 规则是静态 CSS（与
-        .reveal-line 同类：只在对应特性启用时被 DOM 引用），所以这里查元素与
-        编排、不查样式表。
+        默认强绑定只覆盖 agenda 版式——canvas 开屏页只有一张图，agenda 的 DOM
+        都不生成，苹果风整支舞无处可演。
         """
-        html = render(**CASES["portrait_dark"])
+        s = dict(H.sample_source(), opening_layout="canvas")
+        m = H.make_manifest(s)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
         self.assertNotIn('class="apple-halo"', html)
         self.assertNotIn('class="apple-glow"', html)
-        self.assertNotIn("data-opening-anim", html)
         self.assertNotIn('class="t-ch"', html)
-        self.assertIn('tl.from("#title-opening",{scale:0.5', html)
+        self.assertNotIn("data-opening-anim", html)
+        self.assertNotIn('tl.from("#title-opening"', html)
 
 
 def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
@@ -500,7 +504,7 @@ def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
                                "start_time": round(t, 3), "duration": seg_dur}]}
 
     segs = [{"id": "opening", "title": "开场", "tagline": "AI WEEKLY",
-             "layout": "agenda", "opening_animation": "apple",
+             "layout": "agenda",
              "sentences": [{"index": 0, "text": "大家好。",
                             "start_time": 0.0, "duration": open_dur}]}]
     t = open_dur + gap
@@ -518,10 +522,10 @@ def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
 class AppleOpeningBudget(unittest.TestCase):
     """苹果风开场按可见窗口等比归一：短开场装不下时不静默丢尾巴。
 
-    这支舞的收尾时刻由**标题字数与 agenda 行数**共同决定（标题逐字 stagger 波次
-    与最后一行内容滑入），而它能用的时长是开屏页的可见窗口。两者原本不挂钩，
-    于是短开场会静默丢掉最后几行/几个字——那是在页面已被下一页盖住之后才
-    落定的，日志一声不吭。
+    开屏 agenda 卡默认强绑定这套编排（无契约键），这支舞的收尾时刻由**标题
+    字数与 agenda 行数**共同决定（标题逐字 stagger 波次与最后一行内容滑入），
+    而它能用的时长是开屏页的可见窗口。两者原本不挂钩，于是短开场会静默丢掉
+    最后几行/几个字——那是在页面已被下一页盖住之后才落定的，日志一声不吭。
     """
 
     def _render(self, open_dur, n_rows, gap=0.4):
@@ -604,7 +608,7 @@ class AppleOpeningBudget(unittest.TestCase):
         self.assertAlmostEqual(self._k(html), 0.5, delta=0.02)
         self.assertIn("可见窗口", err)
         self.assertIn("地板", err)
-        for advice in ("opening", "内容段数", "opening_animation"):
+        for advice in ("opening", "内容段数", "opening_layout"):
             self.assertIn(advice, err)
 
     def test_more_rows_need_more_room(self):
@@ -644,18 +648,21 @@ class AppleOpeningBudget(unittest.TestCase):
         # 有 kicker 时收尾由 kicker 支配；没它时由行支配，都装得下
         self.assertEqual(self._k(html), 1.0)
 
-    def test_static_opening_gets_no_budget_at_all(self):
-        """不写 opening_animation 的静态开场不受这套预算影响——
-        通用入场的归一化仍归 entranceBudget，两条路互不干涉。"""
+    def test_canvas_opening_gets_no_budget_at_all(self):
+        """开屏页写 canvas 版式（整页海报）= 无文本编排，不受这套预算影响——
+        默认强绑定只覆盖 agenda 版式，画布页连 halo/agenda 的 DOM 都不生成。
+        两条路互不干涉。"""
         m = _apple_manifest(1.0, 7)
         for sg in m["segments"]:
-            sg.pop("opening_animation", None)
+            if sg["id"] == "opening":
+                sg["layout"] = "canvas"
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             html = generate_html(m, "audio/combined.wav", theme="dark",
                                  aspect="portrait",
                                  images={f"seg{i}": {"src": f"images/seg{i}.png"}
-                                         for i in range(1, 8)})
+                                         for i in range(1, 8)}
+                                 | {"opening": {"src": "images/opening.png"}})
         self.assertNotIn('class="apple-halo" id="halo-opening"', html)
         self.assertNotIn('class="apple-glow" id="glow-opening"', html)
         self.assertNotIn("data-opening-anim", html)

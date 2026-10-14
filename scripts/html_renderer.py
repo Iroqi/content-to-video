@@ -795,10 +795,11 @@ def _prepare_card(rc, clip):
     # 库调用方仍带映射时这里也强制忽略。
     layout = seg_layout(seg)
     is_agenda = layout == "agenda"
-    # 苹果风开场：只对开屏 agenda 卡生效（opening_animation 取值已由契约层把守，
-    # 渲染端只认 "apple"）。其他段/其他值一律不进入这条编排——静态开场是缺省。
-    apple_opening = (sid == "opening" and is_agenda
-                     and seg.get("opening_animation") == "apple")
+    # 苹果风开场：开屏页（sid="opening"）且是 agenda 版式时**默认强绑定**——
+    # 不读任何可配置键（opening_animation 已随默认强绑定从契约移除，见
+    # _source_schema）。closing 页与内容段不进入这条编排；开屏页写 canvas
+    # 版式（整页海报）时同样没有文本编排（agenda 的 DOM 都不生成）。
+    apple_opening = sid == "opening" and is_agenda
     has_image = (sid in rc.images) and not is_agenda
     # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
@@ -1247,18 +1248,19 @@ def _apple_opening_budget(rc, card):
         raw = card.vis / need
         k = max(raw, bud["minFactor"])
         if raw < bud["minFactor"]:
-            print(f"[warn] 开屏（opening_animation:\"apple\"）的可见窗口 "
+            print(f"[warn] 开屏（苹果风开场，默认强绑定）的可见窗口 "
                   f"{card.vis:.2f}s 装不下整支开场动画（{need:.2f}s，"
                   f"{n} 行 agenda、{n_chars} 字标题）：已压到地板 "
                   f"{bud['minFactor']:.0%}，收尾仍会被下一页切走。"
                   "把 opening 写长一点（建议说完主题 + 为什么值得看，2.5s 以上）"
-              "、减少内容段数，或不写 opening_animation 退回静态开场。",
+                  "、减少内容段数，或把 opening_layout 写成 \"canvas\""
+                  "（整页海报，无文本编排）。",
                   file=sys.stderr)
     return k
 
 
 def _apple_opening_lines(rc, card):
-    """苹果风开场编排（opening_animation:"apple"）。
+    """苹果风开场编排（开屏 agenda 卡默认强绑定，无契约键）。
 
     v2 的先进开场手感（对标科技发布会开场，全部 GSAP 时间线补间、逐帧 seek
     确定性）：
@@ -1392,7 +1394,7 @@ def _card_timeline_lines(rc, card):
             f'duration:{a_title["duration"] * _k:.2f},'
             f'ease:"{a_title["ease"]}"}},{s:.2f})'
         )
-    # 苹果风开场：整页编排取代通用标题入场（opening_animation:"apple"）。
+    # 苹果风开场：整页编排取代通用标题入场（开屏 agenda 卡默认强绑定）。
     # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
     # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
     # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。

@@ -137,11 +137,7 @@ def _collect_blocks(source):
                    # 版式由 pipeline 盖章（作者只能用 opening_layout 把它换成
                    # "canvas"）：html_renderer 按 layout 分派，manifest 因此是
                    # 自描述的（见 _segments.seg_layout）。
-                   "layout": source.get("opening_layout") or "agenda",
-                   # 开场动画模式（可选，取值由 _segments._validate_opening_
-                   # animation 把守）：pipeline 原样透传进 manifest，渲染端按
-                   # 它给开屏 agenda 卡编排苹果风开场（不写 = 静态开场）。
-                   "opening_animation": source.get("opening_animation")},
+                   "layout": source.get("opening_layout") or "agenda"},
             turns=[],
         ))
 

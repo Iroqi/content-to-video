@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
-                       _validate_opening_animation, is_content_sid)
+                       is_content_sid)
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                        _validate_display_text, _validate_text)
@@ -25,7 +25,7 @@ from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 # 结尾 agenda 卡压根不生成，而产物看起来完全正常（帧是两张槽位页，check 全绿）。
 # 清单必须与下面 validate_segments_source 里逐个 .get() 的字段同步。
 SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
-               "opening_speed", "opening_layout", "opening_animation",
+               "opening_speed", "opening_layout",
                "closing", "closing_title",
                "closing_tagline", "closing_speed", "closing_layout", "cta",
                "speakers", "segments")
@@ -62,6 +62,16 @@ def validate_segments_source(data):
     """
     if not isinstance(data, dict):
         raise ValueError("segments_source.json 顶层必须是 JSON 对象")
+    # 开场动画：开屏 agenda 卡**默认强绑定**苹果风开场，不再有可配置的契约键
+    # （opening_animation 已随默认强绑定一起移除，见 git 历史）。写过旧键的稿
+    # 件在这里得到明确指引，而不是撞一个泛化的"未知键"。放在 _reject_unknown_keys
+    # 之前：reject 会先于这里报"未知字段"，指引就永远到不了作者手里。
+    if "opening_animation" in data:
+        raise ValueError(
+            "segments_source.json 的 'opening_animation' 已随「默认强绑定」移除："
+            "开屏页（agenda 版式）现在无需配置即自动获得苹果风开场动画，"
+            "请删掉这个键；若想要无文本编排的开屏页，把 opening_layout 写成 "
+            "\"canvas\"（整页海报）。")
     _reject_unknown_keys(data, SOURCE_KEYS, "segments_source.json 顶层")
     segments = data.get("segments")
     if not isinstance(segments, list) or not segments:
@@ -89,23 +99,6 @@ def validate_segments_source(data):
     # 整页海报。只有这两个去向，所以这里按取值分派、不看段 id（content=False）。
     for key in ("opening_layout", "closing_layout"):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
-
-    # 开场动画模式（可选）：只影响开屏 agenda 卡，写 "apple" 走苹果风开场编排。
-    # agenda 卡的**可见窗口之外，它无处可演**：writing.md 承诺了"写 'canvas' 海报
-    # 或写在其他段上会被契约层拒绝"，取值本身由 _validate_opening_animation 把守，
-    # 但"这一页到底是不是 agenda 卡"要看 opening_layout——画布那一页只有一张图，
-    # 导演层都不存在，苹果风整支舞只会静默退化成没有任何提示的静态海报。
-    # 拼错方向回复缺省（也是静态），所以这条组合在这里按 error 拦，不留到成片。
-    if data.get("opening_animation") is not None \
-            and (data.get("opening_layout") or "agenda") != "agenda":
-        raise ValueError(
-            f"segments_source.json 的 'opening_animation' 只对开屏 agenda 卡生效，"
-            f"而 'opening_layout' 写的是 {data['opening_layout']!r}（整页海报不生成"
-            " agenda 卡的 DOM，开场编排无处可演，会静默退回静态）。"
-            "要么去掉 opening_layout，要么去掉 opening_animation")
-    _validate_opening_animation(
-        data.get("opening_animation"),
-        "segments_source.json 的 'opening_animation'")
 
     # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
     # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。

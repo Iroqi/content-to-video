@@ -318,7 +318,8 @@ def _fold_camera(root, steps, center):
     e = (1.0 - s) * cx + pose["x"]
     f = (1.0 - s) * cy + pose["y"]
     if abs(s - 1.0) < 1e-9 and abs(e) < 1e-9 and abs(f) < 1e-9:
-        return None                    # 收尾位 = 原位：不包这层，副本与原始内联完全一致    # 带命名空间建：序列化结果与裸 "g" 一字不差（默认命名空间继承），但内存里这棵树
+        return None  # 收尾位 = 原位：不包这层，副本与原始内联完全一致
+    # 带命名空间建：序列化结果与裸 "g" 一字不差（默认命名空间继承），但内存里这棵树
     # 和"再解析一遍"的树就长得一样——链式接续正是拿产出的字符串再解析一次的。
     stage = ET.Element(f"{{{SVG_NS}}}g",
                        {STAGE_ATTR: "1",

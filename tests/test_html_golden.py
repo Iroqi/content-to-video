@@ -4,6 +4,7 @@
 有意改视觉时更新快照：  UPDATE_GOLDEN=1 python -m unittest discover -s tests
 """
 import contextlib
+import html as _htmlmod
 import io
 import os
 import re
@@ -546,6 +547,31 @@ class AppleOpening(unittest.TestCase):
         self.assertNotIn('class="t-ch"', html)
         self.assertNotIn("data-opening-anim", html)
         self.assertNotIn('tl.from("#title-opening"', html)
+
+    def test_apple_opening_title_escapes_per_char(self):
+        """逐字拆 span 拆的是**原文**，每个字符各自转义再包：& / < / > 不能
+        被拆散成字面文本。
+
+        先 esc 整句再拆会把 &amp; 拆成 &、a、m、p、; 五个独立 span，浏览器
+        不再把它当实体解析，标题 "Q&A" 会在画面上渲染成字面 "Q&amp;A"
+        （上墙字段只禁分号，& 这类字符是合法输入，必须能正常上画面）。
+        """
+        s = dict(H.sample_source(), opening_title="Q&A <版本> 专场")
+        m = H.make_manifest(s)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
+        # 实体按字符整体包在单个 span 里（浏览器解析后仍是 & / < / >）
+        self.assertIn('<span class="t-ch">&amp;</span>', html)
+        self.assertIn('<span class="t-ch">&lt;</span>', html)
+        self.assertIn('<span class="t-ch">&gt;</span>', html)
+        # 语义收口：把每个 span 的内容按 HTML 语义解码后拼接，必须还原出原文。
+        # 老 bug（实体被拆散）的解码结果是字面 "Q&amp;A &lt;版本&gt; 专场"，
+        # 与原文对不上——这一条拦的是"看着像转义了、渲染出来却错了"。
+        spans = re.findall(r'<span class="t-ch(?: t-sp)?"[^>]*>(.*?)</span>', html)
+        text = "".join(_htmlmod.unescape(s) for s in spans)
+        self.assertEqual(text, "Q&A <版本> 专场")
 
 
 def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):

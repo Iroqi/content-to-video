@@ -209,13 +209,16 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
     # 标题：静态开场 = 纯文本；苹果开场 = 逐字拆成 .t-ch span（空格为 .t-sp），
-    # GSAP 按字符 stagger 浮出。拆在 esc() 之后，转义后的字符逐个包 span 安全。
+    # GSAP 按字符 stagger 浮出。拆在 esc() 之前：拆的是原文、逐字符转义再包。
     title_html = esc(seg["title"])
     if apple_opening:
+        # 逐字拆 span 拆的是**原文**、每个字符各自转义后再包：先 esc 整句再拆
+        # 会把 &amp; 拆成五个独立 span，浏览器不再把它当实体解析，标题里的
+        # & / < / > 会以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
         title_html = "".join(
-            f'<span class="t-ch t-sp">{ch}</span>' if ch.isspace()
-            else f'<span class="t-ch">{ch}</span>'
-            for ch in title_html)
+            f'<span class="t-ch t-sp">{esc(ch)}</span>' if ch.isspace()
+            else f'<span class="t-ch">{esc(ch)}</span>'
+            for ch in seg["title"])
     return (f'    <div class="agenda-col"{col_attr}>\n'
             f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'

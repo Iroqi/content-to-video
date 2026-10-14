@@ -530,7 +530,8 @@ def _build_parser():
                              "逐段独立分句，直接产出带 segments 分组的 manifest")
     parser.add_argument("-o", "--output", default=None, help="Output directory")
     parser.add_argument("--api-key", default=None,
-                        help="MiMo TTS API key (default: reads MIMO_API_KEY from .env)")
+                        help="MiMo TTS API key。优先级：命令行 > 环境变量 > "
+                             "~/.config/ai-video/.env（技能目录内 .env 不参与读取）")
     parser.add_argument("--voice-id", default=list_voice_ids()[0],
                         choices=list_voice_ids(),
                         help=f"Voice ID（默认 {list_voice_ids()[0]}）；"
@@ -540,11 +541,14 @@ def _build_parser():
                         default="专业新闻播报，语速适中，语气沉稳自信，中英文表达流畅自然",
                         help="Voice style description")
     parser.add_argument("--gap", type=float, default=DEFAULT_GAP,
-                        help="Silence gap between sentences (seconds)")
+                        help="Silence gap between sentences (seconds)。拼接音频与 "
+                             "manifest 时间轴同步插入；它同时决定转场宽度（见 "
+                             "references/rendering.md「动画」）")
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
                         help="Speech speed multiplier via ffmpeg atempo "
                              "(1.0=normal, 1.5=faster). Default follows "
-                             "_timeline.DEFAULT_SPEED (single source).")
+                             "_timeline.DEFAULT_SPEED (single source). "
+                             "变速后字幕按实测时长对齐。")
     parser.add_argument("--resume", action="store_true",
                         help="仅当缓存 WAV 能被「证明」属于当前稿件时跳过重合成："
                              "内容指纹 .sha、可测时长、无截断、语速状态 .spd 全部"
@@ -565,7 +569,7 @@ def _build_parser():
                              "without calling TTS API or writing audio. Useful for "
                              "verifying script formatting without spending credits.")
     parser.add_argument("--workers", type=int, default=4,
-                        help="并行 TTS 调用数（default 4）")
+                        help="并行 TTS 调用数（default 4）；大量 [retry] 日志时调小")
     parser.add_argument("--on-fail", choices=["abort", "silence"], default="abort",
                         help="单句 TTS 反复失败（如触发内容审核）后的处理方式："
                              "abort（默认）让任何句子失败都阻断管线，避免悄悄"

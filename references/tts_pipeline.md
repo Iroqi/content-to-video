@@ -4,20 +4,11 @@
 
 ## pipeline.py 参数
 
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--source` | 必填 | `segments_source.json`；逐段独立分句，直接产出带 segments 分组的 manifest |
-| `--api-key` | env / `~/.config/ai-video/.env` | 读 `MIMO_API_KEY` |
-| `--voice-id` | `冰糖` | 预置音色 ID；可用名单以 `--help` 的 choices 为准（`_voices.list_voice_ids()` 现生成，下表音色名只补搭配建议） |
-| `--voice-style` | — | 自然语言风格描述（如"清晰沉稳的讲解风格，语速适中"） |
-| `--gap` | `0.4` | 句间静音（秒，默认 `0.4`）；拼接音频与 manifest 时间轴同步插入 |
-| `--speed` | `1.5` | 语速倍率（默认 `1.5`），经 ffmpeg `atempo` 精确变速、完全确定（`1.0` = 原始语速）；字幕按变速后实测时长对齐 |
-| `--resume` | off | 文本/音色/模型/时长/语速状态可证明一致时跳过已有 WAV；缺 `.sha`、`.spd` 不可读且无 `.orig.wav` 回退、WAV 声明样本数超实际字节 → 缓存失效重合成。日常调试建议始终加 |
-| `--model` / `--base-url` | env | 一般不改 |
-| `--dry-run` | off | 仅断句 + 段落预览，不调 TTS、不写文件（零额度）；`-o` 可省略 |
-| `--workers` | 4 | TTS 并发；大量 `[retry]` 日志时调小 |
-| `--api-timeout` | 30s | 必须 `>0` 的有限秒数 |
-| `--on-fail` | `abort` | `abort` = 任一失败阻断；`silence` = 静音占位继续（时长按字数/语速估算、落 `.failed` marker、句子带 `synth_failed: true`） |
+参数、默认值与语义的**唯一真源是 `python scripts/pipeline.py --help`**（每条 help 都带语义）。写稿/调参时记住三个默认值与四个 help 会说的连带：
+
+- 三个默认值：全局语速默认 `1.5`（`--speed`）；开场/结尾用 `1.2`（段级 `speed` 覆盖）；句间静音默认 `0.4`（`--gap`）。
+- 四个连带：`--gap` 同时决定转场宽度（见 `references/rendering.md`「动画」）；`--speed` 变速后字幕按实测时长对齐；`--resume` 日常调试建议始终加（缓存失效条件在 help 里）；`--on-fail silence` 的句子带 `synth_failed`，正式渲染须 `--allow-degraded`（见下节）。
+- 密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取（见 `SKILL.md`「环境」）。
 
 ## 降级与补录
 

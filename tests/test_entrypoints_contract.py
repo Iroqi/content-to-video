@@ -181,7 +181,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         """poster / loop / muted / autoplay / playsinline 写在非 video 上要拒。
 
         渲染端的 <img> 分支只输出 src（html_renderer._media_html），这几个键写在
-        位图/SVG/GIF 上会被静默丢掉——而它们都在 MEDIA_ENTRY_KEYS 里，连
+        ImageGen 图/SVG/GIF 上会被静默丢掉——而它们都在 MEDIA_ENTRY_KEYS 里，连
         unknown-key 提示都不会打。口径必须与音轨四件套（_check_audio_opts）
         一致：写了不会生效就拒，别让作者从报错文案里学到两套规则。
         """

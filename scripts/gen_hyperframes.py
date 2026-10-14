@@ -443,7 +443,7 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
     幅的槽位尺寸。
 
     栅格图（照片/视频）不查比例：那张图里没有"画在里面的字"，比例失配只是
-    取景裁边，位图素材那条路本来就是靠 cover 取景的（见 imagery.md）。
+    取景裁边，ImageGen 素材那条路本来就是靠 cover 取景的（见 imagery.md）。
     """
     errs = []
     for seg in segments:
@@ -1262,7 +1262,7 @@ def main(argv=None):
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 3 步"
-              f"在两种形式（位图 imageGen / SVG）中选型补图（见 references/imagery.md）"
+              f"在两种形式（ImageGen / SVG）中选型补图（见 references/imagery.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 
     # GSAP 取用：显式 --gsap-src 直接写进 HTML 引用（不校验），否则走

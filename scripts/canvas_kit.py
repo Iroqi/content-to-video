@@ -962,7 +962,7 @@ def _epilog():
     **下面这份示例出的图只配 layout:"canvas" 的段落**（本模块就是为那一档写的）：
     它按整页画幅出图。槽位版式的配图只铺中间那块 4:3，把这份图塞进去，cover
     会切掉上下边——画在图边缘上的文字跟着消失。槽位版式请按
-    _template.get_image_box 的尺寸自己出图，或改走 imagery.md「位图素材」那条路。
+    _template.get_image_box 的尺寸自己出图，或改走 imagery.md「ImageGen 素材」那条路。
     尺寸由 get_canvas / get_image_box 现取，不在这里抄一份（抄的会漂）。
     """
     bw, bh = get_image_box("portrait")

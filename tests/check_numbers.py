@@ -89,7 +89,7 @@ FACTS = [
         "upscale-warn",
         ("const", "scripts/_media_size.py", "UPSCALE_WARN"), 1.25,
         [("references/imagery.md", r"1\.25\s*倍")],
-        "位图放大告警阈值：作者据此判断素材够不够糊",
+        "ImageGen 放大告警阈值：作者据此判断素材够不够糊",
     ),
     (
         "upscale-severe",

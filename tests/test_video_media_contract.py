@@ -270,7 +270,7 @@ class DuckOptSchema(unittest.TestCase):
             {"src": "images/seg-b.mp4", "duck": "false"}))
 
     def test_non_video_rejected(self):
-        """位图 / SVG / GIF 没有音轨可让，写了不会生效。"""
+        """ImageGen 图 / SVG / GIF 没有音轨可让，写了不会生效。"""
         for src in ("images/seg-b.png", "images/seg-b.svg", "images/seg-b.gif"):
             self.assertIn("不是视频", self._err({"src": src, "duck": True}), src)
 
@@ -319,7 +319,7 @@ class VideoAudioOptSchema(unittest.TestCase):
             {"src": "images/seg-b.mp4", "fade_in": "0.5"}))
 
     def test_opts_on_non_video_rejected(self):
-        """写在位图 / SVG / GIF 上不会生效——没有音轨也没有可裁剪的时间轴。
+        """写在 ImageGen 图 / SVG / GIF 上不会生效——没有音轨也没有可裁剪的时间轴。
         按 director/stage 的同一口径拒掉，不让它变成又一个"写了没反应"。
         """
         for src in ("images/seg-b.png", "images/seg-b.svg", "images/seg-b.gif"):

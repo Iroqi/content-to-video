@@ -455,7 +455,7 @@ def main():
                            if _layout_by_sid.get(s) == "canvas"]
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
-              "请按第 3 步补图：ImageGen 生图（位图）、手绘 SVG 矢量示意图"
+              "请按第 3 步补图：ImageGen 生图、手绘 SVG 矢量示意图"
               "，把文件放进 "
               f"{images_dir}。\n"
               f"然后在 {images_json} 写好各段映射后重跑本命令。",

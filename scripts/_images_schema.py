@@ -67,7 +67,7 @@ MEDIA_ENTRY_KEYS = frozenset({
     "inline_svg",
     # 视频音轨四件套：volume/fade_in/fade_out/media_start。前三个管"这条原声在
     # 成片里多响、怎么进出"，media_start 管从源片第几秒起播。它们只对 video
-    # 成立（位图/SVG/GIF 没有音轨，也没有可 trim 的时间轴），写在非 video 上
+    # 成立（ImageGen 图/SVG/GIF 没有音轨，也没有可 trim 的时间轴），写在非 video 上
     # 一律按"写了不会生效"拒掉，口径与 director/stage 一致。
     # 为什么必须显式开这四个口子：<video> 的音轨是唯一一条**不经过第 2 步
     # TTS、却照样混进成片**的声音（见 html_renderer._media_html）。不给它增益
@@ -582,7 +582,7 @@ def _check_video_only_opts(key, value, src):
 
     与 `_check_audio_opts`（volume/fade_*/media_start）同一条口径，而且理由
     是同一个：**渲染端的 `<img>` 分支只输出 `src`**（见
-    `html_renderer._media_html`），这几个键写在位图/SVG/GIF 上会被静默丢弃，
+    `html_renderer._media_html`），这几个键写在 ImageGen 图/SVG/GIF 上会被静默丢弃，
     没有 warn、没有 unknown-key 提示——它们都在 MEDIA_ENTRY_KEYS 里，"写了
     poster 但封面根本没出现"会变成无解的困惑。
 
@@ -599,7 +599,7 @@ def _check_video_only_opts(key, value, src):
             _errs.append(
                 f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
                 f"（type={(value.get('type') or 'auto')!r}）——{_opt} 只对 video"
-                "生效，位图 / SVG / GIF 走 <img>，这些键会被静默丢掉")
+                "生效，ImageGen 图 / SVG / GIF 走 <img>，这些键会被静默丢掉")
     if _errs:
         raise ValueError("\n".join(_errs))
 
@@ -657,7 +657,7 @@ def _check_flags(key, value):
 def _check_audio_opts(key, value, src):
     """视频音轨四件套：只对 video 成立，且每个键的值域互不依赖。
 
-    位图/SVG/GIF 没有音轨也没有可 trim 的时间轴，写了不会生效 = 静默丢键，
+    ImageGen 图/SVG/GIF 没有音轨也没有可 trim 的时间轴，写了不会生效 = 静默丢键，
     按契约层统一口径拒。
 
     调用方保证 src 是字符串。
@@ -670,7 +670,7 @@ def _check_audio_opts(key, value, src):
             _errs.append(
                 f"images.json 的 '{key}' 写了 {_opt}，但 src={src!r} 不是视频"
                 f"（type={(value.get('type') or 'auto')!r}）——{_opt} 只对 video 生效，"
-                "位图 / SVG / GIF 没有音轨也没有可裁剪的时间轴")
+                "ImageGen 图 / SVG / GIF 没有音轨也没有可裁剪的时间轴")
             continue  # 不是视频时值域无从谈起，别再叠一句"必须是数字"
         _v = value[_opt]
         # 布尔必须单独挡：isinstance(True, int) 为真，`"volume": true`
@@ -704,7 +704,7 @@ def _check_duck(key, value, src):
         _errs.append(
             f"images.json 的 '{key}' 写了 duck，但 src={src!r} 不是视频"
             f"（type={(value.get('type') or 'auto')!r}）——duck 只对 video 生效，"
-            "位图 / SVG / GIF 没有音轨可让")
+            "ImageGen 图 / SVG / GIF 没有音轨可让")
     if not isinstance(value["duck"], bool):
         _errs.append(
             f"images.json 的 '{key}' 的 duck 必须是 JSON 布尔 true/false"

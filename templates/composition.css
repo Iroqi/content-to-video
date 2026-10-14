@@ -52,11 +52,19 @@ body{font-family:var(--ctv-font-family)}
    两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
    把开场/收尾那两页的氛围光挪位。 */
 .agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
-/* 苹果风开场（opening_animation:"apple"）的题头光晕：一枚放在标题身后的软光斑，
+/* 苹果风开场（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
    模拟苹果发布会的"产品光"。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
    不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
    交给 GSAP 编排（淡入 + repeat:-1 呼吸），CSS 只负责形状与颜色。 */
 .apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
+/* 苹果开场副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
+   副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
+   冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
+.apple-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
+/* 苹果开场标题的逐字 span（渲染器只在 apple 开场拆字）：inline-block 让 GSAP
+   的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
+   与折行；静态开场标题是纯文本、不命中这里。 */
+.t-ch{display:inline-block;white-space:pre}
 .seg-card{position:absolute;inset:0;isolation:isolate}
 /* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
    页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，

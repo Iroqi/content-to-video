@@ -310,29 +310,54 @@ _TEMPLATE_JSON = r'''
     "opening": {
       "apple": {
         "title": {
-          "blur": 16,
-          "scale": 1.06,
-          "duration": 1.6,
-          "ease": "power3.out"
+          "chars": {
+            "delay": 0.0,
+            "stagger": 0.04,
+            "duration": 0.55,
+            "y": 18,
+            "scale": 1.04,
+            "blur": 12,
+            "ease": "power3.out"
+          }
         },
         "kicker": {
           "blur": 8,
-          "delay": 0.4,
-          "duration": 1.2,
+          "tracking": 0.28,
+          "delay": 0.35,
+          "duration": 0.8,
           "ease": "power2.out"
         },
         "rows": {
-          "delay": 0.7,
-          "duration": 0.7,
-          "stagger": 0.12,
-          "y": 24,
-          "ease": "power2.out"
+          "idx": {
+            "delay": 0.15,
+            "duration": 0.45,
+            "scale": 1.25,
+            "blur": 6,
+            "ease": "power2.out"
+          },
+          "content": {
+            "delay": 0.3,
+            "duration": 0.55,
+            "x": 10,
+            "ease": "power2.out"
+          },
+          "stagger": 0.12
         },
         "halo": {
-          "in": 1.6,
-          "opacity": 0.55,
-          "breatheTo": 0.35,
-          "breatheDur": 1.2
+          "in": 1.2,
+          "opacity": 0.5,
+          "breatheTo": 0.32,
+          "breatheDur": 1.3,
+          "glow": {
+            "delay": 0.3,
+            "duration": 2.2,
+            "x": 90,
+            "y": 60,
+            "scale": 1.35,
+            "opacity": 0.5,
+            "breatheTo": 0.28,
+            "breatheDur": 2.6
+          }
         },
         "budget": {
           "minFactor": 0.5

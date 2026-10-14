@@ -180,7 +180,8 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     不重算。
     """
     sid = seg["id"]
-    halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n' % sid
+    halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n'
+                 '    <div class="apple-glow" id="glow-%s"></div>\n' % (sid, sid)
                  if apple_opening else "")
     col_attr = (' data-opening-anim="apple"' if apple_opening else "")
     kicker_html = ""
@@ -198,12 +199,20 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
+    # 标题：静态开场 = 纯文本；苹果开场 = 逐字拆成 .t-ch span（空格为 .t-sp），
+    # GSAP 按字符 stagger 浮出。拆在 esc() 之后，转义后的字符逐个包 span 安全。
+    title_html = esc(seg["title"])
+    if apple_opening:
+        title_html = "".join(
+            f'<span class="t-ch t-sp">{ch}</span>' if ch.isspace()
+            else f'<span class="t-ch">{ch}</span>'
+            for ch in title_html)
     return (f'    <div class="agenda-col"{col_attr}>\n'
             f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'
             f'<div class="seg-title" id="title-{sid}" '
             f'style="font-size:{title_size};text-shadow:0 0 {ag["titleGlow"]}px {ac_attr}40">'
-            f'{esc(seg["title"])}</div></div>\n'
+            f'{title_html}</div></div>\n'
             f'      {agenda_html}{tail_html}\n')
 
 
@@ -1202,26 +1211,32 @@ def _director_timeline_lines(rc, card):
 def _apple_opening_budget(rc, card):
     """苹果风开场的等比压缩系数（1.0 = 原速不压）。
 
-    这支舞的收尾时刻由**行数**决定：最后一行浮起 = rows.delay +
-    stagger×(行数−1) + duration，7 行 2.12s、1 行 1.40s。而它能用到的时长是
+    这支舞的收尾时刻由**标题字数与行数**共同决定：最后一个字符落定 =
+    chars.delay + stagger×(非空格字数−1) + duration，最后一行内容滑入 =
+    rows.content.delay + stagger×(行数−1) + duration。而它能用到的时长是
     开屏页的**可见窗口**（锚在擦除起点 win_start 的整段 life，不是口播段长）。
     两者不挂钩，于是短开场会静默丢尾巴：opening 写一句话（~1.0s）、内容段
-    写满 7 行时，最后三行是在页面已被下一页盖住之后才浮起来的——没人看得到，
+    写满 7 行时，最后几行是在页面已被下一页盖住之后才浮起来的——没人看得到，
     日志也不吭声。
 
     口径对齐 entranceBudget：够就原速，不够按比例压，压到 minFactor 就停手
-    并告警（压得更狠就成闪烁了，那比"演到一半被切"更难看）。光晕的呼吸
-    (breatheDur) 不参与压缩——它是淡入之后的稳态循环，压缩它等于让开场一直
-    在喘，而它也不参与"舞是否演完"的判定。
+    并告警（压得更狠就成闪烁了，那比"演到一半被切"更难看）。光晕主光的呼吸
+    与副光漂移不参与压缩——它们是淡入之后的稳态循环，压缩它们等于让开场一直
+    在喘，而它们也不参与"舞是否演完"的判定。
     """
     ap = rc.anim["opening"]["apple"]
     bud = ap["budget"]
     a_t, a_k, a_r = ap["title"], ap["kicker"], ap["rows"]
     n = max(1, card.agenda_row_count)
     has_kicker = bool(card.seg.get("tagline"))
-    # 收尾时刻只数**真会生成**的那几条补间：没写 tagline 就没有 kicker 那条。
-    ends = [a_t["duration"],
-            a_r["delay"] + a_r["stagger"] * (n - 1) + a_r["duration"]]
+    title = card.seg.get("title") or ""
+    n_chars = len(re.sub(r"\s", "", title))
+    # 收尾时刻只数**真会生成**的那几条补间：没写 tagline 就没有 kicker 那条；
+    # 空格字符（.t-sp）不参与字符 stagger。
+    ends = [a_t["chars"]["delay"] + a_t["chars"]["stagger"] * max(0, n_chars - 1)
+            + a_t["chars"]["duration"],
+            a_r["content"]["delay"] + a_r["stagger"] * (n - 1)
+            + a_r["content"]["duration"]]
     if has_kicker:
         ends.append(a_k["delay"] + a_k["duration"])
     need = max(ends)
@@ -1234,10 +1249,10 @@ def _apple_opening_budget(rc, card):
         if raw < bud["minFactor"]:
             print(f"[warn] 开屏（opening_animation:\"apple\"）的可见窗口 "
                   f"{card.vis:.2f}s 装不下整支开场动画（{need:.2f}s，"
-                  f"{n} 行 agenda）：已压到地板 "
+                  f"{n} 行 agenda、{n_chars} 字标题）：已压到地板 "
                   f"{bud['minFactor']:.0%}，收尾仍会被下一页切走。"
                   "把 opening 写长一点（建议说完主题 + 为什么值得看，2.5s 以上）"
-                  "、减少内容段数，或不写 opening_animation 退回静态开场。",
+              "、减少内容段数，或不写 opening_animation 退回静态开场。",
                   file=sys.stderr)
     return k
 
@@ -1245,16 +1260,22 @@ def _apple_opening_budget(rc, card):
 def _apple_opening_lines(rc, card):
     """苹果风开场编排（opening_animation:"apple"）。
 
-    苹果式开场的手感：不是"弹出来"，是"浮出来"——标题带一层高斯模糊由虚到实、
-    配一个 1.06→1 的微缩放落定（power3.out 的缓入缓出比 back.out 更"沉"），
-    光晕先随标题淡入、随后慢呼吸（repeat:-1 yoyo），kicker 短延迟跟上，agenda
-    行逐行浮起（y 24 → 0，stagger 0.12）。
+    v2 的先进开场手感（对标科技发布会开场，全部 GSAP 时间线补间、逐帧 seek
+    确定性）：
+      - 标题**逐字浮出**：每字 blur + 上浮 + 微缩放落定，stagger 0.035 的
+        波次比整行 blur 更"活"——苹果发布会大标题那种字逐个落定的节奏；
+      - 背景**双光斑**：主光晕呼吸（accent 色）+ 副光漂移（冷色），两枚错位
+        异色光在标题身后形成景深层次，替代单枚静态光斑的"贴纸感"；
+      - kicker **字距展开**：letter-spacing 从拉开态收拢到正常字距，配合
+        blur，读作"科技感"的一行小标题；
+      - agenda 行**两拍进入**：编号（.ag-idx）先行 scale+blur 落定，行内容
+        （.ag-name）随后 x 滑入——前后景关系让行列表的读取顺序更强。
 
     全部锚在擦除起点 win_start：页面从 clip-path 被擦开的同时内容就在演化。
     时长是编排的一部分，**但按可见窗口等比归一**（_apple_opening_budget）：
     固定 choreography 遇到短开场会静默丢尾巴，而"丢了"这件事只有页面被盖住
     之后才知道，那时已经无法回溯。压缩是等比的，节奏比例不变。
-    模糊是短暂的（标题 1.6s 内收敛到 0），成片只有开头约 40 帧带 filter
+    模糊是短暂的（标题约 1s 内收敛到 0），成片只有开头几十帧带 filter
     开销，无头渲染可接受。
     """
     sid, t = card.sid, card.win_start
@@ -1268,7 +1289,7 @@ def _apple_opening_lines(rc, card):
         f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"] * k:.2f},'
         f'ease:"sine.out"}},{t:.2f})'
     )
-    # 呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
+    # 主光呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
     # 与 director 的 repeat:-1 同一种确定性（无"最后停在哪儿"可争）。
     # breatheDur 不参与压缩——它是淡入之后的稳态循环，与"舞演完没有"无关。
     lines.append(
@@ -1276,24 +1297,59 @@ def _apple_opening_lines(rc, card):
         f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
         f'ease:"sine.inOut"}},{t + halo["in"] * k:.2f})'
     )
-    a_t = ap["title"]
+    # 副光斑：淡入后 x/y/scale 缓慢漂移（repeat:-1 yoyo）。漂移是稳态循环，
+    # 同主光呼吸一样不参与压缩。
+    gl = halo["glow"]
     lines.append(
-        f'tl.from("#title-{sid}",{{opacity:0,scale:{a_t["scale"]},'
-        f'filter:"blur({a_t["blur"]}px)",duration:{a_t["duration"] * k:.2f},'
-        f'ease:"{a_t["ease"]}"}},{t:.2f})'
+        f'tl.fromTo("#glow-{sid}",{{opacity:0}},'
+        f'{{opacity:{gl["opacity"]:.2f},duration:{gl["delay"]:.2f},'
+        f'ease:"sine.out"}},{t:.2f})'
+    )
+    lines.append(
+        f'tl.to("#glow-{sid}",{{x:{gl["x"]},y:{gl["y"]},'
+        f'scale:{gl["scale"]},opacity:{gl["breatheTo"]:.2f},'
+        f'duration:{gl["breatheDur"]:.2f},repeat:-1,yoyo:true,'
+        f'ease:"sine.inOut"}},{t + gl["delay"]:.2f})'
+    )
+    # 标题逐字浮出：目标选 .t-ch 排除空格 .t-sp（空格的 transform 无视觉意义）。
+    # 字符 span 由渲染器拆好（见 _agenda_col_html），inline-block + white-space:pre
+    # 保证 transform 生效且折行/字距不变。
+    a_t = ap["title"]["chars"]
+    lines.append(
+        f'tl.from("#{sid} .t-ch:not(.t-sp)",{{opacity:0,'
+        f'y:{a_t["y"]},scale:{a_t["scale"]},'
+        f'filter:"blur({a_t["blur"]}px)",'
+        f'duration:{a_t["duration"] * k:.2f},'
+        f'stagger:{a_t["stagger"] * k:.2f},'
+        f'ease:"{a_t["ease"]}"}},{t + a_t["delay"] * k:.2f})'
     )
     if has_kicker:
         a_k = ap["kicker"]
+        # kicker：blur + 字距从拉开态收拢（letter-spacing 是整行属性，字符级
+        # 拆分没有意义）。CSS 默认 letter-spacing 0.14em，from 0.28em 即展开。
         lines.append(
             f'tl.from("#{sid} .agenda-kicker",{{opacity:0,'
-            f'filter:"blur({a_k["blur"]}px)",duration:{a_k["duration"] * k:.2f},'
+            f'letterSpacing:"{a_k["tracking"]:.2f}em",'
+            f'filter:"blur({a_k["blur"]}px)",'
+            f'duration:{a_k["duration"] * k:.2f},'
             f'ease:"{a_k["ease"]}"}},{t + a_k["delay"] * k:.2f})'
         )
+    # agenda 行两拍：编号先行 scale+blur 落定，行内容随后 x 滑入，同 stagger
+    # 波次，idx 的 delay 略先于 content——编号先"钉"住，名字再跟上。
     a_r = ap["rows"]
+    a_i, a_c = a_r["idx"], a_r["content"]
     lines.append(
-        f'tl.from("#{sid} .agenda-row",{{opacity:0,y:{a_r["y"]},'
-        f'duration:{a_r["duration"] * k:.2f},stagger:{a_r["stagger"] * k:.2f},'
-        f'ease:"{a_r["ease"]}"}},{t + a_r["delay"] * k:.2f})'
+        f'tl.from("#{sid} .agenda-row .ag-idx",{{opacity:0,'
+        f'scale:{a_i["scale"]},filter:"blur({a_i["blur"]}px)",'
+        f'duration:{a_i["duration"] * k:.2f},'
+        f'stagger:{a_r["stagger"] * k:.2f},'
+        f'ease:"{a_i["ease"]}"}},{t + a_i["delay"] * k:.2f})'
+    )
+    lines.append(
+        f'tl.from("#{sid} .agenda-row .ag-name",{{opacity:0,'
+        f'x:{a_c["x"]},duration:{a_c["duration"] * k:.2f},'
+        f'stagger:{a_r["stagger"] * k:.2f},'
+        f'ease:"{a_c["ease"]}"}},{t + a_c["delay"] * k:.2f})'
     )
     return lines
 

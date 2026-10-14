@@ -424,8 +424,9 @@ class AgendaTitleShrink(unittest.TestCase):
 
 
 class AppleOpening(unittest.TestCase):
-    """opening_animation:"apple" 的苹果风开场编排：halo + 模糊→锐利标题 + 逐行浮现，
-    取代通用标题入场；不写该键时开屏维持原状（回归网）。"""
+    """opening_animation:"apple" 的 v2 苹果风开场编排：主/副双光斑 + 标题逐字浮出
+    + kicker 字距展开 + agenda 行两拍（编号先行、内容滑入），取代通用标题入场；
+    不写该键时开屏维持原状（回归网）。"""
 
     def _render_apple(self):
         s = dict(H.sample_source(), opening_animation="apple",
@@ -438,17 +439,27 @@ class AppleOpening(unittest.TestCase):
 
     def test_apple_opening_emits_choreography(self):
         html = self._render_apple()
-        # 光晕元素 + 编排标记
+        # 主光晕元素 + 副光斑元素 + 编排标记
         self.assertIn('class="apple-halo" id="halo-opening"', html)
+        self.assertIn('class="apple-glow" id="glow-opening"', html)
         self.assertIn('data-opening-anim="apple"', html)
-        # 光晕：淡入 + repeat:-1 呼吸
-        self.assertIn('tl.fromTo("#halo-opening",{opacity:0},{opacity:0.55', html)
+        # 主光：淡入 + repeat:-1 呼吸（v2 参数：in 1.2 / breathe 1.3）
+        self.assertIn('tl.fromTo("#halo-opening",{opacity:0},{opacity:0.50', html)
         self.assertIn('repeat:-1,yoyo:true', html)
-        # 标题：模糊→锐利 + 微缩放（值从模板 animation.opening.apple 取）
-        self.assertIn('filter:"blur(16px)",duration:1.60,ease:"power3.out"', html)
-        # kicker / agenda 行：短延迟跟上 + 逐行浮起
+        # 副光：淡入 + x/y/scale 漂移（repeat:-1 yoyo，稳态循环）
+        self.assertIn('tl.fromTo("#glow-opening",{opacity:0},{opacity:0.50', html)
+        self.assertIn('x:90,y:60,scale:1.35,opacity:0.28,duration:2.60', html)
+        # 标题逐字浮出：字符 span 目标 + blur/scale + stagger（值从模板取）
+        self.assertIn('<span class="t-ch">本</span>', html)
+        self.assertIn('#opening .t-ch:not(.t-sp)', html)
+        self.assertIn('filter:"blur(12px)",duration:0.55,', html)
+        self.assertIn('stagger:0.04', html)
+        # kicker：blur + 字距展开（letter-spacing 0.28em → CSS 默认 0.14em）
         self.assertIn('#opening .agenda-kicker', html)
-        self.assertIn('#opening .agenda-row', html)
+        self.assertIn('letterSpacing:"0.28em"', html)
+        # agenda 行两拍：编号先行 scale+blur、行内容随后 x 滑入，同 stagger 波次
+        self.assertIn('#opening .agenda-row .ag-idx', html)
+        self.assertIn('#opening .agenda-row .ag-name', html)
         self.assertIn('stagger:0.12', html)
 
     def test_apple_opening_replaces_generic_title_entrance(self):
@@ -458,16 +469,21 @@ class AppleOpening(unittest.TestCase):
         # 非开屏卡照旧走通用入场；closing 不带苹果编排
         self.assertIn('tl.from("#title-seg-a",{scale:0.5', html)
         self.assertNotIn('tl.fromTo("#halo-closing"', html)
+        self.assertNotIn('id="glow-closing"', html)
 
     def test_static_opening_unchanged_without_the_key(self):
-        """不写 opening_animation = 静态开场：没有 halo 元素/编排，通用入场照旧。
+        """不写 opening_animation = 静态开场：没有 halo/glow 元素、标题不拆字、
+        编排不生成，通用入场照旧。
 
-        样式骨架里的 .apple-halo 规则是静态 CSS（与 .reveal-line 同类：只在
-        对应特性启用时被 DOM 引用），所以这里查元素与编排、不查样式表。
+        样式骨架里的 .apple-halo / .apple-glow / .t-ch 规则是静态 CSS（与
+        .reveal-line 同类：只在对应特性启用时被 DOM 引用），所以这里查元素与
+        编排、不查样式表。
         """
         html = render(**CASES["portrait_dark"])
         self.assertNotIn('class="apple-halo"', html)
+        self.assertNotIn('class="apple-glow"', html)
         self.assertNotIn("data-opening-anim", html)
+        self.assertNotIn('class="t-ch"', html)
         self.assertIn('tl.from("#title-opening",{scale:0.5', html)
 
 
@@ -502,9 +518,10 @@ def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
 class AppleOpeningBudget(unittest.TestCase):
     """苹果风开场按可见窗口等比归一：短开场装不下时不静默丢尾巴。
 
-    这支舞的收尾时刻由 agenda 行数决定（7 行 2.12s、1 行 1.40s），而它能用
-    的时长是开屏页的可见窗口。两者原本不挂钩，于是短开场会静默丢掉最后
-    几行——那几行是在页面已被下一页盖住之后才浮起来的，日志一声不吭。
+    这支舞的收尾时刻由**标题字数与 agenda 行数**共同决定（标题逐字 stagger 波次
+    与最后一行内容滑入），而它能用的时长是开屏页的可见窗口。两者原本不挂钩，
+    于是短开场会静默丢掉最后几行/几个字——那是在页面已被下一页盖住之后才
+    落定的，日志一声不吭。
     """
 
     def _render(self, open_dur, n_rows, gap=0.4):
@@ -522,45 +539,60 @@ class AppleOpeningBudget(unittest.TestCase):
 
     @staticmethod
     def _k(html):
-        """从写出的补间反解压缩系数（rows.duration 是模板 duration×k 的直读口）。"""
+        """从写出的补间反解压缩系数（ag-name.duration 是模板 duration×k 的直读口）。"""
         dur = float(re.search(
-            r'tl\.from\("#opening \.agenda-row",\{[^}]*duration:([\d.]+)', html).group(1))
-        return round(dur / 0.7, 4)
+            r'tl\.from\("#opening \.agenda-row \.ag-name",\{[^}]*duration:([\d.]+)',
+            html).group(1))
+        return round(dur / 0.55, 4)
+
+    @staticmethod
+    def _char_stagger(html):
+        return float(re.search(
+            r'#opening \.t-ch:not\(\.t-sp\)",\{[^}]*stagger:([\d.]+)', html).group(1))
 
     def test_enough_window_keeps_original_speed(self):
         """窗口装得下就原速——归一化不能变成"一律压缩"，那会让正常开场变味。"""
         html, vis, err = self._render(3.0, 2)
         self.assertEqual(self._k(html), 1.0)
-        self.assertIn('duration:1.60,ease:"power3.out"', html)
+        self.assertIn('duration:0.55,stagger:0.04,ease:"power3.out"', html)
         self.assertIn("stagger:0.12", html)
         self.assertNotIn("可见窗口", err)
 
     def test_short_window_compresses_every_stage_by_one_factor(self):
-        """压缩是**等比**的：标题、kicker、行延迟、行时长、行错峰乘同一个系数。
+        """压缩是**等比**的：标题字符、kicker、行编号、行内容时长乘同一个系数。
         只有这样节奏比例不变——只压尾巴或只压错峰都读得出是"被赶过"。"""
-        html, vis, err = self._render(1.2, 4)
+        html, vis, err = self._render(0.8, 7)
         k = self._k(html)
         self.assertLess(k, 1.0)
         # 逐项对账：模板原值 → 写出的值（补间参数保留 2 位小数，比对留 0.01）
         for pat, orig in (
-            (r'filter:"blur\(16px\)",duration:([\d.]+)', 1.6),   # 标题
-            (r'#opening \.agenda-kicker",\{opacity:0,filter:"blur\(8px\)"'
-             r',duration:([\d.]+)', 1.2),                        # kicker 时长
-            (r'#opening \.agenda-row",\{opacity:0,y:24,duration:([\d.]+)', 0.7),
+            (r'#opening \.t-ch:not\(\.t-sp\)",\{opacity:0,y:18,scale:1.04,'
+             r'filter:"blur\(12px\)",duration:([\d.]+)', 0.55),   # 标题字符
+            (r'#opening \.agenda-kicker",\{opacity:0,letterSpacing:"0\.28em",'
+             r'filter:"blur\(8px\)",duration:([\d.]+)', 0.8),     # kicker
+            (r'#opening \.agenda-row \.ag-idx",\{opacity:0,scale:1\.25,'
+             r'filter:"blur\(6px\)",duration:([\d.]+)', 0.45),    # 行编号
+            (r'#opening \.agenda-row \.ag-name",\{opacity:0,x:10,'
+             r'duration:([\d.]+)', 0.55),                         # 行内容
         ):
             got = float(re.search(pat, html).group(1))
             self.assertAlmostEqual(got, round(orig * k, 2), delta=0.011, msg=pat)
 
     def test_compressed_tail_fits_inside_window(self):
-        """核心断言：压完之后的**最晚收尾**（最后一行浮起）落在可见窗口内。
-        这条守住的是"短开场不再静默丢尾巴"这句话本身。"""
+        """核心断言：压完之后的**最晚收尾**（标题字符波次 / 最后一行内容滑入）
+        落在可见窗口内。这条守住的是"短开场不再静默丢尾巴"这句话本身。"""
         for open_dur, n_rows in ((1.0, 7), (1.2, 4), (1.5, 7), (1.0, 1)):
             with self.subTest(open_dur=open_dur, n_rows=n_rows):
                 html, vis, err = self._render(open_dur, n_rows)
                 k = self._k(html)
-                stag = float(re.search(
-                    r'#opening \.agenda-row",\{[^}]*stagger:([\d.]+)', html).group(1))
-                tail = max(1.6 * k, 1.6 * k, stag * (n_rows - 1) + 0.7 * k + 0.7 * k)
+                stag_char = self._char_stagger(html)
+                stag_row = float(re.search(
+                    r'#opening \.agenda-row \.ag-name",\{[^}]*stagger:([\d.]+)',
+                    html).group(1))
+                # 标题"开场"= 2 字 → 字符波次收尾 = stagger×1 + duration；行收尾
+                # = content.delay(0.3×k) + stagger×(n−1) + content.duration(0.55×k)
+                tail = max(stag_char * 1 + 0.55 * k,
+                           0.3 * k + stag_row * (n_rows - 1) + 0.55 * k)
                 self.assertLessEqual(tail, vis + 0.02,
                                      f"{tail:.2f}s 收尾超出窗口 {vis:.2f}s（k={k}）")
 
@@ -568,7 +600,8 @@ class AppleOpeningBudget(unittest.TestCase):
         """压到地板还装不下时必须出声：地板 0.5 是"不再往下压"的承诺，
         剩下的缺口靠告警说清楚，并给出三条可操作的方向。"""
         html, vis, err = self._render(0.6, 7, gap=0.1)
-        self.assertEqual(self._k(html), 0.5)
+        # duration 保留 2 位小数：0.55×0.5=0.275 写出 0.28，反解回来有 0.009 舍入
+        self.assertAlmostEqual(self._k(html), 0.5, delta=0.02)
         self.assertIn("可见窗口", err)
         self.assertIn("地板", err)
         for advice in ("opening", "内容段数", "opening_animation"):
@@ -576,20 +609,23 @@ class AppleOpeningBudget(unittest.TestCase):
 
     def test_more_rows_need_more_room(self):
         """行数多 → 收尾晚 → 同样窗口下压缩得更狠。守住"预算由行数驱动"。"""
-        k_one = self._k(self._render(1.5, 1)[0])
-        k_seven = self._k(self._render(1.5, 7)[0])
+        k_one = self._k(self._render(1.0, 1)[0])
+        k_seven = self._k(self._render(1.0, 7)[0])
         self.assertLess(k_seven, k_one)
         self.assertEqual(k_one, 1.0)
 
-    def test_breathe_cycle_is_not_compressed(self):
-        """光晕呼吸的**时长**不参与压缩：它是淡入之后的稳态循环，压它等于让
-        开场一直喘，而且它不参与"舞演完没有"的判定。压缩只落在淡入与其起点。"""
+    def test_breathe_and_drift_cycles_are_not_compressed(self):
+        """主光呼吸与副光漂移的**时长**不参与压缩：它们是淡入之后的稳态循环，
+        压它们等于让开场一直喘，而且它们不参与"舞演完没有"的判定。压缩只落
+        在淡入与其起点。"""
         html, vis, err = self._render(1.0, 7)
-        self.assertIn('duration:1.20,repeat:-1,yoyo:true', html)
-        # 呼吸起点跟着淡入一起压缩：起点 = 淡入时长(1.6×k)，不再落在 1.60
+        # 主光 breatheDur 1.3 / 副光 breatheDur 2.6 原样写出
+        self.assertIn('duration:1.30,repeat:-1,yoyo:true', html)
+        self.assertIn('duration:2.60,repeat:-1,yoyo:true', html)
+        # 呼吸起点跟着淡入一起压缩：起点 = 淡入时长(1.2×k)，不再落在 1.20
         start = float(re.search(r'repeat:-1,yoyo:true,ease:"sine.inOut"\},([\d.]+)',
                                 html).group(1))
-        self.assertAlmostEqual(start, round(1.6 * self._k(html), 2), delta=0.011)
+        self.assertAlmostEqual(start, round(1.2 * self._k(html), 2), delta=0.011)
 
     def test_budget_ignores_kicker_when_absent(self):
         """没写 tagline 就没有 kicker 那条补间，收尾时刻也不能把它算进去。
@@ -605,7 +641,7 @@ class AppleOpeningBudget(unittest.TestCase):
                                  images={f"seg{i}": {"src": f"images/seg{i}.png"}
                                          for i in range(1, 5)})
         self.assertNotIn("#opening .agenda-kicker", html)
-        # 有 kicker 时收尾由 kicker 支配（1.6s）；没它时由行支配（1.4s），都装得下
+        # 有 kicker 时收尾由 kicker 支配；没它时由行支配，都装得下
         self.assertEqual(self._k(html), 1.0)
 
     def test_static_opening_gets_no_budget_at_all(self):
@@ -621,6 +657,7 @@ class AppleOpeningBudget(unittest.TestCase):
                                  images={f"seg{i}": {"src": f"images/seg{i}.png"}
                                          for i in range(1, 8)})
         self.assertNotIn('class="apple-halo" id="halo-opening"', html)
+        self.assertNotIn('class="apple-glow" id="glow-opening"', html)
         self.assertNotIn("data-opening-anim", html)
         self.assertNotIn("可见窗口", err)
 

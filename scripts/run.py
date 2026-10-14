@@ -365,7 +365,7 @@ def main():
         "on_fail": args.on_fail,
     }
 
-    # ── 第 3 步：TTS ──────────────────────────────────────────────
+    # ── 第 2 步：TTS ──────────────────────────────────────────────
     # --resume 恒开（指纹缓存能证明一致才复用；要整重跑时直接调 pipeline.py，
     # 不加 --resume 即可）。
     tts_args = ["--source", args.source, "-o", out, "--resume"]
@@ -384,8 +384,8 @@ def main():
         tts_args.append("--dry-run")
     _run_step(pipeline.main, tts_args, "TTS")
 
-    # ── 第 4 步：配图 ─────────────────────────────────────────────
-    # 配图不由本脚本产出：agent 在第 4 步用 ImageGen 生图、
+    # ── 第 3 步：配图 ─────────────────────────────────────────────
+    # 配图不由本脚本产出：agent 在第 3 步用 ImageGen 生图、
     # 手绘 SVG 矢量示意，落进 images/ 并把映射写进 images.json。
     # run.py 只负责统计这份映射的覆盖率，并只在真要渲染时拦缺图
     # （--until html 只警告）。
@@ -455,7 +455,7 @@ def main():
                            if _layout_by_sid.get(s) == "canvas"]
         print("[run] 以下段落还没有定稿配图："
               + ", ".join(missing_keys) + "。\n"
-              "请按第 4 步补图：ImageGen 生图（位图）、手绘 SVG 矢量示意图"
+              "请按第 3 步补图：ImageGen 生图（位图）、手绘 SVG 矢量示意图"
               "，把文件放进 "
               f"{images_dir}。\n"
               f"然后在 {images_json} 写好各段映射后重跑本命令。",
@@ -508,7 +508,7 @@ def main():
             print(f"[warn] HTML 预览继续生成，但 {_why}；"
                   "最终渲染必须显式加 --allow-degraded。", file=sys.stderr)
 
-    # ── 第 5 步 a：生成 composition HTML ──────────────────────────
+    # ── 第 4 步 a：生成 composition HTML ──────────────────────────
     html_args = ["-m", manifest, "-o", os.path.join(project, "index.html"),
                  "--aspect", args.aspect,
                  "--fps", str(args.fps)]
@@ -531,7 +531,7 @@ def main():
         _print_report_summary()
         return
 
-    # ── 第 5 步 b：渲染 ───────────────────────────────────────────
+    # ── 第 4 步 b：渲染 ───────────────────────────────────────────
     # 渲染前置条件先问一遍：Node 版本不够时 CLI 侧的失败形态与"没装 Node"看不
     # 出区别，等它失败再翻日志末尾是拿结果猜原因。
     _verdict, _node_msg = node_version_gate()
@@ -615,7 +615,7 @@ def main():
     else:
         _REPORT["video"]["check"] = "ok"
 
-    # ── 第 5 步 c：成片抽帧断言（可选，--check-frames）──────────────────
+    # ── 第 4 步 c：成片抽帧断言（可选，--check-frames）──────────────────
     # 时长契约证明"演完了"，抽帧断言证明"画面里真的长出了内容"：抓帧超时、
     # worker 崩、Chrome 提前退出可能产出一支时长刚好、画面整段黑屏/死平的
     # 片子，而时长对账根本看不出。默认关闭（抽查是渲染后的一道额外闸，抽帧

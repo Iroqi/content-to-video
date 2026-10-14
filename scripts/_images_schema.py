@@ -69,7 +69,7 @@ MEDIA_ENTRY_KEYS = frozenset({
     # 成片里多响、怎么进出"，media_start 管从源片第几秒起播。它们只对 video
     # 成立（位图/SVG/GIF 没有音轨，也没有可 trim 的时间轴），写在非 video 上
     # 一律按"写了不会生效"拒掉，口径与 director/stage 一致。
-    # 为什么必须显式开这四个口子：<video> 的音轨是唯一一条**不经过第 3 步
+    # 为什么必须显式开这四个口子：<video> 的音轨是唯一一条**不经过第 2 步
     # TTS、却照样混进成片**的声音（见 html_renderer._media_html）。不给它增益
     # 旋钮，"要了原声"就等于"原声压着口播一起播"，而这条链上没有任何报错。
     "volume", "fade_in", "fade_out", "media_start",

@@ -46,7 +46,7 @@ class TtsHttpError(Exception):
 class MimoTtsClient:
     """MiMo TTS 端点：协议契约的当前唯一实现。
 
-    全管线唯一的外部网络接口，用标准库实现（urllib），让第 3 步与其余步骤一样
+    全管线唯一的外部网络接口，用标准库实现（urllib），让第 2 步与其余步骤一样
     零第三方依赖。请求体与 openai SDK 的 `chat.completions.create(model=,
     messages=, audio=)` 逐字段一致：POST {base_url}/chat/completions，
     Authorization: Bearer <key>，body {model, messages, audio}。

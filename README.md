@@ -81,7 +81,7 @@ agent 才做最后一步渲染，交 MP4 + 一份生产报告（每步耗时、�
 
 运行环境完整口径只在 [SKILL.md](SKILL.md)「环境」表，这里给三句最要紧的：
 
-- **`MIMO_API_KEY` 是硬闸门**：配音走外部付费 TTS，是整条链路唯一的付费外部依赖；没有 key 第 3 步直接停，即使全部命中缓存也不放行。
+- **`MIMO_API_KEY` 是硬闸门**：配音走外部付费 TTS，是整条链路唯一的付费外部依赖；没有 key 第 2 步直接停，即使全部命中缓存也不放行。
 - **ffmpeg**（只要 `ffmpeg`）与 **Node.js 22+**（+ `npx hyperframes`）分别负责音频处理与渲染成片。
 - Python 3.9+ 就够，只用标准库，不需要装任何额外依赖。
 
@@ -93,11 +93,11 @@ agent 才做最后一步渲染，交 MP4 + 一份生产报告（每步耗时、�
 
 | 文件 | 服务哪一步 |
 | --- | --- |
-| [writing.md](references/writing.md) | 第 2 步：字段规范、哪些段值得交给 canvas、内容类型写法 |
-| [tts_pipeline.md](references/tts_pipeline.md) | 第 3 步：配音参数、音色表、manifest 字段 |
-| [imagery.md](references/imagery.md) | 第 4 步选形式：位图 / SVG / `images.json` 落盘 |
-| [canvas.md](references/canvas.md) | 第 4 步 SVG：画 + 演（几何、对比度、导演档、跨段） |
-| [rendering.md](references/rendering.md) | 第 5 步：预览、渲染、官方门禁、画面翻车速查表 |
+| [writing.md](references/writing.md) | 第 1 步：字段规范、哪些段值得交给 canvas、内容类型写法 |
+| [tts_pipeline.md](references/tts_pipeline.md) | 第 2 步：配音参数、音色表、manifest 字段 |
+| [imagery.md](references/imagery.md) | 第 3 步选形式：位图 / SVG / `images.json` 落盘 |
+| [canvas.md](references/canvas.md) | 第 3 步 SVG：画 + 演（几何、对比度、导演档、跨段） |
+| [rendering.md](references/rendering.md) | 第 4 步：预览、渲染、官方门禁、画面翻车速查表 |
 
 **人不必读**，你只管和 agent 说话。
 

@@ -2,7 +2,7 @@
 """content-to-video TTS Pipeline：结构化写稿 → 逐句 TTS → 拼接音频 +
 timing_manifest.json（字幕时间轴的唯一来源）。
 
-参数与行为详见 SKILL.md 第 3 步与 references/tts_pipeline.md；
+参数与行为详见 SKILL.md 第 2 步与 references/tts_pipeline.md；
 完整参数列表见 ``--help``。
 """
 import argparse

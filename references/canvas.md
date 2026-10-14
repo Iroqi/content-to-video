@@ -1,4 +1,4 @@
-# 第 4 步 · SVG：画出来，再让它动
+# 第 3 步 · SVG：画出来，再让它动
 
 选不选 SVG 见 `references/writing.md`「哪些段值得交给 canvas」和 `references/imagery.md`「先选“表现方式”，再选素材来源」；位图路线在 `references/imagery.md`。本文件讲 SVG 的全生命周期：**怎么画**（几何、密度、对比度、字号、数据自查）→ **怎么演**（两档动画、`director` 原语、跨段接续）。只做静态示意图的读到「文字与尺寸」为止；要它跟着旁白逐拍演，继续读「SVG 动画：两档」。
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """timing_manifest.json → Hyperframes composition HTML（html_renderer 的 CLI 壳）。
 
-画幅/主题选择与 vendor 资产装载链见 SKILL.md 第 5 步与 references/rendering.md；
+画幅/主题选择与 vendor 资产装载链见 SKILL.md 第 4 步与 references/rendering.md；
 images.json 字段见 references/imagery.md；完整参数列表见 ``--help``。
 """
 import argparse
@@ -1261,7 +1261,7 @@ def main(argv=None):
     _uncovered = [sid for sid in sids_needing_image(manifest) if sid not in images]
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
-              f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 4 步"
+              f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 3 步"
               f"在两种形式（位图 imageGen / SVG）中选型补图（见 references/imagery.md）"
               f"后重跑；仅当段落内容性质确实不需要图时才保留无图。", file=sys.stderr)
 

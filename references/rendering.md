@@ -1,4 +1,4 @@
-# 第 5 步 · 渲染：预览、渲染与官方门禁
+# 第 4 步 · 渲染：预览、渲染与官方门禁
 
 - **要跑/调渲染**：「HTML 预览与渲染」「性能参数」。
 - **画面出了问题**：「画面翻车速查表」按症状查；版式真源在「画面结构」与「动画」。
@@ -61,7 +61,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 
 ## 配图
 
-- 画布尺寸与配图规格见 `references/imagery.md`（第 4 步规则以它为准）；素材一律 `cover` 铺满画布。
+- 画布尺寸与配图规格见 `references/imagery.md`（第 3 步规则以它为准）；素材一律 `cover` 铺满画布。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片）。
 - **SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `canvas.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
 
@@ -91,11 +91,11 @@ hf-project/
 
 ### 2. 浏览器预览
 
-见 SKILL.md 第 5 步。边界：`preview.js` 只在真实浏览器注入 UI；headless 调试可加 `?preview` 强制注入。
+见 SKILL.md 第 4 步。边界：`preview.js` 只在真实浏览器注入 UI；headless 调试可加 `?preview` 强制注入。
 
 ### 3. 正式渲染
 
-渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 5 步）：它会重新生成一次 HTML 再 render。
+渲染直接跑 `run.py`（不带 `--until`，命令见 SKILL.md 第 4 步）：它会重新生成一次 HTML 再 render。
 
 **渲染之后还有一道闸：成片时长对账**：落盘后拿 ffmpeg 量实际时长与 manifest 的 `total_duration` 对账，容差 `max(1s, 2%)`：短于容差**退出码 4** 拦下交付，长于容差或量不到只 `[warn]`。结果与实测秒数进 `production_report.json` 的 `video` 字段（`ok` / `short` / `long` / `skipped`）；**别把这条 warn 当噪音划走**。撞上 exit 4 照终端报错做。
 

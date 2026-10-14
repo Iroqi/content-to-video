@@ -1,6 +1,6 @@
-# 第 3 步 · TTS：管线参数、预置音色与 manifest 字段
+# 第 2 步 · TTS：管线参数、预置音色与 manifest 字段
 
-主流程与示例命令见 SKILL.md 第 3 步。完整参数以 `python scripts/pipeline.py --help` 为准。
+主流程与示例命令见 SKILL.md 第 2 步。完整参数以 `python scripts/pipeline.py --help` 为准。
 
 ## pipeline.py 参数
 

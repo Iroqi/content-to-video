@@ -363,7 +363,7 @@ class SvgIntrinsicSize(unittest.TestCase):
 class CheckSvgCommandLine(unittest.TestCase):
     """`python scripts/check_svg.py` 的退出码：2=没找到文件，1=有 error，0=干净。
 
-    它是第 4 步引用的生产工具（SKILL.md 明确要留着），退出码是它被编排进脚本时
+    它是第 3 步引用的生产工具（SKILL.md 明确要留着），退出码是它被编排进脚本时
     唯一能读的信号——没人测过，改坏了也不知道。
     """
 

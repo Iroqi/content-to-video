@@ -13,11 +13,11 @@ SKILL.md 只留工作流与红线，**细节在 `references/`，按此刻这一�
 
 | 你正要做的事 | 读这一份 | 什么时候可以跳过 |
 | --- | --- | --- |
-| 写 `segments_source.json` | `references/writing.md` | 从不（第 2 步就要用） |
-| 第 3 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
-| 第 4 步选路线、素材落 `images.json` | `references/imagery.md` | 全片都是手绘 SVG 时 |
-| 第 4 步 SVG：画 + 演（几何、对比度、导演档、跨段） | `references/canvas.md` | 不画 SVG 就不用读 |
-| 第 5 步预览、渲染、官方门禁 | `references/rendering.md` | 从不（第 5 步就要用） |
+| 第 1 步写稿：`segments_source.json` | `references/writing.md` | 从不（第 1 步就要用） |
+| 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
+| 第 3 步选形式、素材落 `images.json` | `references/imagery.md` | 全片都是手绘 SVG 时 |
+| 第 3 步 SVG：画 + 演（几何、对比度、导演档、跨段） | `references/canvas.md` | 不画 SVG 就不用读 |
+| 第 4 步预览、渲染、官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 画面不对劲，不知道该改哪 | `rendering.md`「画面翻车速查表」 | 没出问题就不用 |
 
 ## 核心规则
@@ -35,9 +35,9 @@ SKILL.md 只留工作流与红线，**细节在 `references/`，按此刻这一�
 | 依赖 | 用途 | 缺了会怎样 |
 | --- | --- | --- |
 | Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
-| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 3 步失败（全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
-| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 3 步失败；配图探测降级为仅查存在性 |
-| **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 5 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前四步照常 |
+| **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 2 步失败（全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
+| FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 2 步失败；配图探测降级为仅查存在性 |
+| **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |
 
 其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本钉固，默认 `hyperframes`）。CLI 默认取最新版，跨机逐帧可复现要钉版本（写 `hyperframes@1.2.3`）或走 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
 
@@ -45,19 +45,19 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 ## 核心工作流
 
-### 1. 整理信源
+### 前置：整理信源
 
 提炼标题、核心事实、上下文和视觉线索。数字、日期、金额、比例等事实保留可回查依据。
 
-### 2. 写结构化稿
+### 1. 写结构化稿
 
 生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述；`speakers[].label` 是**上墙文字**（单行、不收分号、≤6 字，超限契约层报错）。双人对话别放进 `layout:"canvas"` 段——整页画布没有字幕层，轮次信息只剩声音。
 
 内容段最多 7 段（≤6 段才放得下 `cta`）。字段集封闭：顶层 / 段落 / 对话轮次 / `speakers` 各层只认清单里的键，写错直接报错。
 
-写稿时顺手挑出值得整页交给导演的段落（`layout:"canvas"`），别等第 4 步才想。字段全集、行数与字数预算、agenda 行为、以及"哪些段值得交给 canvas"都在 `references/writing.md`。
+写稿时顺手挑出值得整页交给导演的段落（`layout:"canvas"`），别等第 3 步才想。字段全集、行数与字数预算、agenda 行为、以及"哪些段值得交给 canvas"都在 `references/writing.md`。
 
-### 3. TTS
+### 2. TTS
 
 ```bash
 python scripts/pipeline.py --source segments_source.json -o audio_output --resume
@@ -65,7 +65,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 产出 `audio_output/timing_manifest.json`。参数、音色表、降级行为见 `references/tts_pipeline.md`。
 
-### 4. 配图
+### 3. 配图
 
 **三问按顺序回答：这一页要不要演 → 观众应该看到什么 → 素材从哪里来。**
 
@@ -75,7 +75,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）。走页面墙钟的运动破坏逐帧可复现，所以只有 SVG 的导演档能"演"——固定画面交给位图即可。
 
-### 5. 生成 HTML、预览、检查、渲染
+### 4. 生成 HTML、预览、检查、渲染
 
 ```bash
 python scripts/run.py --source SOURCE -o OUTPUT --until html   # 迭代：出 HTML 即停

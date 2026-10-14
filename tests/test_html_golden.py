@@ -111,6 +111,41 @@ class Structure(unittest.TestCase):
             "这些随画幅变的量属于 scripts/_template.py（经 --ctv-* 注入），"
             "CSS 存第二份会让改模板不带着它们走：\n  " + "\n  ".join(offenders))
 
+    def test_composition_id_has_one_source_of_truth(self):
+        """合成 ID 只有一个真源：html_renderer.COMPOSITION_ID。
+
+        根元素的 data-composition-id 与 runtime 注册时间线用的键**必须是同一个值**
+        （hyperframes 契约）。它曾经在三处模板里各自硬编码 "main"：改一处漏两处
+        时两者不匹配——只注册一条时间线时 runtime 仍能兜住绑定，两条以上则渲染
+        **静默冻结在 t=0**（不报错，只是画面定格）。现在 composition.html 与
+        runtime.js 走占位符注入；preview.js 不走装配，改为从根元素现读。
+        """
+        import html_renderer as hr
+        tpl_dir = os.path.join(H.SKILL_DIR, "templates")
+
+        # 走装配的两个模板：必须是占位符，不许再出现字面量 ID
+        for name in ("composition.html", "runtime.js"):
+            with open(os.path.join(tpl_dir, name), encoding="utf-8") as f:
+                src = f.read()
+            self.assertIn("__CTV_COMPOSITION_ID__", src,
+                          f"{name} 没有走 __CTV_COMPOSITION_ID__ 占位符")
+            self.assertNotIn('"main"', src,
+                             f'{name} 残留硬编码的合成 ID "main"——它必须与 '
+                             "data-composition-id 同源，不许各写一份")
+
+        # preview.js 不参与装配，只能从根元素现读（它读的就是上面那个真源）
+        with open(os.path.join(tpl_dir, "preview.js"), encoding="utf-8") as f:
+            pv = f.read()
+        self.assertNotIn("__timelines['main']", pv,
+                         "preview.js 不应再硬编码合成 ID")
+        self.assertIn("dataset.compositionId", pv,
+                      "preview.js 必须从根元素的 data-composition-id 现读")
+
+        # 产物：根 ID 与注册键都等于常量，且两者相等
+        html = render()
+        self.assertIn(f'data-composition-id="{hr.COMPOSITION_ID}"', html)
+        self.assertIn(f'window.__timelines["{hr.COMPOSITION_ID}"] = tl;', html)
+
     def test_ambience_geometry_comes_from_template(self):
         """氛围光几何确实由模板注入，且两画幅取到各自的档。"""
         from _template import load_template
@@ -159,13 +194,18 @@ class Structure(unittest.TestCase):
                              ("landscape", "--ctv-amb-agenda-cy:45%")):
             self.assertIn(want, render(aspect=aspect, theme="dark"))
 
-    def test_every_verse_line_carries_layout_exemptions(self):
-        """每一行 verse-line 都要自带 layout 豁免标记，不能只靠 .verse 上的。
+    def test_every_verse_line_carries_non_inherited_exemptions(self):
+        """occlusion/overlap 必须逐行自带；overflow 只许在 .verse 上。
 
-        hyperframes check 只读元素自己身上的 data-layout-allow-*，**不继承祖先
-        的**。滚出 .verse-clip 窗口的行 rect 仍在原位，检查器逐行量它就会判
-        text_occluded——这是真实踩过的：7 段竖屏稿只打 .verse 时报 1 error，
-        给每行补上后 0 error 且 warning 条数不变（快照确认画面本身无遮挡）。
+        两个属性的继承规则不同，别按一套规则打：
+          · allow-occlusion / allow-overlap：检查器只认元素自己身上的标记，
+            **不继承祖先**。缺了就量那行滚出窗口后仍在原位的 rect，判
+            text_occluded 报 error（实测只打 .verse 时报 1 error，补上每行后
+            0 error 且 warning 条数不变）。
+          · allow-overflow：**继承到子树**（感知探针向上遍历祖先）。打在
+            .verse（overflow:hidden 所在层）即覆盖每行，不必逐行重复——
+            逐行打是冗余的，删掉后 check 的 Layout 输出逐条不变（7 段稿与
+            12 句长段稿实测一致）。
         """
         import re
         for aspect in ("portrait", "landscape"):
@@ -173,11 +213,28 @@ class Structure(unittest.TestCase):
             lines = re.findall(r'<div class="verse-line"[^>]*>', html)
             self.assertTrue(lines, f"{aspect} 没有渲染出任何 verse-line")
             for tag in lines:
-                for attr in ("data-layout-allow-overflow",
-                             "data-layout-allow-overlap",
+                # 不继承的两个：每行必须自带
+                for attr in ("data-layout-allow-overlap",
                              "data-layout-allow-occlusion"):
                     self.assertIn(attr, tag,
                                   f"{aspect} 有一行 verse-line 缺 {attr}：{tag[:90]}")
+                # 继承的那个：行上不该有（冗余，且暗示了错误的继承规则）
+                self.assertNotIn("data-layout-allow-overflow", tag,
+                                 f"{aspect} 的 verse-line 上多余地写了 "
+                                 "allow-overflow——它从 .verse 继承，逐行写是冗余")
+            # 说话人标签同理：自带前两个，不写 overflow
+            for tag in re.findall(r'<span class="verse-who"[^>]*>', html):
+                for attr in ("data-layout-allow-overlap",
+                             "data-layout-allow-occlusion"):
+                    self.assertIn(attr, tag, f"verse-who 缺 {attr}")
+                self.assertNotIn("data-layout-allow-overflow", tag,
+                                 "verse-who 上多余地写了 allow-overflow")
+            # .verse 容器三个齐全：overflow 从这里向下继承
+            for tag in re.findall(r'<div class="verse" id="verse-[^"]*"[^>]*>', html):
+                for attr in ("data-layout-allow-overflow",
+                             "data-layout-allow-overlap",
+                             "data-layout-allow-occlusion"):
+                    self.assertIn(attr, tag, f".verse 容器缺 {attr}")
 
     def test_unknown_aspect_rejected(self):
         with self.assertRaises(ValueError):

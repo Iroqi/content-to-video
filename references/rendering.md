@@ -37,7 +37,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 - 段落入场默认**方向擦除（wipe）**：新卡用 clip-path 从全遮蔽补到全覆盖（时长与缓动取 `animation.segmentWipe`）。`style` 全片统一：`line`（**默认**）/ `vertical` / `diagonal` / `circle`（71%）；写错档生成期报错。旧卡**不淡出**。整页画布除外（硬切）。
 - **`line` 引导线转场**：线是新卡末子，其下缘即新卡 clip-path 的揭示边；旧页随后整层剥离并挂 `.peel-shade`。`wipe` 钳到 0 时段线与剥离不生成。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`。
-- **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。
+- **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。再往外一层是 hyperframes 自己的可见窗口 `[data-start, data-start + data-duration)`——**半开区间**，卡在 `start + duration` 那一刻就被隐藏。所以补间的**结束态要落在窗口内、别正好压在末端**：压线那一帧永不渲染（不报错，只是动画像少了一拍）。苹果风开场目前安全，靠的是它只挂在开屏页、而开屏页 `wipe=0`（窗口末端正好等于"被下一页盖住"的时刻）；哪天把开场编排用到 `wipe>0` 的页上，收尾就会被卡的窗口末端切掉——那时候要按 `段时长 + gap + wipe` 重算，不是按可见窗口算。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`）。透明卡做 wipe 会双影叠字。
 - **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前锚点），见 `references/canvas.md`「SVG 动画：两档」。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/canvas.md`「跨段接续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。**CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
@@ -124,13 +124,18 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 ```
 
 - `check` 会真报问题：字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
-- 干净产物的 `check` 基线：**Lint 12 条 warning 全是下面 6 类噪声，Runtime / Motion / Contrast 全 0，Layout 0 error**。看**类型**不看条数：
-  - 噪声：`gsap_callback_dom_measurement`（1 条）、`nested_structure_needs_subcomposition`（**每段一条**）、`timeline_track_too_dense`（1 条）、`composition_file_too_large`（1 条）。
-  - 误报：`negative_z_index`（**每条 `z-index:-1/-2` 规则一条**），Fix 是 `isolation: isolate`（已加）。
+- 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
+  - 噪声：`gsap_callback_dom_measurement`（1）、`timeline_track_too_dense`（1）、`composition_file_too_large`（0~1，HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）。
+  - 误报：`negative_z_index`（**恒 4 条**＝ CSS 里负 z-index 规则的条数），Fix 是 `isolation: isolate`（已加在 `.seg-card` 上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
   - `gsap_infinite_repeat`（**开屏页才有**，1 条，默认强绑定）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
-  - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
+  - 于是条数≈`4 + 卡片数 + 2~3`：2 段稿（4 卡）11 条、3 段（5 卡）12 条、7 段（9 卡）17 条。**别拿"12 条"当固定值**——它只是一个规模的样本。
+  - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**（类型在 8 种稿子／两画幅的实测里恒定，条数才是变的）。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
 - `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
-- Layout 的 `text_occluded`：句子流滚出 `.verse-clip` 的行被裁掉但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。**做法**：给句子流里每个带文字的元素打 `data-layout-allow-occlusion` 等三个豁免属性——检查器只认元素自己身上的标记、**不继承祖先的**（模板已打在 `.verse` / `.verse-line` / `.verse-who`）。**再见到它**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了属性，按 `check` 报的选择器补那一层。
+- Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。**做法**：给句子流每个带文字的元素打豁免属性，但**三个属性的继承规则不同，别按一套打**：
+  - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：检查器只认元素**自己身上**的标记、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带，漏一层就报那一层。
+  - `data-layout-allow-overflow`：**继承到子树**（感知探针向上遍历祖先），打在 `.verse`（`overflow:hidden` 所在层）一个地方就覆盖整棵子树，逐行重复写是冗余的（实测删掉行上那份，Layout 输出逐条不变）。
+  - 留着 `overflow` 的理由：撤掉它，长段滚动时 `check` 会报一批 info 级 `text_box_overflow` / `container_overflow`——行滚出窗口本就是歌词式滚动的预期行为，那批 info 随段落长度线性增长、会把真正的噪声清单淹掉。代价是它顺带抑制子树内的 `text-clipping` / `content-cramped-container` / `foreground-over-panel`，这三样在 verse 里本就无意义（行天生要被窗口裁）。
+  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了 `occlusion`/`overlap`，按 `check` 报的选择器补那一层（补 `overflow` 不管用）。
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
 - 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
 - **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` / `layout` 是**废弃别名**，用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定。

@@ -94,4 +94,4 @@ tl.eventCallback("onUpdate", function() {
 // （window.__timelines[ 出现点必须在 fonts.ready 之后）；字幕 JS 里
 // Array.from 的 ".from(" 会被规则的 GSAP 补间正则误判，注册线在 fonts.ready
 // 之前就会触发 gsap_timeline_registered_before_async_build 误报。
-window.__timelines["main"] = tl;
+window.__timelines["__CTV_COMPOSITION_ID__"] = tl;

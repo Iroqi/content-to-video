@@ -30,6 +30,14 @@ from _cam_crop import cam_default_origin
 
 DEFAULT_ACCENT = get_default_accent()
 
+# 合成 ID：根元素 data-composition-id 与 runtime 注册时间线用的键**同一个值**
+# （hyperframes 契约要求两者一致）。它是本项目唯一的合成 ID 真源，经
+# __CTV_COMPOSITION_ID__ 注进 composition.html 与 runtime.js；templates/preview.js
+# 不走占位符装配，改为从根元素的 data-composition-id 现读。三处曾经各自硬编码
+# "main"——改一处漏两处时，注册键与根 ID 不匹配：只有一条时间线时 runtime 仍能
+# 兜住绑定，两条以上则渲染**静默冻结在 t=0**（无报错）。
+COMPOSITION_ID = "main"
+
 # ── 模板资产：版式的静态骨架 ────────────────────────────────────────────
 # CSS / JS / HTML 骨架是 templates/ 下的真实文件：结构与选择器写死，数值一律
 # 走 var(--ctv-*)——由本模块从 _template 内联的版式数据派生后注入 :root。
@@ -713,11 +721,20 @@ def _verse_html(seg, sid, ac_text_attr):
     选得相近时，观众手里只剩一串分不清轮次的字幕。只在轮次首句挂，同一
     说话人连着说三句不刷三遍标签（那会让字幕行首变成一列复读的抬头）。
     """
-    # 三个 layout 豁免属性打在 .verse 与**每一行**上，两处都要，缺一不可：
-    # 检查器只认元素自己身上的标记，**不继承祖先的**。只打 .verse 的话它照样
-    # 去量每行，而被 .verse-clip 裁在窗口外的半截行 rect 仍在原位 → 判
-    # text_occluded 报 error。实测（7 段竖屏稿）：只打 .verse 报 1 error，
-    # 连每行一起打则 0 error、warning 条数不变。快照确认画面本身没问题。
+    # 三个 layout 豁免属性的继承规则**不一样**，别按一套规则打：
+    #   · allow-occlusion / allow-overlap —— 检查器只认元素自己身上的标记，
+    #     **不继承祖先**：每行 .verse-line 与 .verse-who span 都得自带。缺了
+    #     就量那一行滚出窗口后仍在原位的 rect，判 text_occluded 报 error
+    #     （实测：只打 .verse 报 1 error；补上每行后 0 error，warning 条数不变）。
+    #   · allow-overflow —— **继承到子树**（感知探针向上遍历祖先），只打在
+    #     .verse（overflow:hidden 所在层）就覆盖整棵子树。曾经三个属性一起
+    #     打在每一层，行数是冗余的：实测改成只在 .verse 打，check 的 Layout
+    #     输出逐条一致（7 段稿与 12 句长段稿都是）。
+    # 留着 overflow 的理由：撤掉它，长段滚动时 check 会报一批 info 级的
+    # text_box_overflow / container_overflow——行滚出窗口本来就是歌词式滚动
+    # 的预期行为，那批 info 会随段落长度线性增长、把真正的噪声清单淹掉。
+    # 代价是它顺带抑制子树内的 text-clipping / content-cramped-container /
+    # foreground-over-panel；这三样在 verse 里本就无意义（行天生要被窗口裁）。
     _prev_who = None
     _vlines = []
     for _s2 in seg["sentences"]:
@@ -725,12 +742,11 @@ def _verse_html(seg, sid, ac_text_attr):
         # 轮次首句才标：与上一句同一说话人时不再重复。
         _who_html = ""
         if _who and _who != _prev_who:
-            # 三个豁免属性**也得打在 span 自己身上**：检查器只认元素自己带
-            # 的标记、不继承祖先（`.verse` 打过、每行 `.verse-line` 也打过，
-            # 实测同一份稿子加了这个 span 之后 Layout 立刻报
-            # `text_occluded … span:nth-of-type(1) "主播"`——滚出窗口的行 rect
-            # 仍在原位，判据与那两层一模一样，只是又往下走了一层 DOM）。
-            _who_html = (f'<span class="verse-who" data-layout-allow-overflow'
+            # occlusion/overlap 不继承，span 自己必须带（实测加了 span 之后
+            # Layout 立刻报 text_occluded … span:nth-of-type(1)，判据与行那层
+            # 一样：滚出窗口的 rect 仍在原位，只是又往下走了一层 DOM）。
+            # overflow 不写：祖先 .verse 上的那份会继承覆盖到它。
+            _who_html = (f'<span class="verse-who"'
                          f' data-layout-allow-overlap'
                          f' data-layout-allow-occlusion>{esc(_who)}</span>')
         _prev_who = _who
@@ -739,7 +755,7 @@ def _verse_html(seg, sid, ac_text_attr):
             # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
             # 永久失灵或错行——宁可都不高亮，也不错误高亮
             f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
-            f' data-layout-allow-overflow data-layout-allow-overlap'
+            f' data-layout-allow-overlap'
             f' data-layout-allow-occlusion>'
             f'{_who_html}{esc(_s2["text"])}</div>'
         )
@@ -748,6 +764,7 @@ def _verse_html(seg, sid, ac_text_attr):
         # rect 仍在原位——上越标题区（allow-overlap）、下碰底部元素如进度条
         # （allow-occlusion）、整体越出卡片（allow-overflow）。活动行锚定在
         # 窗口内 clipPad 处，真实重叠不可能发生。
+        # 三个属性在这里齐全：overflow 由这一层向下继承到每一行。
         # --ctv-verse-who-color 只在这里写一次：值来自本段 accent 的文本安全
         # 副本（_card_colors 已过 ensure_text_contrast 保到 check 门禁最严档），
         # CSS 侧只消费变量、不存第二份色值。
@@ -1560,6 +1577,7 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_GSAP__": gsap_code,
         "__CTV_CUES__": sub_cues_js,
         "__CTV_VERSE_CLIP__": f"{rc.verse_clip:g}",
+        "__CTV_COMPOSITION_ID__": COMPOSITION_ID,
     }, "runtime.js")
     html = _fill(_load_asset("composition.html"), {
         "__CTV_GSAP_SRC__": gsap_src_attr,
@@ -1572,6 +1590,7 @@ def generate_html(manifest, audio_src, images=None,
         "__CTV_HEIGHT__": str(height),
         "__CTV_FPS__": str(fps),
         "__CTV_AUDIO_SRC__": quote(audio_src),
+        "__CTV_COMPOSITION_ID__": COMPOSITION_ID,
     }, "composition.html")
 
     return html

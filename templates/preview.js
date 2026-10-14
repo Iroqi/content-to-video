@@ -25,7 +25,11 @@
   var H = parseInt(root.dataset.height, 10);
   if (!(W > 0 && H > 0)) throw new Error("preview: composition 未提供有效画布尺寸");
   var dur = parseFloat(root.dataset.duration || '0');
-  var tl = (window.__timelines && window.__timelines['main']) || null;
+  // composition id 从根元素现读，不写死：它与 runtime 注册时间线用的键是同一个
+  // 值（hyperframes 要求两者一致——不一致且注册了两条以上时间线时，渲染会静默
+  // 冻结在 t=0）。本文件走原样复制、不参与占位符装配，所以只能从 DOM 取。
+  var tl = (window.__timelines && root.dataset.compositionId
+            && window.__timelines[root.dataset.compositionId]) || null;
   var srcEl = document.getElementById('main-audio');
   var audio = (srcEl && srcEl.getAttribute('src'))
       ? new Audio(srcEl.getAttribute('src')) : null;

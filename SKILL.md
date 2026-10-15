@@ -71,7 +71,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布再加「整页画布的密度与层次」。要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」「跨段接续」。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的完整档位组合见同一份文档）。
+- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布再加「整页画布的密度与层次」。要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」（跨段接续在其中）。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的完整档位组合见同一份文档）。
 
 两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）。走页面墙钟的运动破坏逐帧可复现，所以只有 SVG 的导演档能"演"——固定画面交给 ImageGen 即可。
 

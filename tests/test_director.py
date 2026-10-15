@@ -915,6 +915,159 @@ class DirectorPrepare(unittest.TestCase):
         self.assertEqual([e for e in errs if "越界" in e], [])
         self.assertIn("inline_svg", images["seg-a"])
 
+    def _seg(self, sid, layout):
+        return {"id": sid, "layout": layout,
+                "sentences": [{"index": 0, "start_time": 0.0, "duration": 2.0},
+                              {"index": 1, "start_time": 2.0, "duration": 2.0}]}
+
+    def test_canvas_director_blank_frame0_warns(self):
+        """整页画布 × 导演，所有可渲染元素都以 opacity=0 起步 → 起始帧全空。
+        画布页没有标题层也没有字幕层，第一拍落子之前就是整片空白。"""
+        rel = _write_svg(self.tmp.name, "seg-a",
+                         '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                         'viewBox="0 0 1080 1440"><g id="node" opacity="0">'
+                         '<rect width="200" height="100" fill="#fff"/></g></svg>')
+        images = {"seg-a": {"src": rel, "director": {
+            "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
+        errs, warns = G.director_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
+        self.assertEqual(errs, [])
+        hook = [w for w in warns if "起始帧全空" in w]
+        self.assertEqual(len(hook), 1, warns)
+
+    def test_canvas_director_with_structure_base_stays_silent(self):
+        """结构底（面板/坐标轴）不写 opacity、和页面同时到位 → 起始帧有钩子，不报。"""
+        rel = _write_svg(self.tmp.name, "seg-a",
+                         '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                         'viewBox="0 0 1080 1440"><rect id="panel" x="60" y="300" width="960" '
+                         'height="700" fill="#16233a"/><g id="node" opacity="0">'
+                         '<rect width="200" height="100" fill="#fff"/></g></svg>')
+        images = {"seg-a": {"src": rel, "director": {
+            "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
+        _, warns = G.director_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
+        self.assertEqual([w for w in warns if "起始帧全空" in w], [])
+
+    def test_slot_director_blank_frame0_not_checked(self):
+        """槽位页有标题层与句子流层兜底，起始帧全空这条只查整页画布。"""
+        rel = _write_svg(self.tmp.name, "seg-a",
+                         '<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+                         'viewBox="0 0 980 735"><g id="node" opacity="0">'
+                         '<rect width="200" height="100" fill="#fff"/></g></svg>')
+        images = {"seg-a": {"src": rel, "director": {
+            "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
+        segs = [{"id": "seg-a", "sentences": [
+            {"index": 0, "start_time": 0.0, "duration": 2.0}]}]
+        _, warns = G.director_prepare(images, segs, self.tmp.name)
+        self.assertEqual([w for w in warns if "起始帧全空" in w], [])
+
+    def test_keep_page_frame0_not_checked(self):
+        """接续页（stage:"keep"）起点 = 上一页演完的画面，不是盘上原图——全隐藏的
+        原图也不该替接续页报"起始帧全空"。同一张全隐藏的图：首页 canvas 导演报一条，
+        接续页共文件不添第二声。"""
+        rel = _write_svg(self.tmp.name, "seg-a",
+                         '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                         'viewBox="0 0 1080 1440"><g id="node" opacity="0">'
+                         '<rect width="200" height="100" fill="#fff"/></g></svg>')
+        images = {
+            "seg-a": {"src": rel, "director": {
+                "steps": [{"at": 0, "target": "#node", "set": {"opacity": 1}}]}},
+            "seg-b": {"src": rel, "stage": "keep", "director": {
+                "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}},
+        }
+        segs = [self._seg("seg-a", "canvas"), self._seg("seg-b", "canvas")]
+        errs, warns = G.director_prepare(images, segs, self.tmp.name)
+        self.assertEqual(errs, [])
+        hook = [w for w in warns if "起始帧全空" in w]
+        self.assertEqual(len(hook), 1, warns)   # 只有首页那一条，接续页不添
+
+    def test_opacity_zero_via_style_and_inherited_group_hidden(self):
+        """opacity=0 写在 inline style 或组上继承下来，同样算隐藏（visibility/
+        display 同理）；<defs> 里的元素不参与可见性账。"""
+        rel = _write_svg(self.tmp.name, "seg-a",
+                         '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+                         'viewBox="0 0 1080 1440">'
+                         '<defs><rect id="def-only" width="10" height="10"/></defs>'
+                         '<g style="opacity:0"><rect id="child" width="100" height="100"/></g>'
+                         '<rect id="hidden" width="100" height="100" visibility="hidden"/>'
+                         '</svg>')
+        raw = open(os.path.join(self.tmp.name, rel), encoding="utf-8").read()
+        n_vis, n_all = G._svg_frame0_visibility(raw)
+        self.assertEqual(n_all, 3)      # defs 里的不算；g / child / hidden 三个都算
+        self.assertEqual(n_vis, 0)
+
+
+class BackgroundWarns(unittest.TestCase):
+    """满幅背景 <rect> 的生成期体检：SVG 应透明、让模板三层透出来，自带幅底要出声。
+    判据与 check_svg 共用 _svg_sanitize.is_full_bleed_rect（单一真源）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _run(self, svg_text, *, layout=None, sid="seg-a", extra_segs=()):
+        rel = _write_svg(self.tmp.name, sid, svg_text)
+        seg = {"id": sid, "sentences": [{"index": 0, "start_time": 0.0}]}
+        if layout:
+            seg["layout"] = layout
+        return G.svg_background_warnings(
+            {sid: {"src": rel}}, [seg] + list(extra_segs), self.tmp.name)
+
+    def test_slot_full_bleed_rect_warns_colorband(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735">'
+               '<rect width="980" height="735" fill="#fff"/>'
+               '<rect x="10" y="10" width="100" height="50"/></svg>')
+        warns = self._run(svg)
+        self.assertEqual(len(warns), 1)
+        self.assertIn("色差框", warns[0])
+        self.assertIn("透明", warns[0])
+
+    def test_slot_percent_rect_warns_too(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735"><rect width="100%" height="100%" fill="#0b1020"/></svg>')
+        warns = self._run(svg)
+        self.assertEqual(len(warns), 1, warns)
+
+    def test_canvas_full_bleed_rect_warns_covers_layers(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+               'viewBox="0 0 1080 1440"><rect width="1080" height="1440" fill="#0b1020"/>'
+               '</svg>')
+        warns = self._run(svg, layout="canvas")
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("三层", warns[0])
+
+    def test_no_full_bleed_rect_stays_silent(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735"><rect x="10" y="10" width="100" height="50"/>'
+               '<path d="M0 0 L980 735"/></svg>')
+        self.assertEqual(self._run(svg), [])
+
+    def test_raster_image_not_checked(self):
+        """栅格图没有"图内的字会不会被底色框住"的问题，也不该读 SVG。"""
+        d = os.path.join(self.tmp.name, "images")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "seg-a.png"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n")
+        seg = {"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}
+        warns = G.svg_background_warnings(
+            {"seg-a": {"src": "images/seg-a.png"}}, [seg], self.tmp.name)
+        self.assertEqual(warns, [])
+
+    def test_keep_chain_shares_one_warn_per_file(self):
+        """同一张图被 keep 链里多个段落引用时，按路径只报一次。"""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
+               'viewBox="0 0 1080 1440"><rect width="1080" height="1440" fill="#0b1020"/>'
+               '</svg>')
+        rel = _write_svg(self.tmp.name, "seg-a", svg)
+        segs = [{"id": "seg-a", "layout": "canvas",
+                 "sentences": [{"index": 0, "start_time": 0.0}]},
+                {"id": "seg-b", "layout": "canvas",
+                 "sentences": [{"index": 0, "start_time": 0.0}]}]
+        warns = G.svg_background_warnings(
+            {"seg-a": {"src": rel}, "seg-b": {"src": rel, "stage": "keep"}},
+            segs, self.tmp.name)
+        self.assertEqual(len(warns), 1, warns)
+
 
 class CheckSvgWallclock(unittest.TestCase):
     def test_wallclock_animation_warns_director_hint(self):

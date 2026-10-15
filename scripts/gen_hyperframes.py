@@ -155,7 +155,8 @@ from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa:
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
-from _svg_sanitize import sanitize_svg_for_inline  # noqa: E402
+from _svg_sanitize import (_local, _style_map, is_full_bleed_rect,  # noqa: E402
+                           sanitize_svg_for_inline)
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
@@ -474,6 +475,142 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
                 f"失配只说元素超出容器，看不出该改哪。按 {box_w}×{box_h} 重画"
                 f"这张 SVG")
     return errs
+
+
+def svg_background_warnings(images, segments, out_dir):
+    """满幅背景 <rect> 的生成期体检：槽位与整页画布的所有 SVG 配图都查。
+
+    SVG 应当**透明**、让页面渐变与模板三层透出来（references/canvas.md
+    「不铺满幅底」），但设计/生图工具常给文件带一张铺满 viewBox 的底色 rect——
+    槽位版式会在页面上形成一圈色差框，整页画布把模板三层整个盖掉退回一片死平。
+    `check_svg.py` 只在作者主动自查时跑；这一遍保证不跑自查、直接 `gen_hyperframes`
+    也会按段落出声。判据与 check_svg 共用 `_svg_sanitize.is_full_bleed_rect`
+    （单一真源）。warn 不 error：确实要自画满幅底（浅色页 / 照片感场景）是合法
+    取舍，有意为之可忽略。同一文件被 keep 链里多个段落引用时按路径只报一次。
+    """
+    seen = set()
+    warns = []
+    for seg in segments:
+        sid = seg["id"]
+        entry = images.get(sid)
+        if not entry or not is_svg_path(entry["src"]):
+            continue
+        path = os.path.join(out_dir, entry["src"])
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError:
+            continue
+        if _local(root.tag) != "svg":
+            continue
+        size = _root_px_size(root)
+        if size is None:
+            continue
+        vb_w, vb_h = size
+        rects = [el for el in root.iter()
+                 if is_full_bleed_rect(el, vb_w, vb_h)]
+        if not rects:
+            continue
+        if seg_layout(seg) == "canvas":
+            warns.append(
+                f"段落 '{sid}' 的整页画布配图 {entry['src']} 铺了一张满幅底板 "
+                f"<rect>：模板本来就在这一页底下画好了三层（主题渐变 / 只在页缘"
+                f"显形的网格 / 本段 accent 氛围光），满幅 rect 把三层整个盖掉，"
+                f"画布页就退回一片死平。删掉它让三层透出来（见 "
+                f"references/canvas.md「不铺满幅底」）。确实要把整页换成另一种"
+                f"底色时可忽略本条")
+        else:
+            warns.append(
+                f"段落 '{sid}' 的配图 {entry['src']} 带一张铺满 viewBox 的背景 "
+                f"<rect>——槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）；"
+                f"SVG 应保持透明，让页面渐变与该段 accent 氛围光透出来（见 "
+                f"references/canvas.md「不铺满幅底」）")
+    return warns
+
+
+def _root_px_size(root):
+    """根标签的固有像素尺寸：(宽, 高)。优先纯数字 width/height（带 % 的不认），
+    拿不到退回 viewBox 第 3/4 段；都读不出返回 None。"""
+    def _num(v):
+        m = re.match(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$", str(v or ""))
+        return float(m.group(1)) if m else None
+    w, h = _num(root.get("width")), _num(root.get("height"))
+    if w and h:
+        return w, h
+    vb = re.split(r"[,\s]+", (root.get("viewBox") or "").strip())
+    if len(vb) == 4:
+        try:
+            vw, vh = float(vb[2]), float(vb[3])
+        except ValueError:
+            return None
+        if vw and vh:
+            return vw, vh
+    return None
+
+
+_FRAME0_HIDDEN_TAGS = frozenset({"defs", "title", "desc", "metadata", "style"})
+
+
+def _is_zero_opacity(v):
+    """静态 opacity 值是否等于 0（"0" / "0.0" / "0e0" 都算）。"""
+    if v is None:
+        return False
+    m = re.match(r"^\s*([-+]?\d*\.?\d+)\s*$", str(v).strip())
+    return bool(m) and float(m.group(1)) == 0.0
+
+
+def _svg_frame0_visibility(raw):
+    """静态 SVG 第 0 帧的可见性账 → (可见渲染元素数, 渲染元素总数)。
+
+    导演档的内容元素按约定以 `opacity=0` 起步、逐拍点亮；结构底不写 opacity、
+    和页面同时到位。若**所有**可渲染元素（`<defs>` 之外、非 title/desc/
+    metadata/style）都从隐藏起步（自身或任一祖先 `opacity=0` / `visibility:hidden`
+    / `display:none`），这一页开头就是整片空白。visibility 本可被子元素覆盖，
+    保守取"任一层隐藏即隐藏"——宁可多报一条，也不让空白开场静默出货。
+    """
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return 0, 0
+    if _local(root.tag) != "svg":
+        return 0, 0
+    parent = {c: p for p in root.iter() for c in p}
+    # <defs> 子树整体不参与：它只被 <use> 间接引用，本身不渲染。
+    defs_inside = set()
+    for el in root.iter():
+        cur = parent.get(el)
+        while cur is not None:
+            if _local(cur.tag) == "defs":
+                defs_inside.add(el)
+                break
+            cur = parent.get(cur)
+    n_vis = n_all = 0
+    for el in root.iter():
+        if el is root or el in defs_inside or _local(el.tag) in _FRAME0_HIDDEN_TAGS:
+            continue
+        n_all += 1
+        hidden = False
+        cur = el
+        while cur is not None:
+            sm = _style_map(cur)
+            if (_is_zero_opacity(sm.get("opacity", cur.get("opacity")))
+                    or (sm.get("visibility", cur.get("visibility")) or "").strip().lower()
+                    in ("hidden", "collapse")
+                    or (sm.get("display", cur.get("display")) or "").strip().lower()
+                    == "none"):
+                hidden = True
+                break
+            cur = parent.get(cur)
+        if not hidden:
+            n_vis += 1
+    return n_vis, n_all
 
 
 def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
@@ -905,6 +1042,21 @@ def director_prepare(images, segments, out_dir):
                             f"{src} 里找不到对应 id/class 的元素——选择器落空不会报错，只会"
                             "静默没有动画。给该元素补上这个 id/class，或改 target")
         entry["inline_svg"] = markup
+        # 起始帧钩子：只查整页画布 × 导演。画布页不生成标题层与句子流层，开头整片
+        # 空白时观众对着空画面不知所以然；槽位页有标题和句子流兜底，不需要这条。
+        # 接续页（stage:"keep"）跳过：它的起点是上一页演完的画面，不是盘上原图。
+        # 判据只读静态可见性（见 _svg_frame0_visibility 的"宁可多报"口径）：
+        # 导演约定"内容 opacity=0 起步、结构底同时到位"，全隐藏起步 = 开场没有钩子。
+        if not carried and seg is not None and seg_layout(seg) == "canvas":
+            n_vis, n_all = _svg_frame0_visibility(raw)
+            if n_all and n_vis == 0:
+                warns.append(
+                    f"段落 '{sid}' 的整页画布导演档起始帧全空：SVG 里 {n_all} 个可渲染"
+                    f"元素全部以 opacity=0 / visibility:hidden 起步，第一拍落子之前"
+                    f"整页是空白（画布页没有标题层也没有字幕层）。开场要留钩子：把"
+                    f"结构底（坐标轴/外框/标题）不写进 director.steps、让它和页面同时"
+                    f"到位，或把第一拍 set 在页起点（见 references/canvas.md"
+                    f"「整页画布的密度与层次」的起始帧一条）")
         # 运镜裁切：源码看着坐标都在幅内，是 scale 把内容推出去的，只有这里同时握有
         # SVG 原文与 steps（判据与口径见 _cam_crop 模块头）。warn 不 error：途中出画是
         # 合法演法，这里只报"静止位看不见的内容"，而那也可能是作者故意的取舍。
@@ -1293,7 +1445,11 @@ def main(argv=None):
     # "cover 切掉图边缘上的字"，与画布版式那条各管一段版式，互不覆盖，两边都收齐再退。
     _slot_errs = slot_svg_ratio_errors(
         images, manifest["segments"], out_dir, *get_image_box(args.aspect))
-    for _w in _canvas_warns:
+    # 满幅背景 <rect>：SVG 应透明、让模板三层透出来（判据与 check_svg 同一份，
+    # 见 svg_background_warnings）。不跑自查、直接生成也按段落出声；warn 不 error，
+    # 有意为之（浅色页/照片感整页）可忽略。
+    _bg_warns = svg_background_warnings(images, manifest["segments"], out_dir)
+    for _w in _canvas_warns + _bg_warns:
         print(f"[warn] {_w}", file=sys.stderr)
     if _canvas_errs or _slot_errs:
         for _e in _canvas_errs + _slot_errs:

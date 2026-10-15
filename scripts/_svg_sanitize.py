@@ -93,6 +93,38 @@ def _is_external_href(value):
             or _EXT_URL.search(v) is not None)
 
 
+# 满幅背景 <rect> 的判据只有这一份：check_svg.py 的自查 warn 与 gen_hyperframes.py
+# 的生成期 warn 共用，谁都不许再抄一份（SVG 应透明、让模板三层透出来，见
+# references/canvas.md「不铺满幅底」）。口径与 check_svg 旧实现一字不差：
+#   ① 100% × 100%；
+#   ② 像素尺寸 ≥ viewBox 的 98% 且 x/y ≤ 1（几乎贴边）；
+# 带 % 的其他宽度（50% 之类）两种都不是，不误伤半幅装饰底板。
+_NUM = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$")
+
+
+def _parse_num(v):
+    """纯数字（可带 px 后缀）→ float；其他（% / em / 缺省）→ None。"""
+    if v is None:
+        return None
+    m = _NUM.match(str(v))
+    return float(m.group(1)) if m else None
+
+
+def is_full_bleed_rect(el, vb_w, vb_h):
+    """`<rect>` 是否铺满 viewBox（背景底板）。"""
+    if _local(el.tag) != "rect" or not vb_w or not vb_h:
+        return False
+    w, h = el.get("width"), el.get("height")
+    pct = w == "100%" and h == "100%"
+    rw = None if str(w or "").endswith("%") else _parse_num(w)
+    rh = None if str(h or "").endswith("%") else _parse_num(h)
+    if pct or (rw and rh and rw >= vb_w * 0.98 and rh >= vb_h * 0.98
+               and (_parse_num(el.get("x")) or 0) <= 1
+               and (_parse_num(el.get("y")) or 0) <= 1):
+        return True
+    return False
+
+
 def _strip_keyframes(css):
     """剥掉 @keyframes（含厂商前缀）规则体：墙钟动画的定义本身。
 

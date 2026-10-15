@@ -24,11 +24,9 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 
 - **portrait**：标题区定高（模板派生）、两行钳制，超出裁切；4:3 画布（980×735）居中，verse 钉底。标题区压到画布顶边时报 `[template] 竖屏标题区放不进`。
 - **landscape**：左文字栏固定 613px 宽，右侧槽位 1067×800。**没有行数钳制**，守卫只降字号：超 16 字降到 54px、超 22 字降到 48px；超 16 字打 `[warn]`。
-- **整页画布（`layout: "canvas"`，两画幅同一份规则）**：三层塌成一层——配图拉满（1080×1440 / 1920×1080，圆角/外发光/1px 内描边全撤），标题层与句子流层**不生成**；**不要自画满幅底板**（见 `references/canvas.md`「不铺满幅底」）。文字对比度是**画布作者的责任**：`Contrast` 门禁看不见 SVG 里的字，生成期按文件拦——该段必须有配图，SVG 比例与图内 px 字号跟画幅对账（见 `references/canvas.md`「整页画布」「图内文字的对比度」）。进度条与底轨抬到 `z-index:2`。
+- **整页画布（`layout: "canvas"`，两画幅同一份规则）**：三层塌成一层——配图拉满整幅（圆角/外发光/1px 内描边全撤），标题层与句子流层**不生成**；**不要自画满幅底板**（见 `references/canvas.md`「不铺满幅底」）。文字对比度是**画布作者的责任**：`Contrast` 门禁看不见 SVG 里的字，生成期按文件拦——该段必须有配图，SVG 比例与图内 px 字号跟画幅对账（见 `references/canvas.md`「整页画布」「图内文字的对比度」）。进度条与底轨抬到 `z-index:2`。
 
-opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agenda"` 由 pipeline 盖章）。要换成整页海报用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页只剩一张满幅配图 + 进度条。字段、行数上限、`nameTrim`、守卫阈值**以 `references/writing.md` 为准**。agenda 列撑满时牺牲行列表尾部。
-
-画面单位是**段落**，段内基本静止，只让字幕句子逐句切换与高亮。
+opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agenda"` 由 pipeline 盖章）。要换成整页海报用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页只剩一张满幅配图 + 进度条。字段、行数上限、`nameTrim`、守卫阈值**以 `references/writing.md` 为准**。
 
 ## 动画
 
@@ -37,12 +35,12 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 - 段落入场默认**方向擦除（wipe）**：新卡用 clip-path 从全遮蔽补到全覆盖（时长与缓动取 `animation.segmentWipe`）。`style` 全片统一：`line`（**默认**）/ `vertical` / `diagonal` / `circle`（71%）；写错档生成期报错。旧卡**不淡出**。整页画布除外（硬切）。
 - **`line` 引导线转场**：线是新卡末子，其下缘即新卡 clip-path 的揭示边；旧页随后整层剥离并挂 `.peel-shade`。`wipe` 钳到 0 时段线与剥离不生成。
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`。
-- **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。再往外一层是 hyperframes 自己的可见窗口 `[data-start, data-start + data-duration)`——**半开区间**，卡在 `start + duration` 那一刻就被隐藏。所以补间的**结束态要落在窗口内、别正好压在末端**：压线那一帧永不渲染（不报错，只是动画像少了一拍）。苹果风开场目前安全，靠的是它只挂在开屏页、而开屏页 `wipe=0`（窗口末端正好等于"被下一页盖住"的时刻）；哪天把开场编排用到 `wipe>0` 的页上，收尾就会被卡的窗口末端切掉——那时候要按 `段时长 + gap + wipe` 重算，不是按可见窗口算。
+- **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**。窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐。再往外一层是 hyperframes 自己的可见窗口 `[data-start, data-start + data-duration)`——**半开区间**，卡在 `start + duration` 那一刻就被隐藏。所以补间的**结束态要落在窗口内、别正好压在末端**：压线那一帧永不渲染（不报错，只是动画像少了一拍）。窗口末端按 `段时长 + gap + wipe` 算，不是按可见窗口算。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`）。透明卡做 wipe 会双影叠字。
 - **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现。按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子（`at_time` 靠前锚点），见 `references/canvas.md`「SVG 动画：两档」；开头整片空白会被生成期按段落打 `[warn]`「起始帧全空」（见 `references/canvas.md`「整页画布的密度与层次」的起始帧一条）。`stage: "keep"` 的跨段接续页同样 `wipe=0`、不生成配图入场补间（见 `references/canvas.md`「跨段接续」）。
 - title / image 按模板参数入场；tagline 无独立补间，随段落卡整体显隐。**CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
-- verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）；`speakers[].label` 有 6 字上限。字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
-- 每段 accent 派生一组装饰（一律经 `color-mix`）：氛围光、槽位外发光与 1px 内描边（半径 `--ctv-img-glow`）、tagline 刻度条、进度条辉光——选 accent 时注意它染整帧氛围。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
+- verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）。字幕切换在成片里是**瞬时**的：淡入/滚动补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**。
+- 每段 accent 派生氛围光、槽位外发光、tagline 刻度条与进度条辉光（一律经 `color-mix`）——**选 accent 时注意它染整帧氛围**。`bare-media` 的 SVG 槽位不吃外发光与描边（见 `references/canvas.md`「不铺满幅底」）。
 
 ### 苹果风开场（开屏 agenda 卡默认强绑定）
 
@@ -53,17 +51,11 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 - 装不下时打 `[warn]`（可见窗口、需要的时长、行数与字数），症状见「画面翻车速查表」。
 - 锚点是**擦除起点 `win_start`** 而不是段起点。
 
-## 版式真源
-
-版式数值（画布尺寸、标题区、句子流、圆角、动画）从 `scripts/_template.py` 派生 CSS 变量，配色由 `scripts/_theme.py` 派生。新增视觉参数先加进这两个 py，再由 renderer 注入 `--ctv-*`；可留在 `templates/composition.css` 的常量写在 CSS 文件头与各块注释里。
-
-模板改动后重新生成 HTML，在浏览器打开 `hf-project/index.html` 逐段看预览。
-
 ## 配图
 
-- 画布尺寸与配图规格见 `references/imagery.md`（第 3 步规则以它为准）；素材一律 `cover` 铺满画布。
+- 画布尺寸与配图规格见 `references/imagery.md`（第 3 步规则以它为准）；素材一律 `cover` 铺满画布。模板改动后重新生成 HTML，打开 `hf-project/index.html` 逐段看预览。
 - 配图语义是否正确只能靠人眼判断（预览 + 成片）。
-- **SVG 的「导演」**：images.json 写 `director` 时，SVG 经 `scripts/_svg_sanitize.py` 净化后**内联成活 DOM**，`director.steps` 按句起点展开成 GSAP 补间（位置 = `seg.sentences[at].start_time`，见 `canvas.md`「SVG 动画：两档」）；内联剥掉 SMIL / CSS 动画，净化删掉 `<script>`/`on*`/`<foreignObject>`/外链。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
+- **SVG 的「导演」**：images.json 写 `director` 时 SVG 净化后内联成活 DOM、`director.steps` 按句起点展开成 GSAP 补间——写法与净化清单见 `references/canvas.md`「SVG 动画：两档」。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟。
 
 ## HTML 预览与渲染
 
@@ -105,7 +97,7 @@ hf-project/
 
 - `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
 - `workers`：字面透传给 `hyperframes render`。CLI 不给时默认是 `auto`（自己按机器校准），但 `run.py` **恒显式传 `--workers`**——走本技能就永远拿不到那份自动校准，要多少显式写。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
-- `quality`：五档透传（`draft` / `looks` / `standard` / `high` / `delivery`）。`looks` 默认（standard + CRF 16）；`draft` 省约 15%、预览够用；`delivery` 是交付档；`standard`/`high` 是裸档。
+- `quality`：五档透传（`draft` / `looks` / `standard` / `high` / `delivery`），底层其实只有 draft / standard / high 三档：`looks` = standard + CRF 16（默认），**`delivery` 就是 high**（同一档，不是更高质量）。`draft` 省约 15%、预览够用。
 - **固定开销**：每调用一次约白付 8.5s，冷跑第一次多约 6s。先 `--until html` + 快照看够，再整片渲一次。
 - **低配机器（`--low-memory-mode`）**：CLI 把 worker 钉成 1（按总内存 ≤8GB 自判）：
 
@@ -123,20 +115,20 @@ npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时�
 npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
 
-本节口径对着 **v0.8.162** 的 `hyperframes` 实测过（含翻 CLI 源码逐条印证豁免属性的判定方式；v0.8.158 首测，0.8.162 复测三场景——竖屏 2 段、横屏 2 段、竖屏 6 段，findings 类型逐条一致）。CLI 迭代快，升级后先看 `--help` 再照这里改写法。
+本节口径对着 **v0.8.162** 实测过（三场景：竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。CLI 迭代快，升级后先看 `--help` 再照这里改写法。
 
 - `check` 会真报问题：字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
   - 噪声：`gsap_callback_dom_measurement`（1）、`timeline_track_too_dense`（1）、`composition_file_too_large`（0~1，HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）。
   - 误报：`negative_z_index`（**恒 4 条**＝ CSS 里负 z-index 规则的条数），Fix 是 `isolation: isolate`（已加在 `.seg-card` 上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
   - `gsap_infinite_repeat`（**开屏页才有**，1 条，默认强绑定）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
-  - 于是条数≈`4 + 卡片数 + 2~3`：2 段稿（4 卡）11 条、3 段（5 卡）12 条、7 段（9 卡）17 条。**别拿"12 条"当固定值**——它只是一个规模的样本。
+  - 于是条数≈`4 + 卡片数 + 2~3`——**条数随卡片数走，别拿任何一个样本当固定值**。
   - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**（类型在 8 种稿子／两画幅的实测里恒定，条数才是变的）。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
 - `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
 - Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，逐行量就判"文字藏在不透明元素下"。**做法**：给句子流每个带文字的元素打豁免属性，但**三个属性的继承规则不同，别按一套打**：
   - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：检查器只认元素**自己身上**的标记、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带，漏一层就报那一层。
   - `data-layout-allow-overflow`：**继承到子树**（感知探针向上遍历祖先），打在 `.verse`（`overflow:hidden` 所在层）一个地方就覆盖整棵子树，逐行重复写是冗余的（实测删掉行上那份，Layout 输出逐条不变）。
-  - 留着 `overflow` 的理由：撤掉它，长段滚动时 `check` 会报一批 info 级 `text_box_overflow` / `container_overflow`——行滚出窗口本就是歌词式滚动的预期行为，那批 info 随段落长度线性增长、会把真正的噪声清单淹掉。代价是它顺带抑制子树内的 `text-clipping` / `content-cramped-container` / `foreground-over-panel`，这三样在 verse 里本就无意义（行天生要被窗口裁）。
+  - `overflow` 别撤：撤掉后长段滚动会刷出一批 info 级 `text_box_overflow`，它随段落长度线性增长、把真正要看的清单淹掉。代价是它顺带抑制子树内的 `text-clipping` / `content-cramped-container` / `foreground-over-panel`——这三样在 verse 里本就无意义。
   - **同一个属性在两个阶段规则不同，别按一套写**：上面说的是 **Layout 阶段**（`layout-audit`，判 `text_occluded`/overlap 用的是元素**自己身上**的 `hasAttribute`）；**Contrast 阶段**（`contrast-audit`）的 `occlusion` 走的是 `closest()`，打任一祖先上都覆盖整棵子树。所以只用两句话：Layout 要豁免就打在报出来的那一层，Contrast 要豁免打祖先层即可；补 `overflow` 对 Layout 的 `text_occluded` 不管用。
   - **调 `proseCoverageFloor` 优于层层打标**：成句/成段的长文本（`text_occluded` 判据里叫 prose）要被盖住超过 15% 才报，这个后验门限可以压——`npx -y hyperframes check <项目目录> --layout "proseCoverageFloor=0.05"`。原子标签（单词级的短 label）不受它保护，**沾到就算**。
   - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了 `occlusion`/`overlap`，按 `check` 报的选择器补那一层。
@@ -144,7 +136,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
 - 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
 - **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` 是**废弃别名**（`layout` 在新版已整个移除），都用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定；要 warning 也卡住交付，给 `--strict`。
-- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`。`npx hyperframes preview --background` 起预览服务：与渲染同一条 runtime。
+- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes preview --background`。
 
 ## 画面翻车速查表
 

@@ -57,7 +57,8 @@ import xml.etree.ElementTree as ET
 
 from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
-                           _local, _style_map, is_full_bleed_rect)  # noqa: E402  与净化同一份 DOM 读法
+                           _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
+                           is_full_bleed_rect)
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
@@ -113,20 +114,12 @@ def _bg_family(theme):
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
-_NUM = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$")
 
 
 def _prop(el, name):
     """属性优先取 style，其次取同名表现属性。"""
     sm = _style_map(el)
     return sm.get(name, el.get(name))
-
-
-def _parse_num(v):
-    if v is None:
-        return None
-    m = _NUM.match(str(v))
-    return float(m.group(1)) if m else None
 
 
 # ── 整页画布的竖向占位（密度自查）─────────────────────────────
@@ -174,8 +167,9 @@ def _ink_band(el, tag, inherited, page_w, page_h):
         return (min(y1, y2) - _stroke_pad(el, inherited),
                 max(y1, y2) + _stroke_pad(el, inherited))
     if tag in ("polygon", "polyline"):
-        pts = [float(v) for v in re.split(r"[,\s]+", (el.get("points") or "").strip())
-               if _NUM.match(v)]
+        pts = [v for v in map(_parse_num,
+                              re.split(r"[,\s]+", (el.get("points") or "").strip()))
+               if v is not None]
         ys = pts[1::2]
         if not ys:
             return None
@@ -288,8 +282,8 @@ DOT_MAX_R = 4.0
 
 def _pt_list(points):
     """points 属性 → [(x, y), ...]；空/畸形返回 None。"""
-    vals = [float(v) for v in re.split(r"[,\s]+", (points or "").strip())
-            if _NUM.match(v)]
+    vals = [v for v in map(_parse_num, re.split(r"[,\s]+", (points or "").strip()))
+            if v is not None]
     if len(vals) < 4 or len(vals) % 2:
         return None
     return [(vals[i], vals[i + 1]) for i in range(0, len(vals), 2)]

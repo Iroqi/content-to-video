@@ -5,6 +5,7 @@
 """
 import inspect
 import os
+import re
 import sys
 import unittest
 
@@ -270,6 +271,36 @@ class CheckFramesGuards(unittest.TestCase):
         self._stub(metrics={"nonblack_ratio": 0.5, "color_buckets": 9})
         _f, report = CF.check_video("x.mp4", timestamps=[10, 20])
         self.assertTrue(any("成片 10.0s 之外" in l for l in report), report)
+
+
+class NumberParsingSingleSource(unittest.TestCase):
+    """「数字怎么读」的两条判据各只有一份字面量。
+
+    修复前：`_svg_sanitize` 那条"可带 px 的数字"正则被 `check_svg` 抄一遍、
+    `gen_hyperframes._root_px_size` 内联第三遍；纯数字判据被 `_path_morph`
+    与 `_stage_carry` 各声明一遍。判据分家的症状是同一份数值在一个环节被认、
+    在另一个环节被当字符串——两边都不报错，只是结论对不上。
+    """
+
+    def _declaring_files(self, snippet):
+        """scripts/ 里直接写了这段正则字面量的文件。"""
+        needle = re.escape(snippet)
+        hits = []
+        for fn in sorted(os.listdir(SCRIPTS_DIR)):
+            if not fn.endswith(".py"):
+                continue
+            with open(os.path.join(SCRIPTS_DIR, fn), encoding="utf-8") as f:
+                if re.search(needle, f.read()):
+                    hits.append(fn)
+        return hits
+
+    def test_svg_number_with_px_declared_once(self):
+        self.assertEqual(self._declaring_files(r"([-+]?\d*\.?\d+)\s*(px)?"),
+                         ["_svg_sanitize.py"])
+
+    def test_pure_number_declared_once(self):
+        self.assertEqual(self._declaring_files(r"(?:[eE][-+]?\d+)?$"),
+                         ["_script_utils.py"])
 
 
 if __name__ == "__main__":

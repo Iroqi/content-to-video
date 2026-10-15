@@ -114,8 +114,7 @@ def _parse_env_file(path):
             k = k.strip()
             # 兼容 shell 习惯写法（export KEY=VALUE）：
             # key 上的 export 前缀剥掉，否则查表永远 miss
-            if k.startswith("export "):
-                k = k[len("export "):].strip()
+            k = k.removeprefix("export ").strip()
             v = v.strip()
             # 引号与转义交给 shlex：手写 find(引号) 吃不下 `"a\"b"` 这类转义，
             # 而这一步错了直接变成 401。闭引号之后的东西（行内注释 / 多余词）

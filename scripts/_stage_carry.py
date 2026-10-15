@@ -43,9 +43,9 @@ import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
                        decompose_transform, resolve_num)
-from _svg_sanitize import (_local, _style_map,  # noqa: E402  SVG DOM 的两个读法只有一份
+from _svg_sanitize import (_style_map,  # noqa: E402  SVG DOM 的读法只有一份
                            SVG_NS)  # noqa: E402  命名空间串也随净化同一份，不在这里重声明
-from _script_utils import num_fmt  # noqa: E402
+from _script_utils import NUMERIC_ONLY, num_fmt  # noqa: E402
 from _timeline import beat_cycles, ends_at_start
 # GSAP 的 attr 通道名不在这里重新声明：真源在契约层 `_images_schema`（它决定
 # images.json 里什么形状放行）。两处曾经各写一个 "attr" 字面量——契约层放行的
@@ -84,8 +84,8 @@ _TRANSLATE_KEYS = frozenset({"x", "y"})
 _CAM_POSE_KEYS = frozenset({"scale", "x", "y", "svgOrigin", "transformOrigin"})
 # 这些键走 attribute，不走 style（GSAP 的 attr:{} 显式通道）。键名自契约层
 # 导入（见文件头 import 处的说明），本模块不再持有第二份字面量。
-# 纯数字才认的样式：相对写法（"+=0.2"）要有基值可加。
-_NUMERIC_STYLE = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
+# 纯数字才认的样式：相对写法（"+=0.2"）要有基值可加。判据与 path 的畸形 d
+# 校验同一份（_script_utils.NUMERIC_ONLY）。
 # count 的终值是一行文本，只有这些元素搬得动（写在 <rect> 上就是作者放错了 target）。
 _TEXT_TAGS = frozenset({"text", "tspan", "textPath"})
 
@@ -105,7 +105,7 @@ def _css_num(v):
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    return float(v) if _NUMERIC_STYLE.match(str(v).strip()) else None
+    return float(v) if NUMERIC_ONLY.match(str(v).strip()) else None
 
 
 

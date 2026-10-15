@@ -30,11 +30,9 @@ _ARITY = {"M": 2, "L": 2, "H": 1, "V": 1, "C": 6, "S": 4,
 _TOKEN = re.compile(
     r"[MmLlHhVvCcSsQqTtAaZz]"
     r"|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
-# 数字串校验（token 里非字母的都必须是纯数字，否则是畸形 d）。
-_NUM_ONLY = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
 
 
-from _script_utils import num_fmt  # noqa: E402  与 transform/opacity 的写法同源
+from _script_utils import NUMERIC_ONLY, num_fmt  # noqa: E402  纯数字判据与数值格式化同源
 
 
 def parse_path(d, where):
@@ -71,7 +69,7 @@ def parse_path(d, where):
         nums.clear()
 
     for tk in toks:
-        if tk.upper() in _ARITY and not _NUM_ONLY.match(tk):
+        if tk.upper() in _ARITY and not NUMERIC_ONLY.match(tk):
             _flush()
             letter = tk
         else:

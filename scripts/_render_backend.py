@@ -325,7 +325,12 @@ def probe_video_duration(out_path, ffmpeg_path=None):
     return float(d) if d and d > 0 else None
 
 
-def render_wait(cmd, out_path, cwd=None, max_wait=1800.0):
+# 渲染等待的默认硬上限（秒）。`run.py` 拿它当"跟着成片时长走"的地板：改这个值
+# 两处必须一起动，否则 run.py 的地板还停在旧数、注释里的"默认 1800s"就成了谎话。
+DEFAULT_MAX_WAIT = 1800.0
+
+
+def render_wait(cmd, out_path, cwd=None, max_wait=DEFAULT_MAX_WAIT):
     """启动 Hyperframes render；输出文件稳定后不再死等 Node/Chrome 退出。"""
     log_path = os.path.splitext(os.path.abspath(out_path))[0] + ".render.log"
     log_dir = os.path.dirname(log_path)

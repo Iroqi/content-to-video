@@ -43,12 +43,18 @@ import xml.etree.ElementTree as ET
 
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
                        decompose_transform, resolve_num)
-from _svg_sanitize import _local, _style_map  # noqa: E402  SVG DOM 的两个读法只有一份
+from _svg_sanitize import (_local, _style_map,  # noqa: E402  SVG DOM 的两个读法只有一份
+                           SVG_NS)  # noqa: E402  命名空间串也随净化同一份，不在这里重声明
 from _script_utils import num_fmt  # noqa: E402
 from _timeline import beat_cycles, ends_at_start
+# GSAP 的 attr 通道名不在这里重新声明：真源在契约层 `_images_schema`（它决定
+# images.json 里什么形状放行）。两处曾经各写一个 "attr" 字面量——契约层放行的
+# 形状与烘焙认得的形状一旦分家，症状是 stage:"keep" 接续页第 0 帧就坏，且生成
+# 期零报错（烘焙按自己那份键名读不到东西，只当没写）。
+from _images_schema import ATTR_KEY  # noqa: E402
 
-SVG_NS = "http://www.w3.org/2000/svg"
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
+# SVG_NS 自 _svg_sanitize 导入：同一个命名空间串只声明一次。
 ET.register_namespace("", SVG_NS)
 
 
@@ -76,8 +82,8 @@ _TRANSLATE_KEYS = frozenset({"x", "y"})
 # 相机步里由 `_fold_camera` 折进子层、不走元素通道的那几键：姿态本体（scale/x/y）
 # 与绕点（svgOrigin/transformOrigin，与 _cam_crop.cam_resting_pose 读的是同一组）。
 _CAM_POSE_KEYS = frozenset({"scale", "x", "y", "svgOrigin", "transformOrigin"})
-# 这些键走 attribute，不走 style（GSAP 的 attr:{} 显式通道）。
-_ATTR_KEY = "attr"
+# 这些键走 attribute，不走 style（GSAP 的 attr:{} 显式通道）。键名自契约层
+# 导入（见文件头 import 处的说明），本模块不再持有第二份字面量。
 # 纯数字才认的样式：相对写法（"+=0.2"）要有基值可加。
 _NUMERIC_STYLE = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
 # count 的终值是一行文本，只有这些元素搬得动（写在 <rect> 上就是作者放错了 target）。
@@ -207,7 +213,7 @@ def _settle_payload(el, payload):
         if key in _TRANSFORM_KEYS:
             skipped.append(key)
             continue
-        if key == _ATTR_KEY and isinstance(value, dict):
+        if key == ATTR_KEY and isinstance(value, dict):
             for aname, avalue in value.items():
                 _set_attr(el, aname, avalue)
             continue
@@ -378,7 +384,7 @@ def bake_settled_state(markup, steps, beats=None):
         # 别的出口，必须在这里说清，不然作者以为推近的镜头会带进下一页）。
         notes.append("相机步 " + "、".join(sorted(set(cam_loops)))
                      + " 写了 repeat:-1，相机永不停下——整台相机的收尾位不作数，"
-                       "本页不折 <g data-ctv-stage>（那一页的镜头没有'最后停在哪儿'；"
+                       f"本页不折 <g {STAGE_ATTR}>（那一页的镜头没有'最后停在哪儿'；"
                        "要接续就把 repeat 改成明确遍数）")
     if transforms:
         notes.append("接续搬不动元素级 transform 属性 " + "、".join(sorted(set(transforms)))
@@ -397,14 +403,14 @@ def bake_settled_state(markup, steps, beats=None):
         # 读不出的分量排在"是不是原位"之前：手上这组数字根本不是收尾位，
         # 拿它判"收尾位 = 原位、不必折"就是拿一个假姿态当结论。
         notes.append("相机步里有静态几何读不出的分量（如 scale:\"/=0\"，运行期算成 "
-                     "Infinity）——本页不折 <g data-ctv-stage>，接续页从相机原位起跑"
+                     f"Infinity）——本页不折 <g {STAGE_ATTR}>，接续页从相机原位起跑"
                      "（把该分量改写成绝对数，或 /=N（N≠0））")
     elif (pose and pose.get("rests", True) and not _pose_is_identity(pose)
             and pre_center is None):
         # 绕点量不出来（非原位姿态才会走到这）：宁可少折一层，也不能折在一个与运行期
         # 不同的点上（那正是跨页阶跃的来源）。折层是静默搬运，这一层必须出声。
         notes.append("相机绕的那一点在动这棵树之前量不出来（子树里有读不懂的 transform，"
-                     "占位盒算不出）——本页不折 <g data-ctv-stage>，接续页从相机原位起跑"
+                     f"占位盒算不出）——本页不折 <g {STAGE_ATTR}>，接续页从相机原位起跑"
                      "（把读不懂的 rotate/matrix 换成 translate/scale，或本页不写运镜）")
     return ET.tostring(root, encoding="unicode"), notes
 

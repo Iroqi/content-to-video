@@ -32,7 +32,7 @@ from _manifest_schema import load_timing_manifest, MANIFEST_FILENAME  # noqa: E4
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
-                             build_render_command, render_wait,
+                             build_render_command, DEFAULT_MAX_WAIT, render_wait,
                              probe_video_duration, node_version_gate)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            is_inside, guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
@@ -553,9 +553,10 @@ def main():
     )
     # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
     # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟
-    # 打底给出充足余量；默认 1800s 硬上限会把长片或 60fps/high quality
-    # 的正常渲染误杀成"超时"。
-    _render_cap = max(1800.0, float(_tm["total_duration"]) * 10 + 600)
+    # 打底给出充足余量；默认硬上限（DEFAULT_MAX_WAIT）会把长片或 60fps/high
+    # quality 的正常渲染误杀成"超时"。地板取自 render_wait 的默认值而不是再写
+    # 一遍 1800——改默认值时这里跟着走。
+    _render_cap = max(DEFAULT_MAX_WAIT, float(_tm["total_duration"]) * 10 + 600)
     t0_render = time.monotonic()
     try:
         render_wait(hf_render, out_video, cwd=project, max_wait=_render_cap)

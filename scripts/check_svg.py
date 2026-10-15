@@ -60,33 +60,34 @@ from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
                            _local, _style_map, is_full_bleed_rect)  # noqa: E402  与净化同一份 DOM 读法
 from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
                     relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
-from _template import (MIN_READABLE_FONT_PX, load_template,  # noqa: E401
-                       same_aspect, svg_text_band)
+from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
+                       load_template, same_aspect, seg_card_pad_x, svg_text_band)
 
 # 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
 # 手抄数值——上一版手抄的页底色就漂过一次（见 PAGE_BG 注释）。
 _TPL = load_template()
-CANVAS = {"portrait": (_TPL["canvas"]["vertical"]["width"],
-                       _TPL["canvas"]["vertical"]["height"]),
-          "landscape": (_TPL["canvas"]["landscape"]["width"],
-                        _TPL["canvas"]["landscape"]["height"])}
-_IMG = _TPL["layout"]["vertical"]["image"]
-_IMG_L = _TPL["layout"]["landscape"]["image"]
+# 走 get_canvas / get_image_box 而不是自己下标取：生成期判"素材够不够大"用的是
+# 那两个函数（`gen_hyperframes` 的 `_seg_boxes`），自查若另开一份下标，两边取到
+# 的就不是同一个框——模板改结构时一边跟着变、一边不动，"建议尺寸"和"实际拦截"
+# 分家。
+CANVAS = {"portrait": get_canvas("portrait"), "landscape": get_canvas("landscape")}
 # 槽位尺寸**按画幅**取：竖屏是 4:3 主图槽（980×735），横屏是右侧槽位
 # （1067×800，也是 4:3 但更大）。早期这里只读 vertical 一份，于是横屏槽位
 # 也按 980 折算字号——系统性低估 8.2%，一张 1067×800 上 26px 的字会被算成
 # 24px 而误报"小于下限"，且建议尺寸恒写竖屏的 980×735。封面式的"整幅一图"
 # 与槽位共用一个 cover 语义，但框的大小由版式决定，不由素材决定。
-SLOT = {"portrait": (_IMG["width"], _IMG["height"]),
-        "landscape": (_IMG_L["width"], _IMG_L["height"])}
+SLOT = {"portrait": get_image_box("portrait"), "landscape": get_image_box("landscape")}
 
 
 def _safe_margins():
-    """画布页四周留白：竖屏 = segCard 左右内边距（CSS 简写取横向值，与
-    html_renderer 读同一键同一口径），横屏 = layout.landscape.margin。"""
-    _v = _TPL["layout"]["vertical"]["segCard"]["padding"].split()
-    _h = _v[1] if len(_v) >= 2 else _v[0]
-    return {"portrait": int(float(_h.replace("px", ""))),
+    """画布页四周留白：竖屏 = segCard 左右内边距，横屏 = layout.landscape.margin。
+
+    竖屏那份走 `_template.seg_card_pad_x`，与 `html_renderer` 算内容盒用的是同一
+    个函数。修复前这里自己 `.split()` 解一遍 padding 简写，靠注释声称"与
+    html_renderer 读同一键同一口径"——模板把 `50px` 改成 `40px 50px` 这类写法时，
+    只有 html_renderer 跟着变。
+    """
+    return {"portrait": int(seg_card_pad_x()),
             "landscape": _TPL["layout"]["landscape"]["margin"]}
 
 

@@ -3,6 +3,7 @@
 每条注释写明"修复前它是什么样"——测试要锁的是那个错误行为不再回来，不是锁
 当前的某个数字。
 """
+import inspect
 import os
 import sys
 import unittest
@@ -14,6 +15,9 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
 import _cam_crop as CC  # noqa: E402
+import _images_schema as IS  # noqa: E402
+import _render_backend as RB  # noqa: E402
+import _stage_carry as SC  # noqa: E402
 import _template as T  # noqa: E402
 import check_frames as CF  # noqa: E402
 import check_svg as CS  # noqa: E402
@@ -86,6 +90,133 @@ class AspectToleranceSingleSource(unittest.TestCase):
         self.assertTrue(errs, "0.27% 失配要在生成期拦下")
         # check_svg 的自查对同一张图也不能说"通过"
         self.assertFalse(T.same_aspect(w, h, (1080, 1440)))
+
+
+class CrossModuleKeysSingleSource(unittest.TestCase):
+    """跨模块契约键/阈值只有一份字面量。
+
+    上一轮修的是"合成 ID 三处硬编码"。同一类病没修完：下面每条在修复前都是
+    **两处各写一个字面量**，靠注释约定"两边必须一致"——而注释不会拦人。
+    值相等的断言本身很弱（短字符串会被 intern，`is` 也相等），所以每条都配
+    一句源码级断言：常量只能在一处被**赋值**。
+    """
+
+    def test_attr_channel_key_comes_from_the_contract_layer(self):
+        """修复前：`_images_schema._ATTR_KEY = "attr"` 与
+        `_stage_carry._ATTR_KEY = "attr"` 是两个独立字面量，前者的注释写着
+        "两处必须指同一个东西"却没有任何机制 enforce。分家的症状是
+        `stage:"keep"` 接续页第 0 帧就坏，且生成期零报错。"""
+        self.assertEqual(SC.ATTR_KEY, IS.ATTR_KEY)
+        # 烘焙层不许再自己声明一份：真源在契约层（什么形状放行由它说了算）。
+        self.assertNotIn("ATTR_KEY = ", inspect.getsource(SC),
+                         "_stage_carry 不得自己声明 ATTR_KEY，从 _images_schema 导入")
+
+    def test_stage_attr_is_not_relitigated_in_warning_text(self):
+        """修复前：`STAGE_ATTR = "data-ctv-stage"` 定义了，但三条告警文案里写死
+        `<g data-ctv-stage>`。改常量名时文案不动，作者被指向一个不存在的属性名
+        ——而这几条正是"折层没发生"唯一的出口。
+
+        用**行为**验而不是源码计数：字面量藏在长字符串内部，源码里根本不出现
+        `"data-ctv-stage"` 这个带引号的子串，计数那条断言永远绿（已实测）。
+        这里改常量、跑真路径、看文案跟着不跟着变。
+        """
+        # 相机步 repeat:-1 → 走"本页不折 <g …>"那条告警
+        svg = _svg('<g id="cam"><rect id="r" x="10" y="10" width="100" height="100"/></g>')
+        steps = [{"target": "#cam", "to": {"scale": 2}, "repeat": -1}]
+        _, baseline = SC.bake_settled_state(svg, steps)
+        self.assertTrue(any("本页不折" in n for n in baseline), baseline)
+        _orig = SC.STAGE_ATTR
+        try:
+            SC.STAGE_ATTR = "data-ctv-stage-SENTINEL"
+            _, patched = SC.bake_settled_state(svg, steps)
+        finally:
+            SC.STAGE_ATTR = _orig
+        self.assertTrue(any("data-ctv-stage-SENTINEL" in n for n in patched),
+                        "告警文案写死了属性名，没引用 STAGE_ATTR：%s" % patched)
+        # 上面只跑到三条告警里的一条；这条源码断言把另外两条一起兜住：`<g …>` 这种
+        # 写法只剩模块头注释里那一处说明，文案里一律 f-string 引用。
+        self.assertEqual(inspect.getsource(SC).count("<g data-ctv-stage>"), 1,
+                         "还有告警文案在写死 <g data-ctv-stage>")
+
+    def test_check_svg_boxes_are_the_template_accessors(self):
+        """修复前：`check_svg` 用 `_TPL["canvas"]["vertical"]` 下标自己取，
+        `gen_hyperframes` 走 `get_canvas` / `get_image_box`——两套取值口，键名还是
+        "portrait" 与 "vertical" 两种叫法。模板挪键时一边跟着变、一边不动。"""
+        for a in ("portrait", "landscape"):
+            self.assertEqual(CS.CANVAS[a], T.get_canvas(a))
+            self.assertEqual(CS.SLOT[a], T.get_image_box(a))
+        self.assertNotIn('["canvas"]', inspect.getsource(CS),
+                         "check_svg 不得自己下标取 canvas，走 get_canvas")
+
+    def test_safe_margin_shares_the_renderer_padding_parse(self):
+        """修复前：`check_svg._safe_margins` 自己 `.split()` 解 padding 简写，
+        注释声称"与 html_renderer 读同一键同一口径"。模板把 `50px` 写成
+        `40px 50px` 时只有 html_renderer 跟着变，"安全边距"与真实内容盒分家。"""
+        self.assertEqual(CS.SAFE_MARGIN["portrait"], int(T.seg_card_pad_x()))
+        # 两边现在都调同一个函数：改解析口径只需动 _template 一处
+        self.assertTrue(hasattr(T, "seg_card_pad_x"))
+
+    def test_render_cap_floor_is_the_shared_default(self):
+        """修复前：`render_wait(max_wait=1800.0)` 与 `run.py` 的
+        `max(1800.0, ...)` 各写一个 1800。改默认值时 run.py 的地板不动，
+        注释里"默认 1800s 硬上限"就成了谎话。"""
+        self.assertEqual(RB.DEFAULT_MAX_WAIT, 1800.0)
+        # 不 import run.py（它是 CLI 入口，导入有 argv/stdio 副作用）：直接读源码
+        with open(os.path.join(SCRIPTS_DIR, "run.py"), encoding="utf-8") as _f:
+            run_src = _f.read()
+        self.assertIn("DEFAULT_MAX_WAIT", run_src,
+                      "run.py 的等待上限地板要取自 _render_backend，不能重抄数字")
+        self.assertNotIn("max(1800.0", run_src, "run.py 里不该再有 1800.0 字面量")
+
+
+class NoDuplicatedCrossModuleConstants(unittest.TestCase):
+    """跨模块同名同值的模块级常量，一个都不留。
+
+    上一轮修了"合成 ID 三处硬编码"，本轮又修了 `attr` 键名、`data-ctv-stage`、
+    渲染超时 1800、padding 解析——**每次都是靠人读代码发现的**。这条把发现动作
+    自动化：顶层 `NAME = 字面量` 若在两个以上模块各写一份，就是同一语义各自维护，
+    改一处漏一处且不报错。`from x import Y` 不是赋值，导入方不算重复。
+    """
+
+    # 同名但确实是两个独立概念的常量（各自演化，不是同一语义的两份拷贝）。
+    ALLOWED = frozenset()
+
+    def test_no_constant_is_declared_in_two_modules(self):
+        import ast
+        import collections
+        seen = collections.defaultdict(set)
+        for fn in os.listdir(SCRIPTS_DIR):
+            if not fn.endswith(".py"):
+                continue
+            with open(os.path.join(SCRIPTS_DIR, fn), encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=fn)
+            for node in tree.body:
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, ast.AnnAssign):
+                    targets = [node.target]
+                for t in targets:
+                    if not isinstance(t, ast.Name):
+                        continue
+                    name = t.id
+                    if not (name.isupper()
+                            or (name.startswith("_") and name[1:2].isupper())):
+                        continue
+                    if name in self.ALLOWED:
+                        continue
+                    try:
+                        val = ast.literal_eval(node.value)
+                    except (ValueError, SyntaxError, TypeError):
+                        continue
+                    if isinstance(val, (str, int, float, bool)) or (
+                            isinstance(val, (tuple, list, frozenset, set))
+                            and len(val) <= 12):
+                        seen[(name, repr(val))].add(fn)
+        dupes = {k: sorted(v) for k, v in seen.items() if len(v) > 1}
+        self.assertEqual({}, dupes,
+                         "这些常量在多个模块各写了一份字面量——收成单一真源（导入），"
+                         "否则改一处漏一处且不报错")
 
 
 class EmptyBandNoFalseAlarm(unittest.TestCase):

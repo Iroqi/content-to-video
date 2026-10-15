@@ -123,7 +123,7 @@ npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时�
 npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
 
-本节口径对着 **v0.8.158** 的 `hyperframes` 实测过（含翻 CLI 源码逐条印证豁免属性的判定方式）。CLI 迭代快，升级后先看 `--help` 再照这里改写法。
+本节口径对着 **v0.8.162** 的 `hyperframes` 实测过（含翻 CLI 源码逐条印证豁免属性的判定方式；v0.8.158 首测，0.8.162 复测三场景——竖屏 2 段、横屏 2 段、竖屏 6 段，findings 类型逐条一致）。CLI 迭代快，升级后先看 `--help` 再照这里改写法。
 
 - `check` 会真报问题：字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名必须是映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
@@ -140,6 +140,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   - **同一个属性在两个阶段规则不同，别按一套写**：上面说的是 **Layout 阶段**（`layout-audit`，判 `text_occluded`/overlap 用的是元素**自己身上**的 `hasAttribute`）；**Contrast 阶段**（`contrast-audit`）的 `occlusion` 走的是 `closest()`，打任一祖先上都覆盖整棵子树。所以只用两句话：Layout 要豁免就打在报出来的那一层，Contrast 要豁免打祖先层即可；补 `overflow` 对 Layout 的 `text_occluded` 不管用。
   - **调 `proseCoverageFloor` 优于层层打标**：成句/成段的长文本（`text_occluded` 判据里叫 prose）要被盖住超过 15% 才报，这个后验门限可以压——`npx -y hyperframes check <项目目录> --layout "proseCoverageFloor=0.05"`。原子标签（单词级的短 label）不受它保护，**沾到就算**。
   - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式；画面正常就是某层漏打了 `occlusion`/`overlap`，按 `check` 报的选择器补那一层。
+  - **横屏的段落标题**（`#title-*`）会在**段落入场附近**多出 info 级 `text_occluded`（竖屏没有）：检查器恰在擦除进行中的时刻采样，标题的静态 rect 撞上还没揭示完的卡。`snapshot --at` 看标题好好在那儿就是这条，info 不进退出码，确认画面正常即可忽略——竖屏没它纯粹因为入场擦除的几何不同，不是横屏真有遮挡。
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
 - 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
 - **三条命令之外的口径**（CLI 写明、踩上不报错）：`validate` / `inspect` 是**废弃别名**（`layout` 在新版已整个移除），都用 `check`；`check` 会先跑 `lint`（迭代期单跑 lint、定稿再跑 check）；`doctor --json` **恒退出 0**——当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`check` 的退出码只由**持久** findings 决定；要 warning 也卡住交付，给 `--strict`。

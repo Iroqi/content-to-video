@@ -96,6 +96,31 @@ def get_image_box(aspect):
     return int(box["width"]), int(box["height"])
 
 
+def seg_card_pad_x():
+    """竖屏卡片（layout.vertical.segCard）的**左右**内边距（px，float）。
+
+    CSS padding 简写的横向值：3 值=上/左右/下、2 值=上下/左右，只有一个值时四边
+    共用。只管竖屏——横屏是弹性列，没有 segCard.padding 这个键（`html_renderer`
+    分画幅几何那段的注释记着为什么不给它放 0 值占位）。
+
+    两处消费同一个数：`html_renderer` 拿它算画布宽并与 `image.width` 对账（模板
+    漂移就在这里拦），`check_svg` 拿它当 SVG 的安全边距。修复前两边各写一份
+    `.split()[1] if len(parts) >= 2 else parts[0]` 的解析，`check_svg` 只靠注释
+    声称"与 html_renderer 读同一键同一口径"——模板改写法时只有一边跟着变，于是
+    "安全边距"和"真实内容盒"悄悄分家。check_svg 是第 3 步唯一的机器门禁，它算
+    错的后果不是报错而是**放行错的图**。
+    """
+    raw = load_template()["layout"]["vertical"]["segCard"]["padding"]
+    parts = raw.split()
+    if not parts:
+        raise ValueError("[template] layout.vertical.segCard.padding 不能为空")
+    try:
+        return float((parts[1] if len(parts) >= 2 else parts[0]).replace("px", ""))
+    except ValueError as e:
+        raise ValueError(
+            "[template] layout.vertical.segCard.padding 必须是合法 CSS 长度") from e
+
+
 _TEMPLATE_JSON = r'''
 {
   "canvas": {

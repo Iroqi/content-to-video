@@ -19,7 +19,7 @@ from _theme import (
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
 from _template import (MIN_READABLE_FONT_PX, load_template, get_canvas,
-                       normalize_aspect)
+                       normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME)
 from _segments import (is_content_sid, seg_layout)
@@ -323,19 +323,10 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     rc.verse_clip = _vv["clipPad"]
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
-        _v_pad = tpl_layout["segCard"]["padding"]
-        # 卡片左内边距（CSS padding 简写：3 值=上/左右/下，2 值=上下/左右，1 值=四边）。
-        # 卡片内容盒由它内缩，标题与画布水平方向对齐。
-        _v_pad_parts = _v_pad.split()
-        if not _v_pad_parts:
-            raise ValueError("[template] layout.vertical.segCard.padding 不能为空")
-        # 左右内边距永远是简写的第二个值（3 值=上/左右/下、2 值=上下/左右），
-        # 只有一个值时四边共用，就是它自己。取不到数就是模板写错了长度单位。
-        _v_pad_raw = _v_pad_parts[1] if len(_v_pad_parts) >= 2 else _v_pad_parts[0]
-        try:
-            _v_pad_left = float(_v_pad_raw.replace("px", ""))
-        except ValueError as e:
-            raise ValueError("[template] layout.vertical.segCard.padding 必须是合法 CSS 长度") from e
+        # 卡片左右内边距（CSS padding 简写取横向值）：卡片内容盒由它内缩，标题
+        # 与画布水平方向对齐。解析口径只有 `_template.seg_card_pad_x` 一份——
+        # `check_svg` 的安全边距读的是同一个函数，两边不可能各解出两个数。
+        _v_pad_left = seg_card_pad_x()
         _v_verse_h = _vv["windowHeight"]
         _v_verse_bottom = _vv["bottom"]
         # 竖屏画布圆角

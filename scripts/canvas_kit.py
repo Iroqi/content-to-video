@@ -39,7 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而不是重算一遍
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_stagger, validate_images_json)
-from _script_utils import guard_not_in_skill_dir, num_fmt, read_json_file  # noqa: E402
+from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # noqa: E402
+                           write_text_atomic)
 from _template import get_canvas, get_image_box, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
@@ -942,12 +943,6 @@ def _line_visibility_notes(spec, ctx):
 
 
 # ── CLI ─────────────────────────────────────────────────────
-def _write(path, text):
-    # newline="\n"：本仓库一律 LF，Windows 上默认换行会写出 CRLF 产物（diff 全是噪声）
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-
-
 def _epilog():
     """--help 的尾巴：一份能照抄就跑的完整 spec + 七种 kind 的最小片段。
 
@@ -1045,9 +1040,10 @@ def main(argv=None):
     except ValueError as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
-    _write(args.out, svg)
+    write_text_atomic(args.out, svg)
     if args.emit_steps:
-        _write(args.emit_steps, json.dumps(frag, ensure_ascii=False, indent=2) + "\n")
+        write_text_atomic(args.emit_steps,
+                          json.dumps(frag, ensure_ascii=False, indent=2) + "\n")
 
     ctx = _context(spec)
     for note in _line_visibility_notes(spec, ctx):

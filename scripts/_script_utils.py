@@ -12,6 +12,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 
 # 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——混进技能目录会污染
@@ -40,9 +41,14 @@ def _atomic_replace(path, write_fn):
 
 
 def write_json_atomic(path, data, indent=2):
-    """原子写 JSON：写 <path>.tmp → fsync → os.replace 覆盖。"""
+    """原子写 JSON：写 <path>.tmp → fsync → os.replace 覆盖。
+
+    newline="\\n"：仓库 .gitattributes 钉的是 LF，而 Windows 上 open 默认把
+    "\\n" 翻成 CRLF——产物会带着一套仓库里没有的行尾，diff 与 golden 比对都
+    被它污染。写盘这一处统一钉死，调用方不必各自记得传。
+    """
     def _write(tmp):
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             json.dump(data, f, ensure_ascii=False, indent=indent)
             f.flush()
             os.fsync(f.fileno())
@@ -50,9 +56,9 @@ def write_json_atomic(path, data, indent=2):
 
 
 def write_text_atomic(path, text):
-    """原子写文本（HTML 等）：写 <path>.tmp → fsync → os.replace 覆盖。"""
+    """原子写文本（HTML / SVG 等）：写 <path>.tmp → fsync → os.replace 覆盖。"""
     def _write(tmp):
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -86,6 +92,12 @@ def num_fmt(v, nd=3):
         s = f"{float(v):.{nd}f}".rstrip("0").rstrip(".")
         return s if s not in ("", "-") else "0"
     return str(v)
+
+
+# 纯数字串（可带指数、不带单位）的判据只有这一份：path 的畸形 `d` 校验与
+# style 值"纯数字才认"用的是同一条规则，两处各声明一份就会在改判据时只改一边——
+# 症状是同一份数值在一个环节被认、在另一个环节被当成字符串。
+NUMERIC_ONLY = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
 
 
 def sha256_file(path):

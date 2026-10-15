@@ -51,9 +51,9 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 ### 1. 写结构化稿
 
-生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述。双人对话别放进 `layout:"canvas"` 段——整页画布没有字幕层，轮次信息只剩声音。`speakers[].label` 的上墙约束（≤6 字、不收分号）与其余字段见 `references/writing.md`。
+生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不要压成单人讲述。双人对话别放进 `layout:"canvas"` 段——整页画布没有字幕层，轮次信息只剩声音。`speakers[].label` 的上墙约束与其余字段见 `references/writing.md`。
 
-内容段最多 7 段（≤6 段才放得下 `cta`）。字段集封闭：顶层 / 段落 / 对话轮次 / `speakers` 各层只认清单里的键，写错直接报错。
+内容段最多 7 段（≤6 段才放得下 `cta`）。
 
 写稿时顺手挑出值得整页交给导演的段落（`layout:"canvas"`），别等第 3 步才想。字段全集、行数与字数预算、agenda 行为、以及"哪些段值得交给 canvas"都在 `references/writing.md`。
 
@@ -71,9 +71,9 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——管线和 `hyperframes check` 都看不见图里画得对不对，画错没有任何报错；整页画布再加「整页画布的密度与层次」。要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」（跨段接续在其中）。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的完整档位组合见同一份文档）。
+- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——画错了没有任何报错（管线与 `hyperframes check` 都看不见图里画得对不对）；整页画布再加「整页画布的密度与层次」。要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」（跨段接续在其中）。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的完整档位组合见同一份文档）。
 
-两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）。走页面墙钟的运动破坏逐帧可复现，所以只有 SVG 的导演档能"演"——固定画面交给 ImageGen 即可。
+两条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）；**只有 SVG 的导演档能"演"**——固定画面交给 ImageGen。
 
 ### 4. 生成 HTML、预览、检查、渲染
 
@@ -88,7 +88,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。配图是最花时间的一环，不在 `run.py` 计时里。
 
-要一版**能叠在别的素材上**的成片：透明底/非 mp4 容器不在本技能范围，需要叠轨时把 `out.mp4` 送进剪辑工具处理。
+要一版**能叠在别的素材上**的成片：容器换 `npx hyperframes render --format webm|mov`（官方原生带 alpha，`png-sequence` 出 RGBA 帧序列）。但每卡自带 `.bg`/`.grid` 两层不透明底，**只换容器不出透明**——先撤掉那两层再渲。
 
 ## 常用参数
 

@@ -171,9 +171,11 @@ def resolve_command(cmd):
 def build_render_command(output: str, quality: str, fps: int, workers: int,
                          command: List[str],
                          low_memory: Optional[bool] = None) -> List[str]:
-    """拼一条 `hyperframes render`，输出容器由 ``-o`` 后缀决定（恒为 mp4）。
+    """拼一条 `hyperframes render`：本技能恒出 mp4，不传 --format（默认即 mp4）。
 
-    透明底/非 mp4 容器已从本技能移除，无需 --format 旗标。
+    官方 --format 另有 webm / mov（带 alpha）与 png-sequence（RGBA 帧序列），
+    但每卡自带 .bg/.grid 两层不透明底——只换容器不产生透明底，要叠轨得先撤掉
+    那两层（见 SKILL.md 第 4 步）。
 
     ``low_memory`` 三态（None = 不提这个旗标，交给 CLI 按总内存自判）：
     CLI 的 --help 写明低内存档会把 **worker 钉成 1**、走 screenshot capture、

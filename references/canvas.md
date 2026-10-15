@@ -8,7 +8,7 @@
 
 ## SVG 矢量示意图
 
-数据图、公式、示意图走这一条。**定位：图内必须出现准确文字（术语、步骤名、数值、图例）或必须精确几何关系时的首选**；不带文字的画面先走生图（见 `references/imagery.md`）。**图不等于简笔线框图**：渐变、光影层次、等距视角、装饰细节都该上。
+数据图、公式、示意图走这一条；不带文字的画面先走生图（形式分界见 `references/imagery.md`）。**图不等于简笔线框图**：渐变、光影层次、等距视角、装饰细节都该上。
 
 数据与公式红线——数据必须直接来自信源或可追溯数据源：不为"好看"改数字，估算值必须标明；不用误导性比例（截断坐标轴、面积失真对比），不隐藏省略单位；不编造不存在的数据点或会改变含义的关键关系。
 
@@ -18,7 +18,7 @@
 - **官方 registry 现成块**（先搜再手画）：`npx hyperframes catalog --query "<效果>"` 搜（**必须写英文**，中文返回空且不提示）、`hyperframes add <name>` 装。要进导演档必须重写成补间驱动（不许墙钟动画与 `Math.random`，见 `references/rendering.md`「动画」）。
 - **SVG 图库**：logo、通用图标用成熟开源库（simple-icons、lucide、tabler），同一期同一套、统一线宽，来源与 license 记进 provenance。
 
-要不要动、怎么动是**独立决策**，见「SVG 动画：两档」：画面得对上某句话就用导演档，纯氛围用墙钟循环。映射走普通 `src`：`{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行），仍只从干净知名来源获取。
+要不要动、怎么动是**独立决策**，见「SVG 动画：两档」。映射走普通 `src`：`{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行），仍只从干净知名来源获取。
 
 ### 画布几何：根节点尺寸按版式分两种
 
@@ -160,7 +160,7 @@ SVG 以 `<img>` 载入时是独立文档，页面 `--ctv-font-family` 渗不进�
 
 **② 时间轴同步的「导演」（净化内联，opt-in）**：要"随旁白逐句推进"的状态变化，就在 images.json 给这张 SVG 写 `director`。写了 `director` 的 SVG 会：
 
-1. **净化后内联成活 DOM**（`scripts/_svg_sanitize.py`）：删 `<script>` / `on*` / `<foreignObject>` / 任何带 scheme 的 href（`http(s):`/`javascript:`/`file:`/`data:`/`blob:` 一律算外部资源——产物常以 `file://` 打开，`file:` 会触及本机磁盘；内部 `#id` 与相对路径放行）/ `@import`；**外链 `url()` 整颗换 `about:blank`**（`style=""` 和 `fill`/`stroke`/`filter`/`mask`/`clip-path`/`marker-*` 等呈现属性里都一样；内部 `url(#id)` 不碰）；**剥掉 SMIL 与 CSS animation/transition**（墙钟动画在逐帧 seek 里不可复现，导演档一律由补间驱动）。净化让内联回到 `<img>` 的安全水位——**这是唯一允许内联进交付 HTML 的情形**。
+1. **净化后内联成活 DOM**（`scripts/_svg_sanitize.py`）：删 `<script>` / `on*` / `<foreignObject>` / 任何带 scheme 的 href / `@import`（带 scheme 的一律算外部资源，内部 `#id` 与相对路径放行）；**外链 `url()` 整颗换 `about:blank`**（`style=""` 与 `fill`/`stroke`/`filter`/`mask`/`clip-path`/`marker-*` 等呈现属性里都一样，内部 `url(#id)` 不碰）；**剥掉 SMIL 与 CSS animation/transition**——墙钟动画在逐帧 seek 里不可复现，导演档一律由补间驱动。这是唯一允许内联进交付 HTML 的情形。
 2. **由 GSAP 按句驱动**：`director.steps` 每步挂在该段旁白某句起点，渲染器展开成时间线补间（属性补间，逐帧 seek 可复现）。
 
 `director` 结构（键集封闭，写错在契约层报错）：
@@ -228,7 +228,7 @@ SVG 以 `<img>` 载入时是独立文档，页面 `--ctv-font-family` 渗不进�
 
 ### 跨段接续（images.json 的 `stage: "keep"`）：导演跨页接着演
 
-跨段接续不是第二套动画——还是上面这套「导演」，只是把"演完"的定义从**一页之内**延伸到**跨页**：一个舞台动作常一句话讲不完，而段落边界是硬的，每页各自内联、各自从 `opacity="0"` 起步，"推进局部"演完下一页切回去就是**回弹**。给接续页写 `"stage": "keep"`，这一页的起点是**上一页演完的那幅画面**：
+一个舞台动作常一句话讲不完，而段落边界是硬的：每页各自内联、各自从 `opacity="0"` 起步，演完的部分下一页切回去就是**回弹**。给接续页写 `"stage": "keep"`，这一页的起点是**上一页演完的那幅画面**：
 
 ```json
 {

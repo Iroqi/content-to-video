@@ -155,8 +155,8 @@ from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa:
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
-from _svg_sanitize import (_local, _style_map, is_full_bleed_rect,  # noqa: E402
-                           sanitize_svg_for_inline)
+from _svg_sanitize import (_local, _parse_num, _style_map,  # noqa: E402
+                           is_full_bleed_rect, sanitize_svg_for_inline)
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
@@ -538,10 +538,7 @@ def svg_background_warnings(images, segments, out_dir):
 def _root_px_size(root):
     """根标签的固有像素尺寸：(宽, 高)。优先纯数字 width/height（带 % 的不认），
     拿不到退回 viewBox 第 3/4 段；都读不出返回 None。"""
-    def _num(v):
-        m = re.match(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$", str(v or ""))
-        return float(m.group(1)) if m else None
-    w, h = _num(root.get("width")), _num(root.get("height"))
+    w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
     if w and h:
         return w, h
     vb = re.split(r"[,\s]+", (root.get("viewBox") or "").strip())

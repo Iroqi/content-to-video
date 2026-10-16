@@ -120,7 +120,7 @@ _CSS3_NAMES = None
 # 浏览器标准色名全集（name-hex 紧凑副本，首次使用时解析）。stdlib 没有
 # 现成的色名表可借（没有 html.color；colorsys 只有换算函数），只能内嵌。
 _CSS3_NAMES_SRC = """
-aliceblue-f0fff8 antiquewhite-faebd7 aqua-00ffff aquamarine-7fffd4 azure-f0ffff
+aliceblue-f0f8ff antiquewhite-faebd7 aqua-00ffff aquamarine-7fffd4 azure-f0ffff
 beige-f5f5dc bisque-ffe4c4 black-000000 blanchedalmond-ffebcd blue-0000ff
 blueviolet-8a2be2 brown-a52a2a burlywood-deb887 cadetblue-5f9ea0
 chartreuse-7fff00 chocolate-d2691e coral-ff7f50 cornflowerblue-6495ed
@@ -145,7 +145,7 @@ maroon-800000 mediumaquamarine-66cdaa mediumblue-0000cd mediumorchid-ba55d3
 mediumpurple-9370db mediumseagreen-3cb371 mediumslateblue-7b68ee
 mediumspringgreen-00fa9a mediumturquoise-48d1cc mediumvioletred-c71585
 midnightblue-191970 mintcream-f5fffa mistyrose-ffe4e1 moccasin-ffe4b5
-navajowhite-ffdead navy-000080 oldlace-fdf5e0 olive-808000 olivedrab-6b8e23
+navajowhite-ffdead navy-000080 oldlace-fdf5e6 olive-808000 olivedrab-6b8e23
 orange-ffa500 orangered-ff4500 orchid-da70d6 palegoldenrod-eee8aa
 palegreen-98fb98 paleturquoise-afeeee palevioletred-db7093 papayawhip-ffefd5
 peachpuff-ffdab9 peru-cd853f pink-ffc0cb plum-dda0dd powderblue-b0e0e6

@@ -1,6 +1,6 @@
 """多个脚本共用的进程与落盘基础设施，只依赖标准库。
 
-- 落盘：`write_json_atomic` / `write_text_atomic`（.tmp → fsync → os.replace）、
+- 落盘：`write_json_atomic` / `write_text_atomic`（唯一中转名 → fsync → os.replace）、
   `sha256_file`；读取：`read_json_file`（三种读不出来统一成带路径的 ValueError）。
 - 进程与路径：`setup_stdio`（Windows 重定向强制 UTF-8）、`guard_not_in_skill_dir`、
   `is_inside`、`SKILL_DIR`。
@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 
 # 技能目录（scripts/ 的上一级）：制作产物一律不得落在这里——混进技能目录会污染
 # 仓库、多次制作串台。三个入口（pipeline / gen_hyperframes / run）共用这一处判定。
@@ -28,7 +29,15 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _atomic_replace(path, write_fn):
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    tmp = str(path) + ".tmp"
+    # 中转名用 mkstemp 而不是固定的 `<path>.tmp`：两个 run 并跑同一项目目录
+    # （如双画幅）时固定名会互相踩掉对方的中转文件——一方的 `except → os.remove`
+    # 删掉另一方正在写的中转，另一方随即 `os.replace` 抛 FileNotFoundError。
+    # 与 gen_hyperframes 暂存音频时的取舍同一份（当初那条注释只在那一处写着，
+    # 这个共用实现没跟上）。后缀保留 .tmp：中断后残留的中转文件一眼认得出。
+    fd, tmp = tempfile.mkstemp(dir=directory,
+                               prefix="." + os.path.basename(str(path)) + ".",
+                               suffix=".tmp")
+    os.close(fd)
     try:
         write_fn(tmp)
         os.replace(tmp, path)
@@ -41,7 +50,7 @@ def _atomic_replace(path, write_fn):
 
 
 def write_json_atomic(path, data, indent=2):
-    """原子写 JSON：写 <path>.tmp → fsync → os.replace 覆盖。
+    """原子写 JSON：写唯一中转名 → fsync → os.replace 覆盖。
 
     newline="\\n"：仓库 .gitattributes 钉的是 LF，而 Windows 上 open 默认把
     "\\n" 翻成 CRLF——产物会带着一套仓库里没有的行尾，diff 与 golden 比对都
@@ -56,7 +65,7 @@ def write_json_atomic(path, data, indent=2):
 
 
 def write_text_atomic(path, text):
-    """原子写文本（HTML / SVG 等）：写 <path>.tmp → fsync → os.replace 覆盖。"""
+    """原子写文本（HTML / SVG 等）：写唯一中转名 → fsync → os.replace 覆盖。"""
     def _write(tmp):
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
@@ -180,6 +189,24 @@ def is_inside(child, parent):
     child_r = os.path.normcase(_norm_path(child))
     parent_r = os.path.normcase(_norm_path(parent))
     return child_r == parent_r or child_r.startswith(parent_r + os.sep)
+
+
+def media_verdict(project_dir, rel):
+    """素材 `rel`（相对项目根）的可用性判定：""（可用）/ "missing" / "escapes"。
+
+    真源只此一份：`run.py` 的配图覆盖率与 `--until html` 拦截、以及
+    `gen_hyperframes.validate_images_files` 的 fail-fast 都调它。此前两处各写
+    一遍，run 那一份只查 `src` 不查 `poster`——覆盖率报告记"齐了"，下一步
+    gen 才以"封面缺失" exit 1，而 run 的注释还写着"与 validate_images_files
+    同一口径"。与 gen_hyperframes 共用 media_verdict，poster 与 src 都归这一份
+    判，谁都不许再抄。
+    """
+    p = os.path.join(project_dir, rel)
+    if not os.path.exists(p):
+        return "missing"
+    if not is_inside(p, project_dir):
+        return "escapes"
+    return ""
 
 
 def guard_not_in_skill_dir(*labeled_paths):

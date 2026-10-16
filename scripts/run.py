@@ -35,7 +35,8 @@ from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, DEFAULT_MAX_WAIT, render_wait,
                              probe_video_duration, node_version_gate)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
-                           is_inside, guard_not_in_skill_dir)  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
+                           guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
+                           media_verdict)  # noqa: E402  素材可用性判据（与 gen 同一份函数）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
 import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 
@@ -213,15 +214,17 @@ def _image_coverage(manifest_path, images_json):
     missing_keys = [s for s in sids if s not in mapping]
     proj_dir = os.path.dirname(os.path.abspath(images_json))
 
-    # 存在性判定与 gen_hyperframes.validate_images_files 同一口径：isfile 跟随
-    # 软链接，而对方按 realpath 判"是否越出项目目录"。只查 isfile 时，项目内一条
-    # 指向项目外的软链接会被算成"图在"——覆盖率报告记 matched、这里放行，下一步
-    # gen 才以"越出 HTML 项目目录"失败，同一份文件两道门两个答案。
+    # 判定走 _script_utils.media_verdict——与 gen_hyperframes.validate_images_files
+    # 同一个函数（不是"同一句注释"）：src 与 poster 都要查，只查 src 时覆盖率
+    # 报告记"齐了"、下一步 gen 才以封面缺失 exit 1。
     def _unusable(src):
-        p = os.path.join(proj_dir, src)
-        return not (os.path.isfile(p) and is_inside(p, proj_dir))
+        return bool(media_verdict(proj_dir, src))
 
-    missing_files = [s for s in sids if s in mapping and _unusable(mapping[s]["src"])]
+    def _entry_unusable(entry):
+        return any(_unusable(entry[k])
+                   for k in ("src", "poster") if entry.get(k))
+
+    missing_files = [s for s in sids if s in mapping and _entry_unusable(mapping[s])]
     return manifest, sids, missing_keys, missing_files
 
 

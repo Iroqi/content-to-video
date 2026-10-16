@@ -50,7 +50,7 @@ class SlotSvgRatio(unittest.TestCase):
         画幅尺寸，作者照抄去做槽位段就踩在这里。
         """
         name = _write_svg(self.dir, "canvas.svg", *self.canvas)
-        errs = G.slot_svg_ratio_errors(
+        errs, _warns = G.slot_svg_ratio_errors(
             {"seg1": {"src": name}}, [_seg("seg1")], self.dir, *self.box)
         self.assertEqual(1, len(errs))
         self.assertIn("980", errs[0])          # 直接给出正确尺寸，不让人回去查
@@ -61,7 +61,7 @@ class SlotSvgRatio(unittest.TestCase):
     def test_slot_sized_svg_passes(self):
         """按槽位框尺寸出的图，槽位段里不该被拦。"""
         name = _write_svg(self.dir, "slot.svg", *self.box)
-        self.assertEqual([], G.slot_svg_ratio_errors(
+        self.assertEqual(([], []), G.slot_svg_ratio_errors(
             {"seg1": {"src": name}}, [_seg("seg1")], self.dir, *self.box))
 
     def test_same_svg_passes_in_canvas_layout(self):
@@ -71,7 +71,7 @@ class SlotSvgRatio(unittest.TestCase):
         （它必须 continue 掉那部分，否则会对同一张图给两遍错，作者要改两处）。
         """
         name = _write_svg(self.dir, "canvas.svg", *self.canvas)
-        self.assertEqual([], G.slot_svg_ratio_errors(
+        self.assertEqual(([], []), G.slot_svg_ratio_errors(
             {"seg1": {"src": name}}, [_seg("seg1", layout="canvas")],
             self.dir, *self.box))
 
@@ -83,7 +83,7 @@ class SlotSvgRatio(unittest.TestCase):
         拿一张合规的图去要求报错。
         """
         name = _write_svg(self.dir, "canvas.svg", *get_canvas("portrait"))
-        errs = G.slot_svg_ratio_errors(
+        errs, _warns = G.slot_svg_ratio_errors(
             {"seg1": {"src": name}}, [_seg("seg1")], self.dir,
             *get_image_box("landscape"))
         self.assertEqual(1, len(errs))
@@ -95,7 +95,7 @@ class SlotSvgRatio(unittest.TestCase):
         jpg = os.path.join(self.dir, "p.jpg")
         with open(jpg, "wb") as f:
             f.write(b"\xff\xd8\xff\xe0" + b"\x00" * 64)
-        self.assertEqual([], G.slot_svg_ratio_errors(
+        self.assertEqual(([], []), G.slot_svg_ratio_errors(
             {"seg1": {"src": "p.jpg"}}, [_seg("seg1")], self.dir, *self.box))
 
     def test_unreadable_size_reported_not_silently_passed(self):
@@ -104,14 +104,14 @@ class SlotSvgRatio(unittest.TestCase):
         with open(os.path.join(self.dir, name), "w", encoding="utf-8") as f:
             f.write('<svg xmlns="http://www.w3.org/2000/svg" width="100%" '
                     'height="100%"><rect/></svg>')
-        errs = G.slot_svg_ratio_errors(
+        errs, _warns = G.slot_svg_ratio_errors(
             {"seg1": {"src": name}}, [_seg("seg1")], self.dir, *self.box)
         self.assertEqual(1, len(errs))
         self.assertIn("读不出固有尺寸", errs[0])
 
     def test_entry_without_image_is_left_to_other_gates(self):
         """没配图的段落不由这条报（覆盖率提示与引用完整性校验各有出处）。"""
-        self.assertEqual([], G.slot_svg_ratio_errors(
+        self.assertEqual(([], []), G.slot_svg_ratio_errors(
             {}, [_seg("seg1")], self.dir, *self.box))
 
 

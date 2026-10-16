@@ -358,13 +358,13 @@ class SvgIntrinsicSize(unittest.TestCase):
         return gen_hyperframes._svg_intrinsic_size(self.path)
 
     def test_px_suffix_accepted_like_check_svg(self):
-        self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0))
+        self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0, ""))
 
     def test_other_unit_and_prefixed_attr_not_misread(self):
         self.assertIsNone(self.size('width="50%" height="50%"'))
         # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
         self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
-                         (980.0, 735.0))
+                         (980.0, 735.0, ""))
 
     def test_comment_injection_cannot_forge_a_size(self):
         """注释里放一句 `<svg width="10" height="10">`：读文件头的正则版实测
@@ -376,7 +376,7 @@ class SvgIntrinsicSize(unittest.TestCase):
                     '<svg xmlns="http://www.w3.org/2000/svg" width="1080" '
                     'height="1440" viewBox="0 0 1080 1440"></svg>')
         self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
-                         (1080.0, 1440.0))
+                         (1080.0, 1440.0, ""))
 
     def test_root_beyond_the_head_slice_is_not_a_false_negative(self):
         """根标签落在头 8192 字节之外（大注释/前置处理指令）：读头版实测返
@@ -386,7 +386,7 @@ class SvgIntrinsicSize(unittest.TestCase):
                     '<svg xmlns="http://www.w3.org/2000/svg" width="980" '
                     'height="735"></svg>')
         self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
-                         (980.0, 735.0))
+                         (980.0, 735.0, ""))
 
 
 class SvgTextMetrics(unittest.TestCase):

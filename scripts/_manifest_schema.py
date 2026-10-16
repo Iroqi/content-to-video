@@ -13,10 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _degraded import KEYS as DEGRADED_KEYS  # noqa: E402  降级词汇表（注册表派生，单一来源）
 from _segments import (CONTENT_SID_PREFIX, STRUCTURAL_SIDS,  # noqa: E402
-                       _validate_layout, _validate_sid, is_content_sid)
+                       _validate_layout, _validate_sid, is_content_sid,
+                       ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  与 _source_schema 共用 ON_SCREEN_SEGMENT_KEYS
 from _timeline import TIMELINE_TOLERANCE  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
-                        _validate_finite_number, _validate_text)
+                       _validate_display_text, _validate_finite_number,
+                       _validate_text)
 from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
 
 # 时间轴产物文件名：pipeline 写（output 根）、run.py 读（同一处）、gen_hyperframes
@@ -71,6 +73,9 @@ def validate_timing_manifest(data):
             raise ValueError("timing_manifest.json 的 'closing_cta' 必须是字符串")
         if "\n" in data["closing_cta"] or "\r" in data["closing_cta"]:
             raise ValueError("timing_manifest.json 的 'closing_cta' 必须是单行文字")
+        # 与 source 侧的 'cta' 同一条约束（结尾 agenda 尾行也是上墙一行）
+        _validate_display_text(data["closing_cta"],
+                               "timing_manifest.json 的 'closing_cta'（上墙一行）")
     if data.get("combined_audio") is not None and not isinstance(data["combined_audio"], str):
         raise ValueError("timing_manifest.json 的 'combined_audio' 必须是字符串")
     # voice_id 与 source 侧同一白名单口径：pipeline 写入的是本次真实用到的
@@ -218,6 +223,14 @@ def validate_timing_manifest(data):
         _validate_sid(sg.get("id"), f"segments[{i}]", _seen_sids)
         _validate_text(sg.get("title"), f"segments[{i}].title", required=True)
         _validate_text(sg.get("tagline"), f"segments[{i}].tagline")
+        # 上墙文字不收分号：与写稿入口（_source_schema）同一条约束、同一份字段
+        # 清单。manifest 明写"确需手写可按格式提供"，正是手写最容易撞的地方——
+        # 此前这里只查是不是字符串，带分号的 title 在写稿入口被拒、手写入口
+        # 静默上墙，而 agenda 行宽是死的，第二件事在成片里被 nameTrim 悄悄裁掉。
+        for key in ON_SCREEN_SEGMENT_KEYS:
+            _validate_display_text(
+                sg.get(key),
+                f"segments[{i}]（id={sg.get('id', '?')}）的 '{key}'（上墙一行）")
         _validate_accent(sg.get("accent"), f"segments[{i}]（{sg.get('id', '?')}）")
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",

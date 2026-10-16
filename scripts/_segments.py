@@ -14,6 +14,13 @@ import re
 # 括号的 sid 轻则选择器匹配失败动画静默丢失，重则内联 <script> 整段
 # SyntaxError、字幕同步与时间轴注册全部死亡且无报错。在契约层收口校验。
 _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+# 会上墙的文字：一行一个去向，行数与列宽都是死的，所以比口播稿多一道约束
+# （不收分号，见 _validate._validate_display_text）。口播稿不在这张表里。
+# 清单只此一份：`_source_schema`（写稿入口）与 `_manifest_schema`（手写
+# manifest 入口）都从这儿取——此前 manifest 侧根本没走这条约束，手写 manifest
+# 的 `title` 带分号时，同一句话在写稿入口被拒、在手写入口静默上墙。
+ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway")
 # 同一条规则的对外说法。报错文案在 3 个调用点（source/manifest 的
 # _validate_sid、images.json key）各写一份汉字副本时
 # 已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64
@@ -127,9 +134,10 @@ def _validate_layout(value, where, *, content=False):
 def _validate_sid(sid, where, seen):
     """段落 id 校验：合法字符集 + 跨段唯一。
 
-    两个调用点都只在 id 非空白时才调进来（source 侧跳过缺省/空白 id，
-    manifest 侧先要求非空字符串），这里不再兼容 None/空串——收到它们
-    说明调用点写错了，直接走下面的报错。
+    两个调用点都只在 id 这一键**存在**时才调进来（source 侧 id 可缺省，缺省即
+    交给管线自动编号；manifest 侧 id 必填、先要求非空字符串）。收到 None/空串
+    说明调用点写错了，直接走下面的报错——空串不是"没写"，写了空值要当场拒，
+    否则同一份输入在两道门给出两个答案。
     """
     if not is_valid_sid(sid):
         raise ValueError(

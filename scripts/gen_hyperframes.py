@@ -151,12 +151,14 @@ from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
                        STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
-                           is_inside, guard_not_in_skill_dir)
+                           is_inside, guard_not_in_skill_dir,
+                           media_verdict)  # noqa: E402  素材可用性判据（与 run.py 同一份函数）
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa: E402
-                           is_full_bleed_rect, sanitize_svg_for_inline)
+                           is_full_bleed_rect, sanitize_svg_for_inline,
+                           root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
@@ -332,10 +334,13 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
         # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
         # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
         p = os.path.join(out_dir, media_path)
-        if not os.path.exists(p):
+        # 存在性与越界都走 _script_utils.media_verdict——与 run.py 的覆盖率/
+        # `--until html` 拦截同一个函数，两道门必须给同一个答案。
+        verdict = media_verdict(out_dir, media_path)
+        if verdict == "missing":
             missing_imgs.append((sid, media_path))
             continue
-        if not is_inside(p, out_dir):
+        if verdict == "escapes":
             corrupt_imgs.append((sid, media_path,
                                  "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
             continue
@@ -344,10 +349,10 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
         # 一起报出来（先 continue 会让人以为"只是封面缺了"，修完才发现视频本身
         # 还是坏的，白跑一轮）。
         if poster:
-            poster_path = os.path.join(out_dir, poster)
-            if not os.path.isfile(poster_path):
+            poster_verdict = media_verdict(out_dir, poster)
+            if poster_verdict == "missing":
                 missing_imgs.append((sid, poster))
-            elif not is_inside(poster_path, out_dir):
+            elif poster_verdict == "escapes":
                 corrupt_imgs.append((sid, poster,
                                      "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
         # 视频用 ffmpeg 解码探测（只查存在性不够：
@@ -393,14 +398,16 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
 
 
 def _svg_intrinsic_size(path):
-    """从 SVG 根标签取固有像素尺寸（判据与 check_svg 同一份：_root_px_size）。
-    读不出/解析失败返回 None（调用方按"没法验"报错，不静默放行）。
+    """从 SVG 根标签取 (固有宽, 固有高, 说明)；判据走 `_svg_sanitize.root_px_size`
+    ——与 `check_svg` 的自查同一份函数，不是"同一份注释"。读不出/解析失败返回
+    None（调用方按"没法验"报错，不静默放行）。说明串非空是 width/height 与
+    viewBox 比例不一致，由调用方出声：此前这一份只取尺寸不校比例，同一张图
+    check_svg 报不一致、这里一声不吭。
 
     按 ElementTree 解析而不是读文件头正则：注释里放一句 `<svg width="10" …>`
     曾让正则版把 10×10 当成固有尺寸（实测），比例校验于是对着一个假尺寸开灯；
     根标签落在头 8192 字节之外时（大注释/前置处理指令）又只能返 None 误报
-    "读不出"。结构化解析让注释与位置都无从作伪，顺带与 _root_px_size 收成
-    同一份实现（判据只留一处）。
+    "读不出"。结构化解析让注释与位置都无从作伪。
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -409,11 +416,17 @@ def _svg_intrinsic_size(path):
         return None
     if _local(root.tag) != "svg":
         return None
-    return _root_px_size(root)
+    w, h, note = root_px_size(root)
+    if not w or not h:
+        return None        # 读不出 = 没法验，调用方报错而不是拿 None 去判比例
+    return w, h, note
 
 
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
-    """槽位版式配图里 SVG 的比例失配，返回一条说明（无错时为空列表）。
+    """槽位版式配图里 SVG 的比例失配，返回 (错误列表, 告警列表)。
+
+    告警列表与 `canvas_layout_errors` 同形：根标签的 width/height 与 viewBox 比例
+    不一致时出声（此前 check_svg 报、这里一声不吭——同一张图两道门两个答案）。
 
     为什么槽位版式也要查：槽位框是 4:3、画幅是 3:4，SVG 塞进去走 cover。
     比例对不上时 cover 会**切掉边**去填满框——图里画在边缘上的文字就跟着消失，
@@ -432,7 +445,7 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
     栅格图（照片/视频）不查比例：那张图里没有"画在里面的字"，比例失配只是
     取景裁边，ImageGen 素材那条路本来就是靠 cover 取景的（见 imagery.md）。
     """
-    errs = []
+    errs, warns = [], []
     for seg in segments:
         if seg_layout(seg) == "canvas":
             continue          # 画布版式由 canvas_layout_errors 按画幅判，判据不同
@@ -448,7 +461,11 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
             errs.append(f"段落 '{sid}' 的配图 {src} 读不出固有尺寸：根标签要有"
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
-        sw, sh = size
+        sw, sh, note = size
+        if note:
+            warns.append(f"段落 '{sid}' 的配图 {src} {note}——内容按 "
+                         f"preserveAspectRatio 在这一框里留白或拉伸，成片里画在"
+                         f"边缘的字可能跟着变形。让 width/height 与 viewBox 同比例")
         # 判据走 _template.same_aspect：check_svg 的自查与这里的生成期门禁是同一
         # 个问题（"cover 会不会裁掉贴边的字"），容差只有一份（SVG_ASPECT_TOL）。
         if not same_aspect(sw, sh, (box_w, box_h)):
@@ -460,7 +477,7 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
                 f"{abs(sh / box_h - 1) * 100:.0f}%）。hyperframes check 对这种"
                 f"失配只说元素超出容器，看不出该改哪。按 {box_w}×{box_h} 重画"
                 f"这张 SVG")
-    return errs
+    return errs, warns
 
 
 def svg_background_warnings(images, segments, out_dir):
@@ -496,10 +513,10 @@ def svg_background_warnings(images, segments, out_dir):
             continue
         if _local(root.tag) != "svg":
             continue
-        size = _root_px_size(root)
-        if size is None:
-            continue
-        vb_w, vb_h = size
+        # 铺满与否问的是 viewBox 坐标系，不是固有像素尺寸：缩放写法
+        # （width="800" height="600" viewBox="0 0 400 300"）下两套差一个倍数，
+        # 拿 800×600 去判会把铺满整幅的底板 rect 判成只占一半、一声不吭。
+        vb_w, vb_h = root_viewbox_size(root)
         rects = [el for el in root.iter()
                  if is_full_bleed_rect(el, vb_w, vb_h)]
         if not rects:
@@ -519,23 +536,6 @@ def svg_background_warnings(images, segments, out_dir):
                 f"SVG 应保持透明，让页面渐变与该段 accent 氛围光透出来（见 "
                 f"references/canvas.md「不铺满幅底」）")
     return warns
-
-
-def _root_px_size(root):
-    """根标签的固有像素尺寸：(宽, 高)。优先纯数字 width/height（带 % 的不认），
-    拿不到退回 viewBox 第 3/4 段；都读不出返回 None。"""
-    w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
-    if w and h:
-        return w, h
-    vb = re.split(r"[,\s]+", (root.get("viewBox") or "").strip())
-    if len(vb) == 4:
-        try:
-            vw, vh = float(vb[2]), float(vb[3])
-        except ValueError:
-            return None
-        if vw and vh:
-            return vw, vh
-    return None
 
 
 _FRAME0_HIDDEN_TAGS = frozenset({"defs", "title", "desc", "metadata", "style"})
@@ -643,7 +643,11 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h):
             errs.append(f"段落 '{sid}' 的画布 {src} 读不出固有尺寸：根标签要有"
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
-        sw, sh = size
+        sw, sh, note = size
+        if note:
+            warns.append(f"段落 '{sid}' 的画布 {src} {note}——与 slot 版式同一份"
+                         f"判据（_svg_sanitize.root_px_size），两道门必须给同一个"
+                         f"答案。让 width/height 与 viewBox 同比例")
         if not same_aspect(sw, sh, (canvas_w, canvas_h)):
             errs.append(f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，与当前画幅 "
                         f"{canvas_w}×{canvas_h} 不等比——object-fit:cover 会把画在"
@@ -843,13 +847,6 @@ def _zorder_warnings(markup, steps):
         root = ET.fromstring(markup)
     except ET.ParseError:
         return []
-    vb_w = vb_h = None
-    parts = (root.get("viewBox") or "").replace(",", " ").split()
-    if len(parts) == 4:
-        try:
-            vb_w, vb_h = float(parts[2]), float(parts[3])
-        except ValueError:
-            pass
     parent = {c: p for p in root.iter() for c in p}
     dom = []
     for el in root.iter():
@@ -869,7 +866,7 @@ def _zorder_warnings(markup, steps):
                 return None      # 静态算不出 transform 后的最终位置，跳过
             cur = parent.get(cur)
         tag = el.tag.rsplit("}", 1)[-1]
-        return _shape_bounds(el, tag, vb_w, vb_h)
+        return _shape_bounds(el, tag)
 
     warns = []
     for k in range(len(ids)):
@@ -1451,13 +1448,13 @@ def main(argv=None):
         images, manifest["segments"], out_dir, w, h)
     # 槽位版式那张 SVG 的比例（另一条判据，见 slot_svg_ratio_errors）。它拦的是
     # "cover 切掉图边缘上的字"，与画布版式那条各管一段版式，互不覆盖，两边都收齐再退。
-    _slot_errs = slot_svg_ratio_errors(
+    _slot_errs, _slot_warns = slot_svg_ratio_errors(
         images, manifest["segments"], out_dir, *get_image_box(args.aspect))
     # 满幅背景 <rect>：SVG 应透明、让模板三层透出来（判据与 check_svg 同一份，
     # 见 svg_background_warnings）。不跑自查、直接生成也按段落出声；warn 不 error，
     # 有意为之（浅色页/照片感整页）可忽略。
     _bg_warns = svg_background_warnings(images, manifest["segments"], out_dir)
-    for _w in _canvas_warns + _bg_warns:
+    for _w in _canvas_warns + _slot_warns + _bg_warns:
         print(f"[warn] {_w}", file=sys.stderr)
     if _canvas_errs or _slot_errs:
         for _e in _canvas_errs + _slot_errs:

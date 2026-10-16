@@ -16,8 +16,13 @@ director，走 `<img>` 那条路（墙钟循环，见 `references/canvas.md`「S
 
 只用标准库。净化基于 ElementTree 结构化改写，不做正则删标签那种能被绕过的活。
 """
+import os
 import re
+import sys
 import xml.etree.ElementTree as ET
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _template import same_aspect  # noqa: E402  等比判据（含容差）只有一份
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -138,8 +143,62 @@ def _parse_num(v):
     return float(m.group(1)) if m else None
 
 
+# ── 根标签的两套尺寸（真源只此一份）─────────────────────────────────
+# SVG 根标签上有**两个不是一回事**的尺寸，混用就是"两道门给两个答案"：
+#   ① 固有像素尺寸（width/height，没有时退回 viewBox）——浏览器按它定这张图的
+#      原始大小，"够不够大 / 比例对不对得上画幅槽位"问的是这一对；
+#   ② viewBox 坐标系尺寸——图元坐标、字号、rect 的宽高全都写在这一套里，
+#      "文字越界 / rect 铺没铺满"问的是这一对。
+# 缩放写法（width="800" height="600" viewBox="0 0 400 300"，手写 SVG 最常见）
+# 下两套差一个倍数。此前 check_svg 与 gen_hyperframes 各写一份取尺寸的函数，
+# 且都把 ① 当成 ② 喂给 is_full_bleed_rect：铺满 400×300 的底板 rect 被判成
+# "只占一半、没铺满"，两道门都一声不吭，成片里就是一张铺满的死平底板。
+def root_px_size(root):
+    """根标签的**固有像素尺寸** (宽, 高, 说明)；读不出时宽高为 None。
+
+    `check_svg` 的静态自查与 `gen_hyperframes` 的生成期门禁都调这一份。说明串非空
+    表示 width/height 与 viewBox 比例不一致（preserveAspectRatio 会留白或拉伸）。
+    """
+    w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
+    vbw, vbh = _viewbox_size(root)
+    if w and h:
+        if vbw and vbh and not same_aspect(w, h, (vbw, vbh)):
+            return w, h, (f"width/height 比例 {w / h:.3f} 与 viewBox 比例 "
+                          f"{vbw / vbh:.3f} 不一致")
+        return w, h, ""
+    if vbw and vbh:
+        return vbw, vbh, ""
+    return None, None, ""
+
+
+def root_viewbox_size(root):
+    """根标签的**坐标系尺寸** (宽, 高)：图元坐标写在这一套里。
+
+    viewBox 优先；没有 viewBox 时退回固有尺寸（那时两者本就合一）。
+    """
+    vbw, vbh = _viewbox_size(root)
+    if vbw and vbh:
+        return vbw, vbh
+    w, h, _note = root_px_size(root)
+    return w, h
+
+
+def _viewbox_size(root):
+    """viewBox 的第 3/4 段（宽、高）；没有或写坏了返回 (None, None)。"""
+    vb = root.get("viewBox")
+    if not vb:
+        return None, None
+    parts = re.split(r"[,\s]+", vb.strip())
+    if len(parts) != 4:
+        return None, None
+    try:
+        return float(parts[2]), float(parts[3])
+    except ValueError:
+        return None, None
+
+
 def is_full_bleed_rect(el, vb_w, vb_h):
-    """`<rect>` 是否铺满 viewBox（背景底板）。"""
+    """`<rect>` 是否铺满 viewBox（背景底板）；`vb_w/vb_h` 必须来自坐标系尺寸。"""
     if _local(el.tag) != "rect" or not vb_w or not vb_h:
         return False
     w, h = el.get("width"), el.get("height")

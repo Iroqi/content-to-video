@@ -57,7 +57,8 @@ import xml.etree.ElementTree as ET
 from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
-                           is_full_bleed_rect)
+                           is_full_bleed_rect,
+                           root_px_size, root_viewbox_size)  # noqa: E402  与 gen_hyperframes 共用 root_px_size
 from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学与 hex 归一化不在这里重抄
                     theme_bg_stops, DEFAULT_THEME)
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
@@ -235,27 +236,6 @@ def _resolve_layout(layout, w, h, aspect):
         f"请确认根节点尺寸，或显式给 --layout 与 --aspect")
 
 
-def _root_size(root):
-    """返回 (宽, 高, 说明)；读不出纯数字尺寸则宽高为 None。"""
-    w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
-    vb = root.get("viewBox")
-    vbw = vbh = None
-    if vb:
-        parts = re.split(r"[,\s]+", vb.strip())
-        if len(parts) == 4:
-            try:
-                vbw, vbh = float(parts[2]), float(parts[3])
-            except ValueError:
-                pass
-    if w and h:
-        if vbw and vbh and not same_aspect(w, h, (vbw, vbh)):
-            return w, h, f"width/height 比例 {w / h:.3f} 与 viewBox 比例 {vbw / vbh:.3f} 不一致"
-        return w, h, ""
-    if vbw and vbh:
-        return vbw, vbh, ""
-    return None, None, ""
-
-
 # ── 越界与端点落点（2D 版自证，借鉴"线要结束在某处"那条 craft 规则）────────
 # 端点容差：画幅短边的 4‰，下限 2 个 SVG 单位。短边 735 → 2.94、短边 800 →
 # 3.2：随图缩放而不是拍死一个绝对值，与手绘"贴到就能算根住"的直觉一致。
@@ -275,7 +255,7 @@ def _pt_list(points):
     return [(vals[i], vals[i + 1]) for i in range(0, len(vals), 2)]
 
 
-def _shape_bounds(el, tag, vb_w, vb_h):
+def _shape_bounds(el, tag):
     """精确几何元素在画布坐标下的 (x0, y0, x1, y1)；读不出返回 None。
 
     path 用 x_span/y_span（含曲线控制点，宁可高估——越界是 error，低估会漏报）。
@@ -427,7 +407,7 @@ def check_file(path, layout, aspect, theme, resolved=None):
         return ["根节点不是 <svg>"], []
 
     # ── 根节点几何 ──
-    w, h, note = _root_size(root)
+    w, h, note = root_px_size(root)
     if note:
         warns.append(note)
     if not w or not h:
@@ -482,7 +462,10 @@ def check_file(path, layout, aspect, theme, resolved=None):
             cur = parent.get(cur)
         return False
 
-    vb_w, vb_h = w, h
+    # 图元坐标/字号都写在 viewBox 这一套里，不是固有像素尺寸：width="800" height="600"
+    # viewBox="0 0 400 300" 时差一个倍数，拿 800×600 去判"铺没铺满 / 越没越界"会
+    # 把铺满整幅的底板 rect 判成只占一半。与 gen_hyperframes 共用 root_viewbox_size。
+    vb_w, vb_h = root_viewbox_size(root)
     strokes = []      # 待查端点悬空的线条：{desc, ends, owner}
     segs = []         # 落点目标：线段（line / polyline / polygon / rect 边 / path），带归属元素
     dots = []         # 落点目标：终端圆点（r ≤ DOT_MAX_R）
@@ -620,14 +603,14 @@ def check_file(path, layout, aspect, theme, resolved=None):
 
         # ── 图元越界（error）+ 端点落点素材收集（2D 自证）────────────
         # transform 祖先的元素最终位置静态算不出，跳过（与安全边距同一取舍）。
-        if w and h and not has_transform_ancestor(el):
+        if vb_w and vb_h and not has_transform_ancestor(el):
             if tag in ("rect", "circle", "ellipse", "line", "polygon", "polyline", "path"):
-                b = _shape_bounds(el, tag, w, h)
+                b = _shape_bounds(el, tag)
                 if b:
                     x0, y0, x1, y1 = b
-                    if x0 < -1e-6 or y0 < -1e-6 or x1 > w + 1e-6 or y1 > h + 1e-6:
+                    if x0 < -1e-6 or y0 < -1e-6 or x1 > vb_w + 1e-6 or y1 > vb_h + 1e-6:
                         errors.append(
-                            f"图元越出画布（{x0:g},{y0:g}–{x1:g},{y1:g}，画布 {w:g}×{h:g}）"
+                            f"图元越出画布（{x0:g},{y0:g}–{x1:g},{y1:g}，画布 {vb_w:g}×{vb_h:g}）"
                             "——cover 会裁掉贴边内容，把图元整体移进画布")
         _fill = _prop(el, "fill")
         _stroke = _prop(el, "stroke")

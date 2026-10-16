@@ -1138,7 +1138,15 @@ def _director_timeline_lines(rc, card):
             # 还是倒放（倒放喂 ease(1-p)，实测与 GSAP 的 yoyo 一字不差）。
             pf, pt = make_morph(step["morph"]["from"], step["morph"]["to"])
             ease_fn = ease_curve(step.get("ease"), dflt["ease"])
-            cycles = beat_cycles(step) or 1
+            cycles = beat_cycles(step)
+            if cycles is None:
+                # repeat:-1 在 morph 上没有终点可采（契约层已拒，director 校验那条
+                # “没有终点可采”）。此前这里写 `beat_cycles(step) or 1` 静默压成
+                # 一遍：成片演一遍就停，而对轴门禁与接续烘焙仍按"无限、无收尾态"
+                # 记账——报告与成片分家，且全程无 warn。宁可直接炸出来。
+                raise ValueError(
+                    f"director 步 {step.get('target')!r} 的 morph 不支持 "
+                    "repeat:-1：形变是生成期采样，没有终点就采不出中间态")
             yoyo = bool(step.get("yoyo"))
             span = beat_span(step, dur)
             n = max(2, min(240, round(span * rc.fps * 2)))

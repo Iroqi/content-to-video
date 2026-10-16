@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
-                       is_content_sid)
+                       is_content_sid, ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                        _validate_display_text, _validate_text)
@@ -36,11 +36,8 @@ SPEAKER_KEYS = ("voice_id", "voice_style", "label")
 # 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
 TURN_KEYS = ("speaker", "text")
 
-# 会上墙的文字：一行一个去向，行数与列宽都是死的，所以比口播稿多一道约束
-# （不收分号，见 _validate._validate_display_text）。口播稿不在这张表里。
 ON_SCREEN_TOP_KEYS = ("title", "opening_title", "closing_title",
                       "opening_tagline", "closing_tagline")
-ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway")
 
 # 说话人标签的字数上限（两画幅同值）。它上墙后挂在字幕**行首**，跟正文抢同一
 # 行的宽度：竖屏字幕行约 24 个正文字位，标签吃掉 6 个字位还剩得下正文；再长
@@ -170,8 +167,11 @@ def validate_segments_source(data):
         # 可选的稳定 id：SKILL.md 承诺"给段稳定 id，改稿顺序不乱时间轴锚点"。
         # 必须是内容段前缀（seg…），否则下游配图覆盖率/统计把它当结构性页；
         # 必须跨段唯一，否则 HTML 选择器串台。
+        # 写了这个键就必须是个能用的 id：空串/空白与"键不存在"不是一回事——
+        # 键不存在是让管线自动编号（本就合法），写了空值是手滑，此前被当成
+        # 前者静默跳过，而 manifest 侧对同样的空串是拒绝的（两道门两个答案）。
         seg_id = seg.get("id")
-        if seg_id is not None and str(seg_id).strip() != "":
+        if seg_id is not None:
             _validate_sid(seg_id, f"segments[{i}]（title={seg.get('title')!r}）",
                           seen_source_ids)
             if not is_content_sid(seg_id):

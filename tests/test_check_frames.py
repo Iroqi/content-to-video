@@ -150,49 +150,59 @@ class Sampling(unittest.TestCase):
 
 
 class FrameMetrics(unittest.TestCase):
-    """颜色桶计数：np.unique 打包必须与逐像素建 set 严格等价。
+    """像素统计只走 ffmpeg + 标准库：PIL/numpy 不在本技能承诺的环境里。
 
-    向量化是 perf 改动，但它改的是判据的实现——两边数出不同的桶数就会让"死平
-    帧"这条断言悄悄变松或变紧，所以这条不是可选项。
+    靠它们这道闸在承诺环境下必然空转（import 失败 → 每帧 None → "一帧都没
+    量到" → 跳过，而退出码仍是 0）。所以这两条盯的是"换了实现之后判据有没有
+    变"：纯色帧必须还是 1 个桶、黑帧必须还是 0% 非黑。
     """
 
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         try:
-            from PIL import Image  # noqa: F401
-            import numpy as np  # noqa: F401
-        except Exception as e:  # pragma: no cover
-            raise unittest.SkipTest(f"PIL/numpy 不可用：{e}")
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise unittest.SkipTest(f"ffmpeg 不可用，跳过像素指标测试：{e}")
 
-    def _naive_buckets(self, arr):
-        import numpy as np
-        q = (arr // 8).astype(np.uint8)
-        return len({(r[0], r[1], r[2]) for r in q.reshape(-1, 3)})
+    @staticmethod
+    def _frame(name, lavfi_source):
+        """合成一段样片并抽出首帧 PNG，返回 PNG 路径（供 analyze_frame 直读）。"""
+        mp4 = _synth(f"{name}.mp4", lavfi_source)
+        png = os.path.join(_TMP.name, f"{name}_frame.png")
+        subprocess.run(["ffmpeg", "-y", "-ss", "0", "-i", mp4,
+                        "-frames:v", "1", "-q:v", "2", png],
+                       capture_output=True, check=True, timeout=60)
+        return png
 
-    def test_vectorized_bucket_count_matches_naive(self):
-        import numpy as np
-        from PIL import Image
-        rng = np.random.default_rng(7)
-        arr = rng.integers(0, 256, size=(37, 51, 3), dtype=np.uint16)
-        with tempfile.TemporaryDirectory() as td:
-            p = os.path.join(td, "f.png")
-            Image.fromarray(arr.astype(np.uint8), "RGB").save(p)
-            got = self._analyze(p)
-        self.assertIsNotNone(got)
-        self.assertEqual(got["color_buckets"], self._naive_buckets(arr))
-
-    def test_flat_frame_is_still_one_bucket(self):
+    def test_flat_frame_is_one_bucket(self):
         """纯色帧（观感检查里最常见的"死平"形态）量化后必须只有一个桶。"""
-        import numpy as np
-        from PIL import Image
-        arr = np.full((16, 16, 3), 200, dtype=np.uint16)
-        with tempfile.TemporaryDirectory() as td:
-            p = os.path.join(td, "f.png")
-            Image.fromarray(arr.astype(np.uint8), "RGB").save(p)
-            got = self._analyze(p)
+        got = CF.analyze_frame(
+            self._frame("solid", "color=c=green:size=64x64:duration=1"),
+            ffmpeg_path="ffmpeg")
+        self.assertIsNotNone(got)
+        self.assertEqual(got["color_buckets"], 1)
+        self.assertEqual(got["nonblack_ratio"], 1.0)
+
+    def test_black_frame_is_zero_nonblack(self):
+        got = CF.analyze_frame(
+            self._frame("black", "color=c=black:size=64x64:duration=1"),
+            ffmpeg_path="ffmpeg")
+        self.assertIsNotNone(got)
+        self.assertEqual(got["nonblack_ratio"], 0.0)
         self.assertEqual(got["color_buckets"], 1)
 
-    def _analyze(self, path):
-        return CF.analyze_frame(path)
+    def test_lively_frame_has_many_buckets(self):
+        got = CF.analyze_frame(
+            self._frame("lively", "testsrc2=size=64x64:duration=1"),
+            ffmpeg_path="ffmpeg")
+        self.assertIsNotNone(got)
+        self.assertGreater(got["color_buckets"], CF._DEFAULT_MIN_COLORS)
+        self.assertGreater(got["nonblack_ratio"], CF._DEFAULT_MIN_BRIGHT)
+
+    def test_unreadable_frame_returns_none(self):
+        """量不到必须返回 None（= "这一帧没人证明"），不能返回 0 冒充失败。"""
+        self.assertIsNone(CF.analyze_frame(
+            os.path.join(_TMP.name, "no_such.png"), ffmpeg_path="ffmpeg"))
 
 
 if __name__ == "__main__":

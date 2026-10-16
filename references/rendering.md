@@ -91,6 +91,8 @@ hf-project/
 
 **渲染之后还有一道闸：成片时长对账**：落盘后拿 ffmpeg 量实际时长与 manifest 的 `total_duration` 对账，容差 `max(1s, 2%)`：短于容差**退出码 4** 拦下交付，长于容差或量不到只 `[warn]`。结果与实测秒数进 `production_report.json` 的 `video` 字段（`ok` / `short` / `long` / `skipped`）；**别把这条 warn 当噪音划走**。撞上 exit 4 照终端报错做。
 
+`run.py` 恒带 `--no-best-effort`：CLI 的 `--best-effort` **默认开**——媒体缺失或抓帧未就绪也照样出片，只打一条 warning。开着它出得了无声成片（上游只证明"音频文件在"，证明不了"Chrome 侧加载成功"），与本技能红线冲突，所以恒关。撞上这个渲染失败按终端报错修媒体（缺文件补上、格式怪转码）；确要宽容出片就绕开 `run.py` 手工跑 `npx -y hyperframes render`。
+
 ## 性能参数
 
 默认值与档位见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写"什么时候该动它"：

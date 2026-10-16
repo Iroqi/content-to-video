@@ -15,8 +15,9 @@ class Commands(unittest.TestCase):
     def test_build_render_command_shape(self):
         cmd = RB.build_render_command("o.mp4", "draft", 12, 4, [sys.executable, "hf"])
         self.assertIsInstance(cmd, list)
-        self.assertEqual(cmd[-9:], ["render", "-o", "o.mp4", "--quality", "draft",
-                                    "--fps", "12", "--workers", "4"])
+        self.assertEqual(cmd[-10:], ["render", "-o", "o.mp4", "--quality", "draft",
+                                     "--fps", "12", "--workers", "4",
+                                     "--no-best-effort"])
 
     def test_build_render_command_has_no_format_flag(self):
         # 输出容器固定由 -o 后缀（mp4）决定：透明底/mov/webm 已从技能移除，
@@ -25,8 +26,23 @@ class Commands(unittest.TestCase):
         cmd = RB.build_render_command("o.mp4", "draft", 24, 4, base)
         self.assertEqual(cmd[len(base):],
                          ["render", "-o", "o.mp4",
-                          "--quality", "draft", "--fps", "24", "--workers", "4"])
+                          "--quality", "draft", "--fps", "24", "--workers", "4",
+                          "--no-best-effort"])
         self.assertNotIn("--format", cmd)
+
+    def test_best_effort_is_always_off(self):
+        """CLI 的 --best-effort 默认 true：媒体缺失/抓帧未就绪也照样出片。
+
+        本技能红线是"音频缺失直接失败，不生成无声成片"，所以这个旗标恒关，
+        且不与 low_memory 三态耦合——两档组合下都必须在。
+        """
+        base = [sys.executable, "hf"]
+        for lm in (None, True, False):
+            with self.subTest(low_memory=lm):
+                cmd = RB.build_render_command("o.mp4", "draft", 24, 4, base,
+                                              low_memory=lm)
+                self.assertIn("--no-best-effort", cmd)
+                self.assertNotIn("--best-effort", cmd)
 
     def test_low_memory_flag_is_tri_state(self):
         """低内存档三态：不给 = 交给 CLI 自判；给了就字面透传对应旗标。
@@ -37,7 +53,7 @@ class Commands(unittest.TestCase):
         """
         base = [sys.executable, "hf"]
         tail = ["render", "-o", "o.mp4", "--quality", "draft",
-                "--fps", "24", "--workers", "4"]
+                "--fps", "24", "--workers", "4", "--no-best-effort"]
         self.assertEqual(
             RB.build_render_command("o.mp4", "draft", 24, 4, base)[len(base):], tail)
         self.assertEqual(

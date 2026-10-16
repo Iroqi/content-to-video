@@ -243,7 +243,8 @@ class CheckFramesGuards(unittest.TestCase):
         CF._get_ffmpeg = lambda: "ffmpeg"
         CF._probe_duration = lambda ff, v: 10.0
         CF.extract_frame = lambda ff, v, t, p: True
-        CF.analyze_frame = (lambda p: None) if metrics is None else (lambda p: dict(metrics))
+        CF.analyze_frame = ((lambda p, ffmpeg_path=None: None) if metrics is None
+                            else (lambda p, ffmpeg_path=None: dict(metrics)))
         CF._ocr_text = (lambda p: None) if ocr is None else (lambda p: ocr)
 
     def test_ocr_unavailable_does_not_swallow_pixel_assertions(self):
@@ -258,8 +259,9 @@ class CheckFramesGuards(unittest.TestCase):
                          "OCR 降级只能降级 OCR 那一条，不能吞掉像素断言")
 
     def test_nothing_measured_is_not_a_pass(self):
-        """修复前：PIL/numpy 缺失时每帧 `continue`，failures 恒为空，main 打印
-        '通过：N 帧全部过断言'、run.py 记 check:ok——把"没查"说成"查过了"。"""
+        """修复前：每帧 analyse 返回 None 就 `continue`，failures 恒为空，main
+        打印 '通过：N 帧全部过断言'、run.py 记 check:ok——把"没查"说成"查过了"。
+        （PIL/numpy 那会儿是这条路径最常见的成因，现已换成 ffmpeg + 标准库。）"""
         self._stub(metrics=None)
         failures, report = CF.check_video("x.mp4", every=5)
         self.assertIsNone(failures, "一帧都没量到必须按'没量到'降级，不是空列表")

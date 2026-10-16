@@ -11,10 +11,11 @@ Anatomy 的验证工作流叫「渲染便宜，猜是贵的」：成片能播、
   - 可选 --ocr：装了 tesseract 才跑整帧识别，断言至少认出一个词。字幕层/大字
     版式整段丢失的片子会暴露；没装 tesseract 只降级为像素断言，不算失败。
 
-抽帧用 `ffmpeg -ss T -i … -frames:v 1`：每个时间点一次精确 seek，抓"那一秒
-观众实际看到的那一帧"，不做关键帧对齐的猜测（对齐猜错会抽到隔壁帧，等于测
-了个寂寞）。ffmpeg 是本技能的可选依赖，探测与降级口径跟 run.py 的时长契约
-一致：量不到只降级，不把"没法验证"当成"验证失败"。
+抽帧与像素读取都走 `ffmpeg`（`-ss T` 精确 seek + `-f rawvideo` 取像素）：
+每个时间点一次精确 seek，抓"那一秒观众实际看到的那一帧"，不做关键帧对齐的
+猜测（对齐猜错会抽到隔壁帧，等于测了个寂寞）。ffmpeg 是本技能环境里唯一要
+额外装的依赖，探测与降级口径跟 run.py 的时长契约一致：量不到只降级，不把
+"没法验证"当成"验证失败"。
 
 用法：
   python scripts/check_frames.py 成片.mp4 [--every 3] [--min-bright 0.01]
@@ -32,6 +33,7 @@ _DEFAULT_EVERY = 3.0        # 每隔几秒抽一帧（首帧 t=0 必抽）
 _DEFAULT_MIN_BRIGHT = 0.01  # 非黑像素占比下限：1% 亮像素都没有 ≈ 黑屏
 _DEFAULT_MIN_COLORS = 3     # 量化颜色桶数下限：一两种颜色 ≈ 死平
 _MAX_FRAMES = 40            # 抽帧上限：长片也控制在几十秒量级，不把验证拖垮
+_SAMPLE_W = 320             # 像素统计的降采样宽度（高按比例）：够判"死色"，不背全幅开销
 
 
 def sample_timestamps(dur, every=_DEFAULT_EVERY, cap=_MAX_FRAMES):
@@ -87,38 +89,47 @@ def extract_frame(ff, video, t, out_png):
     return r.returncode == 0 and os.path.isfile(out_png) and os.path.getsize(out_png) > 0
 
 
-def analyze_frame(png):
-    """单帧像素断言指标：非黑占比 + 量化颜色桶数（尺寸取帧图实际像素）。
+def analyze_frame(png, ffmpeg_path=None):
+    """单帧像素断言指标：非黑占比 + 量化颜色桶数。
 
-    依赖 PIL/numpy——它们不是本技能承诺的环境，import 失败时返回 None，
-    调用方按"这一帧量不到"降级（不把缺依赖当成画面失败）。
+    像素由 ffmpeg 解码成降采样后的原始 RGB（`-f rawvideo -pix_fmt rgb24`），
+    Python 侧只做两条逐像素计数——不引 PIL/numpy。它们不是本技能承诺的环境
+    （SKILL.md「环境」：标准库 + ffmpeg），靠它们这道闸在承诺环境下必然空转
+    （import 失败 → 每帧 None → "一帧都没量到" → 跳过，而退出码还是 0）。
+
+    降采样只影响精度、不影响判据：两条门槛（1% 亮像素 / 3 个颜色桶）量的是
+    "整帧是不是一块死色"，不是"每个字清不清楚"。宽 `_SAMPLE_W`、高按比例，
+    面积平均不会让一块亮区消失，只会让它变软——黑底白字的正常开场帧照样过。
+
+    ffmpeg 不可用或解码失败返回 None，调用方按"这一帧量不到"降级。
     """
-    try:
-        from PIL import Image
-        import numpy as np
-    except Exception:
+    ff = ffmpeg_path or _get_ffmpeg()
+    if not ff:
         return None
     try:
-        img = Image.open(png).convert("RGB")
-        arr = np.asarray(img, dtype=np.uint16)
-    except Exception:
+        r = subprocess.run(
+            [ff, "-v", "error", "-i", png,
+             "-vf", f"scale={_SAMPLE_W}:-2", "-f", "rawvideo",
+             "-pix_fmt", "rgb24", "-"],
+            capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
         return None
-    if arr.shape[0] * arr.shape[1] == 0:
+    if r.returncode != 0:
         return None
-    mx = arr.max(axis=2)
-    nonblack = float((mx > 16).mean())          # 任一通道明显亮于黑就算"非黑"
-    # 颜色桶数：量化到 8 档/通道（//8，32 级）。//32 会把暗部帧（值都在
-    # 32 以下）整帧压进 (0,0,0) 一个桶——深色底 + 标题字的正常开场帧会被
-    # 误判成"死平"，所以量化粒度取能区分"黑底上一块亮色"的这档。
-    #
-    # 计数走 np.unique 对打包后的 24 位整数（每通道 ≤31，打包是一一映射，
-    # 桶数与逐像素建 set 严格相等）。原先那个 Python 层 for 循环在 1080×1440
-    # 上单帧 0.4s——采样改成覆盖整片后帧数上限真正用满（40 帧 ≈ 17s 纯开销），
-    # 这个循环就成了这道闸本身的成本瓶颈。等价，快约 80 倍。
-    q = (arr // 8).astype(np.uint32)
-    packed = (q[:, :, 0] << 16) | (q[:, :, 1] << 8) | q[:, :, 2]
-    return {"nonblack_ratio": round(nonblack, 4),
-            "color_buckets": int(np.unique(packed).size)}
+    px = r.stdout
+    n = len(px) // 3
+    if n == 0:
+        return None
+    # 任一通道明显亮于黑就算"非黑"
+    nonblack = sum(1 for i in range(0, n * 3, 3)
+                   if max(px[i], px[i + 1], px[i + 2]) > 16)
+    # 颜色桶数：量化到 8 档/通道（>>3，32 级）。>>5 会把暗部帧（值都在 32
+    # 以下）整帧压进 (0,0,0) 一个桶——深色底 + 标题字的正常开场帧会被误判成
+    # "死平"，所以量化粒度取能区分"黑底上一块亮色"的这档。
+    buckets = {(px[i] >> 3, px[i + 1] >> 3, px[i + 2] >> 3)
+               for i in range(0, n * 3, 3)}
+    return {"nonblack_ratio": round(nonblack / n, 4),
+            "color_buckets": len(buckets)}
 
 
 def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
@@ -175,7 +186,7 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
         for i, t in enumerate(ts):
             png = os.path.join(td, f"f{i:03d}.png")
             ok = extract_frame(ff, video, t, png)
-            metrics = analyze_frame(png) if ok else None
+            metrics = analyze_frame(png, ffmpeg_path=ff) if ok else None
             line = f"[{t:7.2f}s]"
             if metrics is None:
                 report.append(f"{line} 抽帧/分析失败：跳过（不判失败，但这条没人证明）")
@@ -216,11 +227,11 @@ def check_video(video, every=_DEFAULT_EVERY, min_bright=_DEFAULT_MIN_BRIGHT,
                 line += "  ✓"
             report.append(line)
     if measured == 0:
-        # 一帧都没量到（PIL/numpy 缺失，或每帧抽帧/分析都失败）不是"全过"：
-        # 返回 None 让调用方按"没量到"降级，与 ffmpeg 不可用同一口径。
+        # 一帧都没量到（每帧抽帧/分析都失败）不是"全过"：返回 None 让调用方
+        # 按"没量到"降级，与 ffmpeg 不可用同一口径。
         return None, report + [
             f"[coverage] {len(ts)} 帧一帧都没量到：跳过抽帧断言"
-            "（装好 Pillow+numpy 后像素断言自动生效；ffmpeg 在但抽帧失败时看上一行原因）"]
+            "（ffmpeg 在但抽帧/解码失败时看上一行原因）"]
     return failures, report
 
 

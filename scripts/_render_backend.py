@@ -177,6 +177,12 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
     但每卡自带 .bg/.grid 两层不透明底——只换容器不产生透明底，要叠轨得先撤掉
     那两层（见 SKILL.md 第 4 步）。
 
+    恒传 `--no-best-effort`：CLI 的 --best-effort **默认 true**，语义是"媒体缺失
+    或抓帧未就绪也照样出片，只给一条 capture-readiness warning"。本技能红线是
+    "音频缺失直接失败，不生成无声成片"——上游校验拦的是"manifest 里的音频文件在
+    不在"，拦不住"文件在、但 Chrome 侧没就绪"这一种，而那一种正是无声成片的
+    来源。交给渲染器宽容，等于把红线留在最后一道没兑现。
+
     ``low_memory`` 三态（None = 不提这个旗标，交给 CLI 按总内存自判）：
     CLI 的 --help 写明低内存档会把 **worker 钉成 1**、走 screenshot capture、
     跳过自动 worker 校准。所以 `True` 与 `--workers N>1` 同时出现时，那个 N
@@ -188,6 +194,7 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
     cmd += ["-o", output]
     cmd += ["--quality", quality,
             "--fps", str(fps), "--workers", str(workers)]
+    cmd += ["--no-best-effort"]
     if low_memory is not None:
         cmd += ["--low-memory-mode" if low_memory else "--no-low-memory-mode"]
     # 参数拼齐后再解析：.cmd 兜底路径返回的是整条命令行字符串，先 resolve

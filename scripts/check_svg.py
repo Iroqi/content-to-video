@@ -20,9 +20,8 @@
   - 字号：按"画布宽 ÷ SVG 宽"折算后的最终 px 低于 26px                   [warn]
     写成 em/%/class 读不出绝对值的文字数量                              [warn]
   - 对比度：文字用字面 hex 填充时，对**主题渐变的最坏一档** stop 算 WCAG 对比度；
-    低于 3:1 为 error，低于 4.5:1 为 warn；背景族（深蓝 #0c1320/#16233a/#1a2536 加上
-    当前主题渐变的各档 stop）当文字色为 error——只在深色页底主题（dark，唯一主题）下查，
-    且只查槽位。整页画布只 warn 不 error：画布上
+    低于 3:1 为 error，低于 4.5:1 为 warn（页底各档 stop 本身就是 1.0:1，当文字色
+    即 error）。整页画布只 warn 不 error：画布上
     的字可能压着自己画的浅色局部底板，按页底算出来的数对它不成立
   - 透明度：文字带 opacity / fill-opacity < 0.8                          [warn]
     （整页画布上的 opacity=0 除外：那是导演逐拍点亮的起始态，终帧才亮）
@@ -59,13 +58,13 @@ from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
                            is_full_bleed_rect)
-from _theme import (contrast_ratio, css_color_to_hex, list_theme_names,
-                    relative_luminance, theme_bg_stops, DEFAULT_THEME)  # WCAG 数学与 hex 归一化不在这里重抄
+from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学与 hex 归一化不在这里重抄
+                    theme_bg_stops, DEFAULT_THEME)
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
                        load_template, same_aspect, seg_card_pad_x, svg_text_band)
 
 # 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
-# 手抄数值——上一版手抄的页底色就漂过一次（见 PAGE_BG 注释）。
+# 手抄数值——上一版手抄的页底色就漂过一次，颜色基准从此全部改为从注册表派生。
 _TPL = load_template()
 # 走 get_canvas / get_image_box 而不是自己下标取：生成期判"素材够不够大"用的是
 # 那两个函数（`gen_hyperframes` 的 `_seg_boxes`），自查若另开一份下标，两边取到
@@ -93,24 +92,11 @@ def _safe_margins():
 
 
 SAFE_MARGIN = _safe_margins()
-BG_FAMILY = {"#0c1320", "#16233a", "#1a2536"}
-# 整页画布的文字真正落在主题背景渐变的中段（45% 位），底色从 _theme 注册表
-# 派生而不是抄一份字面量——上一版手抄的 dark 底色是旧主题遗留，与真实页底
-# 已漂移，对比度门禁一直在拿不存在的颜色当基准。
-PAGE_BG = {t: theme_bg_stops(t)[1] for t in list_theme_names()}
-# BG_FAMILY 抓的失败模式是"深蓝文字待在浅色局部底板上"——对页底对比度正常、
-# 只有家族判定能抓；单一深色主题（dark）下始终启用。家族集合并入当前主题渐变
-# stop：手抄族会与注册表漂移（上一版 PAGE_BG 的注释记的就是这类漂移）。
-_BG_BY_THEME = {}
-
-
-def _bg_family(theme):
-    """该主题下判"背景/底板专属色"的集合（小写 hex）。"""
-    if theme not in _BG_BY_THEME:
-        dark = (relative_luminance(PAGE_BG[theme]) or 0) < 0.2
-        fam = BG_FAMILY | {s.lower() for s in theme_bg_stops(theme)}
-        _BG_BY_THEME[theme] = fam if dark else set()
-    return _BG_BY_THEME[theme]
+# 文字填充色的唯一判据是对页底（主题渐变各档 stop）的对比度：填充色只要暗到
+# 接近页底（对比度 <3:1）就是瞎字，按最坏一档 stop 算就能抓住——不需要另养
+# 一份"背景色族"字面量。历史上那份手抄族（#0c1320/#16233a/#1a2536）是旧主题
+# 遗留，与注册表早已漂移，而它相对对比度判据零新增覆盖（族内色对当前 stops
+# 的对比度全部 <1.3:1），两处判据还各有一套报错文案，删繁就简保留这一条。
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
@@ -554,28 +540,24 @@ def check_file(path, layout, aspect, theme, resolved=None):
                 min_eff = eff if min_eff is None else min(min_eff, eff)
 
             # 字面色对页底的对比度。底色取主题渐变的**最坏一档**：深色页底上的浅字怕最亮
-            # 那档、浅色页底上的深字怕最暗那档，min 两边都自动选对。两档主题下这恰好等于
-            # 原先手挑的 PAGE_BG（渐变的中间档），所以槽位判定一字不变，只是从"赌中间那档"
-            # 变成"取最坏"。
+            # 那档、浅色页底上的深字怕最暗那档，min 两边都自动选对。早年这里手挑中间档
+            # 当唯一边界，改为取最坏后槽位判定一字不变，只是不再"赌中间那档"。
             # 画布页只 warn、不 error：画布上的字可能压在自己画的局部浅色底板上（那是正当
             # 画法，见 canvas.md「图内文字的对比度」），按页底算出来的数对它不成立，
-            # 所以这里没有判死的资格。背景族那条启发式同理留在槽位。
+            # 所以这里没有判死的资格。
             fill = inherited(el, "fill")
             fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
             if fh:
-                if layout == "slot" and fh in _bg_family(theme):
-                    errors.append(f"文字 {content.strip()[:12]!r} 用了背景色族 {fh} 当填充色（瞎字）")
-                else:
-                    c = min(contrast_ratio(fh, s) for s in theme_bg_stops(theme))
-                    if layout == "canvas" and c < 4.5:
-                        warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 主题页底最坏一档只有 "
-                                     f"{c:.1f}:1（<4.5:1）。它若直接落在页底上就是看不清；若压在"
-                                     f"自己画的浅色底板上，本条不成立可忽略。画布的氛围光还会再吃一档")
-                    elif c < 3:
-                        errors.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度仅 {c:.1f}:1（<3:1）")
-                    elif c < 4.5:
-                        warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度 {c:.1f}:1（<4.5:1），"
-                                     f"还会被 accent 辉光再吃一档")
+                c = min(contrast_ratio(fh, s) for s in theme_bg_stops(theme))
+                if layout == "canvas" and c < 4.5:
+                    warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 主题页底最坏一档只有 "
+                                 f"{c:.1f}:1（<4.5:1）。它若直接落在页底上就是看不清；若压在"
+                                 f"自己画的浅色底板上，本条不成立可忽略。画布的氛围光还会再吃一档")
+                elif c < 3:
+                    errors.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度仅 {c:.1f}:1（<3:1）")
+                elif c < 4.5:
+                    warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 页底对比度 {c:.1f}:1（<4.5:1），"
+                                 f"还会被 accent 辉光再吃一档")
             op = inherited(el, "opacity")
             fop = inherited(el, "fill-opacity")
             for name, val in (("opacity", op), ("fill-opacity", fop)):

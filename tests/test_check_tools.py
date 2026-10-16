@@ -16,6 +16,7 @@ import check_svg
 import check_docs
 import check_numbers
 import gen_hyperframes
+from _images_schema import validate_images_json
 
 
 def write(tmp, name, text):
@@ -77,8 +78,14 @@ class SvgChecker(unittest.TestCase):
         self.assertTrue(errs)
 
     def test_background_family_as_text_fill(self):
+        """旧主题遗留的深蓝填充仍必须是 error。
+
+        早先这条走"背景色族"字面量判定；族集与对比度判据重复（族内色对当前
+        dark stops 的对比度全部 <1.3:1）且字面量已漂移，删除后由同一条对比度
+        判据接管——回归钉住：换判据不换结论。
+        """
         errs, _ = self.run_check(GOOD.replace("#dbe6f5", "#1a2536"))
-        self.assertTrue(any("背景色族" in e for e in errs))
+        self.assertTrue(any("对比度" in e for e in errs), errs)
 
     def test_small_font_warns(self):
         _, warns = self.run_check(GOOD.replace('font-size="36"', 'font-size="18"'))
@@ -358,6 +365,116 @@ class SvgIntrinsicSize(unittest.TestCase):
         # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
         self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
                          (980.0, 735.0))
+
+    def test_comment_injection_cannot_forge_a_size(self):
+        """注释里放一句 `<svg width="10" height="10">`：读文件头的正则版实测
+        把它当成固有尺寸（返 10×10），比例校验于是对着一个假尺寸开灯。
+        ET 解析不过注释，注入无从作伪。
+        """
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write('<!-- <svg width="10" height="10"> -->\n'
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="1080" '
+                    'height="1440" viewBox="0 0 1080 1440"></svg>')
+        self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
+                         (1080.0, 1440.0))
+
+    def test_root_beyond_the_head_slice_is_not_a_false_negative(self):
+        """根标签落在头 8192 字节之外（大注释/前置处理指令）：读头版实测返
+        None，把一张好图误报成"读不出固有尺寸"。整文解析与位置无关。"""
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("<!-- " + "x" * 9000 + " -->\n"
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="980" '
+                    'height="735"></svg>')
+        self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
+                         (980.0, 735.0))
+
+
+class SvgTextMetrics(unittest.TestCase):
+    """_svg_text_metrics：注释不许抬高最小字号、不许吹大 <text> 个数。
+
+    全文正则版实测两处中招：`<!-- font-size="99" -->` 把最小字号抬到 99px
+    （折算可读性对着一份假账判），注释里的 `<text>` 幽灵计进个数。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "a.svg")
+
+    def metrics(self, body):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" '
+                    'viewBox="0 0 10 10">' + body + "</svg>")
+        return gen_hyperframes._svg_text_metrics(self.path)
+
+    def test_comment_injection_cannot_move_the_numbers(self):
+        got = self.metrics(
+            '<!-- font-size="99" --><text id="a" x="0" y="0" font-size="26">甲</text>'
+            '<text id="b" x="0" y="1" style="font-size: 18px">乙</text>'
+            '<!-- <text>幽灵</text> -->')
+        self.assertEqual(got, (18.0, 2))
+
+    def test_three_font_size_channels_are_collected(self):
+        """呈现属性、inline style、<style> 规则三个来路都收（后者先剥注释）。"""
+        got = self.metrics(
+            '<style>/* font-size:99px; */ .c{font-size:22px}</style>'
+            '<text id="a" x="0" y="0" class="c" font-size="30">甲</text>'
+            '<text id="b" x="0" y="1" style="font-size: 18.5px">乙</text>')
+        self.assertEqual(got, (18.5, 2))
+
+    def test_relative_units_stay_unreadable(self):
+        """em / % 一律不认：没有布局引擎，硬猜会把"读不准"混成"能读"。"""
+        self.assertEqual(self.metrics(
+            '<text id="a" x="0" y="0" font-size="1.2em">甲</text>'
+            '<text id="b" x="0" y="1" font-size="150%">乙</text>'), (None, 2))
+
+    def test_broken_svg_reports_nothing_rather_than_crashing(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("<svg><unclosed>")
+        self.assertEqual(gen_hyperframes._svg_text_metrics(self.path), (None, 0))
+
+
+class EpilogExampleRuns(unittest.TestCase):
+    """--help 尾巴那份"实测跑通"的 images.json：声明就得被测试兜住。
+
+    证伪：seg2 曾挂 `stage:"keep"`，而 seg1 是不带 director 的 PNG——生成期
+    直接报"上一段没有可接续的内联画面"，照抄命令第一步就红。stage:keep 是
+    跨页接续标记（接的必须是同一张图的上一页导演档），不是素材条目的一种
+    形状，不放进"三种素材条目"的示例里。
+    """
+
+    def test_epilog_example_passes_schema_and_director_prepare(self):
+        epi = gen_hyperframes._epilog()
+        block = epi.split("可直接照抄的 images.json（实测跑通）：", 1)[1]
+        images = json.loads(block[block.index("{"):block.rindex("}") + 1])
+        # 契约层：三种条目形状都过 images.json 校验
+        validate_images_json(images)
+        # 生成期：真文件 + 真 manifest 形状，director_prepare 零 error
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        os.makedirs(os.path.join(tmp.name, "images"))
+        with open(os.path.join(tmp.name, "images", "seg1.png"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        with open(os.path.join(tmp.name, "images", "seg2.svg"), "w",
+                  encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="1080" '
+                    'height="1440" viewBox="0 0 1080 1440">'
+                    '<rect id="bar-1" x="0" y="0" width="10" height="10"/>'
+                    '<rect id="bar-2" x="0" y="0" width="10" height="10"/></svg>')
+        with open(os.path.join(tmp.name, "images", "seg3.gif"), "wb") as f:
+            f.write(b"GIF89a" + b"\x00" * 32)
+        segments = [
+            {"id": "seg1", "layout": "slot",
+             "sentences": [{"start_time": 0.0, "end_time": 1.0},
+                           {"start_time": 1.0, "end_time": 2.0}]},
+            {"id": "seg2", "layout": "slot",
+             "sentences": [{"start_time": 2.0, "end_time": 3.0},
+                           {"start_time": 3.0, "end_time": 4.0}]},
+            {"id": "seg3", "layout": "slot",
+             "sentences": [{"start_time": 4.0, "end_time": 5.0}]},
+        ]
+        errs, _warns = gen_hyperframes.director_prepare(images, segments, tmp.name)
+        self.assertEqual(errs, [])
 
 
 class CheckSvgCommandLine(unittest.TestCase):

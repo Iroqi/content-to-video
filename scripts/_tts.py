@@ -3,10 +3,11 @@
 
 协议契约（提供方接入管线的全部表面）：
     client.synthesize(text, voice_id, voice_style, model, timeout) -> WAV 字节
-    失败只有两类异常：TtsHttpError（非 2xx，带 status_code）与
-    BadAudioResponseError（响应可读回但没有音频）；是否重试由
-    is_non_retryable 统一裁决，pipeline 的重试/落盘/变速逻辑不感知
-    具体提供方。
+    失败分三类：TtsHttpError（非 2xx，带 status_code）、
+    BadAudioResponseError（响应可读回但没有音频/不是合法音频）、
+    网络级异常（连接失败/DNS/读超时，urllib 原样上抛不带 status_code）；
+    是否重试由 is_non_retryable 统一裁决（前两类确定性失败，网络类可重试），
+    pipeline 的重试/落盘/变速逻辑不感知具体提供方。
 
 参数一律是管线的领域语汇（句子/音色/风格/模型），不是某家的请求体
 形状——OpenAI chat/completions 的 messages 预填充与 audio 参数属于
@@ -131,6 +132,15 @@ def _audio_from_response(payload):
         # 先剥空白再严格校验：RFC 2045 允许 base64 带换行，而 validate=True 会把
         # 它当非法字符。剥掉后 "!!!!" 这类垃圾才会被 binascii.Error 抓住。
         compact = re.sub(r"\s+", "", data) if isinstance(data, str) else data
+        if not compact:
+            # 纯空白 data：剥完之后是空串，而空串是合法 base64（解出 b''），
+            # validate=True 不拦。不在这里挡，"没有音频"就变成一个 0 字节
+            # "WAV" 落盘，直到下游 measure_duration 量出 0 才失败——失败分类
+            # 与病因脱节，正是本函数 docstring 要避免的那个形态。
+            raise BadAudioResponseError(
+                "TTS 响应的 audio.data 是空白——端点返回了空音频，检查 "
+                "--base-url/--model 是否指向支持 audio 参数的 TTS 模型"
+                f"（默认 {DEFAULT_MODEL}）")
         return base64.b64decode(compact, validate=True)
     except (binascii.Error, TypeError, ValueError) as e:
         raise BadAudioResponseError(

@@ -155,7 +155,7 @@ from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa:
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
-from _svg_sanitize import (_local, _parse_num, _style_map,  # noqa: E402
+from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa: E402
                            is_full_bleed_rect, sanitize_svg_for_inline)
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
@@ -393,37 +393,23 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
 
 
 def _svg_intrinsic_size(path):
-    """从 SVG 文件头取固有像素尺寸：优先根标签的 width/height（纯数字，
-    带 % / em 的不算像素，直接不认），拿不到再退回 viewBox 的第 3/4 段。
-    读不出返回 None（调用方按"没法验"报错，不静默放行）。
+    """从 SVG 根标签取固有像素尺寸（判据与 check_svg 同一份：_root_px_size）。
+    读不出/解析失败返回 None（调用方按"没法验"报错，不静默放行）。
+
+    按 ElementTree 解析而不是读文件头正则：注释里放一句 `<svg width="10" …>`
+    曾让正则版把 10×10 当成固有尺寸（实测），比例校验于是对着一个假尺寸开灯；
+    根标签落在头 8192 字节之外时（大注释/前置处理指令）又只能返 None 误报
+    "读不出"。结构化解析让注释与位置都无从作伪，顺带与 _root_px_size 收成
+    同一份实现（判据只留一处）。
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            head = f.read(8192)
-    except OSError:
+            root = ET.fromstring(f.read())
+    except (OSError, ET.ParseError):
         return None
-    tag = re.search(r"<svg\b[^>]*>", head, re.S)
-    if not tag:
+    if _local(root.tag) != "svg":
         return None
-    tag = tag.group(0)
-
-    def _px(name):
-        # 允许 "980" 与 "980px" 两种写法：check_svg._parse_num 同样接受 px 后缀，
-        # 两边口径一致，手绘 SVG 才不会一边过检一边被这里判"读不出尺寸"。
-        # (?<![\w-]) 限定属性名左边界，否则 min-width/max-height 也会被当成
-        # width/height 命中（check_svg 用 root.get("width") 天然不会）。
-        m = re.search(rf'(?<![\w-]){name}="\s*([\d.]+)(?:\s*px)?\s*"', tag)
-        return float(m.group(1)) if m else None
-
-    sw, sh = _px("width"), _px("height")
-    if sw and sh:
-        return sw, sh
-    vb = re.search(r'\bviewBox="\s*[-\d.]+[,\s]+[-\d.]+[,\s]+([\d.]+)[,\s]+([\d.]+)\s*"', tag)
-    if vb:
-        w, h = float(vb.group(1)), float(vb.group(2))
-        if w and h:
-            return w, h
-    return None
+    return _root_px_size(root)
 
 
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
@@ -1170,15 +1156,39 @@ def _svg_text_metrics(path):
     字号只认 px：`font-size="26"`、`font-size: 26px`、`font-size="26.5px"` 都算，
     em / % / pt 一律不认——相对单位要乘父级才知绝对值，这里没有布局引擎，硬猜
     会把"能读"和"读不准"混成一类，宁可交回调用方按"没法验"给 warn。
+
+    按 ElementTree 遍历而不是全文正则：注释里提一句 `font-size` 或 `<text>` 不该
+    被当成真字号/真文本（实测正则版两者都中招——注释能把最小字号抬到 99px、
+    把文本个数吹大，折算可读性于是对着一份假账判）。字号三个来路都收：呈现
+    属性、inline style、`<style>` 规则（后者先剥 CSS 注释再扫，注释里的
+    font-size 不是声明）。
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            body = f.read()
-    except OSError:
+            root = ET.fromstring(f.read())
+    except (OSError, ET.ParseError):
         return None, 0
-    sizes = [float(m.group(1)) for m in re.finditer(
-        r'font-size\s*[=:]\s*["\']?\s*(\d+(?:\.\d+)?)\s*(?:px)?(?![\w.%])', body)]
-    return (min(sizes) if sizes else None), len(re.findall(r"<text\b", body))
+    sizes = []
+    n_text = 0
+    for el in root.iter():
+        tag = _local(el.tag)
+        if tag == "text":
+            n_text += 1
+        if tag == "style":
+            css = _CSS_COMMENT.sub("", el.text or "")
+            sizes += [float(m.group(1)) for m in re.finditer(
+                r"font-size\s*:\s*(\d+(?:\.\d+)?)\s*(?:px)?(?![%\w.])", css)]
+            continue
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)(?:px)?", (el.get("font-size") or "").strip())
+        if m:
+            sizes.append(float(m.group(1)))
+            continue
+        st = el.get("style")
+        if st:
+            m = re.search(r"font-size\s*:\s*(\d+(?:\.\d+)?)\s*(?:px)?(?![%\w.])", st)
+            if m:
+                sizes.append(float(m.group(1)))
+    return (min(sizes) if sizes else None), n_text
 
 
 def _audio_candidates(path, out_dir, manifest_dir=None):
@@ -1232,8 +1242,9 @@ def audio_fallback_check(audio_path, want_total):
 def _epilog():
     """--help 的尾巴：一条能照抄的命令 + 一份实测跑通的 images.json。
 
-    只放「看例子比读文字快」的东西：-o 与 --images 的相对路径都相对 -o 所在
-    目录（同一个基准，纯靠猜猜不出），以及三种素材条目各自的完整形状。
+    只放「看例子比读文字快」的东西：路径基准（纯靠猜猜不出——`-o`/`--images`
+    的相对路径都相对**当前工作目录**，而 images.json 里各条的 src 相对 -o 所在
+    目录，两者不是同一个基准），以及三种素材条目各自的完整形状。
 
     这里刻意**不列**「容易写错的几处」：那些撞一次错就全知道，而且报错比
     任何清单都具体（写错 volume 越界时报错带出合法区间与这点的含义）。
@@ -1249,7 +1260,8 @@ def _epilog():
         "      --images hf-project/images.json \\",
         "      --aspect portrait --fps 24",
         "",
-        "（-o 与 --images 的相对路径都相对 -o 所在目录）",
+        "（-o 与 --images 的相对路径都相对当前工作目录；images.json 里各条的",
+        " src 才相对 -o 所在目录）",
         "",
         "可直接照抄的 images.json（实测跑通）：",
         "",
@@ -1259,8 +1271,7 @@ def _epilog():
         '    "seg2": {"src": "images/seg2.svg",',
         '              "director": {"steps": [',
         '                 {"target": "#bar-1", "at": 0, "to": {"height": 320}},',
-        '                 {"target": "#bar-2", "at": 1, "to": {"height": 480}}]},',
-        '              "stage": "keep"},',
+        '                 {"target": "#bar-2", "at": 1, "to": {"height": 480}}]}},',
         '    "seg3": {"src": "images/seg3.gif"}',
         "  }",
         "",

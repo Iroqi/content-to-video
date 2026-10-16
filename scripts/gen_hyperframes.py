@@ -156,7 +156,7 @@ from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa:
 from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
-from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa: E402
+from _svg_sanitize import (_CSS_COMMENT, _local, _style_map,  # noqa: E402
                            is_full_bleed_rect, sanitize_svg_for_inline,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402

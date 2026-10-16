@@ -821,8 +821,8 @@ class CanvasPageAndVideoAttrs(unittest.TestCase):
         m = self._canvas_manifest(long_title)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            html = generate_html(m, "audio/combined.wav",
-                                 images=H.sample_images(m), aspect="landscape")
+            generate_html(m, "audio/combined.wav",
+                          images=H.sample_images(m), aspect="landscape")
         self.assertNotIn("字号降为", err.getvalue())
         # 反向证明 warn 本身还有效：同一个长标题换到槽位段（seg-a）必须报
         s2 = H.sample_source()

@@ -9,7 +9,6 @@
 （"元素超出裁切容器"），读者看不出该改根节点尺寸还是改内容。
 """
 import os
-import sys
 import tempfile
 import unittest
 

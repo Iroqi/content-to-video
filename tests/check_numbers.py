@@ -217,6 +217,14 @@ FACTS = [
         [("references/canvas.md", r"62/33/28")],
         "同上，横屏 title 档",
     ),
+    # ── 手绘旋钮：作者按这个上限取 roughness，超过只是噪声 ──
+    (
+        "canvas-roughness-max",
+        ("const", "scripts/canvas_kit.py", "ROUGHNESS_MAX"), 10,
+        [("references/canvas.md", r"roughness` 0[–-]10")],
+        "canvas_kit 手绘抖动上限（与官方 rough.js 同款口径）：超过只是噪声，"
+        "作者按它取 roughness",
+    ),
 ]
 
 

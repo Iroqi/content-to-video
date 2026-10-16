@@ -25,8 +25,15 @@
 公共旋钮 duration / ease / stagger / repeat / yoyo 都能写进内容元素，草稿原样带出；
 repeat/yoyo 的取值与互斥校验跟 _images_schema 同一套（yoyo 必须带 repeat、只挂内容元素），
 跨键约束（如 morph 不能配 repeat:-1）由 selfcheck 过真契约时兜底。
+
+roughness 是图形侧的手绘旋钮：只改 SVG 里的坐标，不进 director 草稿（草稿按 #id
+寻址，与坐标抖动无关）。坐标轴与文字不收这个键——前者是数据标尺（刻度与标签全
+钉在它上面，抖了读者就没法信这个比例），后者抖一下就不成字；抖的是
+panel / polyline / bars / circle / rule。取值与官方 rough.js 同名同义，上限借它
+那句"over 10 is mostly useless"。
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -100,7 +107,7 @@ ELEMENT_KEYS = {
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
 COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
-               "repeat", "yoyo")
+               "repeat", "yoyo", "roughness")
 # 每个 kind 必填的纯数值键，进函数就按这张表统一查（报错口径全 kind 一致）。
 # polyline 没有数值标量，点在 points 数组里，由它自己那条结构校验管。
 REQUIRED_NUMS = {
@@ -201,6 +208,50 @@ def _num(v):
 
 def _attr_text(s):
     return escape(str(s), {'"': "&quot;"})
+
+
+# ── 手绘感：seeded 坐标抖动 ────────────────────────────────────
+# roughness 与官方 rough.js 同名同义：0 = 不抖（= 本模块加这个键之前的行为），
+# 往大走线越来越"手画"。上限 10 借它的原话——再大只是噪声。
+ROUGHNESS_MAX = 10.0
+
+
+def _wobble(seed_key, i):
+    """seed_key 派生的第 i 个 [-1, 1] 抖动值（同一份 spec 重跑逐字节一致）。
+
+    为什么是 sha256 而不是 random.Random(seed)：后者要持一个实例，"第 i 个值"
+    取决于前面取过几个，调用顺序一改动结果就变；sha256(f"{key}:{i}") 无状态、
+    逐点独立，改一个元素不影响别的元素的抖动。渲染期的确定性契约禁的是墙钟与
+    未播种随机——这里连 random 模块都不 import，天然满足那条契约。
+    """
+    h = hashlib.sha256("{}:{}".format(seed_key, i).encode("utf-8")).digest()
+    return int.from_bytes(h[:8], "big") / float(1 << 64) * 2.0 - 1.0
+
+
+def _jit_pos(v, amp, seed_key, i):
+    """位置类数值（坐标/端点）的抖动：直接加减，不封顶。"""
+    if amp <= 0:
+        return v
+    return v + amp * _wobble(seed_key, i)
+
+
+def _jit_size(v, amp, seed_key, i):
+    """尺寸类数值（宽/高/半径）的抖动：幅度随自身大小收缩，抖完仍为正。
+
+    宽高抖成 0 或负 = 一个不存在、且非法的 rect；收缩上限取自身一半。正常尺寸
+    （远大于幅度）时就是全幅度，只有贴着幅度的极小尺寸才收敛——那时"保住形状"
+    比"抖满"重要。
+    """
+    if amp <= 0:
+        return v
+    return v + amp * _wobble(seed_key, i) * min(1.0, v / (2.0 * amp))
+
+
+def _seed_key(el, i):
+    """抖动的种子键：有 id 用 id（director 也按 id 寻址，一个元素一个身份）；
+    无 id 的结构底按 kind#序号——同页两个 panel 的抖动不重样。i 是元素在 spec 里
+    的序号，spec 不变种子就不变。"""
+    return el["id"] if "id" in el else "{}#{}".format(el["kind"], i)
 
 
 def _node(tag, attrs, kids=None, text=None, raw=False):
@@ -324,12 +375,42 @@ def _validate_element(el, i):
     return el
 
 
+def _roughness_of(el, where):
+    """roughness 的判据全份：取值 + 适配 kind（校验层与渲染层共用这一份）。
+
+    坐标轴与文字不吃这个键：轴是数据标尺（刻度与标签全钉在它上面，抖了读者就没法
+    信这个比例），字抖一下就不成字；手绘感由 panel / polyline / bars / circle /
+    rule 出。写了也白写的键必须当场拒——静默忽略比没有这个键更坏（作者以为到手，
+    其实没有）。render_svg 也调它：那条路被测试与其它入口直接走，校验层不是唯一
+    关口。
+    幅度按线宽换算（线宽是模板真源，见 LINE_W）：抖动量随画幅原生分辨率缩放，
+    不需要另写一个 px 常数——写一个就会和线宽各漂各的。
+    """
+    if "roughness" not in el:
+        return 0.0
+    kind = el["kind"]
+    if kind in ("text", "axis"):
+        why = ("轴是数据标尺，刻度与标签全钉在它上面，抖了读者就没法信这个比例"
+               if kind == "axis" else "字抖一下就不成字")
+        raise ValueError(f"{where} 的 {kind} 不吃 roughness：{why}。"
+                         "手绘感由 panel / polyline / bars / circle / rule 出")
+    v = _opt_num(el, "roughness", where, 0.0, nonnegative=True)
+    if v > ROUGHNESS_MAX:
+        raise ValueError(f"{where} 的 roughness={v:g} 超过上限 {ROUGHNESS_MAX:g}："
+                         "再大只是噪声（官方 rough.js 同款口径：over 10 is mostly "
+                         "useless）。要更糙的线，手写 SVG 自己画")
+    return v
+
+
 def _validate_common_keys(el, where):
-    """公共旋钮（role / beat / duration / ease / stagger / repeat / yoyo）的取值判据。
+    """公共旋钮（role / beat / duration / ease / stagger / repeat / yoyo / roughness）
+    的取值判据。
 
     与 _images_schema 同一套判据（那里管 images.json 的 director，这里管 spec）：
     整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
     另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
+    roughness 是例外中的例外：它只改 SVG 坐标、不进草稿，所以结构底也能写
+    （面板抖一抖正是手绘感的一部分）；坐标轴与文字则由 _roughness_of 拦掉。
     """
     if "role" in el:
         _choice(el["role"], ("structure", "content"), where, "role")
@@ -358,6 +439,7 @@ def _validate_common_keys(el, where):
         raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
                          "一起到位、不进 director steps，没有'哪一拍'可反复。"
                          "要反复的是内容元素")
+    _roughness_of(el, where)
 
 
 def _validate_kind_keys(el, kind, where):
@@ -636,13 +718,20 @@ def _count_render(count):
 
 
 # ── 元素发射 ─────────────────────────────────────────────────
+# 抖动只在**发射时**做（spec 里的坐标一个字节都不动）：草稿按 #id 寻址、与坐标无关，
+# 而检查/运镜/净化都读产物——所以判据一律按抖完之后的值算（见 _emit_panel 的满幅检查）。
 def _emit_panel(el, ctx, where):
     x, y = _need_num(el, "x", where), _need_num(el, "y", where)
     w = _need_num(el, "w", where, positive=True)
     h = _need_num(el, "h", where, positive=True)
     cw, ch = ctx["canvas"]
+    s, amp = ctx["seed"], ctx["amp"]
+    x, w = _jit_pos(x, amp, s, "x"), _jit_size(w, amp, s, "w")
+    y, h = _jit_pos(y, amp, s, "y"), _jit_size(h, amp, s, "h")
     # 与 check_svg 判"满幅底板"同一条阈值，但在这里就报而不是留一条 warn：本模块的
     # 立身之本就是"生成物一定过门禁"，而满幅 rect 唯一的后果是把模板那三层背景盖死。
+    # 判据按**抖完之后**的尺寸算：check_svg 量的是落盘的属性，spec 里差一点、
+    # 抖到阈值外一样盖死那三层。
     if (x <= FULL_BLEED_EDGE and y <= FULL_BLEED_EDGE
             and w >= cw * FULL_BLEED_FRAC and h >= ch * FULL_BLEED_FRAC):
         raise ValueError(f"{where} 的 panel 铺满了整页（{int(w)}×{int(h)} 起于 "
@@ -668,6 +757,9 @@ def _emit_axis(el, ctx, where):
     pos, (lo, hi) = _tick_positions(el["ticks"], frm, to, where)
     kids = []
     horizontal = orient == "x"
+    # 轴线整根不抖：它是数据标尺，刻度与标签全钉在它上面——轴一歪，刻度就浮在
+    # 轴外、读者没法信这个比例（本技能的数据红线第一条就是不用误导性比例）。
+    # 手绘感由图形出（panel / polyline / bars / circle / rule），见各发射函数。
     axis_attrs = ({"x1": _num(frm), "y1": _num(at), "x2": _num(to), "y2": _num(at)}
                   if horizontal else
                   {"x1": _num(at), "y1": _num(frm), "x2": _num(at), "y2": _num(to)})
@@ -709,7 +801,11 @@ def _emit_axis(el, ctx, where):
 
 
 def _emit_polyline(el, ctx, where):
-    pts = " ".join("{},{}".format(_num(p[0]), _num(p[1])) for p in el["points"])
+    s, amp = ctx["seed"], ctx["amp"]
+    pts = " ".join(
+        "{},{}".format(_num(_jit_pos(p[0], amp, s, "%d.x" % j)),
+                       _num(_jit_pos(p[1], amp, s, "%d.y" % j)))
+        for j, p in enumerate(el["points"]))
     attrs = OrderedDict([("id", el.get("id")), ("points", pts),
                          ("fill", _color(el, "fill", ctx, "none", where)),
                          ("stroke", _color(el, "stroke", ctx, "accent", where)),
@@ -718,6 +814,11 @@ def _emit_polyline(el, ctx, where):
         # pathLength=1 让渲染端不必测量真实长度就能把 dash 归一（draw 步骤会再写一次，
         # 这里先带上，是为了这张 SVG 单独用 <img> 看时也保持同一个几何口径）。
         attrs["pathLength"] = "1"
+    if amp > 0:
+        # 抖完之后两个线头可能离它原接着的东西（轴线/圆点）≤ 幅度：那是风格不是
+        # 残线，照 rule 的老办法给 check_svg 的端点落点检查一个显式豁免。不抖时
+        # 不给——端点是精确接上的，那道检查照常兜底。
+        attrs["data-free-ends"] = "1"
     return _node("polyline", attrs)
 
 
@@ -725,15 +826,22 @@ def _emit_bars(el, ctx, where):
     base = _need_num(el, "base_y", where)
     fs = ctx["tiers"]["label"]
     fill = _color(el, "fill", ctx, "accent", where)
+    s, amp = ctx["seed"], ctx["amp"]
     kids = []
-    for b in el["bars"]:
-        x, w, h = float(b["x"]), float(b["w"]), float(b["h"])
+    for j, b in enumerate(el["bars"]):
+        # 底边始终钉在 base_y 上：柱子"站着"是数据语义，不参与抖动；抖的是
+        # x / 宽度 / 高度——顶边与侧沿随之歪，才读得出是手画的柱。
+        x = _jit_pos(float(b["x"]), amp, s, "%d.x" % j)
+        w = _jit_size(float(b["w"]), amp, s, "%d.w" % j)
+        h = _jit_size(float(b["h"]), amp, s, "%d.h" % j)
         kids.append(_node("rect", OrderedDict([
             ("class", "bar"), ("x", _num(x)), ("y", _num(base - h)),
             ("width", _num(w)), ("height", _num(h)), ("fill", fill)])))
         if b.get("label"):
+            # 标签不抖——文字一律不抖（清晰，且同行标签不会互相撞）：x 仍是 spec 里
+            # 的柱中心，y 钉在 base_y + label 档字号。
             kids.append(_node("text", OrderedDict([
-                ("class", "bar-label"), ("x", _num(x + w / 2.0)),
+                ("class", "bar-label"), ("x", _num(float(b["x"]) + float(b["w"]) / 2.0)),
                 ("y", _num(base + fs)), ("font-size", _num(fs)),
                 ("fill", ctx["pal"]["dim"]), ("text-anchor", "middle")]),
                 text=b["label"]))
@@ -741,9 +849,12 @@ def _emit_bars(el, ctx, where):
 
 
 def _emit_circle(el, ctx, where):
+    s, amp = ctx["seed"], ctx["amp"]
     return _node("circle", OrderedDict([
-        ("id", el.get("id")), ("cx", _num(_need_num(el, "cx", where))),
-        ("cy", _num(_need_num(el, "cy", where))), ("r", _num(_need_num(el, "r", where))),
+        ("id", el.get("id")),
+        ("cx", _num(_jit_pos(_need_num(el, "cx", where), amp, s, "cx"))),
+        ("cy", _num(_jit_pos(_need_num(el, "cy", where), amp, s, "cy"))),
+        ("r", _num(_jit_size(_need_num(el, "r", where), amp, s, "r"))),
         ("fill", _color(el, "fill", ctx, "accent", where))]))
 
 
@@ -759,10 +870,13 @@ def _emit_text(el, ctx, where):
 
 
 def _emit_rule(el, ctx, where):
+    s, amp = ctx["seed"], ctx["amp"]
     attrs = OrderedDict([
         ("id", el.get("id")),
-        ("x1", _num(_need_num(el, "x1", where))), ("y1", _num(_need_num(el, "y1", where))),
-        ("x2", _num(_need_num(el, "x2", where))), ("y2", _num(_need_num(el, "y2", where))),
+        ("x1", _num(_jit_pos(_need_num(el, "x1", where), amp, s, "x1"))),
+        ("y1", _num(_jit_pos(_need_num(el, "y1", where), amp, s, "y1"))),
+        ("x2", _num(_jit_pos(_need_num(el, "x2", where), amp, s, "x2"))),
+        ("y2", _num(_jit_pos(_need_num(el, "y2", where), amp, s, "y2"))),
         ("stroke", _color(el, "stroke", ctx, "accent", where)),
         ("stroke-width", _num(_opt_num(el, "width", where, ctx["line_w"], positive=True)))])
     if el.get("draw"):
@@ -796,10 +910,15 @@ def render_svg(spec):
         if role_of(el) == "content" and "id" not in el:
             raise ValueError(f"{where} 是内容元素却缺 id：director 的 step 要靠 "
                              '"#id" 点名它，没有 id 就永远不会被点亮')
+        # 抖动的种子与幅度按元素现算（渲染层再过一遍 roughness 判据：render_svg 也被
+        # 测试与其它入口直接调用，校验层那道不是唯一关口）。幅度 = roughness × 线宽，
+        # 线宽是模板真源，于是抖动量随画幅原生分辨率缩放。
+        ectx = dict(ctx, seed=_seed_key(el, i),
+                    amp=_roughness_of(el, where) * ctx["line_w"])
         if el["kind"] == "axis":
-            node, note = _emit_axis(el, ctx, where)
+            node, note = _emit_axis(el, ectx, where)
         else:
-            node, note = _EMITTERS[el["kind"]](el, ctx, where), None
+            node, note = _EMITTERS[el["kind"]](el, ectx, where), None
         if _starts_hidden(el):
             node["attrs"].append(("opacity", "0"))
         if note:
@@ -988,6 +1107,8 @@ def _epilog():
         "",
         "要点：内容元素（除 panel / axis 外）必须给 id，否则导演的 step 点不到它；",
         "axis 的 from / to 是轴两端的像素坐标，不是起止数据值；",
+        "roughness 0–10 给图形元素加手绘抖动（坐标轴与文字不吃；同一份 spec 重跑"
+        "逐字节一致），0 = 不抖；",
         "给上 --sentences N，自动拍的 at 才按句数回绕，草稿可直接塞进 images.json。",
         "",
     ]

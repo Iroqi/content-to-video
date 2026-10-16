@@ -239,6 +239,218 @@ class RolesAndInitialState(unittest.TestCase):
         self.assertEqual(nodes["underline"].get("pathLength"), "1")
 
 
+class Roughness(unittest.TestCase):
+    """手绘旋钮：roughness 只抖图形坐标；同 spec 重跑逐字节一致（确定性契约）。
+
+    三条不变量各由测试钉住：
+      - roughness=0 与不写这个键**逐字节一致**（改造前的行为原样保留）；
+      - 抖动量级 ≤ roughness × 该画幅线宽（幅度真源是模板线宽，不是私设 px）；
+      - 坐标轴与文字不收这个键（标尺与文字在两种渲染里逐字节一致）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    # 吃 roughness 的只有图形五兄弟；axis 是数据标尺、text 抖了不成字，两者都拒收
+    ROUGH_KINDS = ("panel", "polyline", "bars", "circle", "rule")
+
+    def _spec(self, rough=None):
+        """七种 kind 各来一个；rough=None 表示整个 spec 不写这个键。"""
+        els = [
+            {"kind": "panel", "id": "panel", "x": 80, "y": 300, "w": 920, "h": 700},
+            {"kind": "axis", "id": "ax", "orient": "y", "at": 940, "from": 400,
+             "to": 940, "ticks": [{"v": 400, "label": "8"}, {"v": 940, "label": "0"}]},
+            {"kind": "polyline", "id": "curve", "draw": True,
+             "points": [[160, 900], [480, 600], [800, 750]]},
+            {"kind": "bars", "id": "bars", "base_y": 940,
+             "bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"},
+                      {"x": 320, "w": 120, "h": 350, "label": "Q2"}]},
+            {"kind": "circle", "id": "c", "cx": 540, "cy": 700, "r": 120},
+            {"kind": "rule", "id": "r", "x1": 80, "y1": 1000, "x2": 1000, "y2": 1000},
+            {"kind": "text", "id": "t", "x": 80, "y": 200, "content": "季度营收"},
+        ]
+        if rough is not None:
+            for el in els:
+                if el["kind"] in self.ROUGH_KINDS:
+                    el["roughness"] = rough
+        return {"aspect": "portrait", "elements": els}
+
+    def _render(self, rough=None):
+        return K.render_svg(K.validate_spec(self._spec(rough)))
+
+    def _geometry(self, svg):
+        """产出 SVG 里所有可比数值：{文档序路径: {属性: 值}}，points 拆成逐点。
+
+        两份渲染的元素结构逐一对应（roughness 不动 tag、不动顺序），所以能按路径
+        逐个属性比抖动幅度。
+        """
+        out = {}
+        for idx, el in enumerate(ET.fromstring(svg).iter()):
+            vals = {}
+            for k, v in el.attrib.items():
+                try:
+                    vals[k] = float(v)
+                except ValueError:
+                    if k == "points":
+                        vals[k] = [float(n) for n in re.split(r"[,\s]+", v)]
+            out["{}[{}]".format(local(el.tag), idx)] = vals
+        return out
+
+    def test_zero_roughness_is_byte_identical_to_absent(self):
+        """0 = 不抖 = 加这个键之前的行为：向后兼容不是"差不多"，是逐字节。"""
+        self.assertEqual(self._render(0), self._render(None))
+
+    def test_same_spec_renders_identically(self):
+        """确定性：同一份 spec 重跑逐字节一致（渲染期契约禁未播种随机）。"""
+        self.assertEqual(self._render(2), self._render(2))
+
+    def test_wobble_stays_within_roughness_times_line_width(self):
+        """幅度真源是画幅线宽：每个数值属性的位移都 ≤ roughness × line_w。"""
+        amp = 2 * K.LINE_W["portrait"]
+        rough, plain = self._geometry(self._render(2)), self._geometry(self._render(None))
+        self.assertEqual(list(rough), list(plain))
+        for path, vals in rough.items():
+            # data-free-ends 是端点豁免标记、不是几何：只有被抖的折线会多出它
+            self.assertEqual(set(vals) - set(plain[path]) - {"data-free-ends"},
+                             set(), path)
+            for key, want in vals.items():
+                got = plain[path].get(key)
+                if got is None:
+                    continue
+                if isinstance(want, list):
+                    self.assertEqual(len(got), len(want), path)
+                    for a, b in zip(got, want):
+                        self.assertLessEqual(abs(a - b), amp + 1e-3, f"{path} 的 {key}")
+                else:
+                    self.assertLessEqual(abs(got - want), amp + 1e-3, f"{path} 的 {key}")
+
+    def test_scale_and_text_never_wobble(self):
+        """标尺与文字不收这个键：axis 整棵子树、所有 text（刻度与柱标签也在内）
+        在两种渲染里逐一相同。"""
+        rroot, proot = ET.fromstring(self._render(2)), ET.fromstring(self._render(None))
+
+        def axis_of(root):
+            return next(n for n in root.iter() if n.get("id") == "ax")
+        self.assertEqual(ET.tostring(axis_of(rroot)), ET.tostring(axis_of(proot)))
+        rtexts = [n for n in rroot.iter() if local(n.tag) == "text"]
+        ptexts = [n for n in proot.iter() if local(n.tag) == "text"]
+        self.assertEqual(len(rtexts), len(ptexts))
+        for ra, pa in zip(rtexts, ptexts):
+            self.assertEqual(ra.attrib, pa.attrib, ra.text)
+
+    def test_bars_keep_their_feet_on_the_baseline(self):
+        """柱底始终钉在 base_y：站着是数据语义，抖的只有 x / 宽 / 高。"""
+        base = 940
+        for el in ET.fromstring(self._render(2)).iter():
+            if el.get("class") != "bar":
+                continue
+            self.assertAlmostEqual(float(el.get("y")) + float(el.get("height")), base,
+                                   delta=1e-9)
+
+    def test_different_ids_get_different_wobble(self):
+        """种子绑元素身份：同几何不同 id，抖出来的样子不一样（同页不重样）。"""
+        els = [{"kind": "circle", "id": "a", "cx": 500, "cy": 700, "r": 60},
+               {"kind": "circle", "id": "b", "cx": 500, "cy": 700, "r": 60}]
+        for el in els:
+            el["roughness"] = 2
+        root = ET.fromstring(K.render_svg(K.validate_spec({"elements": els})))
+        circles = [n for n in root.iter() if local(n.tag) == "circle"]
+        self.assertNotEqual(circles[0].get("cx"), circles[1].get("cx"))
+
+    def test_id_less_structure_elements_wobble_independently(self):
+        """无 id 的结构底按 kind#序号做种子：同页两个 panel 的抖动不重样。"""
+        els = [{"kind": "panel", "x": 80, "y": 300, "w": 400, "h": 300},
+               {"kind": "panel", "x": 80, "y": 700, "w": 400, "h": 300}]
+        for el in els:
+            el["roughness"] = 2
+        root = ET.fromstring(K.render_svg(K.validate_spec({"elements": els})))
+        rects = [n for n in root.iter() if local(n.tag) == "rect"]
+        self.assertNotEqual(rects[0].get("x"), rects[1].get("x"))
+
+    def test_sizes_stay_positive_under_max_roughness(self):
+        """极小尺寸也抖不成非法的 rect：宽度抖到 0/负 是一张坏图。"""
+        els = [{"kind": "bars", "id": "tiny", "base_y": 940, "roughness": 10,
+                "bars": [{"x": 160, "w": 6, "h": 6}]}]
+        root = ET.fromstring(K.render_svg(K.validate_spec({"elements": els})))
+        rect = next(n for n in root.iter() if n.get("class") == "bar")
+        self.assertGreater(float(rect.get("width")), 0)
+        self.assertGreater(float(rect.get("height")), 0)
+
+    def test_roughness_over_max_is_refused(self):
+        for bad in (11, -1):
+            with self.subTest(roughness=bad):
+                with self.assertRaises(ValueError) as cm:
+                    K.validate_spec(self._spec(bad))
+                self.assertIn("roughness", str(cm.exception))
+
+    def test_render_layer_refuses_over_max_too(self):
+        """render_svg 也被测试与其它入口直接调用：校验层之外它自己那道也拦。"""
+        spec = K.validate_spec(self._spec(None))
+        spec["elements"][0]["roughness"] = 11
+        with self.assertRaises(ValueError) as cm:
+            K.render_svg(spec)
+        self.assertIn("上限", str(cm.exception))
+
+    def test_text_refuses_roughness(self):
+        """字抖一下就不成字：text 写这个键当场拒，不静默忽略。"""
+        spec = self._spec(None)
+        spec["elements"][-1]["roughness"] = 2
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("不吃 roughness", str(cm.exception))
+
+    def test_axis_refuses_roughness(self):
+        """轴线是数据标尺：刻度与标签全钉在它上面，整根不抖，写这个键当场拒。"""
+        spec = self._spec(None)
+        spec["elements"][1]["roughness"] = 2
+        with self.assertRaises(ValueError) as cm:
+            K.validate_spec(spec)
+        self.assertIn("不吃 roughness", str(cm.exception))
+
+    def test_roughness_never_reaches_the_director_draft(self):
+        """草稿按 #id 寻址、与坐标无关：加不加 roughness，steps 一模一样。"""
+        draft = K.selfcheck_fragment(K.validate_spec(self._spec(2)))
+        self.assertEqual(draft, K.selfcheck_fragment(K.validate_spec(self._spec(None))))
+        for step in draft["steps"]:
+            self.assertNotIn("roughness", step)
+
+    def test_full_bleed_is_judged_on_the_jittered_size(self):
+        """spec 里差一口气的 panel，抖到阈值外也要拒——门禁量的是落盘的属性。"""
+        w, h = get_canvas("portrait")
+        # 种子不碰运气：_wobble 是确定函数，直接找一颗 x/y 都贴在边上（≤1px）、
+        # 而 w/h 都往大推（>0.9）的——四个条件同时满足，这一颗就一定触发。
+        seed = next(s for s in map(str, range(20000))
+                    if abs(K._wobble(s, "x")) < 0.125 and abs(K._wobble(s, "y")) < 0.125
+                    and K._wobble(s, "w") > 0.9 and K._wobble(s, "h") > 0.9)
+        ctx = dict(K._context(K.validate_spec({"elements": [
+            {"kind": "panel", "x": 0, "y": 0, "w": 100, "h": 100}]})),
+            seed=seed, amp=8.0)
+        edge = {"kind": "panel", "x": 0, "y": 0,
+                "w": w * K.FULL_BLEED_FRAC - 3, "h": h * K.FULL_BLEED_FRAC - 3}
+        with self.assertRaises(ValueError) as cm:
+            K._emit_panel(edge, ctx, "spec 的 elements[1]")
+        self.assertIn("铺满了整页", str(cm.exception))
+        # 阈值内充裕的 panel 抖满也不误伤（判据没有敏感到把正常面板拦下）
+        node = K._emit_panel(dict(edge, w=w * 0.8, h=h * 0.8), ctx, "spec 的 elements[1]")
+        self.assertEqual(node["tag"], "rect")
+
+    def test_rough_page_still_passes_the_canvas_gate(self):
+        """手绘页也是画布页：抖完之后照样过 check_svg，门禁不因风格豁免。"""
+        spec = spec_for("portrait")
+        for rough in (2, 4):
+            with self.subTest(roughness=rough):
+                for el in spec["elements"]:
+                    if el["kind"] in self.ROUGH_KINDS:
+                        el["roughness"] = rough
+                p = os.path.join(self.tmp.name, "rough%d.svg" % rough)
+                with open(p, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(K.render_svg(K.validate_spec(spec)))
+                errors, warns = check_svg.check_file(p, "canvas", "portrait", "dark")
+                self.assertEqual(errors, [])
+                self.assertEqual(actionable(warns), [])
+
+
 class DirectorDraft(unittest.TestCase):
     def fragment(self, spec, sentences=None):
         return K.selfcheck_fragment(K.validate_spec(spec), sentences=sentences)

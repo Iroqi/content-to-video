@@ -832,9 +832,12 @@ def _prepare_card(rc, clip):
     # 触发**：_title_font_px 里横屏降字号那条 [warn] 说的是"HTML 标题层会把
     # 字号降到 48px"，而画布页的标题是作者自己在 SVG 里画的，与 48px 无关。
     # 照旧调用只会产出一条内容为假的告警——把作者引去改一段根本不存在的标题。
+    # tagline / verse / title_wrap 同理整条不生成：canvas 分支的装配一个都不
+    # 消费，白算之外还会把 `font-size:;`（title_size 为空的守卫值）嵌进一串
+    # 永不发射的 HTML 里——死代码不该长得像坏 CSS。
     title_size = ("" if is_canvas
                   else _title_font_px(rc, seg, sid, is_agenda))
-    tagline_html = _tagline_html(rc, seg, sid, ac)
+    tagline_html = "" if is_canvas else _tagline_html(rc, seg, sid, ac)
     # <video> 必须落在**卡片那个可见窗口**上，不能用口播段长：
     # hyperframes 给每个带 data-start 的元素按**它自己**的窗口独立判显隐
     # （runtime 的 applyTimedElementVisibility + 逐帧 style.visibility），
@@ -842,7 +845,7 @@ def _prepare_card(rc, clip):
     # 画面上、video 已被判出窗——画面上只剩一个空图槽（实测 0.4s ≈ 10 帧）。
     # <img> 没有 data-start、继承祖先卡的窗口，两种素材必须同一口径。
     image_html = _media_html(rc, sid, win_start, vis_d) if has_image else ""
-    verse_html = _verse_html(seg, sid, ac_text_attr)
+    verse_html = "" if is_canvas else _verse_html(seg, sid, ac_text_attr)
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
     # 不推导盒几何。
@@ -862,14 +865,14 @@ def _prepare_card(rc, clip):
         f'    <div class="seg-progress" id="prog-{sid}" '
         f'style="background:{ac_attr};width:0"></div>\n'
     )
-    title_wrap = (
+    title_wrap = ("" if is_canvas else (
         f'    <div class="seg-title-wrap">\n'
         f'      <div class="seg-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
         f'{esc(seg["title"])}</div>\n'
         f'      {tagline_html}\n'
         f'    </div>'
-    )
+    ))
     return SimpleNamespace(
         seg=seg, sid=sid, s=s, d=d, wipe=clip["wipe"], win_start=win_start,
         # vis = 这一页真正在画面上的时长（[擦除起点, 被下一页盖住]），也是
@@ -1227,8 +1230,9 @@ def _director_timeline_lines(rc, card):
 def _apple_opening_budget(rc, card):
     """苹果风开场的等比压缩系数（1.0 = 原速不压）。
 
-    这支舞的收尾时刻由**标题字数与行数**共同决定：最后一个字符落定 =
-    chars.delay + stagger×(非空格字数−1) + duration，最后一行内容滑入 =
+    这支舞的收尾时刻由**标题字数、行数与编号列**共同决定：最后一个字符落定 =
+    chars.delay + stagger×(非空格字数−1) + duration，最后一行编号落定 =
+    rows.idx.delay + stagger×(行数−1) + duration，最后一行内容滑入 =
     rows.content.delay + stagger×(行数−1) + duration。而它能用到的时长是
     开屏页的**可见窗口**（锚在擦除起点 win_start 的整段 life，不是口播段长）。
     两者不挂钩，于是短开场会静默丢尾巴：opening 写一句话（~1.0s）、内容段
@@ -1248,9 +1252,14 @@ def _apple_opening_budget(rc, card):
     title = card.seg.get("title") or ""
     n_chars = len(re.sub(r"\s", "", title))
     # 收尾时刻只数**真会生成**的那几条补间：没写 tagline 就没有 kicker 那条；
-    # 空格字符（.t-sp）不参与字符 stagger。
+    # 空格字符（.t-sp）不参与字符 stagger；idx 与 content 两拍都生成（编号
+    # 先行、内容跟上），各自算收尾——曾漏过 idx 那条，模板里 content 的
+    # delay+duration 数值较大时永远盖得住，一旦被调小，预算就对着一个比真实
+    # 收尾更早的时刻开灯，压不压、压多少全凭巧合。
     ends = [a_t["chars"]["delay"] + a_t["chars"]["stagger"] * max(0, n_chars - 1)
             + a_t["chars"]["duration"],
+            a_r["idx"]["delay"] + a_r["stagger"] * (n - 1)
+            + a_r["idx"]["duration"],
             a_r["content"]["delay"] + a_r["stagger"] * (n - 1)
             + a_r["content"]["duration"]]
     if has_kicker:
@@ -1314,19 +1323,22 @@ def _apple_opening_lines(rc, card):
         f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
         f'ease:"sine.inOut"}},{t + halo["in"] * k:.2f})'
     )
-    # 副光斑：淡入后 x/y/scale 缓慢漂移（repeat:-1 yoyo）。漂移是稳态循环，
-    # 同主光呼吸一样不参与压缩。
+    # 副光斑：等 delay 之后淡入（duration 是淡入时长，配置里的 glow.duration，
+    # 不拿 delay 充当——曾出现 delay 兼任淡入时长、glow.duration 整条死配置的
+    # 读法），淡入完成后 x/y/scale 缓慢漂移（repeat:-1 yoyo）。漂移是稳态循环，
+    # 同主光呼吸一样不参与压缩；它的锚点却要按压缩后的淡入收尾算（delay+
+    # duration 都乘 k），否则短开场里漂移会抢在淡入还没演完时就开始。
     gl = halo["glow"]
     lines.append(
         f'tl.fromTo("#glow-{sid}",{{opacity:0}},'
-        f'{{opacity:{gl["opacity"]:.2f},duration:{gl["delay"]:.2f},'
-        f'ease:"sine.out"}},{t:.2f})'
+        f'{{opacity:{gl["opacity"]:.2f},duration:{gl["duration"] * k:.2f},'
+        f'ease:"sine.out"}},{t + gl["delay"] * k:.2f})'
     )
     lines.append(
         f'tl.to("#glow-{sid}",{{x:{gl["x"]},y:{gl["y"]},'
         f'scale:{gl["scale"]},opacity:{gl["breatheTo"]:.2f},'
         f'duration:{gl["breatheDur"]:.2f},repeat:-1,yoyo:true,'
-        f'ease:"sine.inOut"}},{t + gl["delay"]:.2f})'
+        f'ease:"sine.inOut"}},{t + (gl["delay"] + gl["duration"]) * k:.2f})'
     )
     # 标题逐字浮出：目标选 .t-ch 排除空格 .t-sp（空格的 transform 无视觉意义）。
     # 字符 span 由渲染器拆好（见 _agenda_col_html），inline-block + white-space:pre

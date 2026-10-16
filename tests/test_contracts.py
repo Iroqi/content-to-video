@@ -320,6 +320,23 @@ class ImagesJson(unittest.TestCase):
                        "muted": True, "autoplay": False, "playsinline": True,
                        "poster": "images/a.png"}})
 
+    def test_explicit_null_type_is_normalized_to_absent(self):
+        """显式 "type": null 必须被抹成"键不存在"，不能原样流到渲染端。
+
+        null 与缺键在 Python 里都读到 None，但下游两种消费口径相反：
+        _is_video_src 写 `value.get("type") or "auto"`（null 当缺省），
+        html_renderer._media_html 写 `media.get("type", "auto")`（null 当显式值
+        ——键在场时默认值根本不生效）——classify_media_path 见 None != "auto"
+        会原样返回 None，一条 mp4 配 "type": null 就此静默变成 <img>。
+        """
+        entry = {"src": "images/a.mp4", "type": None}
+        IMG.validate_images_json({"seg-a": entry})
+        self.assertNotIn("type", entry)
+        # 渲染端 _media_html 的调用形状：键已不在场，回到扩展名判定
+        self.assertEqual(
+            IMG.classify_media_path("images/a.mp4", entry.get("type", "auto")),
+            "video")
+
     def test_still_removed_types_stay_rejected(self):
         """chart/formula 是真删掉的能力，误写时必须点名劝去手绘 SVG。"""
         bad(IMG.validate_images_json, {"seg-a": {"src": "images/a.png", "type": "chart"}},

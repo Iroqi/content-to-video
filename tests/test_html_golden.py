@@ -520,6 +520,50 @@ class AppleOpening(unittest.TestCase):
         self.assertIn('#opening .agenda-row .ag-name', html)
         self.assertIn('stagger:0.12', html)
 
+    def test_glow_fade_uses_its_own_duration_and_anchors_after_the_fade(self):
+        """副光淡入时长是 glow.duration、漂移锚在淡入收尾——两个键曾互相冒充。
+
+        证伪：淡入时长曾写 `gl["delay"]`（0.3s 一擦黑），`glow.duration: 2.2`
+        整条是死配置；漂移锚又只加 delay，淡入换成真时长后漂移会抢在淡入
+        还没演完时开始。正确形状：淡入 = 锚 t+delay、时长 duration（都乘 k），
+        漂移锚 = t+(delay+duration)*k。
+        """
+        html = self._render_apple()
+        # 淡入：0.30s 起、2.20s 演完（模板 glow.delay=0.3 / duration=2.2，k=1）
+        self.assertIn(
+            'tl.fromTo("#glow-opening",{opacity:0},{opacity:0.50,'
+            'duration:2.20,ease:"sine.out"},0.30)', html)
+        # 漂移：锚在淡入收尾 0.30+2.20=2.50，而不是淡入起点 0.30
+        self.assertIn('ease:"sine.inOut"},2.50)', html)
+        self.assertNotIn('ease:"sine.inOut"},0.30)', html)
+
+    def test_opening_budget_counts_the_idx_tween(self):
+        """开场预算的收尾公式要数**每一条真会生成**的补间，idx 那拍也是。
+
+        证伪：公式曾只数字体 chars / kicker / rows.content，漏了 rows.idx。
+        模板现值下 content 的收尾永远更晚所以看不出来；把 idx.duration 调大
+        （编号演得比内容慢）时，旧公式算出的 need 偏小、k 虚高——编号还在演
+        就被判"整支舞演完了"，压不压、压多少全凭巧合。
+        """
+        from types import SimpleNamespace
+
+        import html_renderer as HR
+        ap = {
+            "title": {"chars": {"delay": 0, "stagger": 0, "duration": 0.1}},
+            "kicker": {"delay": 0, "duration": 0.1},
+            "rows": {"stagger": 0,
+                     "idx": {"delay": 0, "duration": 2.0},
+                     "content": {"delay": 0, "duration": 0.1}},
+            "budget": {"minFactor": 0.5},
+        }
+        rc = SimpleNamespace(anim={"opening": {"apple": ap}})
+        card = SimpleNamespace(agenda_row_count=3,
+                               seg={"title": "题", "tagline": "t"}, vis=1.0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            k = HR._apple_opening_budget(rc, card)
+        # need = max(0.1, idx 2.0, 0.1, 0.1) = 2.0 → vis 1.0 只装得下一半，压到地板
+        self.assertEqual(k, 0.5)
+
     def test_apple_opening_replaces_generic_title_entrance(self):
         html = self._render_apple()
         # 苹果编排取代通用 back.out 标题入场（两条补间同元素会打架）
@@ -810,6 +854,39 @@ class CanvasPageAndVideoAttrs(unittest.TestCase):
         tag = [l for l in html.splitlines() if 'id="vid-' in l]
         self.assertEqual(len(tag), 1, "应只有一个 <video> 标签")
         self.assertRegex(tag[0], r'poster="[^"]*"\s+data-')
+
+    def test_canvas_card_does_not_prepare_layers_it_never_renders(self):
+        """画布页的标题层/句子流/tagline 连 DOM 都不生成，_prepare_card 就不该白算。
+
+        证伪：三个字段曾无条件计算——title_wrap 里还嵌着 `font-size:;`
+        （title_size 的画布守卫值是空串），一串永不发射的坏 CSS；verse 行数
+        随段长线性增长，全花在拼一串没人要的字符串上。死代码不该长得像坏
+        CSS，白算的开销也不该随段长走。
+        """
+        from html_renderer import (_build_render_context, _normalize_images,
+                                   _prepare_card)
+        from _template import load_template
+        s = H.sample_source()
+        m = H.make_manifest(s)
+        images = _normalize_images(H.sample_images(m))
+        rc = _build_render_context(load_template(), "vertical", 1080, 1440,
+                                   "dark", images)
+        by_id = {seg["id"]: seg for seg in m["segments"]}
+        clip = {"seg": by_id["seg-b"], "start": 7.2, "duration": 3.0,
+                "wipe": 0.0, "win_start": 7.2, "vis": 3.0,
+                "gets_peeled": False, "gets_line": False, "peel": None}
+        with contextlib.redirect_stderr(io.StringIO()):
+            card = _prepare_card(rc, clip)
+        self.assertTrue(card.is_canvas)
+        self.assertEqual(card.title_wrap, "")
+        self.assertEqual(card.verse_html, "")
+        self.assertEqual(card.tagline_html, "")
+        # 反向证明不是"整个函数对画布页失灵"：同一条链上槽位段照旧算得出这些层
+        clip2 = dict(clip, seg=by_id["seg-a"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            slot = _prepare_card(rc, clip2)
+        self.assertFalse(slot.is_canvas)
+        self.assertIn("seg-title-wrap", slot.title_wrap)
 
 
 class LineWipeGateSingleSource(unittest.TestCase):

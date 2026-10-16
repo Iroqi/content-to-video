@@ -98,11 +98,13 @@ class MimoRequestShape(unittest.TestCase):
             #   "!!!!AAAA"  → 3 字节垃圾
             #   "QUJD!!!!"  → b'ABC'（尾部垃圾被吃掉，截断的音频照样写盘）
             #   "zz zz\tzz" → 4 字节垃圾（空白在宽松模式下不算错，但会被并进去）
+            #   "  \n "     → b''（剥空白后是空串，而空串是合法 base64，validate=True 也不拦）
             # 三种都不抛错，于是 docstring 承诺的"端点配错当场报出"永远打不出来，
-            # 失败分类与病因脱节。validate=True + 先剥空白把三条一起堵住。
+            # 失败分类与病因脱节。validate=True + 先剥空白 + 空串显式拦，一起堵住。
             "纯垃圾且长度为 4 的倍数": {"choices": [{"message": {"audio": {"data": "!!!!"}}}]},
             "垃圾前缀 + 合法尾段": {"choices": [{"message": {"audio": {"data": "!!!!AAAA"}}}]},
             "合法前缀 + 垃圾尾段": {"choices": [{"message": {"audio": {"data": "QUJD!!!!"}}}]},
+            "data 是纯空白": {"choices": [{"message": {"audio": {"data": "  \n\t "}}}]},
         }
         for name, payload in cases.items():
             with self.subTest(case=name):

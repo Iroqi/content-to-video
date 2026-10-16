@@ -54,7 +54,11 @@ class EpilogSampleRuns(unittest.TestCase):
         """
         data = self._images_block()
         self.assertIn("director", data["seg2"])
-        self.assertEqual(data["seg2"]["stage"], "keep")
+        # 示例就是三种素材条目（图 / SVG 导演档 / GIF）的形状：曾挂过
+        # stage:"keep"，而 keep 是跨页接续标记、接的必须是同一张图的上一页
+        # 导演档——照抄那份在生成期直接报"上一段没有可接续的内联画面"，
+        # "实测跑通"成了谎话（端到端回归见 test_check_tools.EpilogExampleRuns）。
+        self.assertNotIn("stage", data["seg2"])
         # 抠出来的那份必须真的走到了 director 校验：把 steps 换成一个明显
         # 非法的形态，若仍通过说明 director 根本没被调用（测试自身在骗人）
         broken = json.loads(json.dumps(data))

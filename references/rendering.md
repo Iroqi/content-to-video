@@ -65,7 +65,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 python scripts/gen_hyperframes.py   -m audio_output/timing_manifest.json   -o hf-project/index.html   --images hf-project/images.json   --fps 24
 ```
 
-`-o` 与 `--images` 的相对路径都相对 `-o` 所在目录。画幅与主题在这一步烧进 HTML（默认 portrait + dark，见 SKILL.md「常用参数」）。
+`-o` 与 `--images` 的相对路径都相对**当前工作目录**；images.json 里各条的 `src` 才相对 `-o` 所在目录。画幅与主题在这一步烧进 HTML（默认 portrait + dark，见 SKILL.md「常用参数」）。
 
 生成目录应至少包含：
 
@@ -144,7 +144,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 
 | 看到的症状 | 成因 | 去处 |
 | --- | --- | --- |
-| 推镜时页底标签不见了、页顶标题贴着边 | `scale>1` 以 `svgOrigin` 为中心放大，离焦点越远位移越大。**留白要按"推完那一帧"算，不是按 SVG 源码算** | `canvas.md`「SVG 动画：两档」里「运镜 / 相机」条的「为什么」 |
+| 推镜时页底标签不见了、页顶标题贴着边 | `scale>1` 以 `svgOrigin` 为中心放大，离焦点越远位移越大。**留白要按"推完那一帧"算，不是按 SVG 源码算** | `canvas.md`「SVG 动画：两档」里「运镜 / 相机」条的「放大位移离焦点越远越大」 |
 | 推近的图形压到了旁边静止的标题或旁白上 | 出画 warn 只判"出画"，不判"撞字"；两者都没出画时无人拦 | `canvas.md`「SVG 动画：两档」里「运镜 / 相机」条的「机器兜不住的那件事」 |
 | `keep` 接续页界上图形**位置**跳一下（尺寸不变） | 没写原点时 GSAP 绕 `#cam` bbox 左上角，那个角还跟着别的步的 `from` 瞬态飘 | `canvas.md`「跨段接续」里「相机绕的那一点是渲染器钉的」 |
 | `keep` 接续页界上整幅换色，但图形其实接上了 | 每页 `--seg-accent` 不同，模板氛围光与进度条在切页那帧整幅换色。**要量连续性就按柱子边沿定位，别拿整幅 PSNR 当判据** | `canvas.md`「跨段接续」的实测段 |

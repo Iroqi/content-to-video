@@ -504,6 +504,41 @@ class DirectorDraft(unittest.TestCase):
         self.assertEqual(by["#kicker"]["from"], {"opacity": 0})
         self.assertEqual(by["#kicker"]["to"], {"opacity": 1})
 
+    def test_content_panel_with_explicit_opacity_stays_legal_xml(self):
+        """panel 显式 opacity + 第 0 帧藏身：两处 opacity 合成一处，不许重复属性。
+
+        证伪：起始态原先**追加** `opacity="0"`，作者写了 0.5 时产物是
+        `opacity="0.5" opacity="0"`——重复属性，整张 SVG 不是合法 XML
+        （ET.ParseError: duplicate attribute），内联 / check_svg / 净化全路读不了。
+        帧 0 归零是导演约定（_starts_hidden），落定到几成透明是作者意图
+        （ELEMENT_KEYS 里就 panel 吃这个键）：SVG 起始属性归零、草稿那拍 to 带
+        作者那档，谁也不盖谁。
+        """
+        spec = {"elements": [
+            {"kind": "panel", "id": "pp", "role": "content", "x": 80, "y": 300,
+             "w": 400, "h": 300, "opacity": 0.5},
+        ]}
+        # 修复前这里直接 ParseError：重复属性使整张 SVG 不成 XML
+        root = ET.fromstring(K.render_svg(K.validate_spec(spec)))
+        node = next(n for n in root.iter() if n.get("id") == "pp")
+        self.assertEqual(node.get("opacity"), "0")
+        frag = self.fragment(spec)
+        by = {s["target"]: s for s in frag["steps"]}
+        self.assertEqual(by["#pp"]["from"], {"opacity": 0})
+        self.assertEqual(by["#pp"]["to"], {"opacity": 0.5})
+        # 真契约：带显式 opacity 的草稿必须能直接过 images.json 的 director 校验
+        validate_images_json({"seg7": {"src": "images/seg7.svg", "director": frag}})
+
+    def test_content_panel_with_zero_opacity_is_refused(self):
+        """内容元素 opacity:0 = 那一拍补间 0→0：永远不亮，且成片看着像"演过了"。"""
+        spec = {"elements": [
+            {"kind": "panel", "id": "pp", "role": "content", "x": 80, "y": 300,
+             "w": 400, "h": 300, "opacity": 0},
+        ]}
+        with self.assertRaises(ValueError) as cm:
+            K.render_svg(K.validate_spec(spec))
+        self.assertIn("永远不亮", str(cm.exception))
+
     def test_default_duration_and_ease_are_left_out_of_the_draft(self):
         spec = spec_for("portrait")
         spec["elements"] = [e for e in spec["elements"] if e.get("kind") == "circle"]
@@ -648,7 +683,7 @@ class SpecContract(unittest.TestCase):
 
     def test_colors_are_derived_not_typed(self):
         """脚手架的取色全部从主题/accent 派生：源码里出现字面 hex 就说明有人抄了一份
-        会漂的色（本仓历史上真漂过一次页底色，见 check_svg 的 PAGE_BG 注释）。
+        会漂的色（本仓历史上真漂过一次页底色，此后颜色基准一律从 _theme 注册表派生）。
         只认真正成形的十六进制色，报错文案里的"#rgb / #rrggbb"这类占位写法不算。
         """
         with open(os.path.join(H.SCRIPTS_DIR, "canvas_kit.py"), encoding="utf-8") as f:

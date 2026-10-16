@@ -92,6 +92,99 @@ class ExternalUrls(unittest.TestCase):
         self.assertEqual(out.count("url("), out.count(")"), out)
 
 
+class ParserEquivalentView(unittest.TestCase):
+    """判定层必须看见浏览器看见的那个值——净化与解析的同款预处理。
+
+    三条都实证过绕过（Chromium/FireFox 均执行）：
+      - XML 字符引用 &#9;/&#10;/&#13; 解析后落成制表/换行，URL 解析器会抹掉它们，
+        scheme 正则不过——`java&#9;script:` 曾是漏网的 javascript:；
+      - CSS 转义还原先于一切判定——`\\75rl(https://…)`、`\\68ttp://…` 曾是漏网的
+        外链 url()，`\\61nimation:x 2s` 曾是漏网的墙钟声明；
+      - CSS 注释在浏览器眼里不存在——`style="fill:red;/*c*/animation:x 1s"` 里
+        那条 animation 曾是活的。
+    """
+
+    def _sanitize(self, markup):
+        return S.sanitize_svg_for_inline(markup)
+
+    def test_href_char_ref_tab_is_still_external(self):
+        """字符引用解码出的制表/换行拦不住 scheme 判定：浏览器抹得，判定也要抹得。"""
+        for raw in ("java&#9;script:alert(1)", "java&#10;script:alert(1)",
+                    "java&#13;script:alert(1)"):
+            with self.subTest(raw=raw):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}"><a href="{raw}">x</a></svg>')
+                self.assertNotIn("href", out)
+                self.assertTrue(any("href" in n for n in notes), notes)
+        # xlink:href 同一口径（_local 剥命名空间后一样进判定）
+        out, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}" xmlns:xlink="{S.XLINK_NS}">'
+            '<a xlink:href="java&#9;script:alert(1)">x</a></svg>')
+        self.assertNotIn("href", out)
+        # 内部片段与相对路径仍放行
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><defs><rect id="r"/></defs>'
+            '<use href="#r"/></svg>')
+        self.assertIn('href="#r"', out)
+        self.assertEqual(notes, [])
+
+    def test_css_escape_cannot_hide_a_url(self):
+        """转义还原先于 url() 判定：关键字与 scheme 都能被藏，也都要被还原。"""
+        bs = chr(92)
+        for where, markup in (
+            ("style 属性藏 url( 关键字",
+             f'<svg xmlns="{S.SVG_NS}"><rect style="fill:url({bs}75rl(https://evil.com/a.png))"/></svg>'),
+            ("style 属性藏 scheme",
+             f'<svg xmlns="{S.SVG_NS}"><rect style="fill:url({bs}68ttp://evil.com/a.png)"/></svg>'),
+            ("<style> 文本藏 scheme",
+             f'<svg xmlns="{S.SVG_NS}"><style>.a{{fill:url({bs}68ttp://evil.com/a.png)}}</style></svg>'),
+            ("呈现属性藏 scheme",
+             f'<svg xmlns="{S.SVG_NS}"><rect fill="url({bs}68ttp://evil.com/a.png)"/></svg>'),
+        ):
+            with self.subTest(where=where):
+                out, notes = self._sanitize(markup)
+                self.assertNotIn("evil.com", out)
+                self.assertIn("url(about:blank)", out)
+                self.assertTrue(any("已中和" in n for n in notes), notes)
+
+    def test_css_escape_cannot_hide_a_wallclock_declaration(self):
+        """`\\61nimation:x 2s` 在浏览器眼里就是 animation 声明。"""
+        bs = chr(92)
+        for where, markup in (
+            ("style 属性",
+             f'<svg xmlns="{S.SVG_NS}"><rect style="fill:red;{bs}61nimation:x 1s"/></svg>'),
+            ("<style> 文本",
+             f'<svg xmlns="{S.SVG_NS}"><style>.a{{fill:red;{bs}61nimation:x 1s}}</style></svg>'),
+        ):
+            with self.subTest(where=where):
+                out, notes = self._sanitize(markup)
+                self.assertNotIn("animation", out.lower())
+                self.assertTrue(any("已剥离" in n for n in notes), notes)
+
+    def test_comment_cannot_hide_a_wallclock_declaration_in_style_attr(self):
+        """注释先剥：inline style 里 `/*c*/animation:x 1s` 曾是活的墙钟声明。"""
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><rect style="fill:red;/*c*/animation:x 1s"/></svg>')
+        self.assertNotIn("animation", out.lower())
+        self.assertIn("fill:red", out)
+        self.assertTrue(any("已剥离" in n for n in notes), notes)
+
+    def test_comment_cannot_hide_a_url_in_style_text(self):
+        """<style> 文本的注释后面同样不许挂外链 url()。"""
+        out = _clean("/*c*/.a{fill:red;background:url(https://evil.com/a.png)}")
+        self.assertNotIn("evil.com", out)
+        self.assertIn("fill:red", out)
+
+    def test_legitimate_escape_is_rewritten_to_what_the_browser_sees(self):
+        """还原只发生在判定域：合法转义（`\\2014`）被改写成浏览器眼里的字面量。
+
+        这条钉住"整文本还原"策略的代价：产物 CSS 里不再有转义序列——语义与浏览器
+        解析结果一致（content:"—" 就是 content:"\\2014" 的解析结果），不是删除。
+        """
+        out = _clean('.a{content:"\\2014"}')
+        self.assertEqual(out, '.a{content:"—"}')
+
+
 class CssCustomProperties(unittest.TestCase):
     def test_custom_property_named_animation_is_not_a_wallclock(self):
         """CSS 自定义属性不是墙钟动画，不能被拦腰截断。

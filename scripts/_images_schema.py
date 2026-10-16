@@ -622,7 +622,16 @@ def _check_type(key, value, src):
     # type 先查、src 后查：写着 {"type": "chart"} 的旧稿件本来就没有
     # src，先查 src 会报"缺少 src"，把人往错的方向引。
     _t = value.get("type")
-    if _t is not None and _t not in ("auto", "image", "video", "gif"):
+    if _t is None:
+        # 显式 null 与"键不存在"在 Python 里都读到 None，但下游两种消费口径
+        # 相反：_is_video_src 写 `value.get("type") or "auto"` 把 null 当缺省，
+        # html_renderer._media_html 写 `media.get("type", "auto")` 把 null 当
+        # 显式值——classify_media_path 见 None != "auto" 会原样返回 None，
+        # 于是一条 mp4 配 "type": null 静默变成 <img>（契约层放行、渲染端
+        # 坏图）。契约层统一样子：抹掉 null，让可选字段真的只有缺省一种形态
+        # （与 _normalize_src 的回写归一同一模式）。
+        value.pop("type", None)
+    elif _t not in ("auto", "image", "video", "gif"):
         raise ValueError(
             f"images.json 的 '{key}' 的 'type' 必须是 auto/image/video/gif"
             f"（实际: {_t!r}）"

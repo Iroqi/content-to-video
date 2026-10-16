@@ -50,6 +50,13 @@ _WALLCLOCK_CSS = re.compile(
 # 匹配一直吃到收尾的 `)`：替换是"整颗 url() 换成 about:blank"，只吃 scheme 那一截
 # 会留下半截（`url(about:blank//evil.com/x.png)` 既不成语法、URL 也还看得见）。
 _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re.I)
+# CSS 转义序列（CSS Syntax §4.3.7）：`\XXXXXX`（1~6 位十六进制，后可跟一个空白被
+# 吃掉）、`\<其它字符>`、以及 `\`+换行（续行，整体抹掉）。浏览器解析 CSS 值与
+# URL 之前做的就是这一步还原——净化层不先还原，`\75rl(…)`、`\61nimation:`、
+# `java\tscript:`（XML 字符引用 &#9; 解析后落成制表符）这类写法在正则眼里不
+# 存在、在浏览器眼里成立（Chromium 与 Firefox 均实测执行）。
+_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(\r\n|[\r\n\f])|(.))",
+                         re.S)
 # CSS 注释：下面每条判定（@import / 外链 / 墙钟 / @keyframes）都只看真 CSS，所以注释
 # 先剥。不剥的后果实测过：`/* 用 @keyframes 做循环 */ .a{fill:red}` 里那条 .a 会被
 # 当成 @keyframes 的规则体吃掉。注释无语义，剥掉不损失任何东西。
@@ -83,8 +90,29 @@ def _style_map(el):
     return out
 
 
+def _css_unescape(s):
+    """按 CSS 转义规则还原字符串（见 _CSS_ESCAPE 的契约注释）。"""
+    def repl(m):
+        if m.group(1) is not None:
+            cp = int(m.group(1), 16)
+            if cp == 0 or cp > 0x10FFFF or 0xD800 <= cp <= 0xDFFF:
+                return "\ufffd"
+            return chr(cp)
+        if m.group(2) is not None:
+            return ""          # 续行：反斜杠与换行一起抹掉
+        return m.group(3)      # 普通转义：只吃反斜杠
+    return _CSS_ESCAPE.sub(repl, s)
+
+
 def _is_external_href(value):
-    v = (value or "").strip().lower()
+    # WHATWG URL 解析器的同款预处理：先抹掉所有制表/换行/回车（`java\tscript:`
+    # 在浏览器眼里就是 `javascript:`——XML 字符引用 &#9;/&#10;/&#13; 解析后就
+    # 落成这些字符，scheme 正则不过它们），再撕掉首尾的 C0 控制与空格
+    # （`\x01javascript:` 同理）。不按这条口径看，判定层看不见浏览器看见的
+    # 那个 URL。
+    v = re.sub(r"[\t\n\r]", "", value or "").lower()
+    v = re.sub(r"^[\x00-\x20]+", "", v)
+    v = re.sub(r"[\x00-\x20]+$", "", v)
     if not v or v.startswith("#"):
         # 空值 / 内部片段引用（<use href="#id"> 同文档引用）合法。
         return False
@@ -174,7 +202,10 @@ def _clean_style_text(css, notes):
     """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）与外链 url()/@import。"""
     if not css:
         return css
-    out = _CSS_COMMENT.sub("", css)
+    # 注释先剥、转义后还原，这个次序与浏览器一致：CSS 注释不过转义（`/* \*/`
+    # 里的 `*/` 照样收尾），而转义还原必须赶在所有判定之前——`\75rl(https://…)`
+    # 在浏览器眼里就是一条外链 url()、`\61nimation:x 2s` 就是一条墙钟声明。
+    out = _css_unescape(_CSS_COMMENT.sub("", css))
     if re.search(r"@import", out, re.I):
         out = re.sub(r"@import[^;]*;?", "", out, flags=re.I)
         notes.append("<style> 里的 @import 已删除（外链资源不进成片）")
@@ -198,7 +229,10 @@ def _clean_style_attr(el, notes):
     st = el.get("style")
     if not st:
         return
-    new = st
+    # 与 <style> 文本同两条预处理：注释先剥（`style="fill:red;/*c*/animation:x 1s"`
+    # 在浏览器眼里就是一条活的墙钟声明——实测注释后面的 animation 原样存活），
+    # 转义后还原（`\61nimation:` 同理）。
+    new = _css_unescape(_CSS_COMMENT.sub("", st))
     if _EXT_URL.search(new):
         new = _EXT_URL.sub("url(about:blank)", new)
         notes.append(f"<{_local(el.tag)}> 的 style 外链 url() 已中和")
@@ -282,8 +316,12 @@ def sanitize_svg_for_inline(raw):
                 if _local(k).lower() == "style":     # style 已由上一步清过
                     continue
                 v = el.get(k) or ""
-                if _EXT_URL.search(v):
-                    el.set(k, _EXT_URL.sub("url(about:blank)", v))
+                # 呈现属性的值也过 CSS 转义：`fill="url(\68ttp://…)"` 在浏览器
+                # 眼里就是一条外链 url()。不含反斜杠时 decoded 就是原值，行为
+                # 与改造前逐字节一致；判定不命中的转义不重写（不动作者其余字节）。
+                decoded = _css_unescape(v) if "\\" in v else v
+                if _EXT_URL.search(decoded):
+                    el.set(k, _EXT_URL.sub("url(about:blank)", decoded))
                     notes.append(f"<{tag}> 的 {_local(k)} 属性外链 url() 已中和")
 
     # root 重写成 cover 语义：铺满 .seg-image 容器，短边对齐、长边居中裁切，

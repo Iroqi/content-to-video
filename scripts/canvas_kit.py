@@ -446,7 +446,16 @@ def _validate_kind_keys(el, kind, where):
     """kind 专属键的键集与取值（ticks / points / bars / count 这些嵌套结构在这里管）。"""
     if kind == "panel":
         _opt_num(el, "r", where, None, nonnegative=True)
-        _opt_num(el, "opacity", where, None, nonnegative=True)
+        opacity = _opt_num(el, "opacity", where, None, nonnegative=True)
+        # 内容元素的 opacity 是"落定透明度"（由 build_director 带进那一拍的 to），
+        # 写成 0 就是让那一拍补间 0→0——元素永远不亮，而成片看着像"演过了"。
+        # 与 _starts_hidden 对 draw/count/type 的例外同一条理由：当场拒，别留成
+        # 最难查的那种坏法。要半透明落定就写 0.1~0.79 的档。
+        if opacity is not None and opacity == 0 and role_of(el) == "content":
+            raise ValueError(
+                f"{where} 是内容元素却写了 opacity:0——那一拍补间 0→0，元素永远不亮"
+                "（最难查的一种坏法：成片看着'演过了'，其实是被藏死）。要半透明落定"
+                "写 0.1~0.79 的档；要这一块根本不演，把 role 改成 structure 或不给 id")
     elif kind == "axis":
         _choice(_need_str(el, "orient", where), ("x", "y"), where, "orient")
         if el.get("label_side") is not None:
@@ -688,6 +697,17 @@ def _starts_hidden(el):
     return not (el.get("draw") or el.get("type") or "count" in el)
 
 
+def _rest_opacity(el):
+    """内容元素落定后的透明度：作者写的 opacity，没写按 1。
+
+    只有 panel 吃 opacity 键（ELEMENT_KEYS 里就它有），其余内容元素一律落 1。
+    帧 0 归零是导演约定（见 _starts_hidden），落定到几成透明是作者意图——两件事
+    分别由 SVG 起始属性与 build_director 的那一拍说话，谁也不盖谁。
+    """
+    v = el.get("opacity")
+    return 1 if v is None else float(v)
+
+
 def _tick_positions(ticks, frm, to, where):
     """刻度值 → 轴上像素：vmin 落在 from 端、vmax 落在 to 端（先定标尺再画图形）。
 
@@ -920,7 +940,16 @@ def render_svg(spec):
         else:
             node, note = _EMITTERS[el["kind"]](el, ectx, where), None
         if _starts_hidden(el):
-            node["attrs"].append(("opacity", "0"))
+            # 内容元素第 0 帧藏起来。**改写**而不是追加：panel 显式写了 opacity
+            # （作者的"落定透明度"）时，追加会产出 `opacity="0.5" opacity="0"`
+            # 这种重复属性——整张 SVG 不是合法 XML（实测 ET.ParseError: duplicate
+            # attribute），内联、check_svg、净化全路都读不了它。作者那档透明度不丢：
+            # 由 build_director 带进那一拍的 to（见下）。
+            node["attrs"] = ([(k, "0") if k == "opacity" else (k, v)
+                              for k, v in node["attrs"]]
+                             + ([("opacity", "0")]
+                                if not any(k == "opacity" for k, _ in node["attrs"])
+                                else []))
         if note:
             nodes.append(("note", note.strip()))
         nodes.append(("node", node))
@@ -991,8 +1020,10 @@ def build_director(spec, sentences=None):
         else:
             # 起始态 SVG 已经写了 opacity=0，这里仍给全 from：草稿要能在作者删掉
             # SVG 那行 opacity 之后依旧演得对（fromTo 不依赖元素当前值）。
+            # to 带作者写的 opacity（panel 的"落定透明度"）：SVG 帧 0 归零是导演
+            # 约定，落定到几成透明是作者意图，两件事都归这一拍说话。
             step["from"] = {"opacity": 0}
-            step["to"] = {"opacity": 1}
+            step["to"] = {"opacity": _rest_opacity(el)}
         if "stagger" in el:
             step["stagger"] = el["stagger"]
         # repeat / yoyo：新特性同样给脚手架出口（呼吸/脉动的"一条步"写法）。

@@ -315,10 +315,11 @@ def _sentence_hash(text, voice_id=None, voice_style=None, model=None,
 def _write_spd(out_path, value, label, on_error_hint):
     """写 .spd 语速 marker，失败只警告不抛。
 
-    三处调用点（合成后落 marker、restore_first 替换坏 marker、reapply 后补写）
-    语义不同但失败处理是同一件事：磁盘满/文件被占都不该把已合成好的音频变成
-    丢句，也该告诉用户下次 --resume 会多做什么。收在一处，口径与提示语不再
-    三份各自漂移。返回是否写成功。
+    两处调用点（reapply 后补写、restore 成功时替换坏 marker）语义不同但失败
+    处理是同一件事：磁盘满/文件被占都不该把已合成好的音频变成丢句，也该告诉
+    用户下次 --resume 会多做什么。收在一处，口径与提示语不再两份各自漂移。
+    返回是否写成功。合成路径的 marker 不走这里（与 .sha 一起落，见
+    _write_sentence_sidecars）。
     """
     try:
         with open(out_path + ".spd", "w", encoding="utf-8") as f:
@@ -1044,20 +1045,48 @@ def main(argv=None):
                 pending_tasks.append(task)
                 continue
             restored = False
+            # restore 成功前 decision.prev_speed 不可信：marker 不可读那条路上
+            # 它是 resolve_resume_state 的推定值（applied = 1.0），不是实测。
+            # 带着它进 apply_speed 会触发 refresh_backup——把当前这条语速未知的
+            # WAV 盖回 .orig.wav，真原速备份就此销毁，之后每次换速都在错误基线
+            # 上叠变速（1.5x 被当原速备份 → 再 atempo 1.5 = 2.25x）。还原成功
+            # 后文件已回到原速，推定值才变成事实，届时才准传。
+            reapply_prev = decision.prev_speed
             if decision.restore_first:
                 if apply_speed(ffmpeg_path, out_path, 1.0):
                     restored = True
-                    print(f"  [{label}] .spd marker 不可读，已从 "
+                    print(f"  [{label}] 无可用 .spd marker，已从 "
                           f".orig.wav 还原到原速，重新对齐语速", flush=True)
                 else:
-                    print(f"  [{label}][warn] .orig.wav 还原原速失败，"
-                          f"跳过语速对齐（音频保持现状）", file=sys.stderr)
+                    # 不覆盖备份（reapply_prev=None），apply_speed 改为直接拿
+                    # .orig.wav 当变速源——目标语速仍从真原速施加，只是不再
+                    # 走"先还原再变速"这一步。use_cached 时没有后续对齐，
+                    # 音频保持现状（该分支不写 marker，见下方 if restored）。
+                    reapply_prev = None
+                    _tail = ("后续语速对齐改从 .orig.wav 直接施加"
+                             if decision.action == "reapply"
+                             else "音频保持现状")
+                    print(f"  [{label}][warn] .orig.wav 还原原速失败；{_tail}",
+                          file=sys.stderr)
+            _replayed = restored
             if decision.action == "reapply":
                 if apply_speed(ffmpeg_path, out_path, decision.apply_speed_to,
-                               prev_speed=decision.prev_speed):
+                               prev_speed=reapply_prev):
+                    # 只有真的施加了变速才算"重处理过"：apply_speed_to=1.0 时
+                    # apply_speed 是还原/空操作（连 ffmpeg 都没起），标签必须
+                    # 跟"这一句本次到底动没动过音频文件"对齐（见下方 _tag）。
+                    _replayed = _replayed or needs_speed_change(
+                        decision.apply_speed_to)
                     if decision.write_spd is not None:
-                        _write_spd(out_path, decision.write_spd, label,
-                                   "下次 --resume 会重新对齐语速")
+                        if not _write_spd(out_path, decision.write_spd, label,
+                                          "下次 --resume 会重新对齐语速"):
+                            # 补写失败却留着旧 marker = 盘上一份谎话：文件已在
+                            # 新语速而 marker 说着旧值，下次 --resume 请求旧值
+                            # 会直接判 use_cached，错语速静默上线。删掉它，落到
+                            # "无 marker" 状态，让下次 resume 走还原+重施加的
+                            # 自愈路径（resolve_resume_state 的 applied=None
+                            # 分支：有 .orig.wav 就先还原再对齐）。
+                            remove_if_exists(out_path + ".spd")
                     elif os.path.exists(out_path + ".spd"):
                         remove_if_exists(out_path + ".spd")
                 else:
@@ -1108,18 +1137,16 @@ def main(argv=None):
             if decision.synth_failed:
                 sd["synth_failed"] = True
             sentence_data.append(sd)
-            # 缓存命中的两种形态分开报：纯复用一句 ffmpeg 都没跑；而
-            # restore_first/reapply 分支本次实际重放了 atempo（花了 ffmpeg
-            # 时间、改写了 WAV），一律打 (cached) 会掩盖"这次其实重新处理过
-            # 音频"，排查语速问题时误导。cached_count 口径保持"没花 TTS 额度"。
-            # restore_first / restored 是"真的重放过一遍音频"；reapply 却未必——
-            # 语速本来就是 1.0 时 apply_speed 是空操作（连 ffmpeg 都没起），照样被判
-            # 成 reapply。再问一次 needs_speed_change，标签才对得上它的用途：它是给
-            # 排查语速问题的人看"这一句本次到底动没动过音频文件"。
-            _reprocessed = (decision.restore_first or restored
-                            or (decision.action == "reapply"
-                                and needs_speed_change(decision.apply_speed_to)))
-            _tag = "skip,respeed" if _reprocessed else "skip,cached"
+            # 缓存命中的两种形态分开报：纯复用一句 ffmpeg 都没跑；而本次实际
+            # 重放了音频（还原原速 / 重新施加变速）的一律打 (cached) 会掩盖
+            # "这次其实重新处理过音频"，排查语速问题时误导。cached_count 口径
+            # 保持"没花 TTS 额度"。
+            # _replayed 只认"音频文件真的被改写"：restore 成功（.orig.wav 盖回
+            # WAV）或 reapply 真的施加了 atempo。restore_first 本身不算——还原
+            # 失败时文件原封不动；reapply 的 apply_speed_to=1.0 也不算，那是
+            # 还原/空操作。双失败（还原失败 + atempo 失败）时音频保持现状，
+            # 标签必须是 skip,cached 而不是 skip,respeed。
+            _tag = "skip,respeed" if _replayed else "skip,cached"
             print(f"  [{label}][{_tag}] {dur:.2f}s", flush=True)
             cached_count += 1
             continue

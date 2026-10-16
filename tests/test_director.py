@@ -296,12 +296,13 @@ class TweenKnobContract(unittest.TestCase):
                           "ease": fam + mod})
 
     def test_steps_only_takes_a_direction_with_counts(self):
-        # 实测 gsap.parseEase：`steps`、`steps(4).in` 认，`steps.in` 不认（静默换缓动）
-        for good in ("steps", "steps(4)", "steps(4).in", "steps(4,true).out"):
+        # 实测 gsap.parseEase：`steps(4)`、`steps(4).in` 认；裸 steps 是 config 对象不是
+        # 函数（补间直接抛错）、`steps.in` 的键不存在（静默换缓动）——都必须给档数
+        for good in ("steps(4)", "steps(4).in", "steps(4,true).out"):
             self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": good})
-        for bad in ("steps.in", "steps.out", "steps.inOut"):
+        for bad in ("steps", "steps.in", "steps.out", "steps.inOut"):
             self._bad({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": bad},
-                      "steps 要带方向就必须给档数")
+                      "档数")
 
     def test_plugin_only_ease_rejected(self):
         # 实测钉固的 gsap@3.14.2 核心包解析不了这些（rough/slow/stepped 都不认）
@@ -315,7 +316,8 @@ class TweenKnobContract(unittest.TestCase):
                       "none 是直通档")
 
     def test_parameterized_ease_accepted(self):
-        # 参数写在方向前后都认（back.out(1.7) / elastic(1,0.3).inOut）
+        # 参数写在方向**后面**（back.out(1.7) / elastic.inOut(1,0.3)）；写在方向前面
+        # GSAP 会把方向整体丢掉（back(1.7).in 演出来是 back.out(1.7)），契约层拒
         for good in ("back.out(1.7)", "elastic.inOut(1,0.3)", "steps(4,true)",
                     "power3.in", "Bounce.easeOut", "strong.out"):
             self._ok({"at": 0, "target": "#a", "to": {"opacity": 1}, "ease": good})

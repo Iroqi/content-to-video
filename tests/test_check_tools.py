@@ -250,6 +250,16 @@ class SvgChecker(unittest.TestCase):
             '<path d="M100 500 L300 500 L200 600 Z" stroke="#fff"/></svg>'))
         self.assertFalse(any("端点悬空" in w for w in warns), warns)
 
+    def test_stroked_malformed_path_does_not_crash(self):
+        # 带 stroke 的坏 d 曾让 check_file 崩在端点落点收集处的裸 traceback
+        # （无 stroke 的 path 走不到那一步，原有测试没盖住）；与 _shape_bounds
+        # 同一口径：跳过该 path 的几何判定，不能把悬空判定建立在读不懂的几何上。
+        errs, warns = self.run_check(GOOD.replace(
+            "</svg>", '<path d="M150 800 Q 90" stroke="#fff"/></svg>'))
+        self.assertIsInstance(errs, list)
+        self.assertIsInstance(warns, list)
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
     def test_relative_path_endpoints_resolve_absolutely(self):
         # 相对命令的端点也要走光标算成绝对坐标，再判是否悬空
         _, warns = self.run_check(GOOD.replace(

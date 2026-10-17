@@ -19,9 +19,18 @@ class Parse(unittest.TestCase):
         self.assertEqual(P.parse_path("M.5 1e2", "x"), [("M", [0.5, 100.0])])
 
     def test_malformed_rejected(self):
-        for bad in ("", "   ", "L 0 0", "M 0 0 Q 1", "M 0 0 X 3", "M 0 0 !"):
+        # 空参数命令（"M"/"M0 0 L"/"M0 0 Z Q"…）与缺参/非法字符同一档：
+        # SVG 里只有 Z 允许不带参数，其余命令空参放行会让 interp 原样吐回
+        # 浏览器不认的 d，动画静默丢失。
+        for bad in ("", "   ", "L 0 0", "M 0 0 Q 1", "M 0 0 X 3", "M 0 0 !",
+                    "M", "M 0 0 L", "M 0 0 Z Q", "M 0 0 C", "M 0 0 L 1 1 H",
+                    "M 0 0 S", "M 0 0 T", "M 0 0 A"):
             with self.assertRaises(ValueError, msg=bad):
                 P.parse_path(bad, "x")
+
+    def test_z_may_stand_alone(self):
+        # Z 是唯一允许不带参数的命令：闭合回子路径起点
+        self.assertEqual(P.parse_path("M 0 0 Z", "x"), [("M", [0.0, 0.0]), ("Z", [])])
 
 
 class Compat(unittest.TestCase):

@@ -663,12 +663,20 @@ def check_file(path, layout, aspect, theme, resolved=None):
                     else:
                         rings.append((cx, cy, rr))
             elif tag == "path" and stroke_on:
-                segs.extend((s[0], s[1], s[2], s[3], el) for s in path_segments(el.get("d") or ""))
-                if el.get("data-free-ends") is None:
-                    ends = path_endpoints(el.get("d") or "")
-                    if ends:
-                        strokes.append({"desc": f"<path>（起 {ends[0][0]:g},{ends[0][1]:g}）",
-                                        "ends": list(ends), "owner": el})
+                # 畸形 d：与 _shape_bounds / _ink_band 同一口径（上面各自的
+                # except ValueError），跳过这条 path 的端点落点素材——把悬空
+                # 判定建立在读不懂的几何上只会造噪声。此前这里没有守卫，
+                # 带 stroke 的坏 d 会让整个文件的检查崩在裸 traceback 上。
+                try:
+                    segs.extend((s[0], s[1], s[2], s[3], el)
+                                for s in path_segments(el.get("d") or ""))
+                    if el.get("data-free-ends") is None:
+                        ends = path_endpoints(el.get("d") or "")
+                        if ends:
+                            strokes.append({"desc": f"<path>（起 {ends[0][0]:g},{ends[0][1]:g}）",
+                                            "ends": list(ends), "owner": el})
+                except ValueError:
+                    pass
 
         # 竖向占位登记（只有画布档用得上：整页构图没有模板兜底，空带得自己发现）
         if layout == "canvas" and w and h:

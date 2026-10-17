@@ -62,7 +62,16 @@ def parse_path(d, where):
         if letter is None:
             return
         a = _ARITY[letter.upper()]
-        if a and len(nums) % a:
+        if a and (not nums or len(nums) % a):
+            if not nums:
+                # 空参数命令："M"、"M0 0 L"、"M0 0 Z Q" 这类退化 path 此前会
+                # 因 0 % a == 0 直接放行——过了同拓扑契约、interp 又原样吐回，
+                # 成片里 GSAP 拿到的是浏览器不认的 d，动画静默丢失且无报错。
+                # SVG 里只有 Z 允许不带参数（闭合并回子路径起点），其余命令
+                # 至少要一组数值。
+                raise ValueError(
+                    f"{where} 的命令 {letter!r} 一个数值都没有——只有 Z 允许"
+                    "不带参数（M/L/H/V/C/S/Q/T/A 都至少要一组数值）")
             raise ValueError(
                 f"{where} 的命令 {letter!r} 有 {len(nums)} 个数值，不是 {a} 的整数倍")
         out.append((letter, list(nums)))

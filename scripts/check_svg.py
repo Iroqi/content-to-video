@@ -55,7 +55,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 from _path_morph import path_endpoints, path_segments, x_span, y_span
-from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
+from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
+                           _css_unescape, _is_external_href,   # 外链/墙钟判据与净化器同一份
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
                            is_full_bleed_backdrop,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 gen_hyperframes 共用 root_px_size
@@ -485,19 +486,27 @@ def check_file(path, layout, aspect, theme, resolved=None):
             lk = _local(k).lower()
             if lk.startswith("on"):
                 errors.append(f"<{tag}> 带事件属性 {lk}")
-            _lv = v.strip().lower()
-            if lk == "href" and (
-                    _lv.startswith("//")
-                    or re.match(r"^[a-z][a-z0-9+.-]*:", _lv)):
-                # 与净化器同一口径：任何 scheme 都算外部资源（file:/data:/
-                # blob:/javascript: …），内部片段 "#id" 与相对路径放行。
+            if lk == "href" and _is_external_href(v):
+                # 判据直接借用净化器的 _is_external_href，自查里不另写一份正则：
+                # 任何 scheme 都算外部资源（file:/data:/blob:/javascript: …），
+                # 内部片段 "#id" 与相对路径放行。另写一份的代价是口径漂移——
+                # 净化器先抹制表符/换行再判 scheme（`java&#9;script:` 这类字符
+                # 引用混淆在浏览器眼里就是 javascript:），自查的正则不抹就看不见
+                # 它，于是报"通过"而净化层照样删：两道门对同一份输入给两个答案。
                 errors.append(f"<{tag}> 引用外链/脚本/本地文件资源 {v[:60]}")
-        if tag == "style" and el.text and re.search(
-                r"@import|url\(\s*['\"]?(?:https?:|//|file:|data:)", el.text, re.I):
-            errors.append("<style> 里有 @import 或外链 url()")
-        if el.get("style") and re.search(
-                r"url\(\s*['\"]?(?:https?:|//|file:|data:)", el.get("style"), re.I):
-            errors.append(f"<{tag}> 的 style 里有外链 url()")
+        # <style> / style 的外链判定与净化器共用同一份预处理与判据（_EXT_URL /
+        # @import），自查里不写简化版正则：净化器先剥注释、还原 CSS 转义再判，
+        # 简化版看不见 `url(\68ttp://…)`、`url( "https://…")` 这类浏览器眼里的
+        # 外链，却会把注释包住的一串（净化层先剥掉、根本不进成片）误报成 error
+        # ——报错与净化各说一套，作者不知道该信谁。
+        if tag == "style" and el.text:
+            _cleaned = _css_unescape(_CSS_COMMENT.sub("", el.text))
+            if re.search(r"@import", _cleaned, re.I) or _EXT_URL.search(_cleaned):
+                errors.append("<style> 里有 @import 或外链 url()")
+        if el.get("style"):
+            _cleaned = _css_unescape(_CSS_COMMENT.sub("", el.get("style")))
+            if _EXT_URL.search(_cleaned):
+                errors.append(f"<{tag}> 的 style 里有外链 url()")
         # 墙钟动画的 CSS 判定**借用净化器那条正则**，不在我这里另写一份
         # （口径漂移的代价是真问题：净化剥掉的东西与 check 报的东西必须是同一
         # 类）。旧写法是裸的 \b(animation|transition)\b，`.animation-card` 这种

@@ -66,6 +66,39 @@ class SvgChecker(unittest.TestCase):
             GOOD.replace("</svg>", '<use href="#t"/><image href="images/p.png"/></svg>'))
         self.assertFalse(any("外链" in e for e in errs), errs)
 
+    def test_tab_obfuscated_scheme_href_is_error(self):
+        """字符引用混淆的 scheme 与净化器同一口径：`java&#9;script:` 在 XML
+        解析后落成 `java\tscript:`，裸正则看不见、浏览器看得见——自查若另写
+        一份正则就会在这里放行，而净化层照样删 href（两道门两个答案）。
+        只测字符引用、不测字面制表符：XML 属性值归一化把字面 tab 规范成空格
+        （天然惰性），保留 tab 的唯一写法就是 &#9;/&#10;/&#13; 字符引用。
+        """
+        for bad in ('java&#9;script:alert(1)', 'java&#10;script:alert(1)',
+                    'java&#13;script:alert(1)'):
+            with self.subTest(href=bad):
+                errs, _ = self.run_check(
+                    GOOD.replace("</svg>", f'<image href="{bad}"/></svg>'))
+                self.assertTrue(any("外链" in e for e in errs), errs)
+
+    def test_css_url_check_uses_sanitizer_preprocessing(self):
+        """<style> 外链判据与净化器同一份预处理：CSS 转义（`\68ttp:`）与引号后
+        带空格的写法在浏览器眼里都是外链，必须报；注释包住的反而不报（净化层先
+        剥注释，那一串根本不进成片）。
+        """
+        bs = chr(92)
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         f'<style>.a{{background:url({bs}68ttp://evil.com/x.png)}}</style></svg>'))
+        self.assertTrue(any("外链 url()" in e for e in errs), errs)
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         '<style>.a{background:url( "https://evil.com/x.png" )}</style></svg>'))
+        self.assertTrue(any("外链 url()" in e for e in errs), errs)
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         '<style>/* url(https://evil.com/x.png) */ .a{fill:red}</style></svg>'))
+        self.assertFalse(any("外链 url()" in e for e in errs), errs)
+
     def test_css_url_file_scheme_is_error(self):
         errs, _ = self.run_check(
             GOOD.replace("</svg>",

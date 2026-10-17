@@ -22,6 +22,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _path_morph import _TOKEN, path_segments, x_span, y_span  # noqa: E402  path 占位/线段/数字切分只此一份
 from _template import same_aspect  # noqa: E402  等比判据（含容差）只有一份
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -126,12 +127,23 @@ def _is_external_href(value):
             or _EXT_URL.search(v) is not None)
 
 
-# 满幅背景 <rect> 的判据只有这一份：check_svg.py 的自查 warn 与 gen_hyperframes.py
-# 的生成期 warn 共用，谁都不许再抄一份（SVG 应透明、让模板三层透出来，见
-# references/canvas.md「不铺满幅底」）。口径与 check_svg 旧实现一字不差：
-#   ① 100% × 100%；
-#   ② 像素尺寸 ≥ viewBox 的 98% 且 x/y ≤ 1（几乎贴边）；
-# 带 % 的其他宽度（50% 之类）两种都不是，不误伤半幅装饰底板。
+# ── 满幅底板判据（单一真源）─────────────────────────────────────────
+# check_svg.py 的自查 warn、gen_hyperframes.py 的生成期 warn、canvas_kit.py 的
+# 发射期报错都以这一份为准，谁都不许再抄一份（SVG 应透明、让模板三层透出来，
+# 见 references/canvas.md「不铺满幅底」）。
+#
+# 判的是**"这个元素的可见填充会不会把页面背景盖死"**，不是"它是不是 <rect>"：
+# 同一个视觉结果（一张铺满 viewBox 的底色）有 rect / polygon / path 三种等价
+# 写法，只认 rect 时另外两种一声不吭——而那正是「不铺满幅底」要防的事：槽位
+# 版式在页面上形成一圈色差框，整页画布把模板三层（渐变 / 网格 / 氛围光）整个
+# 盖掉退回一片死平。实测漏网：`<path d="M0 0 H980 V735 H0 Z">`、
+# `<polygon points="0,0 980,0 980,735 0,735">` 都零 warn 通过。
+#
+# 占比阈值与贴边容差是**两个数字**，canvas_kit 的发射期报错用同一对（改这里
+# 就必须一起动那边，所以那两个常量从这里导入，不在 canvas_kit 再写一份）。
+FULL_BLEED_FRAC = 0.98    # 形状占位达到 viewBox 这个比例算"铺满"
+FULL_BLEED_EDGE = 1.0     # 起点贴边容差：x=0 与 x=1 同判
+_FILL_SCANLINES = 240     # 填充面积量几条扫描线：矩形/折线下结果与线数无关，曲线近似才受它影响
 _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*(px)?\s*$")
 
 
@@ -143,6 +155,158 @@ def _parse_num(v):
     return float(m.group(1)) if m else None
 
 
+def _covers_viewbox(x0, y0, x1, y1, vb_w, vb_h):
+    """形状占位 [x0,x1]×[y0,y1] 是否铺满 viewBox：两轴都够宽 + 起点贴边。
+
+    起点略微越界（x=-5）算贴边——负偏移只会盖得更多，不会更少。
+    """
+    return (x1 - x0 >= vb_w * FULL_BLEED_FRAC
+            and y1 - y0 >= vb_h * FULL_BLEED_FRAC
+            and x0 <= FULL_BLEED_EDGE and y0 <= FULL_BLEED_EDGE)
+
+
+def _fill_hidden(el):
+    """元素有没有可见填充：`fill:none` 与 `opacity:0` 都不盖任何东西。
+
+    旧判据连这两种也 warn，是误报——透明的满幅 rect 无害，而误报训练人忽略
+    warn，比漏报更贵。只认元素自己身上的 inline style 与呈现属性：class/id
+    控制的 fill 读不到，那种按"有填充"算（warn 方向，不漏报）。
+    """
+    st = _style_map(el)
+    fill = st.get("fill", el.get("fill"))
+    if fill is not None and fill.strip().lower() == "none":
+        return True
+    opacity = st.get("opacity", el.get("opacity"))
+    if opacity is not None:
+        try:
+            if float(str(opacity).strip()) == 0.0:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def _rect_len(v, full):
+    """长度属性 → 用户单位数（`%` 按对应轴的满量折算）；读不出 → None。"""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if s.endswith("%"):
+        p = _parse_num(s[:-1])
+        return p * full / 100.0 if p is not None else None
+    return _parse_num(s)
+
+
+def _rect_backdrop(el, vb_w, vb_h):
+    """rect：宽高占满（100% / 像素 / 略微越界都算），起点贴边。"""
+    rw = _rect_len(el.get("width"), vb_w)
+    rh = _rect_len(el.get("height"), vb_h)
+    if not (rw and rh):
+        return False
+    x = _rect_len(el.get("x"), vb_w) or 0.0
+    y = _rect_len(el.get("y"), vb_h) or 0.0
+    return _covers_viewbox(x, y, x + rw, y + rh, vb_w, vb_h)
+
+
+def _polygon_backdrop(el, vb_w, vb_h):
+    """polygon：points 的占位盒铺满。
+
+    切数字复用 `_path_morph` 的 tokenizer（同一套"命令字母或浮点数"正则），
+    不在这里另写一份 points 解析。
+    """
+    pts = el.get("points")
+    if not pts:
+        return False
+    try:
+        nums = [float(t) for t in _TOKEN.findall(pts)]
+    except ValueError:
+        return False          # points 里混进命令字母之类：读不出占位就不判
+    if len(nums) < 4 or len(nums) % 2:
+        return False
+    xs, ys = nums[0::2], nums[1::2]
+    return _covers_viewbox(min(xs), min(ys), max(xs), max(ys), vb_w, vb_h)
+
+
+def _path_fill_ratio(d, vb_w, vb_h):
+    """path 的填充（even-odd 扫描线）占 viewBox 的比例。
+
+    bbox 铺满不等于填充铺满：`M0 0 L980 735` 这种一条对角线占位整个画面，
+    填充面积是 0——它不是底板，报它就是误报（而 warn 贬值比漏报更贵）。
+    逐水平线求交点、奇偶配对累加覆盖宽，是"这个形状盖住了多少背景"的直接回答，
+    矩形/折线（含 Z 闭合、以及未闭合时浏览器隐式补的那条）在这套近似下是精确的；
+    曲线按 `path_segments` 的弦近似，误差只让面积略小（安全方向）。
+    """
+    try:
+        segs = path_segments(d)
+    except ValueError:
+        return 0.0
+    if not segs:
+        return 0.0
+    # 未闭合 path 的 fill 在浏览器眼里是隐式闭合的（首尾拉一条直线）：
+    # `M0 0 H980 V735 H0` 漏写 Z，视觉上照样铺满——不补这段就漏报它。
+    hx, hy, tx, ty = segs[0][0], segs[0][1], segs[-1][2], segs[-1][3]
+    if (hx, hy) != (tx, ty):
+        segs = segs + [(tx, ty, hx, hy)]
+    covered = 0.0
+    row = vb_h / _FILL_SCANLINES
+    for i in range(_FILL_SCANLINES):
+        y = row * (i + 0.5)
+        xhits = []
+        for x1, y1, x2, y2 in segs:
+            lo, hi = (y1, y2) if y1 <= y2 else (y2, y1)
+            if lo <= y < hi:                # 半开区间：顶点只算一次
+                xhits.append(x1 + (x2 - x1) * (y - y1) / (y2 - y1))
+        xhits.sort()
+        for j in range(0, len(xhits) - 1, 2):
+            covered += max(0.0, min(xhits[j + 1], vb_w) - max(xhits[j], 0.0)) * row
+    return covered / (vb_w * vb_h)
+
+
+def _path_backdrop(el, vb_w, vb_h):
+    """path：`d` 的轴投影占位铺满，且**填充**也铺满。
+
+    bbox 复用 `_path_morph.x_span / y_span`——它按命令语义走光标（相对命令累加
+    当前点、Z 送回子路径起点），比"把 d 里的数字全切出来取极值"准。bbox 只当
+    快筛：铺不满的直接否掉；铺满的再过填充面积那道（见 `_path_fill_ratio`），
+    对角线/细线因此不误报。面积按 SVG 默认的 even-odd 规则算，所以"挖空一条"
+    的 path（外矩形套同向内矩形）如实只算框条那部分——挖空够大就不算铺满，
+    挖空只剩一丝时才 warn 一声让人确认，比 bbox 判据准。
+    """
+    d = el.get("d")
+    if not d:
+        return False
+    try:
+        xs, ys = x_span(d), y_span(d)
+    except ValueError:
+        return False          # d 畸形：读不出占位就不判
+    if not xs or not ys:
+        return False
+    if not _covers_viewbox(xs[0], ys[0], xs[1], ys[1], vb_w, vb_h):
+        return False
+    return _path_fill_ratio(d, vb_w, vb_h) >= FULL_BLEED_FRAC
+
+
+def is_full_bleed_backdrop(el, vb_w, vb_h):
+    """元素的可见填充形状是否铺满 viewBox（背景底板）。
+
+    `vb_w/vb_h` 必须来自坐标系尺寸（`root_viewbox_size`）——拿固有像素尺寸判
+    会把铺满的底板判成只占一半。覆盖 rect / polygon / path 三种等价写法；
+    `fill:none` / `opacity:0` 不判（没有可见填充）。
+    """
+    if not vb_w or not vb_h:
+        return False
+    tag = _local(el.tag)
+    if tag == "rect":
+        covers = _rect_backdrop(el, vb_w, vb_h)
+    elif tag == "polygon":
+        covers = _polygon_backdrop(el, vb_w, vb_h)
+    elif tag == "path":
+        covers = _path_backdrop(el, vb_w, vb_h)
+    else:
+        return False
+    return bool(covers) and not _fill_hidden(el)
+
+
 # ── 根标签的两套尺寸（真源只此一份）─────────────────────────────────
 # SVG 根标签上有**两个不是一回事**的尺寸，混用就是"两道门给两个答案"：
 #   ① 固有像素尺寸（width/height，没有时退回 viewBox）——浏览器按它定这张图的
@@ -151,7 +315,7 @@ def _parse_num(v):
 #      "文字越界 / rect 铺没铺满"问的是这一对。
 # 缩放写法（width="800" height="600" viewBox="0 0 400 300"，手写 SVG 最常见）
 # 下两套差一个倍数。此前 check_svg 与 gen_hyperframes 各写一份取尺寸的函数，
-# 且都把 ① 当成 ② 喂给 is_full_bleed_rect：铺满 400×300 的底板 rect 被判成
+# 且都把 ① 当成 ② 喂给满幅判据：铺满 400×300 的底板被判成
 # "只占一半、没铺满"，两道门都一声不吭，成片里就是一张铺满的死平底板。
 def root_px_size(root):
     """根标签的**固有像素尺寸** (宽, 高, 说明)；读不出时宽高为 None。
@@ -195,21 +359,6 @@ def _viewbox_size(root):
         return float(parts[2]), float(parts[3])
     except ValueError:
         return None, None
-
-
-def is_full_bleed_rect(el, vb_w, vb_h):
-    """`<rect>` 是否铺满 viewBox（背景底板）；`vb_w/vb_h` 必须来自坐标系尺寸。"""
-    if _local(el.tag) != "rect" or not vb_w or not vb_h:
-        return False
-    w, h = el.get("width"), el.get("height")
-    pct = w == "100%" and h == "100%"
-    rw = None if str(w or "").endswith("%") else _parse_num(w)
-    rh = None if str(h or "").endswith("%") else _parse_num(h)
-    if pct or (rw and rh and rw >= vb_w * 0.98 and rh >= vb_h * 0.98
-               and (_parse_num(el.get("x")) or 0) <= 1
-               and (_parse_num(el.get("y")) or 0) <= 1):
-        return True
-    return False
 
 
 def _strip_keyframes(css):

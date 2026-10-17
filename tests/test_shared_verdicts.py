@@ -56,7 +56,7 @@ def _namespace(name):
 
 # ── 扫描器：注释自称"与 X 同一份/共用 sym"，sym 必须真在 X 里 ──────────
 # 抓两种写法：`与 check_svg 同一份：_root_px_size`（裸符号）与
-# `判据与 check_svg 共用 `_svg_sanitize.is_full_bleed_rect``（带模块前缀）。
+# `判据与 check_svg 共用 `_svg_sanitize.is_full_bleed_backdrop``（带模块前缀）。
 _CLAIM = re.compile(
     r"(?:与|和)\s*([a-z_][a-z0-9_]*)\s*(?:的[^。\n；;]{0,6})?"
     r"(?:同一份|同一口径|共用|同一判据|同一实现|只有这一份|唯一真源|单一真源|同一来源)"
@@ -131,7 +131,7 @@ class RootSizeSingleSource(unittest.TestCase):
     """SVG 根标签的尺寸：固有尺寸与坐标系尺寸是**两回事**，各只有一份实现。
 
     修复前：`check_svg._root_size` 与 `gen_hyperframes._root_px_size` 各写一份，
-    且两侧都把"固有像素尺寸"当成"viewBox 坐标系尺寸"喂给 `is_full_bleed_rect`。
+    且两侧都把"固有像素尺寸"当成"viewBox 坐标系尺寸"喂给满幅底板判据。
     width="800" height="600" viewBox="0 0 400 300"（等比缩放，手写 SVG 最常见的
     写法）时，一张铺满整个 viewBox 的底板 rect 被判成只占一半——**两道门都一声
     不吭**，成片里就是一张铺满的死平底板（canvas.md 明令禁止的那种）。

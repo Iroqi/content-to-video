@@ -57,7 +57,7 @@ import xml.etree.ElementTree as ET
 from _path_morph import path_endpoints, path_segments, x_span, y_span
 from _svg_sanitize import (_WALLCLOCK_CSS as _CSS_WALLCLOCK,
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
-                           is_full_bleed_rect,
+                           is_full_bleed_backdrop,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 gen_hyperframes 共用 root_px_size
 from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学与 hex 归一化不在这里重抄
                     theme_bg_stops, DEFAULT_THEME)
@@ -591,13 +591,14 @@ def check_file(path, layout, aspect, theme, resolved=None):
         if tag == "style" and el.text and "font-family" in el.text:
             has_font_family = True
 
-        # 满幅背景 rect（判据与生成期门禁共用 _svg_sanitize.is_full_bleed_rect）
-        if layout in ("slot", "canvas") and is_full_bleed_rect(el, vb_w, vb_h):
+        # 满幅底板（判据与生成期门禁共用 _svg_sanitize.is_full_bleed_backdrop）
+        if layout in ("slot", "canvas") and is_full_bleed_backdrop(el, vb_w, vb_h):
             if layout == "slot":
-                warns.append("疑似铺满 viewBox 的背景 <rect>：槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）")
+                warns.append("疑似铺满 viewBox 的满幅底板：槽位 SVG 不要铺满幅底"
+                             "（会在页面上形成一圈色差框）")
             else:
-                warns.append("整页画布铺了一张满幅底板 <rect>：模板本来就在这一页底下画好了三层"
-                             "（主题渐变 / 只在页缘显形的网格 / 本段 accent 氛围光），满幅 rect 把三层"
+                warns.append("整页画布铺了一张满幅底板：模板本来就在这一页底下画好了三层"
+                             "（主题渐变 / 只在页缘显形的网格 / 本段 accent 氛围光），满幅底板把三层"
                              "整个盖掉，画布页就退回一片死平。删掉它让三层透出来（见 canvas.md"
                              "「整页画布的密度与层次」）。确实要把整页换成另一种底色时可忽略本条")
 

@@ -165,10 +165,10 @@ class SvgChecker(unittest.TestCase):
         got = [w for w in warns if "满幅底板" in w]
         self.assertEqual(len(got), 1)
         self.assertIn("氛围光", got[0])
-        # 槽位那条各说各的理由，措辞不共用
+        # 槽位那条各说各的理由，措辞不共用：画布专属的"氛围光"不出现在槽位 warn 里
         _, sw = self.run_check(self._canvas_svg(body), layout="slot")
         self.assertTrue(any("色差框" in w for w in sw))
-        self.assertEqual([w for w in sw if "满幅底板" in w], [])
+        self.assertEqual([w for w in sw if "氛围光" in w], [])
 
     # ── 图元越出画布（error）───────────────────────────────────
 

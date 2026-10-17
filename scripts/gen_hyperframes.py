@@ -157,7 +157,7 @@ from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note  # noqa: E402
 from _svg_sanitize import (_CSS_COMMENT, _local, _style_map,  # noqa: E402
-                           is_full_bleed_rect, sanitize_svg_for_inline,
+                           is_full_bleed_backdrop, sanitize_svg_for_inline,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
@@ -481,15 +481,17 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h):
 
 
 def svg_background_warnings(images, segments, out_dir):
-    """满幅背景 <rect> 的生成期体检：槽位与整页画布的所有 SVG 配图都查。
+    """满幅底板的生成期体检：槽位与整页画布的所有 SVG 配图都查。
 
     SVG 应当**透明**、让页面渐变与模板三层透出来（references/canvas.md
-    「不铺满幅底」），但设计/生图工具常给文件带一张铺满 viewBox 的底色 rect——
-    槽位版式会在页面上形成一圈色差框，整页画布把模板三层整个盖掉退回一片死平。
-    `check_svg.py` 只在作者主动自查时跑；这一遍保证不跑自查、直接 `gen_hyperframes`
-    也会按段落出声。判据与 check_svg 共用 `_svg_sanitize.is_full_bleed_rect`
-    （单一真源）。warn 不 error：确实要自画满幅底（浅色页 / 照片感场景）是合法
-    取舍，有意为之可忽略。同一文件被 keep 链里多个段落引用时按路径只报一次。
+    「不铺满幅底」），但设计/生图工具常给文件带一张铺满 viewBox 的底板——
+    `rect` / `polygon` / `path`（`M0 0 H… V… H… Z` 这类）是三种等价写法，都算；
+    `fill:none` / `opacity:0` 不误报。槽位版式会在页面上形成一圈色差框，
+    整页画布把模板三层整个盖掉退回一片死平。`check_svg.py` 只在作者主动自查
+    时跑；这一遍保证不跑自查、直接 `gen_hyperframes` 也会按段落出声。判据与
+    check_svg 共用 `_svg_sanitize.is_full_bleed_backdrop`（单一真源）。warn 不
+    error：确实要自画满幅底（浅色页 / 照片感场景）是合法取舍，有意为之可忽略。
+    同一文件被 keep 链里多个段落引用时按路径只报一次。
     """
     seen = set()
     warns = []
@@ -515,24 +517,24 @@ def svg_background_warnings(images, segments, out_dir):
             continue
         # 铺满与否问的是 viewBox 坐标系，不是固有像素尺寸：缩放写法
         # （width="800" height="600" viewBox="0 0 400 300"）下两套差一个倍数，
-        # 拿 800×600 去判会把铺满整幅的底板 rect 判成只占一半、一声不吭。
+        # 拿 800×600 去判会把铺满整幅的底板判成只占一半、一声不吭。
         vb_w, vb_h = root_viewbox_size(root)
-        rects = [el for el in root.iter()
-                 if is_full_bleed_rect(el, vb_w, vb_h)]
-        if not rects:
+        backdrops = [el for el in root.iter()
+                     if is_full_bleed_backdrop(el, vb_w, vb_h)]
+        if not backdrops:
             continue
         if seg_layout(seg) == "canvas":
             warns.append(
-                f"段落 '{sid}' 的整页画布配图 {entry['src']} 铺了一张满幅底板 "
-                f"<rect>：模板本来就在这一页底下画好了三层（主题渐变 / 只在页缘"
-                f"显形的网格 / 本段 accent 氛围光），满幅 rect 把三层整个盖掉，"
+                f"段落 '{sid}' 的整页画布配图 {entry['src']} 铺了一张满幅底板："
+                f"模板本来就在这一页底下画好了三层（主题渐变 / 只在页缘"
+                f"显形的网格 / 本段 accent 氛围光），满幅底板把三层整个盖掉，"
                 f"画布页就退回一片死平。删掉它让三层透出来（见 "
                 f"references/canvas.md「不铺满幅底」）。确实要把整页换成另一种"
                 f"底色时可忽略本条")
         else:
             warns.append(
-                f"段落 '{sid}' 的配图 {entry['src']} 带一张铺满 viewBox 的背景 "
-                f"<rect>——槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）；"
+                f"段落 '{sid}' 的配图 {entry['src']} 带一张铺满 viewBox 的背景"
+                f"底板——槽位 SVG 不要铺满幅底（会在页面上形成一圈色差框）；"
                 f"SVG 应保持透明，让页面渐变与该段 accent 氛围光透出来（见 "
                 f"references/canvas.md「不铺满幅底」）")
     return warns

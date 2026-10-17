@@ -1,9 +1,12 @@
-"""_svg_sanitize 的净化口径：墙钟动画定义、外链 url()、以及"注释里提一句"的误伤。
+"""_svg_sanitize 的净化口径：墙钟动画定义、外链 url()、以及满幅底板判据。
 
 判据都落在 <style> 文本上，所以这里直接喂 CSS（_clean_style_text）——内联前的那层
-结构化改写另由 test_canvas_kit / test_stage_carry 的端到端覆盖。
+结构化改写另由 test_canvas_kit / test_stage_carry 的端到端覆盖。满幅底板判据是
+"SVG 必须透明"那条规矩的唯一真源（references/canvas.md「不铺满幅底」），这里钉住
+它认哪些写法、不误报哪些。
 """
 import unittest
+import xml.etree.ElementTree as ET
 
 import _helpers as H                       # noqa: F401  sys.path 装配
 import _svg_sanitize as S
@@ -211,3 +214,73 @@ class CssCustomProperties(unittest.TestCase):
                 out = _clean(css)
                 self.assertNotIn("animation", out.lower(), css)
                 self.assertNotIn("transition", out.lower(), css)
+
+
+_HEAD = ('<svg xmlns="%s" width="980" height="735" viewBox="0 0 980 735">' % S.SVG_NS)
+
+
+def _backdrop(body):
+    """一段 SVG 主体 → 它里面有没有被判为满幅底板的图元。"""
+    root = ET.fromstring(_HEAD + body + "</svg>")
+    vbw, vbh = S.root_viewbox_size(root)
+    return any(S.is_full_bleed_backdrop(el, vbw, vbh)
+               for el in root.iter() if el is not root)
+
+
+class FullBleedBackdrop(unittest.TestCase):
+    """满幅底板判据：三种等价写法都认，没有可见填充/没铺满的都不误报。
+
+    修复前只认 `<rect>`：`<path d="M0 0 H980 V735 H0 Z">` 与
+    `<polygon points="0,0 980,0 980,735 0,735">` 实测零 warn 通过，成片里照样
+    一张死平底板（canvas.md 明令禁止的那种）。
+    """
+
+    def test_three_equivalent_writings_all_count(self):
+        for body in ('<rect width="980" height="735" fill="#123"/>',
+                     '<rect width="100%" height="100%"/>',
+                     '<rect width="100%" height="99%"/>',
+                     '<rect width="980" height="735" rx="24"/>',
+                     '<g><rect width="980" height="735" fill="#123"/></g>',
+                     '<rect width="980" height="735" fill="rebeccapurple"/>',
+                     '<rect width="980" height="735" style="fill:#123"/>',
+                     '<polygon points="0,0 980,0 980,735 0,735"/>',
+                     '<path d="M0 0 H980 V735 H0 Z" fill="#123"/>',
+                     '<path d="m0 0 h980 v735 h-980 z" fill="#123"/>',
+                     '<path d="M0 0 H980 V735 H0" fill="#123"/>'):
+            with self.subTest(body=body):
+                self.assertTrue(_backdrop(body), body)
+
+    def test_invisible_fill_is_not_a_backdrop(self):
+        """fill:none / opacity:0 没有可见填充：透明的满幅 rect 无害。"""
+        for body in ('<rect width="980" height="735" fill="none"/>',
+                     '<rect width="980" height="735" opacity="0"/>',
+                     '<rect width="980" height="735" style="fill:none"/>',
+                     '<path d="M0 0 H980 V735 H0 Z" fill="none"/>'):
+            with self.subTest(body=body):
+                self.assertFalse(_backdrop(body), body)
+
+    def test_not_full_bleed_is_not_a_backdrop(self):
+        for body in ('<rect width="980" height="367"/>',
+                     '<rect width="950" height="735"/>',
+                     '<rect width="50%" height="50%"/>',
+                     '<path d="M0 0 L980 735"/>',
+                     '<path d="M0 0 H490 V367 H0 Z"/>',
+                     '<path d="M0 0 H980 V367 H0 Z"/>',
+                     '<polygon points="0,0 490,0 490,367 0,367"/>',
+                     '<text x="10" y="20">hi</text>'):
+            with self.subTest(body=body):
+                self.assertFalse(_backdrop(body), body)
+
+    def test_full_bleed_is_judged_in_viewbox_units(self):
+        """缩放写法（width/height 与 viewBox 差一个倍数）下铺满的底板照样认得出。"""
+        root = ET.fromstring(
+            '<svg xmlns="%s" width="800" height="600" viewBox="0 0 400 300">'
+            '<rect width="400" height="300"/></svg>' % S.SVG_NS)
+        vbw, vbh = S.root_viewbox_size(root)
+        el = next(e for e in root.iter() if e is not root)
+        self.assertTrue(S.is_full_bleed_backdrop(el, vbw, vbh))
+
+    def test_malformed_d_is_not_a_backdrop(self):
+        for d in ("M0 0 L", "M0 0 Hx", "garbage"):
+            with self.subTest(d=d):
+                self.assertFalse(_backdrop('<path d="%s"/>' % d))

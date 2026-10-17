@@ -48,6 +48,7 @@ from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_stagger, validate_images_json)
 from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # noqa: E402
                            write_text_atomic)
+from _svg_sanitize import FULL_BLEED_EDGE, FULL_BLEED_FRAC  # noqa: E402  满幅阈值唯一真源
 from _template import get_canvas, get_image_box, load_template, normalize_aspect  # noqa: E402
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_accent_palette,
@@ -85,10 +86,9 @@ DIM_FRAC = 0.6       # 次要文字 = 文字色往页底压一档，再按 7:1 �
 LINE_FRAC = 0.45     # 轴线/刻度线 = 比次要文字再暗一档（线要的是"在"，不是"抢眼"）
 TICK_FRAC = 0.5      # 刻度线长 = label 档字号的一半
 TEXT_BASE_FRAC = 0.35  # 竖排刻度 label 的基线修正：让字身中线对齐刻度而不是基线对齐
-FULL_BLEED_FRAC = 0.98  # 与 check_svg 判"满幅底板"同一条阈值（宽或高越过它就该问一句）
-# 满幅判据的"贴边"容差，与 check_svg 的 `<= 1` 同一条：留 1px 是让 x=0/y=0 与 x=1 同判，
-# 不是给内容让路。
-FULL_BLEED_EDGE = 1.0
+# 满幅判据的两条阈值不在这里重抄：与 check_svg / gen_hyperframes 判"满幅底板"
+# 同一份（_svg_sanitize.FULL_BLEED_FRAC / FULL_BLEED_EDGE），canvas_kit 自查自己
+# 发射的面板有没有无意铺满时也走它。
 # 次要文字的对比度目标：check_svg 的门禁线是 4.5，但画布页的小字还要经两画幅缩放和成片
 # 压缩编码，取色表那条"次要说明按 ≥7:1 取"就是为了留出这两档损耗。
 DIM_CONTRAST_TARGET = 7.0

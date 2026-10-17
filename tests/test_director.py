@@ -998,8 +998,8 @@ class DirectorPrepare(unittest.TestCase):
 
 
 class BackgroundWarns(unittest.TestCase):
-    """满幅背景 <rect> 的生成期体检：SVG 应透明、让模板三层透出来，自带幅底要出声。
-    判据与 check_svg 共用 _svg_sanitize.is_full_bleed_rect（单一真源）。
+    """满幅底板的生成期体检：SVG 应透明、让模板三层透出来，自带幅底要出声。
+    判据与 check_svg 共用 _svg_sanitize.is_full_bleed_backdrop（单一真源）。
     """
 
     def setUp(self):
@@ -1069,6 +1069,45 @@ class BackgroundWarns(unittest.TestCase):
             {"seg-a": {"src": rel}, "seg-b": {"src": rel, "stage": "keep"}},
             segs, self.tmp.name)
         self.assertEqual(len(warns), 1, warns)
+
+    def test_full_bleed_path_and_polygon_warn_too(self):
+        """rect / polygon / path 是同一视觉结果的三种等价写法，漏一种就是漏报。
+
+        实测修复前：`M0 0 H980 V735 H0 Z` 与 `points="0,0 980,0 980,735 0,735"`
+        都零 warn 通过，成片里照样一张死平底板。
+        """
+        head = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+                'viewBox="0 0 980 735">')
+        for tail in ('<path d="M0 0 H980 V735 H0 Z" fill="#0b1020"/>',
+                     '<polygon points="0,0 980,0 980,735 0,735" fill="#0b1020"/>'):
+            with self.subTest(tail=tail):
+                warns = self._run(head + tail + '</svg>')
+                self.assertEqual(len(warns), 1, warns)
+
+    def test_hidden_fill_and_half_bleed_stay_silent(self):
+        """fill:none / opacity:0 没有可见填充；只占一半的三种写法都不是底板。
+
+        对角线（`M0 0 L980 735`）单独一条：bbox 占满整个画面但填充面积是 0，
+        它是连线/分隔线，不是底板——warn 贬值比漏报更贵。
+        """
+        head = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+                'viewBox="0 0 980 735">')
+        for tail in ('<rect width="980" height="735" fill="none"/>',
+                     '<rect width="980" height="735" opacity="0"/>',
+                     '<path d="M0 0 H980 V735 H0 Z" fill="none"/>',
+                     '<rect width="980" height="367"/>',
+                     '<path d="M0 0 L980 735"/>',
+                     '<path d="M0 0 H490 V367 H0 Z"/>',
+                     '<polygon points="0,0 490,0 490,367 0,367"/>'):
+            with self.subTest(tail=tail):
+                self.assertEqual(self._run(head + tail + '</svg>'), [])
+
+    def test_relative_command_path_counts(self):
+        """相对命令（m/h/v/z）同样拼出满幅底板：bbox 按命令语义累加。"""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735">'
+               '<path d="m0 0 h980 v735 h-980 z" fill="#0b1020"/></svg>')
+        self.assertEqual(len(self._run(svg)), 1)
 
 
 class CheckSvgWallclock(unittest.TestCase):

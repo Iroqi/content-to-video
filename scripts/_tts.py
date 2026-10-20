@@ -84,8 +84,15 @@ class MimoTtsClient:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise TtsHttpError(e.code, e.read().decode("utf-8", "replace")[:300]) \
-                from None
+            # 响应体单独兜一层：连接已在断的边缘时 `e.read()` 自己会抛（超时/
+            # ConnectionReset），直接写在 raise 里会把 `e.code` 一起吞掉——
+            # 401 这类确定性失败退化成"不带 status_code 的网络错误"，每句白烧满
+            # 3 次 billable 调用才放弃。状态码是分类的依据，必须先保住。
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                detail = "（响应体读不出来）"
+            raise TtsHttpError(e.code, detail) from None
         except ValueError as e:
             # 200 但 body 不是 JSON（网关返回了 HTML 错误页之类）：
             # 端点配错，重试同一次请求不会变好，按确定性失败处理。
@@ -152,16 +159,22 @@ def _audio_from_response(payload):
 def is_non_retryable(exc):
     """判断异常是否属于"重试也不会好"的确定性失败。
 
-    带 status_code 的 TtsHttpError：400（参数/内容审核拒绝）、401/403（密钥
-    错误/无权限）、404（模型不存在）、422（请求不合法）这类错误重试 N 次结果
-    完全一样——每句烧满 3 次重试只会浪费额度和时间（100 句 × 无效 key = 300
-    次无效调用 + 每句多等 6s），直接放弃。响应不含音频（BadAudioResponseError）
-    同理：端点/模型配错了，换一句再试也是同样的纯文本响应。连接/超时/429 限流
-    类不带 status_code 或带可重试码，仍走重试。
+    带 status_code 的 TtsHttpError：**4xx 一律确定性**，只有 408（请求超时）与
+    429（限流）例外——那两个是"同一个请求再来一次可能就成了"。400（参数/内容
+    审核拒绝）、401/403（密钥错/无权限）、404（模型不存在）、410/413/431
+    （资源没了/请求太大/头太大）这类重试 N 次结果完全一样——每句烧满 3 次重试
+    只会浪费额度和时间（100 句 × 无效 key = 300 次无效调用 + 每句多等 6s），
+    直接放弃。
+
+    判据写成"4xx 减两个例外"而不是枚举具体码：枚举表每遇到一个没列进来的
+    确定性码（405/410/413/431…）就要回头补一次，漏一天就白烧一天额度；
+    而"客户端错误不该重试"是 HTTP 自己的语义，例外只有两个。
+    响应不含音频（BadAudioResponseError）同理：端点/模型配错了，换一句再试
+    也是同样的纯文本响应。连接/超时类不带 status_code，仍走重试。
     """
     if isinstance(exc, BadAudioResponseError):
         return True
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
-        return status in (400, 401, 403, 404, 422)
+        return 400 <= status < 500 and status not in (408, 429)
     return False

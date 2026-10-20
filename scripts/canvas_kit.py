@@ -44,10 +44,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而不是重算一遍
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
-                            _validate_stagger, validate_images_json)
+                            _validate_repeat_yoyo, _validate_stagger,
+                            validate_images_json)
 from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # noqa: E402
                            seeded_wobble, write_text_atomic)
-from _svg_sanitize import FULL_BLEED_EDGE, FULL_BLEED_FRAC  # noqa: E402  满幅阈值唯一真源
+# 满幅判据整个走 _svg_sanitize._covers_viewbox（阈值常量也在它那边）：check_svg
+# 与这里判的是同一件事，判据就该只有一份。
+from _svg_sanitize import (FULL_BLEED_EDGE, FULL_BLEED_FRAC,  # noqa: E402  满幅阈值唯一真源
+                           _covers_viewbox)
 from _template import (get_canvas, get_image_box, load_template,  # noqa: E402
                        normalize_aspect, put_override)
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
@@ -104,8 +108,8 @@ LINE_FRAC = 0.45     # 轴线/刻度线 = 比次要文字再暗一档（线要�
 TICK_FRAC = 0.5      # 刻度线长 = label 档字号的一半
 TEXT_BASE_FRAC = 0.35  # 竖排刻度 label 的基线修正：让字身中线对齐刻度而不是基线对齐
 # 满幅判据的两条阈值不在这里重抄：与 check_svg / gen_hyperframes 判"满幅底板"
-# 同一份（_svg_sanitize.FULL_BLEED_FRAC / FULL_BLEED_EDGE），canvas_kit 自查自己
-# 发射的面板有没有无意铺满时也走它。
+# 同一份（_svg_sanitize 的 FULL_BLEED_* 与 _covers_viewbox），canvas_kit 自查自己
+# 发射的面板有没有无意铺满时直接调它，不重算一遍。
 # 次要文字的对比度目标：check_svg 的门禁线是 4.5，但画布页的小字还要经两画幅缩放和成片
 # 压缩编码，取色表那条"次要说明按 ≥7:1 取"就是为了留出这两档损耗。
 DIM_CONTRAST_TARGET = 7.0
@@ -295,6 +299,18 @@ def _opt_num(el, key, where, default, *, nonnegative=False, positive=False):
     return _need_num(el, key, where, nonnegative=nonnegative, positive=positive)
 
 
+def _ink_invisible(fill, opacity):
+    """这块图元盖不盖得住东西：`fill:"none"` 与 `opacity:0` 都不盖。
+
+    与 `_svg_sanitize._fill_hidden` 同一条判据（那边读元素属性，这里读发射时已
+    解析好的值）。只差"看不见"这一种——class/id 控制的 fill 读不到，那种按"看得
+    见"算（报错方向，不漏报）。
+    """
+    if isinstance(fill, str) and fill.strip().lower() == "none":
+        return True
+    return opacity is not None and float(opacity) == 0.0
+
+
 def _need_str(el, key, where):
     v = el.get(key)
     if v is None:
@@ -427,19 +443,10 @@ def _validate_common_keys(el, where):
         raise ValueError(f"{where} 的 ease 必须是字符串（GSAP 缓动名，如 power2.inOut）")
     if "stagger" in el:
         _validate_stagger(el["stagger"], f"{where} 的 stagger")
-    if "repeat" in el:
-        v = el["repeat"]
-        if isinstance(v, bool) or not isinstance(v, int) or v < -1:
-            raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
-                             f"0=只演一遍；实际: {v!r}）")
-    if "yoyo" in el:
-        if not isinstance(el["yoyo"], bool):
-            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
-                             f"（实际: {el['yoyo']!r}）")
-        if not el.get("repeat"):
-            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP "
-                             "根本不会回头。要来回就写 repeat:1（奇数遍收尾在 to，"
-                             "偶数遍收尾回起点）")
+    # repeat / yoyo 的取值判据走 _images_schema 那一份（唯一真源）：spec 与
+    # images.json 的 director 是同一个 GSAP 语义的两个入口，判据分家就是两道门
+    # 给两个答案。这里只补 spec 特有的上下文——反复只能挂在内容元素上。
+    _validate_repeat_yoyo(el, where)
     if (el.get("repeat") is not None or el.get("yoyo")) and role_of(el) != "content":
         raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
                          "一起到位、不进 director steps，没有'哪一拍'可反复。"
@@ -757,18 +764,23 @@ def _emit_panel(el, ctx, where):
     # 立身之本就是"生成物一定过门禁"，而满幅 rect 唯一的后果是把模板那三层背景盖死。
     # 判据按**抖完之后**的尺寸算：check_svg 量的是落盘的属性，spec 里差一点、
     # 抖到阈值外一样盖死那三层。
-    if (x <= FULL_BLEED_EDGE and y <= FULL_BLEED_EDGE
-            and w >= cw * FULL_BLEED_FRAC and h >= ch * FULL_BLEED_FRAC):
+    #
+    # 几何判定直接调 `_svg_sanitize._covers_viewbox`（阈值常量已经在用那一份，
+    # 判据没理由再抄一遍：抄的那份迟早少一个条件——这里就曾少了"填充不可见时
+    # 不算盖死"，于是 `fill:"none"` 的满幅 panel 被当成铺满整页拒掉，而同一份
+    # 几何在 check_svg 里是放行的：脚手架拒了一份门禁本来会收的合法 spec）。
+    fill = _color(el, "fill", ctx, "plate", where)
+    opacity = _opt_num(el, "opacity", where, None)
+    if _covers_viewbox(x, y, x + w, y + h, cw, ch) and not _ink_invisible(fill, opacity):
         raise ValueError(f"{where} 的 panel 铺满了整页（{int(w)}×{int(h)} 起于 "
                          f"{int(x)},{int(y)}）：画布页必须留透明，让模板的渐变/网格/"
                          "accent 氛围光三层从内容背后透出来。要局部层次就缩进边距、"
                          "分几块面板；确实要换一种页色就手写 SVG，别走本脚手架")
     r = _opt_num(el, "r", where, ctx["panel_r"], nonnegative=True)
-    opacity = _opt_num(el, "opacity", where, None)
     return _node("rect", OrderedDict([
         ("id", el.get("id")), ("x", _num(x)), ("y", _num(y)),
         ("width", _num(w)), ("height", _num(h)), ("rx", _num(r)),
-        ("fill", _color(el, "fill", ctx, "plate", where)),
+        ("fill", fill),
         ("opacity", None if opacity is None else _num(opacity))]))
 
 

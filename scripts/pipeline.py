@@ -234,6 +234,12 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
     永久钉成"已在目标速率"，见 _write_sentence_sidecars）。
 
     语速在合成后用 ffmpeg atempo 精确变速，与 TTS 模型的自然语速无关。
+
+    **API 失败不碰磁盘**：本函数只有在写盘那一步才真正拥有 out_path。API 阶段
+    失败（400/401/重试耗尽）时盘上那份是**上一次成功合成的同句 WAV**——删了它，
+    再配 `--on-fail silence` 就等于拿静音覆盖掉一条好配音，而且 sidecar 随后
+    为这条静音重写指纹，下次 `--resume` 命中缓存，好音频再也回不来。要清的从来
+    只有"本次写了一半"的那种文件，而那一种只在写盘异常里出现。
     """
     for attempt in range(max_retries):
         try:
@@ -244,9 +250,6 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             if is_non_retryable(e):
                 print(f"    [{label}][fatal] {e}（确定性失败，不重试）",
                       flush=True)
-                # 失败即清掉 out_path：磁盘写满等异常可能留下半截 WAV，
-                # 其 wave 头完整、下次 --resume 会把它当有效缓存跳过。
-                remove_if_exists(out_path)
                 return False, False
             # 最后一次不再打 retry：打出来会让人以为还有下一次重试在排队，
             # 排障时会去找"第 4 次"并不存在。耗尽就直说耗尽。
@@ -270,11 +273,12 @@ def synth_sentence(client, text, voice_id, voice_style, out_path,
             label = _log_label(text, sentence_label)
             print(f"    [{label}][fatal] 音频写盘失败（{e}），不重试",
                   file=sys.stderr, flush=True)
+            # 写盘失败才清：半截 WAV 的 wave 头可能已完整，下次 --resume 会把它
+            # 当有效缓存跳过。清的是本次自己写的那一份。
             remove_if_exists(out_path)
             return False, False
         break  # API 成功、音频已落盘，跳出重试循环
     else:
-        remove_if_exists(out_path)  # 理由同 fatal 分支：不留半截 WAV 给下次 resume
         return False, False
 
     # 新合成 = 全新内容：先清上一轮残留 sidecar（.sha 由调用方在 synth 成功后

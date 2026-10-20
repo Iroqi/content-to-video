@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 import _helpers as H  # noqa: F401  sys.path 装配
@@ -129,10 +130,26 @@ class MimoRequestShape(unittest.TestCase):
 
 class RetryVerdict(unittest.TestCase):
     def test_status_code_table(self):
-        for code in (400, 401, 403, 404, 422):
+        # 4xx 一律确定性（枚举表漏一个码就白烧一轮额度，所以按区间判）
+        for code in (400, 401, 403, 404, 405, 410, 413, 422, 431):
             self.assertTrue(T.is_non_retryable(T.TtsHttpError(code, "x")), code)
-        for code in (429, 500, 503):
+        for code in (408, 429, 500, 503):
             self.assertFalse(T.is_non_retryable(T.TtsHttpError(code, "x")), code)
+
+    def test_http_error_keeps_status_when_body_unreadable(self):
+        """响应体读不出来时状态码必须保住：丢了它，401 会被当成可重试的网络错误。"""
+        class UnreadableHTTPError(urllib.error.HTTPError):
+            def read(self, *a, **k):
+                raise ConnectionResetError("broken")
+
+        def boom(req, timeout=None):
+            raise UnreadableHTTPError("http://x", 401, "Unauthorized", {}, None)
+
+        with mock.patch.object(T.urllib.request, "urlopen", boom):
+            with self.assertRaises(T.TtsHttpError) as cm:
+                T.MimoTtsClient("k", "http://x").synthesize("你好", "v", "", "m", 1)
+        self.assertEqual(cm.exception.status_code, 401)
+        self.assertTrue(T.is_non_retryable(cm.exception))
 
     def test_network_errors_are_retryable(self):
         self.assertFalse(T.is_non_retryable(ConnectionResetError("boom")))
@@ -154,9 +171,12 @@ class SynthSentenceThroughProtocol(unittest.TestCase):
                 raise outcome
             return outcome
 
-    def _run(self, outcomes, speed=1.0, max_retries=3):
+    def _run(self, outcomes, speed=1.0, max_retries=3, seed=None):
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, "s001.wav")
+            if seed is not None:
+                with open(out, "wb") as f:
+                    f.write(seed)
             client = self.RecordingClient(outcomes)
             with mock.patch.object(P.time, "sleep"):
                 ok, applied = P.synth_sentence(
@@ -187,6 +207,19 @@ class SynthSentenceThroughProtocol(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(len(client.calls), 3)
         self.assertIsNone(content)
+
+    def test_api_failure_keeps_previously_synthesized_audio(self):
+        """API 阶段失败不许删盘上那份：它是上一次成功合成的同句 WAV。
+
+        删掉它再配 --on-fail silence，等于拿静音覆盖一条好配音，而且 sidecar
+        随后为这条静音重写指纹——下次 --resume 命中缓存，好音频再也回不来。
+        本函数只有在写盘那一步才真正拥有 out_path。
+        """
+        for outcomes in ([T.TtsHttpError(401, "bad key")],
+                         [ConnectionResetError("x")] * 3):
+            ok, _applied, _client, content = self._run(outcomes, seed=b"RIFFgood")
+            self.assertFalse(ok)
+            self.assertEqual(content, b"RIFFgood")
 
     def test_last_failure_logged_as_giveup_not_retry(self):
         """最后一次失败要说"放弃"，不能还打 retry 3/3。

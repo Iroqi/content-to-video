@@ -145,11 +145,16 @@ def _set_attr(el, name, value):
 
 
 def _targets(root, selector):
-    """单个 `#id` / `.class` 选择器 → 元素列表（schema 已挡掉复合选择器）。"""
+    """单个 `#id` / `.class` 选择器 → 元素列表（schema 已挡掉复合选择器）。
+
+    #id 走 `root.iter()` 逐元素比对，**不拼 XPath 谓词**：id 是作者写进 SVG 的
+    自由文本，可以合法含单引号（`<g id="a'b">`）。拼成 `[@id='a'b']` 时谓词被
+    那个引号截断，ElementTree 抛 SyntaxError——而调用方只接 ParseError /
+    ValueError，于是整次生成裸栈中断，报错里看不出是 SVG 里的一个引号。
+    """
     kind, name = selector[0], selector[1:]
     if kind == "#":
-        el = root.find(".//*[@id='%s']" % name)
-        return [el] if el is not None else []
+        return [el for el in root.iter() if (el.get("id") or "") == name]
     return [el for el in root.iter() if name in (el.get("class") or "").split()]
 
 
@@ -455,7 +460,7 @@ def global_ref_leaks(markup, steps):
     return out
 
 
-def infer_stage_keep(images, seg_ids, src_of=None):
+def infer_stage_keep(images, seg_ids):
     """给"上一页推近、本页同一张图继续讲"的接续页自动盖章 `stage:"keep"`。
 
     **为什么让机器推断**：`stage:"keep"` 曾是唯一一处"字面没写就一定是错的"的
@@ -479,17 +484,19 @@ def infer_stage_keep(images, seg_ids, src_of=None):
     让作者学会"无脑加一行"。盖章之后，这个字段从"必须记住"变成"只在想要非默认
     行为时才需要写"——而那正是默认值该有的样子。
 
+    **只在归一化之前调用**：判据读的 `inline_svg` / `director` / `stage` 都是
+    images.json 的顶层键。`html_renderer._normalize_images` 会把除 `src`/`type`
+    之外的键搬进 `opts`，搬完之后这三条判据条条落空（`inline_svg` 永远读不到），
+    盖出来的 `stage` 写在顶层也不会被 `_is_keep_page`（读 `opts["stage"]`）看见
+    ——所以调用点必须排在归一化之前，而不该给本函数加一个"从 opts 取值"的入口。
+
     Args:
         images: {段 id: 媒体条目}（同一份会被就地盖章）；
-        seg_ids: manifest 段序里的 id 列表；
-        src_of: 可选，``sid -> src`` 的取值器。渲染端手里是归一化后的
-            ``{src, type, opts}``，src 与 opts 分家存放，传 ``lambda s: imgs[s]["src"]``
-            即可；缺省读条目自己的 ``src`` 键。
+        seg_ids: manifest 段序里的 id 列表。
 
     Returns:
         list[str]：本次被盖章的段 id（调用方据此打一行 `[notice]`）。
     """
-    get_src = src_of or (lambda k: (images.get(k) or {}).get("src"))
     stamped = []
     for i, sid in enumerate(seg_ids):
         if i == 0:
@@ -500,8 +507,8 @@ def infer_stage_keep(images, seg_ids, src_of=None):
         prev_entry = images.get(seg_ids[i - 1]) or {}
         if not prev_entry.get("inline_svg"):
             continue
-        src = get_src(sid)
-        if not src or src != get_src(seg_ids[i - 1]):
+        src = entry.get("src")
+        if not src or src != prev_entry.get("src"):
             continue
         steps = (prev_entry.get("director") or {}).get("steps") or []
         pose = cam_resting_pose(steps)

@@ -246,6 +246,16 @@ def validate_timing_manifest(data):
     for i, sg in enumerate(segs):
         if not isinstance(sg, dict):
             raise ValueError(f"segments[{i}] 必须是对象")
+        # 开场动画：开屏 agenda 卡默认强绑定，契约键已移除（见 _source_schema
+        # 的指引）。手写的 manifest 若还带着旧键，这里给同样的指引。
+        # **必须排在 _reject_unknown_keys 之前**——reject 会先报一句泛化的"未知
+        # 字段 'opening_animation'"，这句专用指引就永远到不了作者手里（_source_schema
+        # 那边就是按这个顺序写的，两边口径必须一致）。
+        if sg.get("opening_animation") is not None:
+            raise ValueError(
+                f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 写了 "
+                "opening_animation，该键已随「默认强绑定」移除：开屏页（agenda "
+                "版式）现在无需配置即自动获得苹果风开场动画，请删掉这个键。")
         _reject_unknown_keys(sg, MANIFEST_SEGMENT_KEYS,
                              f"timing_manifest.json 的 segments[{i}]"
                              f"（id={sg.get('id', '?')}）")
@@ -274,13 +284,6 @@ def validate_timing_manifest(data):
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
                          content=is_content_sid(sid))
-        # 开场动画：开屏 agenda 卡默认强绑定，契约键已移除（见 _source_schema
-        # 的指引）。手写的 manifest 若还带着旧键，这里给同样的指引。
-        if sg.get("opening_animation") is not None:
-            raise ValueError(
-                f"timing_manifest.json 的段落 '{sid}' 写了 opening_animation，"
-                "该键已随「默认强绑定」移除：开屏页（agenda 版式）现在无需"
-                "配置即自动获得苹果风开场动画，请删掉这个键。")
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:

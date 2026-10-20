@@ -628,7 +628,10 @@ def _title_font_px(rc, seg, sid, is_agenda):
     """
     _tl, _ag, aspect, width = rc.tl, rc.ag, rc.aspect, rc.width
     if is_agenda:
-        _title_font_px = _ag["titleSize"]
+        # --set 能把任意 JSON 标量写进模板叶子（0 也合法），而字号是"每行能放
+        # 几个字"的除数：0 会让下面那条整除 ZeroDivisionError 裸栈，崩在一个与
+        # 旋钮语义毫无关系的算术式上。模板里这类数一律按正尺寸用。
+        _title_font_px = max(1, _ag["titleSize"])
         _tlen = len(seg["title"].strip())
         _ag_avail = width - 2 * _ag["insetX"]
         _ag_lines = 1 if aspect == "landscape" else 2
@@ -1766,7 +1769,11 @@ def _entrance_k(rc, card):
     走：那一段的图"框已经到位了、镜头还在按旧速度收"，而它看起来只是有点不对劲。
     """
     _eb = rc.anim["entranceBudget"]
-    return min(1.0, max(_eb["minFactor"], card.d / _eb["normSeconds"]))
+    # 归一化分母同样可能被 --set 写成 0（同 _title_font_px 那条理由）。分母失
+    # 效时比值趋于无穷，外层 min(1.0, ...) 正好收成"不压缩"——长段维持原速，
+    # 与 normSeconds 极小是同一个意图。
+    return min(1.0, max(_eb["minFactor"],
+                        card.d / max(1e-6, _eb["normSeconds"])))
 
 
 def _entrance_lead(rc, card):
@@ -2257,14 +2264,18 @@ def generate_html(manifest, audio_src, images=None,
 
     # ── 配图/视频归一化（只做一次）─────────────────────────────────
     # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
-    images = _normalize_images(images or {})
+    images = images or {}
     # 接续页自动盖章：判据唯一真源在 `_stage_carry.infer_stage_keep`。放在这里是为了
     # **渲染端与生成期看到同一个答案**——生成期（gen_hyperframes.director_prepare）
     # 拿它决定"烘不烘焙"，渲染端拿它决定"要不要擦进来 / 重播入场"。两边各判一次
     # 就一定会分家，而分家的症状是"烘了却照样擦进来"，烘焙的意义正好被抵消掉。
-    # 判据只读 src / director / inline_svg，这三样在归一化前后同值。
-    infer_stage_keep(images, [seg["id"] for seg in manifest["segments"]],
-                     src_of=lambda sid: images[sid]["src"])
+    #
+    # 必须在归一化**之前**盖章：判据读的 `inline_svg` / `director` / `stage` 是
+    # images.json 的顶层键，归一化会把它们搬进 `opts`——盖章后再归一化，`stage`
+    # 跟着进 opts，正是渲染端 `_is_keep_page` 读的位置；反过来实现过一次（先归一
+    # 化再盖章），判据条条落空、盖出来的 `stage` 还写在顶层，渲染端永远看不见。
+    infer_stage_keep(images, [seg["id"] for seg in manifest["segments"]])
+    images = _normalize_images(images)
     total_dur = manifest["total_duration"]
     sentences = manifest["sentences"]
     # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插

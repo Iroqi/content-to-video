@@ -301,6 +301,29 @@ class SvgChecker(unittest.TestCase):
             "</svg>", '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/></svg>'))
         self.assertTrue(any("端点悬空" in w for w in warns), warns)
 
+    def test_loose_end_tolerance_is_measured_in_viewbox_units(self):
+        """端点容差必须按 viewBox 短边算，不能按根标签的 width/height。
+
+        缩放写法（width="1960" height="1470" viewBox="0 0 980 735"）下，图元坐标
+        仍是 viewBox 系；拿像素短边算会把容差放大一倍，落在中间的悬空端点静默
+        漏报。同一次几何，只换根标签的 px 尺寸不该改变判定。
+        """
+        # 端点 (400,500) 距另一条竖线 4 单位：viewBox 容差 max(2,735×0.004)=2.94
+        # → 该报；放大后的 5.88 → 曾被吞掉。
+        body = ('<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/>'
+                '<line x1="404" y1="500" x2="404" y2="300" stroke="#fff"/></svg>')
+        for tag in ('<svg xmlns="http://www.w3.org/2000/svg" width="980" '
+                    'height="735" viewBox="0 0 980 735">',
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="1960" '
+                    'height="1470" viewBox="0 0 980 735">'):
+            with self.subTest(tag=tag):
+                svg = (tag + '<style>text{font-family:"Microsoft YaHei",sans-serif}'
+                       '</style>'
+                       '<text x="40" y="100" font-size="36" fill="#dbe6f5">反向传播'
+                       '</text>' + body)
+                _, warns = self.run_check(svg)
+                self.assertTrue(any("端点悬空" in w for w in warns), warns)
+
     def test_line_ending_on_another_stroke_passes(self):
         # 一条线接到另一条线的端点上，两头都根住了
         _, warns = self.run_check(GOOD.replace(

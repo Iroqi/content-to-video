@@ -222,10 +222,14 @@ def _check_family_args(family, args, spec, where):
                              _ELASTIC_WHAT[i], spec, where)
         elif kind == "num":
             v = _arg_num(raw, "过冲量（第一个参数）", spec, where)
-            if math.isinf(v):
+            # NaN 与 Infinity 都要拒：`float("NaN")` 解析得出来，于是 NaN 一路
+            # 过了契约层，`curve()` 整条返回 nan，morph 采样产出字面 d 串
+            # `Mnan nan Lnan nan`（实测）——浏览器整条丢弃形变，全程零报错。
+            # isinf 只挡一半的那个洞就是这么开的。
+            if v != v or math.isinf(v):
                 raise ValueError(
                     f"{where} {spec!r}：back 的过冲量必须是有限数（实际 {raw!r}）——"
-                    f"Infinity 在 GSAP 里出 NaN 坐标。{EASE_HELP}")
+                    f"NaN / Infinity 在 GSAP 里出 NaN 坐标。{EASE_HELP}")
         elif kind == "steps_n":
             # 非数字 GSAP 直接出 NaN 曲线；小数档数按原值跳（4.5 格），采样器与
             # 预览同式才对得上——契约层只收 ≥1 的整数。
@@ -349,7 +353,11 @@ def curve(name, default):
         # 第二个参数是 JS truthiness——任何非空值都整体提前一格（实测 steps(4,false)
         # 与 steps(4,true) 同曲线）；裸 steps 缺省 1 格（config 的 void 0 分支）。
         n = _num(args, 0, 1)
-        if n < 1:
+        # 与 elastic 那个兜底同一条理由：契约层挡的是常规路径，这里挡的是绕过它
+        # 的输入（手改过的 images.json、老产物重放）。档数非有限时 `math.floor`
+        # 会抛 "cannot convert float NaN to integer"（实测），而本函数 docstring
+        # 承诺的是线性兜底——一条算不出的曲线不该把整页渲染崩在取整上。
+        if not (n >= 1) or math.isinf(n):
             return lambda t: t
         if len(args) > 1:
             return lambda t, n=n: 1.0 if t >= 1 else min(math.floor(t * n) + 1, n) / n
@@ -413,6 +421,11 @@ def curve(name, default):
         g = lambda t: 1 - math.sqrt(max(0.0, 1 - t * t))
     elif family == "back":
         c1 = _num(args, 0, 1.70158)          # 过冲量；back.out(1.7) 与裸 back.out 同档
+        # 与 elastic / steps 同一条兜底：过冲量非有限时整条曲线是 nan，morph 采样
+        # 会产出 `Mnan nan Lnan nan` 这样的 d 串被浏览器整条丢弃——silent 比崩更
+        # 难查，所以在这里就回落到裸 back 的缺省过冲量。
+        if c1 != c1 or math.isinf(c1):
+            c1 = 1.70158
         c3 = c1 + 1
         g = lambda t, c1=c1, c3=c3: c3 * t ** 3 - c1 * t ** 2
     else:

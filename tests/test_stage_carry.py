@@ -726,6 +726,69 @@ class InferStageMatchesRenderer(unittest.TestCase):
         self.assertIn('id="seg-b" class="clip seg-card" data-start="2.40"', html)
         self.assertNotIn('tl.from("#img-seg-b"', html)
 
+    def test_renderer_stamps_on_its_own_before_normalizing(self):
+        """渲染端自己那次盖章必须真的生效——不是"判据落空的死代码"。
+
+        曾把 infer_stage_keep 排在 _normalize_images 之后：判据读的 inline_svg /
+        director / stage 已被搬进 opts，条条落空；盖出来的 stage 写在顶层，而
+        _is_keep_page 读 opts["stage"]——于是渲染端永远看不见接续，烘好的副本
+        照样被当成新页擦进来重演一遍，烘焙的意义正好被抵消。
+        """
+        import contextlib
+        import io
+        from html_renderer import generate_html
+        segs = [{"id": "seg-a", "title": "甲",
+                 "sentences": [{"index": 0, "start_time": 0.0,
+                                "duration": 2.0, "text": "第一句。"}]},
+                {"id": "seg-b", "title": "乙",
+                 "sentences": [{"index": 1, "start_time": 2.4,
+                                "duration": 2.0, "text": "第二句。"}]}]
+        # 不经 director_prepare：只有 inline_svg 与末拍推近的相机，模拟"生成期
+        # 之外直接调渲染端"的调用面。
+        images = {
+            "seg-a": {"src": "images/stage.svg", "inline_svg": "<svg/>",
+                      "director": {"steps": [
+                          {"at": 0, "target": "#cam", "to": {"scale": 1.4}}]}},
+            "seg-b": {"src": "images/stage.svg"},
+        }
+        m = {
+            "total_duration": 4.8,
+            "sentences": [
+                {"index": 0, "start_time": 0.0, "duration": 2.0, "text": "第一句。",
+                 "seg": "seg-a"},
+                {"index": 1, "start_time": 2.4, "duration": 2.0, "text": "第二句。",
+                 "seg": "seg-b"},
+            ],
+            "segments": segs,
+        }
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav", images=images)
+        self.assertEqual(images["seg-b"].get("stage"), "keep")
+        self.assertNotIn('tl.from("#img-seg-b"', html)
+
+
+class TargetsResolveQuotedIds(unittest.TestCase):
+    """`#id` 选择器不许拼 XPath 谓词：SVG 的 id 是自由文本，可以合法含引号。"""
+
+    def test_id_with_single_quote_resolves_instead_of_crashing(self):
+        markup = ('<svg xmlns="%s"><g id="cam">'
+                  '<rect id="a\'b" x="0" y="0" width="10" height="10"/>'
+                  '</g></svg>' % NS)
+        root = ET.fromstring(markup)
+        # 拼成 [@id='a'b] 时谓词被那个引号截断 → SyntaxError（调用方只接
+        # ParseError/ValueError，于是整次生成裸栈中断，报错里看不出是 SVG 里的
+        # 一个引号）。
+        self.assertRaises(SyntaxError, root.find, ".//*[@id='%s']" % "a'b")
+        self.assertEqual([el.get("id") for el in SC._targets(root, "#a'b")], ["a'b"])
+
+    def test_bake_survives_quoted_id(self):
+        steps = [{"at": 0, "target": "#a'b", "to": {"opacity": 1}}]
+        out, _notes = SC.bake_settled_state(markup=(
+            '<svg xmlns="%s"><g id="cam">'
+            '<rect id="a\'b" x="0" y="0" width="10" height="10" opacity="0"/>'
+            '</g></svg>' % NS), steps=steps)
+        self.assertIn("opacity:1", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ def _lum(hex_color):
 
 def _close(a, b):
     """两支色"读得出不一样"的下限：sRGB 通道至少差 6（≈ 2.3% 色阶）。"""
-    pa, pb = T._hex_channels(a), T._hex_channels(b)
+    pa, pb = T._hex_rgb_bytes(a), T._hex_rgb_bytes(b)
     return max(abs(x - y) for x, y in zip(pa, pb)) >= 6
 
 
@@ -71,10 +71,10 @@ class ArcAccent(unittest.TestCase):
 
     def test_midpoint_mixes_like_color_mix(self):
         got = T.arc_accent(0.5)
-        a = T._hex_channels(T.get_accent_palette()[T._ARC_CYCLE[0]])
-        b = T._hex_channels(T.get_accent_palette()[T._ARC_CYCLE[1]])
+        a = T._hex_rgb_bytes(T.get_accent_palette()[T._ARC_CYCLE[0]])
+        b = T._hex_rgb_bytes(T.get_accent_palette()[T._ARC_CYCLE[1]])
         self.assertEqual(
-            T._hex_channels(got),
+            T._hex_rgb_bytes(got),
             tuple(int(round(x + (y - x) * 0.5)) for x, y in zip(a, b)))
 
     def test_out_of_range_is_clamped_not_wrapped(self):

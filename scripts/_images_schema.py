@@ -324,6 +324,36 @@ def _validate_stagger(stagger, where):
     return stagger
 
 
+def _validate_repeat_yoyo(step, where):
+    """repeat / yoyo 的取值判据——**唯一真源**。
+
+    images.json 的 `director.steps[]` 与 canvas_kit 的 spec 元素都调这一份（spec
+    侧另加"只挂内容元素"、director 侧另加"必须挂在可重放的步上"，那两条是各自的
+    上下文，判据本身只有这一份）。两处各写一遍的代价在**改判据那天**才付：改了
+    "repeat 允许到几"，只有改的那一处生效，另一处照旧放行一个渲染端不认的值
+    （或反过来拒一个合法值），而两边报错文案一模一样，作者分不清是哪道门在说话
+    ——同文件里的 stagger / count 早已是共用一份，这两条当时漏了。
+
+    整数而非小数是故意的：GSAP 吃 0.5 这种"半遍"，而跨段接续与出画自查都要按
+    "最后停在哪一头"说话，半遍收尾在两者里都是猜。
+    """
+    if "repeat" in step:
+        v = step["repeat"]
+        if isinstance(v, bool) or not isinstance(v, int) or v < -1:
+            raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
+                             f"0=只演一遍；实际: {v!r}）")
+    if "yoyo" in step:
+        if not isinstance(step["yoyo"], bool):
+            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
+                             f"（实际: {step['yoyo']!r}）")
+        # 只在 yoyo 真的开着时要求 repeat：显式写 `yoyo:false` 是合法且与缺省
+        # 等价的写法，按"键存在"问就会把一句没问题的声明判成错。
+        if step["yoyo"] and not step.get("repeat"):
+            raise ValueError(f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP "
+                             "根本不会回头。要来回就写 repeat:1（奇数遍收尾在 to，"
+                             "偶数遍收尾回起点）")
+
+
 def _validate_director(key, dirval):
     """校验 images.json 条目的导演档编排块（时间轴同步的 SVG 动画）。"""
     if not isinstance(dirval, dict):
@@ -441,17 +471,6 @@ def _validate_director(key, dirval):
                                      f"（NaN/Infinity 不算数；实际: {v!r}）")
         if "ease" in step:
             validate_ease(step["ease"], f"{where} 的 ease")
-        # repeat / yoyo：这一拍演完再演几遍、以及来回（GSAP 的同名补间变量）。整数而非
-        # 小数是故意的：GSAP 吃 0.5 这种"半遍"，而跨段接续与出画自查都要按"最后停在
-        # 哪一头"说话，半遍收尾在两者里都是猜。
-        if "repeat" in step:
-            v = step["repeat"]
-            if isinstance(v, bool) or not isinstance(v, int) or v < -1:
-                raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
-                                 f"0=只演一遍；实际: {v!r}）")
-        if "yoyo" in step and not isinstance(step["yoyo"], bool):
-            raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"
-                             f"（实际: {step['yoyo']!r}）")
         # 反复必须挂在真会"演"的步上。纯 set 是瞬时赋值：门禁按"瞬时"推进相对链的游标，
         # 而 GSAP 会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
         # 在单遍上更是直接被忽略。静默失效的那一类宁可在契约层就说不通。
@@ -462,10 +481,11 @@ def _validate_director(key, dirval):
                 f"{where} 写了 repeat / yoyo 却没有可重放的补间（from / to / draw / morph /"
                 " count / type 一个都没有）——纯 set 是瞬时赋值，重放它在成片里看不出区别，"
                 "只会让门禁算的落点和渲染端用的落点分家")
-        if step.get("yoyo") and not step.get("repeat"):
-            raise ValueError(
-                f"{where} 写了 yoyo 但 repeat 缺省或 0——只演一遍时 GSAP 根本不会回头。"
-                "要来回就写 repeat:1（奇数遍收尾在 to，偶数遍收尾回起点）")
+        # repeat / yoyo：这一拍演完再演几遍、以及来回（GSAP 的同名补间变量）。
+        # 判据在 _validate_repeat_yoyo（与 canvas_kit 的 spec 共用一份）。
+        # 排在"有没有可重放的补间"之后：那条说的是这一拍根本不会演，比"yoyo 缺
+        # repeat"更靠近病因，先说它。
+        _validate_repeat_yoyo(step, where)
         # morph 的形变是生成期采样成离散关键帧的：无限循环没有"最后一帧"可采，采样器只能
         # 猜。补间/count/type 走运行期，GSAP 按时间解析求值，无限循环反而是确定的。
         if morph is not None and step.get("repeat", 0) < 0:

@@ -331,6 +331,33 @@ class ElasticArgs(unittest.TestCase):
                 E.validate_ease(spec, "ease")
             self.assertIn("周期", str(cm.exception))
 
+    def test_nan_and_infinite_overshoot_rejected(self):
+        """back 的过冲量：NaN 也要拒——`float("NaN")` 解析得出来，只查 isinf 会漏。
+
+        漏过去时整条曲线是 nan，morph 采样产出字面 d 串 `Mnan nan Lnan nan`，
+        浏览器整条丢弃形变，全程零报错。
+        """
+        for spec in ("back.out(NaN)", "back.in(NaN)", "back.inOut(nan)",
+                     "back.out(Infinity)"):
+            with self.assertRaises(ValueError, msg=spec) as cm:
+                E.validate_ease(spec, "ease")
+            self.assertIn("有限", str(cm.exception))
+
+    def test_curve_falls_back_instead_of_raising_on_bad_args(self):
+        """curve() 对绕过契约层的坏参数只能兜底，不能把整页渲染崩在取整/取值上。
+
+        steps 的档数非有限时 `math.floor` 抛 "cannot convert float NaN to integer"；
+        back 的过冲量非有限时整条返回 nan（silent 比崩更难查）。两条都回落到
+        "算得出的那条曲线"，与本函数 docstring 的承诺一致。
+        """
+        for spec in ("steps(NaN)", "steps(Infinity)"):
+            f = E.curve(spec, "none")
+            self.assertEqual([round(f(t), 6) for t in (0.0, 0.5, 1.0)],
+                             [0.0, 0.5, 1.0], spec)
+        for spec in ("back.out(NaN)", "back.out(Infinity)"):
+            f = E.curve(spec, "none")
+            self.assertTrue(all(v == v for v in (f(0.0), f(0.5), f(1.0))), spec)
+
     def test_legal_amplitude_below_one_still_allowed(self):
         # 振幅 <1 是 GSAP 的合法写法（钳到 1、周期按 1/振幅 放大），别误伤
         for spec in ("elastic.out(0.6,0.18)", "elastic.in(0.5,0.4)",

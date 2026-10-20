@@ -738,8 +738,13 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
     # 线条端点落点（warn）：容差按画幅短边 4‰，至少 2 单位。
     # 草稿档整条跳过：它是 craft 品味（"线要结束在某处"），探索期的草图满屏
     # 悬线，逐条点名只会把人从"试构图"拽回"擦线头"。定稿自查再回来。
-    if w and h and not draft:
-        tol = max(END_TOL_MIN, min(w, h) * END_TOL_FRAC)
+    # 容差必须按 **viewBox** 的短边算（vb_w/vb_h），不能按固有像素（w/h）：
+    # segs/dots/rings/discs/boxes 全是 viewBox 系里的坐标，缩放写法
+    # （width="1440" height="1920" viewBox="0 0 720 960"）下拿像素短边会把容差
+    # 放大一倍，[真实容差, 放大后容差) 区间里的悬空端点静默漏报；反向缩放则误报。
+    # 同文件"图元越界 / 文字越界 / 空带占比"都按 vb 量，这里没有第二种坐标系。
+    if (vb_w or w) and (vb_h or h) and not draft:
+        tol = max(END_TOL_MIN, min(vb_w or w, vb_h or h) * END_TOL_FRAC)
         warns.extend(_check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol))
 
     if min_eff is not None and min_eff < MIN_READABLE_FONT_PX:

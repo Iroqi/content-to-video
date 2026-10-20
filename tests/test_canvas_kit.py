@@ -157,6 +157,26 @@ class Gate(unittest.TestCase):
             K.render_svg(K.validate_spec(spec))
         self.assertIn("铺满了整页", str(cm.exception))
 
+    def test_invisible_full_bleed_panel_is_allowed(self):
+        """铺满整页但**不盖任何东西**的 panel 不该被拒：`fill:"none"` / `opacity:0`
+        挡不住模板那三层背景，"铺满"这条警告的病因（盖死背景）根本不成立。
+
+        判据此前只比几何，于是脚手架拒了一份 check_svg 本来会放行的合法 spec
+        ——同一份几何两道门两个答案，而作者看不出自己错在"少写了个 fill"。
+        """
+        w, h = get_canvas("portrait")
+        for extra in ({"fill": "none"}, {"opacity": 0}):
+            with self.subTest(extra=extra):
+                spec = {"elements": [dict({"kind": "panel", "x": 0, "y": 0,
+                                           "w": w, "h": h}, **extra)]}
+                K.render_svg(K.validate_spec(spec))   # 不抛即可
+        # 真会盖住背景的照旧拦下
+        spec = {"elements": [{"kind": "panel", "x": 0, "y": 0, "w": w, "h": h,
+                              "opacity": 0.5}]}
+        with self.assertRaises(ValueError) as cm:
+            K.render_svg(K.validate_spec(spec))
+        self.assertIn("铺满了整页", str(cm.exception))
+
     def test_sparse_page_fails_the_gate_with_the_empty_band(self):
         """只有上 1/4 有东西的页就是"暂停是空页"的形状：脚手架要拦，不能默默交出去。"""
         spec = {"elements": [

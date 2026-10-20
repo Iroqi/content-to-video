@@ -125,13 +125,6 @@ def arc_accent_indices(count):
     return [k * (end - 1) / last for k in range(count)]
 
 
-def _hex_channels(hex_color):
-    h = hex_color.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
 def arc_accent(pos, palette=None):
     """把弧上位置换成实际颜色：整档取原色，中间位置按比例混两支近邻色。
 
@@ -147,8 +140,8 @@ def arc_accent(pos, palette=None):
     hi = pal[_ARC_CYCLE[lo + 1]]
     if frac >= 0.98:
         return hi
-    a = _hex_channels(pal[_ARC_CYCLE[lo]])
-    b = _hex_channels(hi)
+    a = _hex_rgb_bytes(pal[_ARC_CYCLE[lo]])
+    b = _hex_rgb_bytes(hi)
     return "#" + "".join(
         "%02x" % int(round(a[i] + (b[i] - a[i]) * frac)) for i in range(3))
 

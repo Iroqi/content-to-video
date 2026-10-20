@@ -211,19 +211,21 @@ class ManifestValidation(unittest.TestCase):
     def test_manifest_has_no_opening_animation_key(self):
         """开屏页默认强绑定：manifest 不再透传 opening_animation 键。
 
-        build_parts 不再把 source 的旧键带进 manifest；即使手写 manifest 硬塞，
-        契约层按未知字段拦（报错信息含键名，且不再有专属的"只属于开屏"分支）。
+        build_parts 不再把 source 的旧键带进 manifest；手写 manifest 硬塞时，
+        契约层给的是**迁移指引**而不是泛化的"未知字段"——与写稿入口
+        （_source_schema）同一条口径：那条指引必须排在 _reject_unknown_keys
+        之前，否则 reject 先报"未知字段"，作者永远拿不到"该删这个键"的说明。
         """
         m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
         opening = next(s for s in m["segments"] if s["id"] == "opening")
         self.assertNotIn("opening_animation", opening)
         MAN.validate_timing_manifest(m)
-        # 手写 manifest 硬塞旧键：任何段都按未知字段拦
+        # 手写 manifest 硬塞旧键：任何段都要拿到那句迁移指引
         for sid in ("opening", "seg-a", "closing"):
             with self.subTest(sid=sid):
                 m2 = H.make_manifest()
                 self._seg(m2, sid)["opening_animation"] = "apple"
-                bad(MAN.validate_timing_manifest, m2, contains="opening_animation")
+                bad(MAN.validate_timing_manifest, m2, contains="默认强绑定")
         # 旧值非法也一样走未知字段（值校验分支已随键一起移除）
         m3 = H.make_manifest()
         self._seg(m3, "opening")["opening_animation"] = "glow"

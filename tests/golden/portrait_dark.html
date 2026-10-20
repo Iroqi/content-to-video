@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1080,height=1440">
+<script src="vendor/gsap.min.js"></script>
+<style>
+/* ── Content-to-Video composition stylesheet ──────────────────────────────
+   本文件是版式的**静态骨架**：结构与选择器写死，数值一律走 var(--ctv-*)。
+   变量由 html_renderer.py 从 _template.py 内联的版式数据派生后注入本文件末尾的
+   :root 块。
+   注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
+   字符串也会被替换（会把整份变量表塞进注释里）。
+   纪律：**版式数值**（随画幅/主题取不同值的几何与字号）在本文件内不得
+   硬编码，一律走 --ctv-* 令牌、改版式只改 _template.py 内联的版式数据；
+   与画幅无关、单值即终态的结构常数（1px 描边、em 相对字距、字重、mask
+   渐隐百分比等）允许直接写在本文件里——给它们各配一枚令牌只会把一份
+   JSON 变成两份。
+
+   双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
+   layout.vertical / layout.landscape 块）。画面结构与三档版式行为以
+   references/rendering.md「画面结构」为准，这里不复述。
+   ────────────────────────────────────────────────────────────────────── */
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:var(--ctv-w);height:var(--ctv-h);overflow:hidden;background:var(--ctv-bg-gradient)}
+/* local() 顺序即优先级：macOS/Windows 原名在前，Linux 沙箱只有
+   "Noto Sans CJK SC/JP"（"Noto Sans SC" 会回落到无 CJK 字形的
+   NotoSans-Regular.ttf），兜底名必须显式列出。 */
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei"),local("MicrosoftYaHei"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"PingFang SC";src:local("PingFang SC"),local("PingFangSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"Noto Sans SC";src:local("Noto Sans SC"),local("NotoSansSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+/* 上面三枚是"字体栈里出现过的名字都要有 @font-face"：hyperframes 的
+   StaticGuard 会把 font-family 里每个未在 @font-face / 自动解析字体表
+   中出现的家族名判成 error（font_family_without_font_face），判定基于
+   名字而不是解析结果——所以兜底名自身也必须声明，src 只用 local()，
+   本机没有该字体时依旧按字体栈正常回落。 */
+@font-face{font-family:"Noto Sans CJK SC";src:local("Noto Sans CJK SC"),local("NotoSansCJKsc-Regular")}
+@font-face{font-family:"Noto Sans CJK JP";src:local("Noto Sans CJK JP"),local("NotoSansCJKjp-Regular")}
+body{font-family:var(--ctv-font-family)}
+
+.bg{position:absolute;inset:0;background:var(--ctv-bg-gradient)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(var(--ctv-grid-color) 1px,transparent 1px),linear-gradient(90deg,var(--ctv-grid-color) 1px,transparent 1px);background-size:var(--ctv-grid-size) var(--ctv-grid-size);-webkit-mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%);mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%)}
+
+/* 段落氛围光：每段把自己的 accent 稀释成一团大半径径向光垫在内容之下
+   （z-index:-1 + isolation 把它压在卡片内容之上、却仍在页面背景/网格之上），
+   让不同段落各有色彩氛围，破除整片米白的单调。
+   isolation 写在无属性限定的 .seg-card 上：两画幅都要它，且 hyperframes 的
+   negative_z_index 检查只看静态声明、不解析 [data-aspect] 作用域，写成属性
+   选择器会被误报成"祖先没有层叠上下文"。
+   几何（椭圆半轴、圆心、浓度、截止点）随画幅变——竖屏那团居中且宽大于高，
+   横屏偏媒体区中心且高大于宽——所以全部走 var(--ctv-amb-*)，值在
+   _template.py 的 layout.<画幅>.ambience。**别在这里写死第二份**：改模板
+   不会带着 CSS 里的字面量走。 */
+.seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-cx) var(--ctv-amb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 纯文字 agenda 卡（opening/closing，与 .seg-card 同时挂在同一元素上）把圆心从媒体
+   区拨回文字重心：横屏是 50% 45%，竖屏本来就是 50% 50%、与 .seg-card 相同。
+   椭圆半轴/浓度/截止点两画幅共用，只圆心有第二种取值。注意这条**不带画幅限定**，
+   两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
+   把开场/收尾那两页的氛围光挪位。 */
+.agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 苹果风开场（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
+   模拟苹果发布会的"产品光"。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
+   不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
+   交给 GSAP 编排（淡入 + repeat:-1 呼吸），CSS 只负责形状与颜色。 */
+.apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
+/* 苹果开场副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
+   副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
+   冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
+.apple-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
+/* 苹果开场标题的逐字 span（渲染器只在 apple 开场拆字）：inline-block 让 GSAP
+   的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
+   与折行；静态开场标题是纯文本、不命中这里。 */
+.t-ch{display:inline-block;white-space:pre}
+/* 苹果开场 kicker 的逐字 span（同 .t-ch 的由来：transform 要生效 + 空格
+   不折叠）。与 .t-ch 分开两类：kicker 的字距舞 animate **每一个** .k-ch
+   （含空格——GSAP 函数式值按目标序号求值，序号即字符序号），标题那支
+   stagger 舞却要 :not(.t-sp) 排除空格，一个选择器两种语义会互相咬。 */
+.k-ch{display:inline-block;white-space:pre}
+.seg-card{position:absolute;inset:0;isolation:isolate}
+/* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
+   页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
+   只露出揭示边以下的部分（GSAP 补间 y，自身不得声明 transform）；颜色走卡上
+   已有的 --seg-accent，所以看起来是"下一页的颜色从进度条里渗出来"；两端渐隐、
+   中心提亮成一枚"笔尖"，是硬条读不出笔触、必须有亮头才有"书写"感；辉光下偏
+   （y 偏移）让光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。 */
+.reveal-line{position:absolute;left:0;right:0;top:0;background:linear-gradient(90deg,transparent 0%,var(--seg-accent) 16%,color-mix(in srgb,var(--seg-accent) 55%,#fff) 50%,var(--seg-accent) 84%,transparent 100%);box-shadow:0 12px 30px 5px color-mix(in srgb,var(--seg-accent) 55%,transparent);pointer-events:none}
+/* 被揭旧页的底缘暗边（style:"line" 且该页会被下一页犁起才生成）：绕底边轴
+   掀起的纸在折页线附近最暗；opacity 由 peel 同窗补间拉起（_peel_shade_html）。 */
+.peel-shade{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.5),transparent);opacity:0;pointer-events:none}
+/* 卡内自带 .bg/.grid 背景层（几何沿用 root 那两条规则，逐像素对齐）：卡片由此
+   成为不透明图层，clip-path 擦除换页时新旧内容不会叠影。z-index:-2 压在氛围光
+   (::after,-1) 之下；负 z 的安全性与上面 isolation 的 lint 口径同判。 */
+.seg-card>.bg,.seg-card>.grid{z-index:-2}
+.seg-title-wrap{position:absolute}
+.seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
+.tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em;padding-left:var(--ctv-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+/* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）：
+   两画幅同款故无属性限定，宽度走 --ctv-tagline-tick。开屏/结尾已是纯文字
+   agenda 卡，不再出现 tagline。 */
+.tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
+.seg-progress{position:absolute;bottom:0;left:0;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
+/* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
+   不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。
+   轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
+   只会多出一次同步维护，没有第二种取值可表达。 */
+.seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+/* 槽位不铺底色，素材直接落在页面背景上。
+   外发光从祖先 seg-card 注入的 --seg-accent 派生（半径走 --ctv-img-glow），
+   两画幅同款、三个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
+.seg-image{position:absolute;overflow:hidden;box-shadow:0 0 var(--ctv-img-glow) color-mix(in srgb,var(--seg-accent) 25%,transparent)}
+/* img 与 video 共用同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
+   <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，右边留空、
+   下边被裁）。这条是**唯一**来源：inline style 会盖过一切非 important 选择器，
+   所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
+   三处并存时改一处不生效。 */
+.seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 导演档的内联 SVG（.svg-inline）：铺满槽位，和 <img>+object-fit:cover 同款。
+   cover 语义由 SVG 根节点自带的 preserveAspectRatio="xMidYMid slice" 承担（净化时
+   写入，见 _svg_sanitize），这里只负责把它撑到 100%×100%；z-index 与 img 一致，
+   让内描边 ::after 照常收边（bare-media 时又被撤掉，与 <img> SVG 同路径）。 */
+.seg-image.svg-inline>svg{position:relative;z-index:1;width:100%;height:100%;display:block}
+/* 配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边），SVG 配图
+   除外（见下面 bare-media）。两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
+.seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+/* 无框媒体（bare-media = SVG 配图）：撤掉上面那道内描边和外发光。画布透明时
+   这两层是唯一还留着"矩形槽位"证据的东西，留着就是给一片空白画框。圆角刻意
+   保留：没有底色和描边之后它只裁到图自身的留白，且省掉一条与 [data-aspect]
+   圆角规则打架的选择器。 */
+.seg-image.bare-media{box-shadow:none}
+.bare-media::after{display:none}
+
+/* ── Vertical（竖屏 3:4，1080x1440）大标题 + 图片 + 句子流 ──────────────
+   仅在 #root[data-aspect="vertical"] 时命中。portrait（3:4）复用本块全部规则。
+   竖屏只有 verse 模式。结构：固定标题区（1 行优先、最多 2 行）→ 固定 4:3 画布
+   → 固定在底部的句子流。标题不参与画布与 verse 的定位。
+   侧边距统一由 --ctv-v-pad-left 控制（标题/画布/句子流对齐同一轴线）。
+   注意：本块全部是绝对定位——绝对定位子元素的包含块是 padding box，
+   segCard 的 padding 不会内缩它们，轴线必须显式写成 left/right 值；
+   同理百分比宽度按整屏 1080 解析而非内容盒宽，画布宽必须用变量
+   --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。
+   本块刻意**不用 !important**：每条选择器都比 base 块多一个属性选择器
+   （0,2,0 > 0,1,0），层叠自然压过 base；渲染器写在同名元素上的 inline
+   style 只带 font-size / color / text-shadow / opacity，
+   与本块声明的属性零重叠，没有需要靠 importance 才能赢的对手。 */
+[data-aspect="vertical"] .seg-card{inset:0;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)}
+[data-aspect="vertical"] .seg-title-wrap{left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);top:var(--ctv-v-title-top);height:var(--ctv-v-title-area);padding:0;overflow:hidden;text-align:left}
+[data-aspect="vertical"] .seg-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-v-title-lines);overflow:hidden;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)}
+/* 横向居中走绝对定位的左右 auto 外边距，**不走 transform:translateX(-50%)**：
+   GSAP 的入场补间往同一个元素写 inline transform，CSS 的 transform 与它互斥，
+   写了就得靠 !important 压住补间、连带把 y 滑入整条吃掉（竖屏配图只剩淡入，
+   横屏却有滑入）。用 auto 外边距居中，transform 归 GSAP 独占，两画幅动效一致。 */
+[data-aspect="vertical"] .seg-image{top:var(--ctv-v-img-top);left:0;right:0;margin:0 auto;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2);height:var(--ctv-v-img-height);border-radius:var(--ctv-v-img-radius)}
+
+/* ── verse 句子流（两画幅统一的双行窗口滚动字幕）────────────────────────
+   竖屏 = 固定标题区/固定 4:3 画布 + 钉底句子流：窗口高由 vertical.verse.windowHeight
+   控制，DOM 渲染在 seg-card 尾部、绝对定位钉在内容区底部（见下面的 vertical 覆盖）。
+   横屏 = 左栏内的文档流窗口（base 规则相对定位即命中，无需额外覆盖）。
+   开屏/结尾为 agenda 卡：其 .verse 收在 .agenda-col 列尾随流锚底（豁免规则在
+   agenda 块）。
+   clip 上下各留 verse.clipPad 内边距且滚动锚点同步同值：首句/尾句完整落在
+   mask 渐隐区（上下各 14%）之外，不被边缘虚化。不变量：
+   verse.clipPad ≥ 14% × verse.windowHeight（横屏 260→36.4、竖屏 280→39.2，
+   两画幅 clipPad 均为 40）。 */
+.verse{position:relative;width:100%;height:var(--ctv-verse-h);overflow:hidden;
+  -webkit-mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent);
+  mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent)}
+/* clip 必须定位：verse-line.offsetTop 需要相对 clip 而不是绝对定位的
+   seg-card（否则首行 offsetTop 巨大，滚动公式恒被钳到段落尾部——
+   第一句永远在窗口外） */
+/* 这里刻意**不写 transition**：成片是逐帧 seek 时间线截出来的，每一帧的
+   画面必须是"时间线时刻"的纯函数。CSS 过渡按墙上时钟走、不受 GSAP 驱动，
+   实测（seek 到 12.0s 后立即读取计算样式）状态停在过渡起点：
+   inline `translateY(-220px)` → computed `matrix(1,0,0,1,0,0)`、active 行
+   opacity 0.62（该是 1）、颜色还是主题色而非 accent，6 条 CSSTransition
+   全部 `playState:running, currentTime:0`。表现就是句子流不跟着滚动、
+   高亮不上色——而且 bleed 多少取决于抓取每帧花多久，同一条稿件两次渲染
+   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。 */
+.verse-clip{position:relative;padding:var(--ctv-verse-clip) 0}
+/* 句子流的**暗垫**：竖屏句子流钉在页底，正压在氛围光最亮的一带，网格线在字
+   后面读起来像托着一层灰底。垫层从透明渐变到 90% 页面底色，边缘看不见，只把
+   字托起来（页底纹理因此正好在字幕上边界处淡出，读作"字幕区是干净的"）。
+   横屏不垫（--ctv-verse-shade: none）：文字栏是定宽弹性列，整块宽垫垂中时读成
+   "这里垫了一块悬浮的板"（成片实测，字号越大的标题区越明显）；横屏底色本就在
+   #060709 附近很干净，没有要垫的东西。开关走模板，不在这里按画幅分叉。
+   必须让句子流自己是层叠上下文（isolation）：垫层要落在"这一行字之后、卡片
+   背景之前"，只有负 z-index 能做到，而负 z 元素会掉进**最近祖先**层叠上下文
+   的最底层——卡片本身就是（.seg-card 上的 isolation），不隔离的话垫层会钻到
+   .bg/.grid 下面，画面上一像素都看不见（lab 实测：pixel 完全不变）。
+   层叠上下文不动布局，与上面那个 overflow 裁切窗口互不影响。
+   几何走 --ctv-verse-line（行内边距）而不是写死 px：垫片要比文字盒宽出一点，
+   但不能宽到顶到页面边缘。右缘单独一个变量 --ctv-verse-pad-right：竖屏是页宽
+   一整条（左右都出血），横屏收到 0（只垫到句子流行尾——宽垫在左栏垂中的时候
+   整块会读成一块悬浮暗块，见 references/rendering.md「画面结构」）。 */
+.verse{isolation:isolate}
+.verse::before{content:"";display:var(--ctv-verse-shade,block);position:absolute;left:calc(-1 * var(--ctv-verse-line) * 2);right:var(--ctv-verse-pad-right);bottom:calc(-1 * var(--ctv-verse-line) * 5);height:calc(var(--ctv-verse-h) * 0.8);z-index:-1;pointer-events:none;background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--ctv-bg-color) 74%,transparent) 58%,color-mix(in srgb,var(--ctv-bg-color) 90%,transparent))}
+/* active/past 与 base 的 .verse-line 是 0,2,0 对 0,1,0，层叠自然压过，不用
+   !important；运行时只往行上写 inline color，不写 opacity，没有对手。
+   `--ctv-relay` 是换句接力（运行时见 runtime.js 的 verseRelay）：只在换句后的
+   一小段行程里被写成 0.35→1 的实数，整段结束后运行时把它移除，这里的 `1`
+   就是"没在接力"的常态值。opacity 用 min() 取两者较小者：active 行的 1.0 与
+   接力值取小 = 接力值；非活动行的 .62 与接力值取小 = 更暗的那个，两种状态
+   都不会被对方意外覆盖。 */
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+.verse-line.active{--ctv-line-op:1}
+/* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
+   的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
+.verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
+.verse-line.past{--ctv-line-op:.45}
+/* 词级强调（karaoke，运行时见 runtime.js 的 verseEmUpdate）──────────────────
+   当前句已经"念到哪儿"，用一层**真实元素**的覆盖物画出来。
+   为什么要覆盖物、不直接把正文切成两段 span：切成两个含文字的叶子，Layout 门禁
+   会逐字量重叠——滚出窗口的行 rect 仍在原位，静态内容段成批报 text_occluded
+   （proseCoverageFloor 也救不了：包成 span 之后它不再是散文单元）。所以正文永远
+   保持**一个裸文本节点**，强调是叠在它上面的一层附加物。
+
+   这一层的不变量只有一条，其余全由它推出来：
+   **覆盖层与正文逐字重合。**
+
+   于是覆盖层装的是**整句原文**（生成期写死，见 html_renderer._ved_layer），与
+   正文共用同一套行盒、同一份字体声明，折行位置和每个字的落点由浏览器算出同一份
+   答案。运行时只把已经念过的字 alpha 抹成 0（verseVedGlyphs），未念的字留 0.62
+   压暗。没有 clip-path、没有 em 书签、没有"已念段有多宽"——三样都是重影源。
+
+   走过两条弯路，都记在这里免得再走一遍：
+   · 覆盖层只写 slice(k)（"还没念到的那截"）自己从头起排：单行看不出问题，跨行
+     立刻塌——前 k 个字被拿掉，折行点全部前移，第 j 个字只有第一个能对齐正文的
+     第 k+j 个字，之后按缺掉的前缀宽度逐渐错开（实测 13 字句第 8 字起差出半个字，
+     屏幕上是一格叠一格）。
+   · clip-path 裁"k 个 em"：假设被裁掉的部分恰好占 k 个等宽格，中英混排、标点、
+     字母都不成立，误差随 k 累积。而且 Chrome 144 上伪元素 + content:attr() +
+     clip-path 三者同用会漂移（左缘落后几十像素、随机跳动、有时整层不再被裁），
+     所以还得用真元素。
+
+   几何上的两处讲究：
+   · 不用 `inset:0` 定位：inset 的参考盒是**内边距边框盒**，文字画在内容盒里，
+     行有 padding 时整层会被推下一个内边距，与正文错开半行。
+   · 不用 `left:0;right:0` 拉满行宽：那会把文字原点挪到行盒左缘，而正文首字可能
+     因为说话人标签 / 首行缩进往右让开一段。负边距把盒子铺到**行盒**（含内边距）
+     的左右缘，再用 padding 把内容盒缩回去——`--ctv-ved-dx` 是运行时实测的那段
+     行内前缀宽度（只在带说话人标签的首句上非零），加上它，文字原点与正文首字
+     严格相等，横向一个像素都不用猜。
+   · 纵向同理：上下各让出一个行内边距再补回来，行内边距一变自动跟随。
+   · 字体逐项对齐 .verse-line 的声明，不用 `font:inherit`（简写会连 font-weight
+     一起拉过来，任何一处不一致都会让同一句话以两种粗细叠着画）。
+   · 未念段必须是**实色**、不能靠 opacity：活动行的正文是全句 accent 色，覆盖层
+     用 `opacity:.62` 的浅色去盖，合成结果仍比底色亮得多——实测成片里整句看起来
+     仍然全亮，压暗完全失效（浏览器里读到的 opacity 数值都"对"，所以这个坑很隐蔽）。
+     改成不透明实色（`color-mix` 把文本色按 0.62 混到页面背景色上，与 .verse-line
+     base 档的观感一致），已念字 alpha 归 0 露出下面的 accent。
+   · 不写 transition：过渡会让高亮滞后于逐帧 seek 的时间轴。
+   · 三态辨识度靠 accent（已念/在念）与 past(0.45) 拉开。 */
+.verse-ved{position:absolute;top:0;left:0;right:0;margin:calc(-1 * var(--ctv-verse-line)) 0;padding:calc(var(--ctv-verse-line) * 2) 0 0 var(--ctv-ved-dx,0px);font-family:inherit;font-size:var(--ctv-sub-font);font-weight:600;letter-spacing:inherit;line-height:inherit;white-space:inherit;color:color-mix(in srgb,var(--ctv-text-color) 62%,var(--ctv-bg-color,#000));pointer-events:none;display:none}
+.verse-line.verse-ved-on .verse-ved{display:block}
+/* 对话段的说话人标签（只在轮次切换的首句行首出现，见 html_renderer._verse_html）。
+   它是字幕里的**元信息**，不是内容：字号比句子小一档、字重压到最重、颜色走
+   accent 的文本安全副本（--ctv-verse-who-color 由渲染器按段写在 .verse-clip 上，
+   这里不存第二份色值）。小字号 + 重字重是为了让它读作"抬头"而不是"正文的
+   前两个字"——只缩不重会跟正文糊在一起。
+   不写 vertical-align：inline 元素默认基线对齐，且它自身 line-height 继承的
+   数值（--ctv-verse-lh）× 更小的 font-size，算出来的行盒比 .verse-line 矮，
+   不会把行撑高、不推动滚动锚点。 */
+.verse-who{font-size:var(--ctv-verse-who-font);font-weight:800;color:var(--ctv-verse-who-color);margin-right:var(--ctv-verse-who-gap);white-space:nowrap}
+/* 竖屏钉底。不用 !important：本条 0,2,0 压过上面的 .verse（0,1,0）；
+   agenda 卡里的豁免由 .agenda-col .verse 用 importance 拿下（那两条选择器
+   打平，靠 importance 而非源序决胜，理由见该处注释）。 */
+[data-aspect="vertical"] .verse{position:absolute;left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);bottom:var(--ctv-v-verse-bottom);width:auto;height:var(--ctv-verse-h);margin:0}
+
+/* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
+   仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
+   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。 */
+[data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
+[data-aspect="landscape"] .seg-title-wrap{position:static}
+/* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
+   左栏是垂直居中的 flex 列，长标题按 text-wrap:balance 自由折行，长度守卫只
+   降字号（62→54→48）。因此 _template.py 的 landscape.title 里没有 maxLines，
+   竖屏那份才有——给横屏补一个没人读的行数键，只会骗下一个改版式的人。 */
+[data-aspect="landscape"] .seg-title{line-height:var(--ctv-l-title-lh);text-wrap:balance}
+/* 媒体卡四周留 96 白、垂直居中。内描边与进度条轨道走两画幅共用的无属性限定
+   规则（.seg-image::after / .seg-card::before），此处不再各写一份。 */
+[data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
+
+/* ── 整页画布（段落 layout: "canvas"，两画幅同一份）──────────────────────
+   配图就是这一页：槽位盒拉满全屏，槽位那两道装饰（1px 内描边 + 外发光）一并
+   撤掉——页面边缘就是画布边缘，再描一道等于给整块屏幕套相框。HTML 的标题层与
+   句子流层由渲染器**不生成**（不是藏起来），所以画布上没有任何覆盖物，也就不
+   需要遮罩层；文字对比度由画布自己负责（见 references/rendering.md）。
+   选择器用 [data-aspect] 抬到 0,3,0，与两条画幅各自的 .seg-image 定位规则
+   （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
+[data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
+[data-aspect] .seg-canvas .seg-image::after{display:none}
+/* 画布页的氛围光要比槽位那枚**大得多、软得多**：画布页不画满幅底板，主题渐变 + 网格 +
+   这团光就是它全部的景深来源。槽位那枚 58%×42% 的光斑放到整屏上只盖住中间一小块，
+   边缘仍是平的，而且它的椭圆边界在深色页底上看得出来——读作糊在主视觉后面的一块色斑而不是
+   打光。所以这里取近全屏的宽高、把中心略抬到主视觉一带、并把截止点推到 82% 让边界消失。
+   抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
+   网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
+[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
+/* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
+   的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
+   段进度整个盖掉。 */
+[data-aspect] .seg-canvas .seg-progress,[data-aspect] .seg-canvas::before{z-index:2}
+
+/* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
+   全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
+   吃留白——省出的空间用来抬进行数上限）、句子流锚底。几何差异
+   （inset/字号）全部由 --ctv-ag-* 令牌承载，renderer 对两画幅输出同一套结构。
+   横屏的 --ctv-ag-t(80) 刻意小于左右 --ctv-ag-x(96)：列顶再抬 16px，把整块空白
+   让给行列表，行数吃满时行距仍有余量（7 行预算正是靠"标题锁 1 行 + rowPad 8 /
+   titleMarginTop 12"的紧行距换出来的，实测题头+7 行+定高句子流不挤）。代价是那一页
+   的卡顶不与内容段的 96 轴线对齐——内容段走 --ctv-l-margin，不受这里影响。 */
+.agenda-col{position:absolute;left:var(--ctv-ag-x);right:var(--ctv-ag-x);top:var(--ctv-ag-t);bottom:var(--ctv-ag-b);display:flex;flex-direction:column;color:var(--ctv-text-color)}
+.agenda-kicker{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-kicker);font-weight:600;letter-spacing:.14em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* kicker 行尾的字距垫（渲染器给每一行 kicker 写 data-kern：开屏逐字拆、结尾
+   整行补间 x，两种形态都在"字距展开"这一拍上）。行的起点态比落位态宽
+   (n−1)×span，容器是 overflow:hidden——垫满 n×span，行宽就恒不变，最后一个字
+   不会在补间前半段被裁掉（只在那一页、收拢到一半才"长出来"，看不出是 bug）。
+   宽度走 --ctv-ag-kern-pad（模板 opening.apple.kicker 的 tracking−rest 乘
+   kickerSize），不在这里按画幅分叉。 */
+.agenda-kicker[data-kern]{padding-right:var(--ctv-ag-kern-pad)}
+.agenda-head .seg-title{margin-top:var(--ctv-ag-title-mt);line-height:var(--ctv-ag-title-lh);text-wrap:balance}
+/* agenda 正文列表既是生长块也是可牺牲块：行数没吃满 maxRows 预算时，
+   flex:1 把列里剩的高度收进来、交给 space-evenly 在行的上下与之间均摊
+   （行距和"题头→首行"的间距一起拉开，不再把空白全堆到句子流上方）；
+   行数超出时 min-height:0 解除 flex 默认不缩底、overflow:hidden 从尾部
+   裁行。行距下限由 .agenda-row 自身的 rowPad 提供，所以满额预算时
+   space-evenly 几乎无剩余可分，版式与改动前一致。
+   .agenda-tail（cta 尾行）与题头、句子流窗口都 flex-shrink:0，永远完整。 */
+.agenda{margin-top:var(--ctv-ag-list-mt);flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:space-evenly}
+.agenda-tail{flex-shrink:0}
+.agenda-row{display:flex;align-items:baseline;gap:var(--ctv-ag-gap);padding:var(--ctv-ag-row-pad) 4px;border-top:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-row:last-child{border-bottom:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-tail .agenda-row:first-child{border-top:0}
+.ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
+/* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
+   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。
+   行高 1.4 = Noto Sans CJK Bold 实测墨迹下限（hyperframes 判 clipped_text 的
+   阈值是墨迹 ≤ 行盒 − 2px，42px 时 1.32 仍超 3px、1.4 才装下）；微软雅黑在
+   此行高下同样有余量，且两画幅 maxRows 预算都放得下（横屏 40px×1.4 的 7 行
+   仍低于定高列预算）。1.25 时字形墨迹溢出被 overflow:hidden 裁掉。 */
+.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.4;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
+/* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
+   与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让
+   长旁白按句数无限撑高、吃掉整列预算，把行列表挤出屏幕；定高窗口 +
+   运行时滚动锚点保证句子流占位恒定，挤压只落在可收缩的正文列表上。
+   margin-top:auto 由句子流吸收列内剩余空间（题头/列表贴顶成块，留白
+   全部沉到列表与句子流之间），挤压时 auto 归零、无副作用。
+   这里的 !important 是**全表唯一承重的一处**：对手是句子流样式表里那条
+   竖屏钉底规则，两条选择器同为 0,2,0 打平，靠源序决胜就等于把正确性押在
+   那份样式表的注入位置上；用 importance 决胜与注入点无关。
+   对面的规则因此不再需要 !important。 */
+.agenda-col .verse{position:static!important;left:auto!important;right:auto!important;bottom:auto!important;width:100%!important;max-width:var(--ctv-ag-verse-w);margin:auto 0 0!important;flex-shrink:0}
+/* agenda 标题整体豁免竖屏内容段标题钳制（-webkit-box / line-clamp /
+   overflow:hidden / max-height 四件套）：agenda 卡是全高 flex 列、没有固定
+   标题区，单行大标题不需要行数钳制，挂着 overflow:hidden 反而会把雅黑字体
+   度量盒（≈1.32em）上下各约 9px 的溢出裁掉。豁免后长标题整段折行而非静默
+   截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。
+   不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
+[data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
+
+:root{
+  --ctv-w:1080px;--ctv-h:1440px;
+  --ctv-bg-gradient:linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%);
+  --ctv-bg-color:#060709;
+  --ctv-font-family:"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif;
+  --ctv-font-mono:ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
+  --ctv-grid-size:60px;--ctv-grid-color:rgba(170,185,190,0.10);
+  --ctv-text-color:#eef2ee;
+  --ctv-img-glow:40px;
+  --ctv-title-weight:900;
+  --ctv-title-lh:1.45;--ctv-title-tracking:-0.02em;
+  --ctv-tagline-font:32px;--ctv-tagline-mt:8px;
+  --ctv-tagline-lh:1.25;--ctv-tagline-weight:600;
+  --ctv-tagline-indent:16px;--ctv-tagline-tick:8px;
+  --ctv-prog-height:4px;
+  --ctv-sub-font:40px;
+  --ctv-verse-h:280px;--ctv-verse-clip:40px;
+  --ctv-verse-line:5px;--ctv-verse-lh:1.5;
+  --ctv-verse-pad-right:-10px;--ctv-verse-shade:block;
+  --ctv-verse-rule:0.12em;
+  --ctv-verse-who-font:28px;--ctv-verse-who-gap:12px;
+  --ctv-ag-x:72px;--ctv-ag-t:88px;--ctv-ag-b:96px;
+  --ctv-ag-title-lh:1.1;--ctv-ag-title-mt:18px;
+  --ctv-ag-kicker:24px;--ctv-ag-idx:30px;
+  --ctv-ag-kern-pad:3.36px;
+  --ctv-ag-idx-min:52px;--ctv-ag-name:42px;
+  --ctv-ag-dur:26px;--ctv-ag-gap:10px;
+  --ctv-ag-row-pad:20px;--ctv-ag-verse-w:936px;--ctv-ag-list-mt:16px;
+  --ctv-amb-rx:58%;--ctv-amb-ry:42%;
+  --ctv-amb-cx:50%;--ctv-amb-cy:50%;
+  --ctv-amb-alpha:12%;--ctv-amb-edge:78%;
+  --ctv-amb-agenda-cx:50%;--ctv-amb-agenda-cy:50%;
+  --ctv-camb-rx:135%;--ctv-camb-ry:85%;
+  --ctv-camb-cx:50%;--ctv-camb-cy:42%;
+  --ctv-camb-alpha:13%;--ctv-camb-edge:82%;
+  --ctv-v-pad-left:50px;
+  --ctv-v-title-top:80px;
+  --ctv-v-title-area:233.60px;--ctv-v-title-lines:2;
+  --ctv-v-img-w:980px;--ctv-v-img-ms:0px;
+  --ctv-v-img-top:325px;--ctv-v-img-height:735px;--ctv-v-img-radius:12px;
+  --ctv-v-verse-bottom:50px;
+}
+
+</style>
+</head>
+<body>
+<!-- 预览逻辑在独立的 templates/preview.js（生成 HTML 时原样复制到输出目录，
+     不走占位符装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
+     尖括号"字面量（会被当作脚本结束标签），否则 hyperframes 打包单文件
+     HTML 内联脚本时会在此处截断，导致页面报错。 -->
+<div id="root" data-composition-id="main" data-aspect="vertical" data-start="0" data-duration="14.00" data-width="1080" data-height="1440" data-fps="24">
+  <div class="bg"></div>
+  <div class="grid"></div>
+
+  <div id="opening" class="clip seg-card agenda-card" data-start="0.00" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="agenda-col" data-opening-anim="apple">
+    <div class="apple-halo" id="halo-opening"></div>
+    <div class="apple-glow" id="glow-opening"></div>
+      <div class="agenda-head"><div class="seg-title" id="title-opening" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40"><span class="t-ch">本</span><span class="t-ch">期</span><span class="t-ch">内</span><span class="t-ch">容</span></div></div>
+      <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">第一件事</span><span class="ag-dur">0:04</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span><span class="ag-dur">0:04</span></div></div>
+    
+    <div class="verse" id="verse-opening" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf" style="--ctv-verse-who-color:#2dd4bf"><div class="verse-line" data-i="0" data-t0="0.00" data-t1="2.00" data-layout-allow-overlap data-layout-allow-occlusion>大家好，今天聊两件事。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="大家好，今天聊两件事。"></div></div></div></div>
+    </div>
+    <div class="seg-progress" id="prog-opening" style="background:#2dd4bf;width:0"></div>
+      <div class="reveal-line" id="line-opening" style="height:6px"></div>
+    <div class="peel-shade" id="shade-opening" style="height:115px"></div>
+</div>
+  <div id="seg-a" class="clip seg-card" data-start="2.00" data-duration="5.20" data-accent="#ffd54f" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#ffd54f;--seg-accent-text:#ffd54f">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="seg-title-wrap">
+      <div class="seg-title" id="title-seg-a" style="font-size:64px;text-shadow:0 0 40px #ffd54f40">第一件事</div>
+      <div class="tagline" id="tag-seg-a" style="color:#ffefbc">背景</div>
+    </div>
+    <div class="seg-image bare-media" id="img-seg-a">
+      <img src="images/seg-a.svg" alt="">
+    </div>
+    <div class="seg-progress" id="prog-seg-a" style="background:#ffd54f;width:0"></div>
+    
+    <div class="verse" id="verse-seg-a" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#ffd54f" style="--ctv-verse-who-color:#ffd54f"><div class="verse-line" data-i="1" data-t0="2.40" data-t1="4.80" data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第一句。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="这是第一段的第一句。"></div></div><div class="verse-line" data-i="2" data-t0="4.80" data-t1="6.80" data-layout-allow-overlap data-layout-allow-occlusion>这是第一段的第二句，稍微长一点点。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="这是第一段的第二句，稍微长一点点。"></div></div></div></div>
+      <div class="reveal-line" id="line-seg-a" style="height:6px"></div>
+</div>
+  <div id="seg-b" class="clip seg-card seg-canvas" data-start="7.20" data-duration="4.80" data-accent="#f59e0b" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#f59e0b;--seg-accent-text:#f59e0b">
+    <div class="bg"></div>
+    <div class="grid"></div>
+
+    <div class="seg-image bare-media" id="img-seg-b">
+      <img src="images/seg-b.svg" alt="">
+    </div>
+    <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
+  </div>
+  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
+    <div class="bg"></div>
+    <div class="grid"></div>
+    <div class="agenda-col">
+      <div class="agenda-head"><div class="seg-title" id="title-closing" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">小结</div></div>
+      <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
+    
+    <div class="verse" id="verse-closing" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="verse-clip" data-accent="#2dd4bf" style="--ctv-verse-who-color:#2dd4bf"><div class="verse-line" data-i="5" data-t0="12.00" data-t1="14.00" data-layout-allow-overlap data-layout-allow-occlusion>谢谢观看，下期再见。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="谢谢观看，下期再见。"></div></div></div></div>
+    </div>
+    <div class="seg-progress" id="prog-closing" style="background:#2dd4bf;width:0"></div>
+      <div class="reveal-line" id="line-closing" style="height:6px"></div>
+</div>
+
+
+  <audio id="main-audio" data-start="0" data-duration="14.00" data-track-index="10" src="audio/combined.wav"></audio>
+</div>
+
+<script>
+/* ── Composition 运行时：GSAP 时间线 + cue 数据 + verse 滚动 ──────────────
+   动态片段由 html_renderer.py 填进本文件的占位符：逐段补间（数据驱动，由
+   Python 生成）、逐句字幕 cue 数组（唯一时间轴来源）、verse 滚动锚点（= 当前
+   画幅的 verse.clipPad）。
+   注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
+   字符串也会被替换（会把整段代码塞进注释，甚至因早闭注释破坏语法）。
+   时钟只有一个：GSAP 时间线。渲染器逐帧 seek 触发 onUpdate。 */
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({paused:true});
+tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},0.00)
+  tl.fromTo("#line-opening",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},0.00)
+  tl.fromTo("#halo-opening",{opacity:0},{opacity:0.50,duration:1.20,ease:"sine.out"},0.00)
+  tl.to("#halo-opening",{opacity:0.32,duration:1.30,repeat:-1,yoyo:true,ease:"sine.inOut"},1.20)
+  tl.fromTo("#glow-opening",{opacity:0},{opacity:0.50,duration:2.20,ease:"sine.out"},0.30)
+  tl.to("#glow-opening",{x:90,y:60,scale:1.35,opacity:0.28,duration:2.60,repeat:-1,yoyo:true,ease:"sine.inOut"},2.50)
+  tl.from("#opening .t-ch:not(.t-sp)",{opacity:0,y:18,scale:1.04,filter:"blur(12px)",duration:0.55,stagger:0.04,ease:"power3.out"},0.00)
+  tl.from("#opening .agenda-row .ag-idx",{opacity:0,scale:1.25,filter:"blur(6px)",duration:0.45,stagger:0.12,ease:"power2.out"},0.15)
+  tl.from("#opening .agenda-row .ag-name",{opacity:0,x:10,duration:0.55,stagger:0.12,ease:"power2.out"},0.30)
+  tl.to("#prog-opening",{width:"100%",duration:2.00,ease:"none"},0.00)
+  tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},2.00)
+  tl.fromTo("#line-seg-a",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},2.00)
+  tl.to("#opening",{y:-432.0,rotation:-4,rotationX:12,transformOrigin:"50% 100%",transformPerspective:1000,duration:0.40,ease:"power2.in"},2.00)
+  tl.to("#shade-opening",{opacity:1,duration:0.40,ease:"power2.in"},2.00)
+  tl.from("#title-seg-a",{scale:0.92,y:22,duration:0.50,ease:"expo.out"},2.40)
+  tl.from("#tag-seg-a",{opacity:0,scale:0.952,y:13.2,duration:0.38,ease:"power2.out"},2.62)
+  tl.from("#img-seg-a",{opacity:0,y:40,duration:0.44,ease:"power2.out"},2.60)
+  tl.fromTo("#img-seg-a > img",{scale:1.06,x:0,y:13.23},{scale:1,x:0,y:0,duration:0.60,ease:"power2.out"},2.80)
+  tl.fromTo("#img-seg-a > img",{scale:1,x:0,y:0},{scale:1.0204,x:2.17,y:1.981,duration:3.40,ease:"none"},3.40)
+  tl.fromTo("#img-seg-a > img",{scale:1,x:0,y:0},{scale:1,x:0,y:0,duration:0.01,ease:"none"},3.39)
+  tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
+  tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.01,ease:"power2.inOut"},7.20)
+  tl.to("#prog-seg-b",{width:"100%",duration:4.40,ease:"none"},7.20)
+  tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},11.60)
+  tl.fromTo("#line-closing",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},11.60)
+  tl.from("#title-closing",{scale:1.0,y:34,duration:0.25,ease:"power2.out"},12.00)
+  tl.to("#prog-closing",{width:"100%",duration:2.00,ease:"none"},12.00)
+
+// Sentence-flow sync via onUpdate
+const cues = [
+{t:0.00,d:2.40,si:0,dt:[0.00,2.40]},
+    {t:2.40,d:2.40,si:1,dt:[2.40,4.80]},
+    {t:4.80,d:2.40,si:2,dt:[4.80,7.20]},
+    {t:7.20,d:2.40,si:3,dt:[7.20,9.60]},
+    {t:9.60,d:2.40,si:4,dt:[9.60,12.00]},
+    {t:12.00,d:2.00,si:5,dt:[12.00,14.00]}
+];
+
+// verse 句子流：静态行集合（两画幅内容段统一渲染 .verse，滚动/高亮
+// 机制两画幅共用同一份 cue 驱动；横屏 clipPad 与窗口高取各自模板值）。
+// 渲染器逐帧 seek 触发 onUpdate（非线性顺序），测量做懒缓存——布局值
+// （offsetTop/clientHeight/scrollHeight）不受 transform 与 seek 顺序影响、
+// 字体就绪后恒定，首帧测量一次即可；transform 赋绝对值幂等，乱序 seek
+// 重复执行结果一致（seek-safe）。
+const verses = Array.from(document.querySelectorAll(".verse"));
+const verseCache = new Map();
+const verseEmCache = new Map();
+// 覆盖层的"每个字该在哪儿"缓存：按行元素记，内容是逐字命中 span 的链表。
+// 字体就绪会改变折行，命中测试必须重来，所以和上面两份缓存一起清。
+const vedBg = new Map();
+// 字体异步加载会改变行高：就绪后清缓存，下次触发时用最终字形重测
+// （期间已设的 transform 按旧测量算，偏差在下一次 cue 切换即修正）
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => { verseCache.clear(); verseEmCache.clear(); vedBg.clear(); });
+}
+// 懒测量：布局值（offsetTop/clientHeight/scrollHeight）不受 transform 与 seek
+// 顺序影响、字体就绪后恒定，首帧测一次即可。
+const verseCacheOf = (v) => {
+  let c = verseCache.get(v);
+  if (c) return c;
+  const clip = v.querySelector(".verse-clip");
+  c = {clip: clip, accent: clip.getAttribute("data-accent") || "", winH: v.clientHeight, clipH: clip.scrollHeight, lines: []};
+  for (const ln of v.querySelectorAll(".verse-line")) {
+    c.lines.push({el: ln, top: ln.offsetTop,
+      t0: parseFloat(ln.getAttribute("data-t0")),
+      t1: parseFloat(ln.getAttribute("data-t1")),
+      // 有没有可强调的正文（生成期在行尾放的挂点，见 html_renderer._em_marker）
+      em: ln.querySelector(".verse-em") !== null,
+      // 覆盖层元素（生成期就位的空盒子，见 html_renderer._ved_layer）
+      ved: ln.querySelector(".verse-ved"),
+      lastK: -1});
+  }
+  verseCache.set(v, c);
+  return c;
+};
+// ── 词级强调（karaoke）：当前句按句内进度把文字切成"已念 / 未念"两段 ────
+// 已念段染该段 accent、未念段压暗（见 composition.css 的 .verse-ved）。
+//
+// 三条纪律，缺一条这条链路就不可复现或不可用：
+//   1. **纯函数**：第 k 个字只由「t、本句 t0/t1、实测字宽」决定——不看上一帧。
+//      渲染器逐帧 seek 时可能乱序跳（见上方 verseCache 的注释），所以这里不能
+//      有任何"当前亮到第几个"的状态累积。
+//   2. **按渲染宽度切，不按字符数**：中文一字一宽、中英混排时按字数切会让高亮
+//      领先或落后半句。字宽只在字号/容器宽变化时重测（字体就绪后清缓存）。
+//   3. **句内匀速是唯一假设**：TTS 只回整段音频、没有词级时间戳（与导演档
+//      `at` 的小数偏移同一条实测口径：平均偏 0.2 字、长句能到 1s 量级）。它只
+//      影响"哪几个字先亮"，不影响字幕切换时刻——切换仍由 cue 的 t/d 硬切。
+// 可强调的正文节点 = 行内**最后一个**文本节点（行首说话人标签是元素，正文在它
+// 之后；生成期保证正文是一个裸文本节点，见 html_renderer._em_marker）。
+const verseEmNode = (el) => {
+  for (let n = el.lastChild; n; n = n.previousSibling) {
+    if (n.nodeType === 3) return n;
+  }
+  return null;
+};
+const verseEmClip = (el) => {
+  const node = verseEmNode(el);
+  const len = node ? node.nodeValue.length : 0;
+  const key = el.clientWidth + "|" + len;
+  const hit = verseEmCache.get(el);
+  if (hit && hit.key === key) return hit;
+  const cut = {key: key, n: len, xs: null, total: len, text: node ? node.nodeValue : ""};
+  if (len > 0) {
+    const r = document.createRange();
+    const xs = [0];
+    for (let k = 1; k <= len; k++) {
+      r.setStart(node, k - 1);
+      r.setEnd(node, k);
+      xs.push(r.getBoundingClientRect().right);
+    }
+    // 折行会让右缘非单调（第二行回到左边）：逐字取累计最大值，折行处的字仍按
+    // 顺序点亮，进度退化成按字宽加权的均匀分布——仍是时间与宽度的纯函数。
+    const base = xs[0];
+    for (let k = 0; k <= len; k++) {
+      xs[k] -= base;
+      if (k > 0 && xs[k] < xs[k - 1]) xs[k] = xs[k - 1];
+    }
+    cut.xs = xs;
+    cut.total = Math.max(1, xs[len]);
+  }
+  cut.text = node ? node.nodeValue : "";
+  verseEmCache.set(el, cut);
+  return cut;
+};
+// 覆盖层的横向原点：它的盒子铺满**行盒**（负边距抵消行内边距，见 composition.css），
+// 所以文字原点在行的左缘，而正文首字可能因为说话人标签 / 首行缩进往右让开一段。
+// 只在覆盖层**首次上屏前**量一次，写成 px padding（--ctv-ved-dx），此后每帧零成本；
+// 字体就绪会清 verseEmCache，那时才允许重量（L.vedDx === undefined 即未量）。
+const verseVedOrigin = (L) => {
+  if (L.vedDx !== undefined) return L;
+  const node = verseEmNode(L.el);
+  L.vedDx = 0;
+  if (node && node.nodeValue.length) {
+    const rg = document.createRange();
+    rg.setStart(node, 0);
+    rg.setEnd(node, 1);
+    const dx = rg.getBoundingClientRect().left - L.el.getBoundingClientRect().left;
+    if (isFinite(dx) && dx > 0.5) L.vedDx = Math.round(dx * 10) / 10;
+  }
+  if (L.ved) L.ved.style.setProperty("--ctv-ved-dx", L.vedDx + "px");
+  return L;
+};
+// ── 覆盖层写什么：**整句原文，逐字上 alpha** ───────────────────────────────
+// 覆盖层必须与正文**逐字重合**，否则就是重影。能保证重合的只有一件事：让它装的
+// 字和正文一模一样、走的行盒一模一样——于是折行位置、缩进、字距全部由浏览器算出
+// 同一份答案，一个像素都不用换算。
+//
+// 反面教材（别再走回头路）：写 slice(k)「还没念到的那截」，让它自己从头起排。
+// 单行时不缩进的句子看起来没问题，一旦跨行就塌：前 k 个字被拿掉，折行点全部前移，
+// 覆盖层第 j 个字与正文第 k+j 个字只对齐第一个，之后按"缺掉的前缀宽度"逐渐错开
+// （实测 13 字句的第 8 字起差出半个字，同一句里两个字叠着画）。
+// "裁掉 k 个 em"同理：它假设被裁掉的部分恰好占 k 个等宽格，中英混排、标点、字母
+// 都不成立，误差随 k 累积。
+//
+// 所以：覆盖层整句写满，已经念过的字给 alpha 0（彻底不画，不会与正文的 accent 色
+// 抢同一格），还没念到的字给 dim（压暗前缀）。无 clip-path、无 em 书签、无原点换算
+// ——这三样全是重影的来源，一并删掉。
+//
+// 逐字用 <span> 包起来只在覆盖层里发生：它是 aria-hidden、不参与布局的附加物，
+// Layout 门禁只看正文的裸文本节点，不受影响（正文必须保持裸文本的原因见
+// composition.css）。缓存 span 列表，每帧只改 style.opacity。
+//
+// 覆盖层是**实色**（文本色按 0.62 混到底色上，见 composition.css），不是半透明：
+// 活动行的正文整句都是 accent，半透明浅色压不住它。所以这里的 alpha 只有两档：
+// 已念 0（彻底不画，露出正文的 accent）、未念 1（实色盖住 accent，观感等于 base 档）。
+const verseVedLit = "0";
+const verseVedDim = "1";
+const verseVedGlyphs = (L) => {
+  const text = L.ved ? (L.ved.getAttribute("data-text") || "") : "";
+  if (L.vedSpans && L.vedText === text) return L.vedSpans;
+  L.vedText = text;
+  L.vedSpans = [];
+  if (L.ved) {
+    L.ved.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (const ch of text) {
+      const sp = document.createElement("span");
+      sp.textContent = ch;
+      frag.appendChild(sp);
+      L.vedSpans.push(sp);
+    }
+    L.ved.appendChild(frag);
+  }
+  return L.vedSpans;
+};
+// 只改"刚刚跨过"的那几个字：k 每帧只前进零点几个字，全量刷会让样式改写量随句长
+// 线性增长。L.vedDone 记已经处理到第几个字（每句 reset，仍是纯函数派生量）。
+const verseVedPaint = (L, k) => {
+  const spans = verseVedGlyphs(L);
+  const from = Math.min(L.vedDone, k);
+  const to = Math.max(L.vedDone, k);
+  for (let i = from; i < to && i < spans.length; i++) {
+    spans[i].style.opacity = i < k ? "0" : verseVedDim;
+  }
+  L.vedDone = k;
+};
+// 覆盖层压暗的是"还没念到的字"，而**字在屏幕上的位置**由正文决定，不由覆盖层的
+// 字符序号决定——一条字幕句可能被拆成多行 .verse-line 渲染（生成期的分行），
+// 覆盖层里的第 j 个字与正文第 j 个字不一定在同一行上。所以映射按**像素**建：
+// 正文里每个字的中心点若落在覆盖层某个字的盒子里，这两个字就是同一个字。
+//
+// 映射只测一次（字体就绪后随 vedBg 清空），存成"正文序号 → 覆盖层序号"的数组。
+// 逐字测一次 range 是 O(n)，只在上屏首帧付；之后每帧只做 O(n) 的查表。
+const verseVedMap = (L) => {
+  const cached = vedBg.get(L.el);
+  if (cached) return cached;
+  const node = verseEmNode(L.el);
+  const spans = verseVedGlyphs(L);
+  const map = [];
+  if (node && node.nodeValue.length && spans.length) {
+    const boxes = spans.map((sp) => sp.getBoundingClientRect());
+    const rg = document.createRange();
+    const n = node.nodeValue.length;
+    for (let i = 0; i < n; i++) {
+      rg.setStart(node, i);
+      rg.setEnd(node, i + 1);
+      const r = rg.getBoundingClientRect();
+      map.push(-1);
+      if (!r.width && !r.height) continue;
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      for (let j = 0; j < boxes.length; j++) {
+        const b = boxes[j];
+        if (cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom) {
+          map[i] = j;
+          break;
+        }
+      }
+    }
+  }
+  vedBg.set(L.el, map);
+  return map;
+};
+// 把"已念到正文第 k 个字"翻译成"覆盖层哪些字该灭"。未命中的正文序号跳过——
+// 它的可见像素由相邻那格承担，不影响观感。
+// 先 verseVedGlyphs 再 verseVedMap：前者负责把 data-text 拆成 span（首次上屏
+// 时建好），后者才有盒子可量。顺序颠倒会让 spans 还是空的、整层永远不亮。
+const verseVedApply = (L, k) => {
+  const spans = verseVedGlyphs(L);
+  if (!spans.length) return;
+  const map = verseVedMap(L);
+  const off = [];
+  for (let i = 0; i < map.length; i++) {
+    const j = map[i];
+    if (j >= 0) off[j] = i < k;
+  }
+  for (let j = 0; j < spans.length; j++) {
+    spans[j].style.opacity = off[j] ? verseVedLit : verseVedDim;
+  }
+};
+const verseEmAt = (el, p) => {
+  const c = verseEmClip(el);
+  if (!c.n) return 0;
+  if (!c.xs) return Math.round(p * c.n);
+  const x = p * c.total;
+  let k = 0;
+  while (k < c.n && c.xs[k + 1] <= x) k++;
+  return k;
+};
+// ── 已念段的画法：**正文不动 + 绝对定位的一层覆盖物** ─────────────────────
+// 拆成「已念 span + 未念 span」也能染色，但会把一句拆成两个含文字的叶子，而
+// Layout 门禁按叶子逐个量重叠：滚出窗口的行 rect 仍在原位，静态内容段会成批
+// 报 text_occluded（实测一出现就报）。所以正文保持一个裸文本节点，另起一层
+// .verse-ved 复制整句原文、把未念到的字压暗——露出来的已念段就是行的 accent 色。
+// 覆盖物绝对定位、不占布局，不影响行高、折行与滚动锚点。
+const verseEmClear = (L) => {
+  if (L.lastK === -1) return;
+  L.lastK = -1;
+  L.el.classList.remove("verse-ved-on", "verse-ved-done");
+  if (L.vedSpans) for (const sp of L.vedSpans) sp.style.opacity = "";
+};
+const verseEmUpdate = (c, si, t) => {
+  for (const L of c.lines) {
+    if (!L.em) continue;
+    const el = L.el;
+    const on = parseInt(el.getAttribute("data-i"), 10) === si
+      && isFinite(L.t0) && isFinite(L.t1) && L.t1 > L.t0;
+    if (!on) { verseEmClear(L); continue; }
+    const p = Math.max(0, Math.min(1, (t - L.t0) / (L.t1 - L.t0)));
+    const k = verseEmAt(el, p);
+    if (k === L.lastK) continue;
+    L.lastK = k;
+    // 先上屏（display:block 之后才有盒子可测），再对原点、再逐字上 alpha。
+    el.classList.add("verse-ved-on");
+    verseVedOrigin(L);
+    verseVedApply(L, k);
+    el.classList.toggle("verse-ved-done", k >= verseEmClip(el).n);
+  }
+};
+// ── 时间轴"这一刻"从哪来 ─────────────────────────────────────────────────
+// 逐帧渲染（截图档）**只**把 tl.time() 拨到帧时刻、不回调 onUpdate，回调只在该
+// 帧时间线内部真正跨过某个 tween 边界时才触发。于是任何"只在 onUpdate 里改
+// 字幕状态"的写法在成片里都是散的：跳到一句中间时，活跃行是上一句留下的、书签
+// 停在上一句的位置（实测 t=4.4s 整句仍是 accent 色）。
+//
+// 所以字幕链路分两半：
+//   1. **cue 切换**（哪一句 active）——挂一段零长 tween 组成的时钟轨（见下
+//      buildCueTrack）。时钟轨在渲染开关打开时把每一句的起点钉在帧网格上，且每
+//      **帧**都必定被跨过一次，回调因此每帧必到；两条时间线互为"保险丝"（开关
+//      被误关、边界被并帧），谁报的时刻新就用谁。
+//   2. **句内书签**——每次收到时刻都重算（见 verseApply），不靠"又在同一句里"
+//      这个判断。句内仍是纯函数：只有 (t, t0, t1, 实测字宽) 四个输入。
+// 时钟锚：回调触发时 tl.time() 可能已被更晚的 seek 拨走（帧异步执行），所以先
+// 试 gsap.globalTimeline.time()——逐帧渲染下它是**渲染器当前这一帧**的时刻；
+// 它早于刚收到的时刻、或拿不到时退回收到的时刻。
+const cueClock = {t: -1};
+let cueSi = -1;
+// 时钟轨的时间位：按这个上限铺满全片（句末 gap 里也要有回调，否则跨句时上一句
+// 的书签会冻在句尾——gap 里该维持"整句已念完"）
+const cueSpan = () => (cues.length ? cues[cues.length - 1].t + Math.max(cues[cues.length - 1].d, 0.01) : 0);
+const verseApply = (si) => {
+  cueSi = si;
+  for (const v of verses) {
+    const c = verseCacheOf(v);
+    let act = null;
+    for (const L of c.lines) {
+      if (parseInt(L.el.getAttribute("data-i"), 10) === si) { act = L; break; }
+    }
+    for (const L of c.lines) {
+      const di = parseInt(L.el.getAttribute("data-i"), 10);
+      L.el.classList.toggle("active", L === act);
+      L.el.classList.toggle("past", !!act && di < si);
+      // 当前句吃段落 accent（字重恒定，避免 500/700 切换时字形宽度跳变）；
+      // 非活动行恢复主题色。换色/换透明度必须是**瞬时**的：过渡只在人工预览里
+      // 由 preview.js 注入，成片每一帧都得等于时间线时刻（见 composition.css）。
+      L.el.style.color = (L === act && c.accent) ? c.accent : "";
+    }
+    if (!act) continue;
+    // 两画幅里不滚动的那一侧 clip 比窗口矮，整体不滚
+    c.clip.style.transform = "translateY(" + (c.clipH <= c.winH ? 0
+      : Math.max(c.winH - c.clipH, Math.min(0, 40 - act.top))) + "px)";
+    // 换句接力的起点：这一句第一次成为当前句的时刻（= 它的 cue 起点）。
+    c.relayT = _cueStart(si);
+  }
+};
+// 换句接力：新句落位的那一小段行程里淡入，而不是"啪"地到位。
+//
+// 滚动是父级 .verse-clip 的 translateY（整行平移），新句在平移开始前就在窗口
+// 外、平移结束时正好落位。给它补一次"从略暗到位"的 alpha，读起来是上一句被
+// 推走、下一句接着上来，而不是硬切。
+//
+// 四条约束（逐帧渲染逼出来的）：
+//   1. **时间 t 的纯函数**：进度只由 (t − 本句 cue 起点) 算，不记"上一帧到哪"，
+//      乱序 seek 也幂等。
+//   2. **只动 opacity，不碰 transform**：滚动由 .verse-clip 独占；行上再写
+//      transform 会与滚动叠加成错位。
+//   3. **只给"当前行"与"未来行"**：past 行有自己的 0.45 档，掺进接力会让
+//      "念过"和"刚到"两种暗法撞在一起，读不出区别。
+//   4. **结束后清掉内联值**：让 CSS 的 active/past 档位重新接管，否则内联
+//      opacity 会永久压住 active 的 1.0。
+const RELAY_SECONDS = 0.32;
+const _cueStart = (si) => {
+  for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
+  return NaN;
+};
+const verseRelay = (c, t) => {
+  const t0 = c.relayT;
+  if (!isFinite(t0)) return;
+  const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
+  for (const L of c.lines) {
+    const past = L.el.classList.contains("past");
+    const on = (p < 1) && !past;
+    if (!on) {
+      if (L.relaySet) { L.el.style.removeProperty("--ctv-relay"); L.relaySet = false; }
+      continue;
+    }
+    // 起点 0.35 ≈ past 档（0.45）之下一点，落位瞬间"几乎还没亮"，然后追上 1
+    L.el.style.setProperty("--ctv-relay", (0.35 + 0.65 * p).toFixed(3));
+    L.relaySet = true;
+  }
+};
+const verseTick = (t) => {
+  // 只看当前 cue：句间 gap 里 si 保持最后一句（整句已念完、窗口不回滚）
+  let found = -1;
+  for (let i = 0; i < cues.length; i++) {
+    if (t >= cues[i].t && t < cues[i].t + Math.max(cues[i].d, 0.01)) { found = i; break; }
+  }
+  if (found < 0) {
+    // 片头/片尾的 lead-in 与 gap：沿用最后一句，但把它的 data-t1 时间之上的状态
+    // 钉死在句尾——p 会随 t 继续涨，k 早已到 n，结果与句尾一致。
+    if (cueSi < 0) return;
+    for (const v of verses) {
+      const c = verseCacheOf(v);
+      verseEmUpdate(c, cueSi, 1e9);
+      verseRelay(c, 1e9);
+    }
+    return;
+  }
+  if (cues[found].si !== cueSi) verseApply(cues[found].si);
+  for (const v of verses) {
+    const c = verseCacheOf(v);
+    verseEmUpdate(c, cueSi, t);
+    verseRelay(c, t);
+  }
+};
+const verseSync = (t, t2) => {
+  // 时钟锚：优先全局时间线（= 当前渲染帧），它不比自己收到的时刻早就用它
+  let tt = t;
+  try {
+    const g = gsap.globalTimeline.time();
+    if (isFinite(g) && g + 1e-4 >= t) tt = g;
+  } catch (e) {}
+  if (t2 !== undefined && isFinite(t2) && t2 + 1e-4 >= t) tt = Math.max(tt, t2);
+  // 首帧（cueSi 还没定）必须放行：渲染器从 0 之外任意时刻开抓时，第一个回调
+  // 就落在某句中间，这里若因"si 未定"直接返回，整片字幕都不会出现
+  if (!isFinite(tt) || Math.abs(tt - cueClock.t) < 1e-4) return;
+  cueClock.t = tt;
+  verseTick(tt);
+};
+// ── 时钟轨：让"每帧都会有一次回调"成为结构保证，而不是靠渲染器的实现细节 ──
+// 一段只有零长 tween、没有可见属性的空轨，层级放在所有视觉补间**之上**（层级
+// 只影响渲染次序，空轨什么也不画）。
+//
+// 打点的密度决定字幕能不能逐帧推进：onUpdate 只在 seek **跨过某个 tween 边界**
+// 时才被调用。只在 cue 起止处打点 = 一句之内只有两帧会更新，实测成片里
+// 3.6s→5.9s 六帧全是整句亮蓝、句内书签一动不动。所以在**每个帧网格**上打点：
+// 渲染器 seek 的时刻本就落在网格上，于是每一帧都正好跨过一个时钟位，onUpdate
+// 每帧必到。
+//
+// 为什么不再拿渲染开关（window.__HF_EXPORT_RENDER_SEEK_CONFIG）来决定铺不铺：
+// 开关的可见时机取决于渲染器在哪一步注入页面脚本，靠不住——关掉时静默退化成
+// "只有 cue 边界"，而那种退化在预览里看不出来、只在成片里暴露（书签冻住）。
+// 一条 12fps / 20s 的片子也就 240 个零长 tween，开销可以忽略；两档行为一致，
+// 预览看到的推进节奏与成片逐帧一致，这才是更值钱的。
+const CUES_FPS = parseFloat("24") || 30;
+const buildCueTrack = () => {
+  const span = cueSpan();
+  if (!(span > 0)) return;
+  const step = 1 / CUES_FPS;
+  const ts = [];
+  const end = span + step;
+  for (let i = 0; i * step <= end + 1e-6; i++) ts.push(Math.round(i * step * 1e4) / 1e4);
+  for (const c of cues) {
+    // cue 边界补一遍：cue 的 t 未必正好落在帧网格上，而"换句"必须准时
+    ts.push(Math.round(c.t * 1e4) / 1e4);
+    ts.push(Math.round((c.t + Math.max(c.d, 0.01)) * 1e4) / 1e4);
+  }
+  const uniq = ts.filter((x, i, a) => isFinite(x) && x >= 0 && a.indexOf(x) === i).sort((a, b) => a - b);
+  const clock = gsap.timeline({paused: true});
+  for (const t of uniq) clock.to({}, {duration: 0}, t);
+  tl.add(clock, 0);
+};
+buildCueTrack();
+tl.eventCallback("onUpdate", function() {
+  verseSync(tl.time());
+  if (window.__pvUpdate) window.__pvUpdate(); // 预览刷新钩子（无预览时为空）
+});
+gsap.ticker.add(() => { verseSync(tl.time(), tl.time()); });
+// 注册放脚本末尾（同步执行流内，行为与紧跟构建后注册等价）：hyperframes 的
+// lint 规则按源码位置判定"注册是否早于 document.fonts.ready 异步构建"
+// （window.__timelines[ 出现点必须在 fonts.ready 之后）；字幕 JS 里
+// Array.from 的 ".from(" 会被规则的 GSAP 补间正则误判，注册线在 fonts.ready
+// 之前就会触发 gsap_timeline_registered_before_async_build 误报。
+window.__timelines["main"] = tl;
+
+</script>
+<script src="preview.js"></script>
+</body>
+</html>

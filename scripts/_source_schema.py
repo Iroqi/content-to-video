@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""segments_source.json 的契约：封闭字段集 + 取值校验。
+
+用户写稿、pipeline 读取的唯一入口。四层（顶层 / 段落 / speakers / dialogue 轮次）
+字段集各自封闭，多一个键就报错——读侧全是 .get()，拼错的字段不生效也不出声，
+最坏的一类后果是整页悄悄消失。校验范围不止结构：speed / voice_id / accent /
+layout 这些取值也在这里把关，坏参数在进 TTS 之前就 fail-fast。
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _script_utils import read_json_file  # noqa: E402
+from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
+                       is_content_sid, ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
+from _timeline import validate_speed  # noqa: E402
+from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
+                       _validate_display_text, _validate_text)
+from _voices import is_valid_voice_id, list_voice_ids  # noqa: E402
+
+# segments_source.json 的封闭字段集：顶层 / 段落 / 对话轮次 / speakers 条目四层
+# 各自只读列出的这些键，多出来的键一律报错。
+# 为什么不留"未知键静默忽略"的余地：读侧全是 .get()，拼错的字段不会生效也不会
+# 报错，最坏的一类后果是整页悄悄消失——实测把 closing 写成 closing_text 后，
+# 结尾 agenda 卡压根不生成，而产物看起来完全正常（帧是两张槽位页，check 全绿）。
+# 清单必须与下面 validate_segments_source 里逐个 .get() 的字段同步。
+SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
+               "opening_speed", "opening_layout",
+               "closing", "closing_title",
+               "closing_tagline", "closing_speed", "closing_layout", "cta",
+               "speakers", "segments")
+SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
+                "speed", "voice_id", "voice_style", "takeaway", "layout")
+SPEAKER_KEYS = ("voice_id", "voice_style", "label")
+# 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
+# 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
+TURN_KEYS = ("speaker", "text")
+
+ON_SCREEN_TOP_KEYS = ("title", "opening_title", "closing_title",
+                      "opening_tagline", "closing_tagline")
+
+# 说话人标签的字数上限（两画幅同值）。它上墙后挂在字幕**行首**，跟正文抢同一
+# 行的宽度：竖屏字幕行约 24 个正文字位，标签吃掉 6 个字位还剩得下正文；再长
+# 就把正文挤到第二行，而 verse 窗口只有两行多一点的余量——一句正常长度的话
+# 会顶掉下一句的位置。所以这里按上墙文字管，超限直接拒（label 是作者自己起
+# 的短名，当场改比事后在字幕里看一串长抬头便宜得多）。
+SPEAKER_LABEL_MAX_CHARS = 6
+
+
+def validate_segments_source(data):
+    """segments_source.json：需要非空的 segments 列表，opening/closing 可选。
+
+    每个 segment 需要 'text'（单人独白）或 'dialogue'（双人/多人对话）二选一。
+    使用 'dialogue' 时，顶层必须有 'speakers' 声明每个说话人的 voice_id。
+
+    除了结构校验，还做取值校验：speed 必须是 >0 的有限数值、voice_id 必须是
+    预置音色之一。这样坏参数在进 TTS 之前就 fail-fast，而不是每句重试到超时。
+    字段集封闭（SOURCE_KEYS / SEGMENT_KEYS / SPEAKER_KEYS），未知键直接报错。
+    """
+    if not isinstance(data, dict):
+        raise ValueError("segments_source.json 顶层必须是 JSON 对象")
+    # 开场动画：开屏 agenda 卡**默认强绑定**苹果风开场，不再有可配置的契约键
+    # （opening_animation 已随默认强绑定一起移除，见 git 历史）。写过旧键的稿
+    # 件在这里得到明确指引，而不是撞一个泛化的"未知键"。放在 _reject_unknown_keys
+    # 之前：reject 会先于这里报"未知字段"，指引就永远到不了作者手里。
+    if "opening_animation" in data:
+        raise ValueError(
+            "segments_source.json 的 'opening_animation' 已随「默认强绑定」移除："
+            "开屏页（agenda 版式）现在无需配置即自动获得苹果风开场动画，"
+            "请删掉这个键；若想要无文本编排的开屏页，把 opening_layout 写成 "
+            "\"canvas\"（整页海报）。")
+    _reject_unknown_keys(data, SOURCE_KEYS, "segments_source.json 顶层")
+    segments = data.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("segments_source.json 需要非空的 'segments' 列表"
+                         "（至少一条内容段落）")
+
+    for key in ("title", "opening_title", "closing_title",
+                "opening_tagline", "closing_tagline", "opening", "closing"):
+        _validate_text(data.get(key), f"segments_source.json 的 '{key}'")
+
+    # 上墙文字比口播稿多一道：一行只放一个事实，所以不收分号。
+    for key in ON_SCREEN_TOP_KEYS:
+        _validate_display_text(data.get(key),
+                               f"segments_source.json 的 '{key}'（上墙一行）")
+
+    # ── 值校验：speed / voice_id ───────────────────────────────────
+    for key in ("opening_speed", "closing_speed"):
+        if data.get(key) is not None:
+            try:
+                validate_speed(data[key])
+            except ValueError as e:
+                raise ValueError(f"segments_source.json 的 '{key}' 非法：{e}") from e
+
+    # 结构性页的版式覆盖：不写 = agenda 投影卡（pipeline 盖章），写 "canvas" =
+    # 整页海报。只有这两个去向，所以这里按取值分派、不看段 id（content=False）。
+    for key in ("opening_layout", "closing_layout"):
+        _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
+
+    # 结尾 agenda 尾行（可选，至多一条）：cta=行动号召或下期预告二选一。渲染时直接
+    # 进 HTML 文本，只接受非空字符串（esc 之后），坏类型在进 TTS 前报对人。
+    # 单行是硬约束（writing.md）：agenda 的行数预算按"一行"计，含换行的 cta
+    # 会挤爆预算、让"先丢 cta 再裁正文"的截断优先级失效。
+    if data.get("cta") is not None:
+        if not isinstance(data["cta"], str):
+            raise ValueError("segments_source.json 的 'cta' 必须是字符串"
+                             "（结尾 agenda 的尾行文字，可选字段）")
+        if "\n" in data["cta"] or "\r" in data["cta"]:
+            raise ValueError("segments_source.json 的 'cta' 必须是单行文字"
+                             "（结尾 agenda 尾行只占一行，不要含换行符）")
+        _validate_display_text(data["cta"],
+                               "segments_source.json 的 'cta'（上墙一行）")
+
+    speakers = data.get("speakers")
+    if speakers is not None and not isinstance(speakers, dict):
+        raise ValueError("segments_source.json 的 'speakers' 必须是对象"
+                         "（{说话人 key: {voice_id, voice_style?, label?}}）")
+    if speakers:
+        for spk, spk_cfg in speakers.items():
+            if not isinstance(spk_cfg, dict):
+                raise ValueError(f"segments_source.json 的 speakers['{spk}'] 必须是对象"
+                                 "（{voice_id, voice_style?, label?}）")
+            _reject_unknown_keys(spk_cfg, SPEAKER_KEYS,
+                                 f"segments_source.json 的 speakers['{spk}']")
+            vid = spk_cfg.get("voice_id")
+            if not isinstance(vid, str) or not is_valid_voice_id(vid):
+                raise ValueError(
+                    f"segments_source.json 的 speakers['{spk}'].voice_id={vid!r} "
+                                     f"不在预置音色里（可用：{', '.join(list_voice_ids())}）")
+            for _key in ("label", "voice_style"):
+                _validate_text(spk_cfg.get(_key),
+                               f"segments_source.json 的 speakers['{spk}'].{_key}")
+            # label 现在是**上墙文字**：对话段轮次切换的首句行首会挂出这枚标签
+            # （见 references/rendering.md「画面结构」的 verse 一条）。所以它也
+            # 受上墙那三道管：不收分号、单行、字数有上限。
+            # 判的是**最终上墙的那个值**而不是只判显式 label：label 缺省时回退
+            # 成 speaker 名本身（build_from_structured 的 `label or spk`），key
+            # 起长了又不给 label，画面上照样挂一串长抬头——只校验显式 label 等于
+            # 给这条约束留了个绕过去的口子。
+            _label = spk_cfg.get("label")
+            _on_screen = _label if isinstance(_label, str) and _label.strip() else spk
+            _where = f"segments_source.json 的 speakers['{spk}'] 上墙的说话人标签"
+            if "\n" in _on_screen or "\r" in _on_screen:
+                raise ValueError(f"{_where}（{_on_screen!r}）必须是单行"
+                                 "（它挂在字幕行首，含换行会撑破行高）")
+            _validate_display_text(_on_screen, _where)
+            if len(_on_screen.strip()) > SPEAKER_LABEL_MAX_CHARS:
+                raise ValueError(
+                    f"{_where}（{_on_screen!r}）有 {len(_on_screen.strip())} 字，"
+                    f"超过 {SPEAKER_LABEL_MAX_CHARS} 字上限：它跟正文抢同一行字幕，"
+                    "长了会把正文挤到下一行、顶掉下一句。\n"
+                    "  给 speakers 里这个说话人写一枚短的 'label'（如「主播」「讲解」），"
+                    f"或把 speaker 名 {spk!r} 改短（不写 label 时上墙的就是它）。")
+
+    seen_source_ids = set()
+    for i, seg in enumerate(segments, 1):
+        if not isinstance(seg, dict):
+            raise ValueError(f"segments[{i}] 必须是对象")
+        _reject_unknown_keys(seg, SEGMENT_KEYS,
+                             f"segments[{i}]（title={seg.get('title')!r}）")
+        _validate_text(seg.get("title"), f"segments[{i}].title", required=True)
+        _validate_text(seg.get("tagline"), f"segments[{i}].tagline")
+        for key in ON_SCREEN_SEGMENT_KEYS:
+            _validate_display_text(
+                seg.get(key),
+                f"segments[{i}]（title={seg.get('title')!r}）的 '{key}'（上墙一行）")
+        # 可选的稳定 id：SKILL.md 承诺"给段稳定 id，改稿顺序不乱时间轴锚点"。
+        # 必须是内容段前缀（seg…），否则下游配图覆盖率/统计把它当结构性页；
+        # 必须跨段唯一，否则 HTML 选择器串台。
+        # 写了这个键就必须是个能用的 id：空串/空白与"键不存在"不是一回事——
+        # 键不存在是让管线自动编号（本就合法），写了空值是手滑，此前被当成
+        # 前者静默跳过，而 manifest 侧对同样的空串是拒绝的（两道门两个答案）。
+        seg_id = seg.get("id")
+        if seg_id is not None:
+            _validate_sid(seg_id, f"segments[{i}]（title={seg.get('title')!r}）",
+                          seen_source_ids)
+            if not is_content_sid(seg_id):
+                raise ValueError(
+                    f"segments[{i}] 的 id={seg_id!r} 必须以 {CONTENT_SID_PREFIX}… 开头"
+                    "（如 seg1-openai），opening/closing 为结构性页保留")
+        if seg.get("speed") is not None:
+            try:
+                validate_speed(seg["speed"])
+            except ValueError as e:
+                raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）"
+                                 f"的 'speed' 非法：{e}") from e
+        if seg.get("voice_id") is not None and (
+                not isinstance(seg["voice_id"], str)
+                or not is_valid_voice_id(seg["voice_id"])):
+            raise ValueError(
+                f"segments[{i}]（title={seg.get('title')!r}）的 voice_id="
+                f"{seg['voice_id']!r} 不在预置音色里"
+                f"（可用：{', '.join(list_voice_ids())}）")
+        if seg.get("takeaway") is not None:
+            if not isinstance(seg["takeaway"], str):
+                raise ValueError(
+                    f"segments[{i}]（title={seg.get('title')!r}）的 'takeaway' 必须是字符串"
+                                     "（结尾 agenda 要点总结用的一句话结论，可选字段）")
+            if "\n" in seg["takeaway"] or "\r" in seg["takeaway"]:
+                raise ValueError(
+                    f"segments[{i}]（title={seg.get('title')!r}）的 'takeaway' 必须是单行"
+                    "（结尾 agenda 每段只占一行，含换行会挤爆行数预算）")
+        _validate_text(seg.get("voice_style"),
+                       f"segments[{i}]（title={seg.get('title')!r}）的 voice_style")
+        _validate_accent(seg.get("accent"),
+                         f"segments[{i}]（title={seg.get('title')!r}）")
+        _validate_layout(seg.get("layout"),
+                         f"segments[{i}]（title={seg.get('title')!r}）",
+                         content=True)
+        dialogue = seg.get("dialogue")
+        # 类型必须在这里拦下：非列表的 truthy dialogue（字符串/对象）若放行，
+        # 会绕过 has_dialogue 判定、又在 build_from_structured 的 if dialogue:
+        # 真值分支里被当 turns 迭代，turn.get() 直接 AttributeError 裸栈。
+        if dialogue is not None and not isinstance(dialogue, list):
+            raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）的 "
+                             "'dialogue' 必须是数组 [{speaker, text}, ...]")
+        has_dialogue = isinstance(dialogue, list) and len(dialogue) > 0
+        if seg.get("text") is not None and not isinstance(seg.get("text"), str):
+            raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）的 'text' 必须是字符串")
+        has_text = isinstance(seg.get("text"), str) and bool(seg.get("text").strip())
+        if not has_text and not has_dialogue:
+            raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）"
+                             "需要 'text'（独白）或 'dialogue'（对话）字段之一")
+        if has_text and has_dialogue:
+            raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）"
+                             "'text' 和 'dialogue' 只能二选一，不要同时提供")
+        if has_dialogue:
+            if not speakers:
+                raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）"
+                                 "使用了 'dialogue'，但顶层缺少 'speakers' 字段"
+                                 "（需要为每个说话人声明 voice_id）")
+            for j, turn in enumerate(dialogue, 1):
+                if not isinstance(turn, dict):
+                    raise ValueError(f"segments[{i}].dialogue[{j}] 必须是对象 {{speaker, text}}")
+                _reject_unknown_keys(turn, TURN_KEYS,
+                                     f"segments[{i}].dialogue[{j}]")
+                spk = turn.get("speaker")
+                if not isinstance(spk, str) or not spk.strip():
+                    raise ValueError(f"segments[{i}].dialogue[{j}] 缺少 'speaker' 字段")
+                if not isinstance(turn.get("text"), str) or not turn.get("text").strip():
+                    raise ValueError(f"segments[{i}].dialogue[{j}]（speaker={spk!r}）缺少 'text' 字段")
+                spk_cfg = speakers.get(spk)
+                if not isinstance(spk_cfg, dict) or not spk_cfg.get("voice_id"):
+                    raise ValueError(f"segments[{i}].dialogue[{j}] 引用了说话人 {spk!r}，"
+                                     "但顶层 'speakers' 里没有声明它，或声明里缺少 'voice_id'")
+    _warn_agenda_overflow(data)
+    return data
+
+
+def _warn_agenda_overflow(data):
+    """内容段数超过 agenda 行预算时，在写稿阶段就 warn。
+
+    为什么提前到这一步说：截断本身发生在渲染层（html_renderer._agenda_rows），
+    那时配音都渲完了，作者拿到的是一条"后 N 条不会出现在画面上"的 warn——贵到
+    没人愿意回头改。这里在同一份真源（模板的 agenda.maxRows）上先量一次，把
+    "压段数还是合并要点"这个决定提前到写稿那一刻。判据不重抄：maxRows 直接读
+    模板，模板改了这里跟着改。
+
+    为什么是 warn 不是 error：段数超限不违法，7 行是这一版的排版预算而不是契约
+    红线。拦下来会挡掉合法稿子（多写一段、让它不显示，与不写相比并不更坏）。
+    渲染层那道 warn 留着——这里的量按"内容段条数"算，那边按"实际渲染出来的
+    行"算，两者不必相等。
+
+    开屏/结尾都写成 canvas 海报时没有 agenda 卡，不适用这条预算，跳过。
+    """
+    if (data.get("opening_layout") or "agenda") == "canvas" \
+            and (data.get("closing_layout") or "agenda") == "canvas":
+        return
+    try:
+        from _template import load_template
+        max_rows = int(load_template()["layout"]["vertical"]["agenda"]["maxRows"])
+    except (ImportError, KeyError, TypeError, ValueError):
+        return          # 模板结构变了就闭嘴：这条 warn 是提醒，不值得为它拦住写稿
+    n_content = sum(1 for seg in data["segments"]
+                    if isinstance(seg, dict)
+                    and (not seg.get("id") or is_content_sid(seg["id"])))
+    over = n_content - max_rows
+    if over <= 0:
+        return
+    print(f"[warn] segments_source.json 有 {n_content} 个内容段，"
+          f"开屏/结尾 agenda 的行预算是 {max_rows} 行——超 {over} 行，"
+          "成片时开屏章节列表与结尾要点总结会按「要点优先」丢掉尾部几行"
+          "（渲染层还会再报一次）。写稿时压段数或合并要点，见 references/writing.md",
+          file=sys.stderr)
+
+
+def load_segments_source(path):
+    """读取并校验 segments_source.json（读取失败统一成带路径的 ValueError）。"""
+    return validate_segments_source(read_json_file(path))

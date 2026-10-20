@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # 采样而非全矩阵：下限（SKILL.md 声明的 3.9+）、一个中位、本机开发用的两档
+        python: ["3.9", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    env:
+      # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 技能脚本与测试只用标准库：装依赖这一步都不需要，两步命令就是本地维护者的跑法
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+        timeout-minutes: 5
+
+      # 三道文档契约检查（cross-refs · numbers · examples）都是"文档与代码
+      # 是否还诚实"的同一件事，并成一步；本地维护者跑法相同：
+      #   check_docs   ——「指向哪」：章节交叉引用有没有悬空、文档有没有重新膨胀
+      #   check_numbers——「是几」：文档里的数字必须等于代码常量（决策阈值最小集）
+      #   check_examples——「能不能跑」：文档示例退化成"看起来对"的那天，读者要
+      #                    自己再撞一遍当初试错撞出来的坑
+      - name: Doc contracts
+        run: |
+          python tests/check_docs.py
+          python tests/check_numbers.py
+          python tests/check_examples.py

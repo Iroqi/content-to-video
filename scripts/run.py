@@ -1,0 +1,765 @@
+#!/usr/bin/env python3
+"""Content-to-Video — 一键编排（可选，薄组合层）。
+
+把 TTS → 配图 → HTML → 渲染串成一条命令，内部按依赖顺序调用各步骤；
+不改变任何子脚本的独立性，只做组合与默认值。
+
+TTS / 生成 HTML 两步是**进程内直调**子脚本的 main(argv)（参数校验只在
+子脚本自己那一份 parser 里做一次，错误以 SystemExit 传回、语义与旧的
+子进程退出码一致）；全文件唯一的子进程是 `npx hyperframes render`，
+由 _render_backend 负责进程树与成片完整性。
+
+  python scripts/run.py --source segments_source.json -o audio_output --until html
+  # ↑ 迭代用：跑到 HTML 为止，在 hf-project/ 打开 index.html 看版式和配图。
+  python scripts/run.py --source segments_source.json -o audio_output
+  # ↑ 定稿用：一路渲染到 hf-project/out.mp4。
+"""
+import argparse
+import datetime
+import os
+import sys
+import time
+
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
+sys.path.insert(0, SCRIPTS_DIR)
+from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
+from _timeline import (DEFAULT_FPS, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
+                       duration_tolerance, validate_speed)
+from _voices import list_voice_ids  # noqa: E402
+from _segments import sids_needing_image, seg_layout  # noqa: E402
+from _manifest_schema import load_timing_manifest, MANIFEST_FILENAME  # noqa: E402
+from _images_schema import load_images_json  # noqa: E402
+from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
+from _render_backend import (hyperframes_command,  # noqa: E402
+                             build_render_command, DEFAULT_MAX_WAIT, render_wait,
+                             probe_video_duration, node_version_gate)
+from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
+                           guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
+                           media_verdict)  # noqa: E402  素材可用性判据（与 gen 同一份函数）
+import pipeline  # noqa: E402  进程内直调 TTS 步骤
+import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
+
+# ── 制作报告：一次 run.py 跑完后，各步骤耗时/配图情况/跳过了什么散落在各步骤
+# 自己的 stdout 里，人工翻起来很累。这里不改任何步骤的行为，只在旁路记一份轻量
+# 流水账，跑完打印小结 + 写 production_report.json，让"这次跑得正不正常"一眼可
+# 判。任何一步失败退出前也会把已记录的部分写盘。
+_REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
+# 制作报告的 out 目录：main() 一解析出 -o/--output 就赋值
+_REPORT_DIR = None
+# 制作报告的文件名（写进 out 目录，跟 timing_manifest.json 放一起）。
+_REPORT_FILE = "production_report.json"
+# --dry-run 承诺"不写任何文件"（见参数 help），旁路制作报告也不能例外
+# ——失败路径同样只打印不落盘。main() 解析完参数就置 True。
+_DRY_RUN = False
+# 整个 run 的起始时刻：total_seconds 用真实墙钟，而不是把各步骤耗时直接
+# 相加（TTS 与配图并行时两步各记各的全程，相加会大于真实墙钟）。
+# main() 第二时间无条件赋值。
+_RUN_T0 = None
+
+
+def _total_seconds():
+    """本次 run 的真实墙钟时长。
+
+    起止都用 `time.monotonic()`：量的是间隔，墙钟被 NTP 校正或休眠唤醒改动时
+    会让"合计耗时"变成负数或凭空多出几十分钟——这份数字是排查"这次跑得正常
+    不正常"的依据，不能自己就不可信。
+    """
+    return round(time.monotonic() - _RUN_T0, 1)
+
+
+def _write_report(path):
+    if _DRY_RUN:
+        return
+    try:
+        _REPORT["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        _REPORT["total_seconds"] = _total_seconds()
+        # 原子写走 _script_utils.write_json_atomic：
+        # production_report 被 Ctrl-C 打断在写一半时落截断 JSON，下次排查
+        # "这次跑得正不正常"反而先崩在 json.load。
+        write_json_atomic(path, _REPORT)
+    except Exception as e:
+        print(f"[run] 写制作报告失败（不影响主流程产出）：{e}", file=sys.stderr)
+
+
+def _print_report_summary():
+    print("\n" + "=" * 44)
+    print("[run] 本次制作报告")
+    print("=" * 44)
+    for s in _REPORT["steps"]:
+        tag = "OK  " if s["ok"] else "FAIL"
+        print(f"  [{tag}] {s['name']:<28} {s['seconds']:>7.1f}s")
+    total = _total_seconds()
+    print(f"  {'合计':<34} {total:>7.1f}s")
+    if _REPORT.get("degraded"):
+        print("  降级：" + "; ".join(
+            f"{d.get('type')}={d.get('count', '?')}" for d in _REPORT["degraded"]))
+    if _REPORT["images"] is not None:
+        img = _REPORT["images"]
+        print(f"  配图：{img['matched']}/{img['total']} 条内容已定稿"
+              + (f"，{img['missing']} 条待人工审阅/兜底" if img.get("missing") else ""))
+    if _REPORT.get("video"):
+        v = _REPORT["video"]
+        _got = "未测量" if v["seconds"] is None else f"{v['seconds']:.2f}s"
+        print(f"  成片：{_got} / 时间轴 {v['expected_seconds']:.2f}s"
+              f"（时长校验 {v['check']}）")
+    if _REPORT["skipped"]:
+        print("  跳过的步骤：" + "；".join(_REPORT["skipped"]))
+    print("=" * 44)
+
+
+def _run_step(fn, argv, step_name):
+    """进程内直调子脚本入口 fn(argv)，退出语义与旧子进程调用一致。
+
+    子脚本自己 parse_args——参数校验只有那一份，run.py 不再复制；
+    失败以 SystemExit 传回：非 0 记失败步骤、落制作报告、以同码退出。
+    sys.exit("消息") 这种字符串码在子进程里由解释器代打并归一为 1，
+    进程内没人代打，这里补打。
+
+    ValueError / OSError 一并接住：子脚本的入口只保证"错就 sys.exit"，但
+    `read_json_file` / 写盘 / 子进程拉起这些路径抛的是 ValueError 与 OSError——
+    漏掉它们时一次普通的"文件路径写错"会变成裸栈退出，且**不落制作报告**
+    （报告只在下面的失败分支里写），于是"这次跑到哪一步、哪一步挂的"这条唯一
+    的排查线索也没了。接住后按退出码 1 走同一条失败路径。
+    KeyboardInterrupt / SystemExit 之外的 BaseException（Ctrl-C）不接：
+    用户主动中断不该被当成步骤失败写进报告。
+    """
+    print(f"\n>>> {step_name} [in-process]: {' '.join(argv)}", flush=True)
+    t0 = time.monotonic()
+    code = 0
+    try:
+        fn(argv)
+    except SystemExit as e:
+        if e.code is None:
+            code = 0
+        elif isinstance(e.code, int):
+            code = e.code
+        else:
+            code = 1
+            print(str(e.code), file=sys.stderr, flush=True)
+    except (ValueError, OSError) as e:
+        code = 1
+        print(f"[run] {step_name} 异常终止（{type(e).__name__}）：{e}",
+              file=sys.stderr, flush=True)
+    if code != 0:
+        _REPORT["steps"].append(
+            {"name": step_name, "seconds": round(time.monotonic() - t0, 1), "ok": False})
+        _write_report(_report_path())
+        print(f"[run] 步骤失败（退出码 {code}）：{step_name} {' '.join(argv)}",
+              file=sys.stderr)
+        sys.exit(code)
+    _REPORT["steps"].append(
+        {"name": step_name, "seconds": round(time.monotonic() - t0, 1), "ok": True})
+
+
+def _report_path():
+    """制作报告写到哪：out 目录（跟 timing_manifest.json 放一起），
+    main() 在首个写报告点之前无条件赋 _REPORT_DIR。"""
+    return os.path.join(_REPORT_DIR, _REPORT_FILE)
+
+
+def _load_manifest_or_exit(manifest_path):
+    """读并校验 timing_manifest.json，坏文件报成人话而不是 traceback。
+
+    走 _manifest_schema 的加载器而不是裸 json.load：上一轮若被中断在写 manifest
+    的半途，文件是截断的 JSON，裸 load 会抛 JSONDecodeError traceback，
+    用户看到的堆栈跟"TTS 产物坏了、该重跑"这个真实原因毫无关系。
+    load_timing_manifest 把缺字段/坏结构报成一句人话（ValueError），这里转成
+    带路径的退出——正式流程与生成 HTML 共用这一份口径。
+    """
+    try:
+        return load_timing_manifest(manifest_path)
+    except ValueError as e:
+        raise SystemExit(
+            f"[run] timing_manifest.json 无法读取（{manifest_path}）：{e}\n"
+            "文件可能被上次中断的写入截断或结构不合法；"
+            "请重跑 TTS 步骤重新生成后再来。")
+
+
+def _image_coverage(manifest_path, images_json):
+    """返回 (tm, all_sids, missing_keys, missing_files)：已校验的 manifest 对象
+    （主流程的降级检测直接复用，同一份文件不在一次 run 里 load+全量校验两遍），
+    manifest 中需要配图的段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
+    有键但媒体文件不可用的（missing_files：不在盘上，或软链接/绝对路径越出项目目录）。
+
+    两类必须分开：missing_keys 只是"图还没画完"，--until html 可以警告放行；
+    missing_files 是"映射指向坏路径"，gen_hyperframes 无论跑到哪一步都会
+    fail-fast——把它混进"只警告"里等于承诺一个根本兑现不了的继续（实测
+    先打印"继续生成 HTML"、下一步整体 exit 1）。
+
+    口径收口在 _segments.needs_image：内容段一律需要配图；开屏/结尾默认是纯文字
+    agenda 卡（章节罗列/要点总结），两画幅都不配图，但那一页换成整页画布
+    （opening_layout / closing_layout: "canvas"）后，配图就是它唯一的画面，同样计入。
+    """
+    # 走 _load_manifest_or_exit：正式流程对坏 manifest 的报错同源。
+    manifest = _load_manifest_or_exit(manifest_path)
+    # 段 id 的唯一来源：契约已把 manifest["segments"] 钉成非空列表，渲染端读的
+    # 也是同一份；这里另推一套分组只会让缺图拦截与画面段 id 漂移。口径走
+    # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
+    sids = sids_needing_image(manifest)
+    if not sids:
+        return manifest, [], [], []
+    if not os.path.isfile(images_json):
+        return manifest, sids, sids, []
+    # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 load_images_json 统一
+    # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
+    # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
+    try:
+        mapping = load_images_json(images_json)
+    except ValueError as e:
+        raise SystemExit(
+            "[run] images.json 读不出来——文件可能被上次中断的写入截断，或不是"
+            "合法 JSON；修复或手写该文件后重跑本命令。"
+            f"\n{e}")
+    missing_keys = [s for s in sids if s not in mapping]
+    proj_dir = os.path.dirname(os.path.abspath(images_json))
+
+    # 判定走 _script_utils.media_verdict——与 gen_hyperframes.validate_images_files
+    # 同一个函数（不是"同一句注释"）：src 与 poster 都要查，只查 src 时覆盖率
+    # 报告记"齐了"、下一步 gen 才以封面缺失 exit 1。
+    def _unusable(src):
+        return bool(media_verdict(proj_dir, src))
+
+    def _entry_unusable(entry):
+        return any(_unusable(entry[k])
+                   for k in ("src", "poster") if entry.get(k))
+
+    missing_files = [s for s in sids if s in mapping and _entry_unusable(mapping[s])]
+    return manifest, sids, missing_keys, missing_files
+
+
+# 只作用于 TTS 步骤的旗标集中定义在这里；render 侧参数（--fps/--quality/--workers）
+# 走 hyperframes 字面透传，不复制第二份默认值。
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        description="信源转视频一键编排（薄组合层）",
+        epilog="TTS 凭据不从本 CLI 传入，由 pipeline 从环境/用户级 .env 读取："
+               "MIMO_API_KEY（必需）、MIMO_BASE_URL、MIMO_TTS_MODEL。"
+               "完整取值与优先级见 pipeline.py --help 与 references/tts_pipeline.md。")
+    parser.add_argument("--source", required=True, help="segments_source.json 路径")
+    parser.add_argument("-o", "--output", default="audio_output",
+                        help="音频/中间产物输出目录（默认 audio_output）")
+    parser.add_argument("--project", default=None,
+                        help="HTML/渲染项目目录（默认 <output 同级>/hf-project）")
+    parser.add_argument("--until", choices=["tts", "images", "html", "render"],
+                        default="render",
+                        help="跑到该步骤为止（默认 render；迭代时用 html："
+                             "生成 HTML 即停，先看版式和配图再渲染）")
+    parser.add_argument("--aspect", default="portrait",
+                        choices=["portrait", "landscape"],
+                        help="画幅：portrait（默认，1080×1440 竖屏）或 "
+                             "landscape（1920×1080 横屏）")
+    parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
+                        choices=[12, 24, 30, 60],
+                        help="输出帧率（默认 24；12 是快速看画面的低规格迭代档）。"
+                             "实测档位与耗时见 references/rendering.md「性能参数」。"
+                             "gen_hyperframes 自己还接受 1–240，这里只放行实测过的档位")
+    parser.add_argument("--quality", default="looks",
+                        choices=["draft", "looks", "standard", "high", "delivery"],
+                        help="渲染质量（默认 looks）。五档是 Hyperframes CLI 自己的取值，"
+                             "字面透传：looks = standard 编码 + CRF 16（CLI 的默认档，"
+                             "定稿用这一档）；draft 约省 15%%，只够预览；delivery = high，"
+                             "交付档。standard / high 是不带 CRF 覆写的裸档——同样写着"
+                             "standard，looks 比它多一层 CRF 16，成片更清楚也更大，"
+                             "所以默认选官方那一档而不是裸档")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
+                             "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
+                             "低配机器遇 V8 堆崩溃或配图体积大时建议降到 2")
+    # 低内存档是官方 CLI 的旗标（--help：钉 1 worker + screenshot capture +
+    # 跳过自动 worker 校准，默认按总内存 ≤8GB 自判）。低配机器非它不可——实测
+    # 3.9GB/2 核机上不加就落在抓帧超时重抓。三态：不给 = 交给 CLI 自判，
+    # 显式 --no-low-memory-mode 才能关掉它的自判。
+    _lm = parser.add_mutually_exclusive_group()
+    _lm.add_argument("--low-memory-mode", dest="low_memory", action="store_true",
+                     default=None,
+                     help="强制开 Hyperframes 低内存渲染档（worker 钉 1、screenshot "
+                          "capture、跳过 worker 自动校准）；低配机器（≤8GB、/dev/shm "
+                          "偏小）用它。会覆盖 --workers")
+    _lm.add_argument("--no-low-memory-mode", dest="low_memory", action="store_false",
+                     help="强制关低内存档（CLI 默认按总内存自判，≤8GB 会自动开）")
+    parser.add_argument("--allow-degraded", action="store_true",
+                        help="允许 TTS 静音兜底等降级产物继续渲染；默认把 degraded artifact 作为交付阻断")
+    parser.add_argument("--allow-best-effort", action="store_true",
+                        help="调试档：把渲染器的 --best-effort 打开（CLI 默认就是开）。"
+                             "媒体缺失或抓帧未就绪也照出片，成片可能无声或缺帧。"
+                             "默认关——本技能红线是不出无声成片；只在排查"
+                             "\"某段媒体到底哪儿不对\"时用")
+    parser.add_argument("--placeholder-missing", action="store_true",
+                        help="预览档（只配 --until html）：给缺图的整页画布段写占位 SVG，"
+                             "让 HTML 先出来看结构。默认不带——缺图的整页画布段照旧拦下"
+                             "（没图就没画面）。占位图在预览之后必须换成真图，"
+                             "带 --placeholder-missing 跑渲染直接报错")
+    parser.add_argument("--on-fail", default="abort", choices=["abort", "silence"],
+                        help="单句 TTS 失败的处理方式，透传给 pipeline（默认 abort："
+                             "任何句子失败即整条管线退出；silence 把失败句降级为"
+                             "静音占位并让 manifest 进入 degraded 状态，需配合"
+                             "--allow-degraded 才能继续渲染）")
+    parser.add_argument("--set", action="append", default=[], metavar="键=值",
+                        help="临时改一个模板视觉参数（可重复），透传给 gen_hyperframes，"
+                             "如 --set layout.vertical.title.fontSize=100。只在本次进程"
+                             "生效、不落盘；定稿的取值请写回 scripts/_template.py")
+    parser.add_argument("--drift", default=None, choices=["off", "subtle", "boring"],
+                        help="全片静态图运镜档：off=关 / subtle=更长更近 / boring=更短更轻。"
+                             "不给走模板缺省；逐段微调写 images.json 的 drift 字段")
+    parser.add_argument("--allow-ease", action="store_true",
+                        help="预览档（只配 --until html）：放行 GSAP core 之外的 ease 档名。"
+                             "带它跑渲染会在入口报错——那些档在渲染里会静默退回缺省缓动")
+    parser.add_argument("--draft", action="store_true",
+                        help="草稿档总开关：一次放行全部迭代逃生口（缺图/坏 src 降级并占位、"
+                             "槽位比例与画布字号降 warn、ease 放行、渲染 best-effort）。"
+                             "探索期随便折腾用；定稿交付请去掉（判据照旧全严，"
+                             "production_report 会标记 draft 留痕）")
+    parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
+                        help=f"语速倍率（默认 {DEFAULT_SPEED:g}，透传给 pipeline）")
+    parser.add_argument("--voice-id", default=list_voice_ids()[0], choices=list_voice_ids(),
+                        help="音色 ID（默认使用预置音色列表第一项，透传给 pipeline）")
+    # 下面四个只在显式给出时才透传：不给就由 pipeline 用自己的默认值，run.py
+    # 不复制第二份默认值（两处各写一份必然漂移）。--voice-style 参与句子音频
+    # 指纹，改动会让受影响句子在 --resume 下重新合成。
+    parser.add_argument("--voice-style", default=None,
+                        help="自然语言风格描述（透传给 pipeline，控制语气情绪）；"
+                             "默认沿用 pipeline 的播报风格文案")
+    parser.add_argument("--gap", type=float, default=None,
+                        help=f"句间静音秒数（透传给 pipeline，时间轴与段落擦除时长的"
+                             f"钳制上限都依赖它）；默认 {DEFAULT_GAP:g}")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="只预检 TTS 链路（分句/段检测/稿件契约），不合成、"
+                             "不写任何文件；--until 在 dry-run 下不生效（HTML/"
+                             "渲染步骤整体跳过）")
+    parser.add_argument("--check-frames", action="store_true",
+                        help="渲染完成后自动抽帧断言成片画面（非黑占比/颜色桶数；"
+                             "装了 tesseract 可再加 --check-frames-ocr）。默认关闭："
+                             "抽查是渲染后的一道额外闸，抽帧每几秒一帧，量不到只降级"
+                             "不阻断，断言失败会阻断交付——黑屏/死平/整段空帧的片子"
+                             "不该照打'完成'")
+    parser.add_argument("--check-frames-ocr", action="store_true",
+                        help="配合 --check-frames：整帧 OCR 断言至少认出一个词"
+                             "（字幕/大字版式整段丢失会暴露；tesseract 缺失只降级）")
+    return parser
+
+
+
+def main():
+    setup_stdio()
+    global _REPORT_DIR, _REPORT, _DRY_RUN, _RUN_T0
+    # 同一进程里重复调用 main()（import run 后直接调用的测试/嵌入式用法）
+    # 时，模块级 _REPORT 不能累积上一次的 steps/skipped——每次都从空白
+    # 报告开始。
+    _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
+    _DRY_RUN = False
+    _RUN_T0 = time.monotonic()
+    parser = _build_parser()
+    args = parser.parse_args()
+    _DRY_RUN = args.dry_run
+
+    # ── 入参校验：这两条看起来像 pipeline 的重复，其实都承重 ────────────
+    # --speed 必定透传给 pipeline，两边文案也一致，但校验不能只留下游那份：
+    # _REPORT["params"] 里就有这个值，而步骤失败时照样落 production_report.json
+    # ——实测把 run.py 的校验删掉后 `--speed nan` 会写出 "speed": NaN，
+    # Python 读得回、jq / JSON.parse 读不回。fail-fast 在前，报告里就永远只
+    # 会有合法数值。
+    # --workers 更是只有这一份：它不进 tts_cmd（run.py 的是渲染抓帧 worker 数，
+    # pipeline 的同名旗标是 TTS 并发数），交给下游拦就是
+    # `npx hyperframes render --workers 0` 的莫名失败。
+    try:
+        validate_speed(args.speed)
+    except ValueError as e:
+        parser.error(str(e))
+    if args.workers < 1:
+        parser.error("--workers 必须是正整数")
+    # 占位档只对预览有意义：带它渲染等于把占位图烧进成片，那是交付事故而不是
+    # 迭代便利。与其在渲染跑到一半才发现，不如在入口说清。
+    # --draft 例外：草稿档的成片本来就是"粗剪看节奏"，占位页/空位是草稿的
+    # 组成部分，报告会留痕；定稿路径（不带 --draft）照旧拦。
+    if args.placeholder_missing and args.until != "html" and not args.draft:
+        parser.error("--placeholder-missing 只配 --until html（预览档）："
+                     "占位图不能进成片。定稿时去掉这个旗标，按画幅补齐整页画布的配图")
+    # 同一条理由：core 之外的 ease 在真正渲染时会静默退回缺省缓动，成片与预览
+    # 看到的是两条不同的曲线。预览里挑档可以，交付前必须换回目录里的。
+    if args.allow_ease and args.until != "html" and not args.draft:
+        parser.error("--allow-ease 只配 --until html（预览档）：那些档名只影响预览，"
+                     "渲染时 GSAP 会静默换成缺省缓动——成片和你看到的不一样。"
+                     "定稿时去掉这个旗标，把 ease 换回 --help 里列出的档")
+
+    out = os.path.abspath(args.output)
+    project = os.path.abspath(args.project) if args.project else \
+        os.path.join(os.path.dirname(out) or ".", "hf-project")
+    # 两画幅共用同一个项目目录（--aspect 只影响生成的 HTML）。
+    # --dry-run 承诺不写任何文件，不需要拦产物路径
+    if not args.dry_run:
+        guard_not_in_skill_dir(("-o/--output", out), ("--project", project))
+    _REPORT_DIR = out
+    _REPORT["source"] = os.path.abspath(args.source)
+    _REPORT["output"] = out
+    _REPORT["project"] = project
+    _REPORT["started_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    _REPORT["params"] = {
+        "aspect": args.aspect,
+        "canvas": "{}x{}".format(*get_canvas(args.aspect)),
+        "fps": args.fps,
+        "quality": args.quality,
+        "workers": args.workers,
+        "low_memory": args.low_memory,
+        "speed": args.speed,
+        "voice_id": args.voice_id,
+        "on_fail": args.on_fail,
+        # 调试档开了就必须在报告里留痕：成片可能无声或整段缺帧，事后翻报告
+        # 要能一眼看出"这支片子是宽容渲染出来的"。
+        "allow_best_effort": args.allow_best_effort,
+    }
+    if args.draft:
+        # 草稿档总开关：报告记 draft=true，并把"哪些判据被放松"写进 skipped，
+        # 翻报告能对出这一版不是按交付红线出的。
+        _REPORT["draft"] = True
+
+    # ── 第 2 步：TTS ──────────────────────────────────────────────
+    # --resume 恒开（指纹缓存能证明一致才复用；要整重跑时直接调 pipeline.py，
+    # 不加 --resume 即可）。
+    tts_args = ["--source", args.source, "-o", out, "--resume"]
+    # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子步骤参数，
+    # 让 pipeline 的 resume 指纹与本次参数一致，不依赖两边默认值恰好相同。
+    tts_args += ["--speed", str(args.speed), "--voice-id", args.voice_id]
+    if args.voice_style:
+        tts_args += ["--voice-style", args.voice_style]
+    if args.gap is not None:
+        tts_args += ["--gap", str(args.gap)]
+    # 单句 TTS 失败的降级策略同样永远透传（同上一条规则）。silence 会把失败句
+    # 降级为静音占位并让 manifest 进入 degraded 状态——那是 SKILL.md
+    # 「降级显式化」规则与下方 degraded 拦截真正能触达的入口。
+    tts_args += ["--on-fail", args.on_fail]
+    if args.dry_run:
+        tts_args.append("--dry-run")
+    _run_step(pipeline.main, tts_args, "TTS")
+
+    # ── 第 3 步：配图 ─────────────────────────────────────────────
+    # 配图不由本脚本产出：agent 在第 3 步用 ImageGen 生图、
+    # 手绘 SVG 矢量示意，落进 images/ 并把映射写进 images.json。
+    # run.py 只负责统计这份映射的覆盖率，并只在真要渲染时拦缺图
+    # （--until html 只警告）。
+    # 文件名与 pipeline 写侧同源（MANIFEST_FILENAME）：各拼一遍的话，改一侧
+    # 就等于把"manifest 不存在"这条分支永久打开。
+    manifest = os.path.join(out, MANIFEST_FILENAME)
+    images_json = os.path.join(project, "images.json")
+    has_images = os.path.isfile(images_json)
+
+    if args.dry_run or args.until == "tts":
+        if args.until == "tts":
+            _REPORT["skipped"].append("html/render（--until tts）")
+        # dry-run 承诺"不写任何文件"：_write_report 内部短路不落盘，只打
+        # 印摘要（非 dry-run 的 --until tts 仍是写报告 + 打印）。
+        _write_report(_report_path())
+        _print_report_summary()
+        return
+
+    # 覆盖率统计：images.json 存在就按其映射算缺图；不存在时 _image_coverage
+    # 会把全部内容段落都报成缺图（不能因为文件不存在就跳过统计——那样
+    # missing 恒空、缺图拦截形同虚设，会静默渲染出无图成片）。
+    # dry-run / --until tts 已在上方提前 return，走到这里必然要统计。
+    _tm, all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
+    _missing_union = sorted(set(missing_keys) | set(missing_files))
+    _REPORT["images"] = {
+        "total": len(all_sids), "matched": len(all_sids) - len(_missing_union),
+        "missing": len(_missing_union)}
+
+    # --until images：配图阶段到此为止即正常结束（exit 0）。必须放在缺图拦截
+    # 之前——调试意图是"看看覆盖率如何"，被 exit 2 劫持就和"要渲染到底但缺图"
+    # 混成了同一种失败。
+    if args.until == "images":
+        _REPORT["skipped"].append("html/render（--until images）")
+        _write_report(_report_path())
+        _print_report_summary()
+        return
+
+    images_dir = os.path.join(project, "images")
+    if missing_files:
+        # images.json 有键但媒体文件不可用（不在盘上，或软链接/绝对路径越出项目目录）：
+        # gen_hyperframes 对这类坏路径无条件 fail-fast，"只警告继续"在这里
+        # 兑现不了——与其先打一句"继续生成 HTML"再让 HTML 步骤 exit 1，
+        # 不如就地报清病因，并把还没映射的段一并列出来让人一次修完。
+        print("[run] images.json 映射的媒体文件不可用（不存在，或通过软链接/绝对路径"
+              "越出项目目录）："
+              + ", ".join(missing_files) + "。\n"
+              f"请补齐 {images_dir} 下的文件，或修正/删除对应映射条目。",
+              file=sys.stderr)
+        if missing_keys:
+            print("[run] 另外这些段落还没有配图映射：" + ", ".join(missing_keys),
+                  file=sys.stderr)
+        if not args.draft:
+            _write_report(_report_path())
+            _print_report_summary()
+            sys.exit(2)
+        # --draft：草稿期"先搭结构、图稍后画"的常态——src 还没落盘不该把整条
+        # 管线卡死。放行并把同一个决定传给生成器（--draft 下 gen 会给画布段换
+        # 占位、槽位段留空位），预览/成片里的空位/占位就是"还没画完"的诚实信号。
+        print("[run][warn] 以上缺 src 在 --draft 下不阻断：本次继续，预览/成片里"
+              "对应位置会空着或用占位（草稿档；定稿渲染必须补全后再跑）",
+              file=sys.stderr)
+        _REPORT["skipped"].append("缺 src 文件放行（--draft，预览/成片可能空位/裂图）")
+
+    if missing_keys:
+        # 只有真要出片才拦：--until html 是"图没画完先看版式"的迭代路径，
+        # 同一份缺图清单在那里只降级成警告。missing 的口径见 _image_coverage。
+        #
+        # 唯一例外是整页画布：那一页没有标题层也没有句子流层，配图就是整个
+        # 画面，gen_hyperframes 在生成期必然 exit 1（canvas_layout_errors）。
+        # 对它承诺"继续生成 HTML 供预览"是兑现不了的承诺——打印完这句紧接着
+        # 就是一条 [error]，两条信息自相矛盾。所以整页画布段缺图不分 --until，
+        # 与 missing_files 同样就地拦下并点名病因（--draft/--placeholder-missing
+        # 是它的逃生口：占位 SVG 先把画面填上）。
+        _layout_by_sid = {s["id"]: seg_layout(s) for s in _tm["segments"]}
+        _canvas_missing = [s for s in missing_keys
+                           if _layout_by_sid.get(s) == "canvas"]
+        print("[run] 以下段落还没有定稿配图："
+              + ", ".join(missing_keys) + "。\n"
+              "请按第 3 步补图：ImageGen 生图、手绘 SVG 矢量示意图"
+              "，把文件放进 "
+              f"{images_dir}。\n"
+              f"然后在 {images_json} 写好各段映射后重跑本命令。",
+              file=sys.stderr)
+        if _canvas_missing and (args.placeholder_missing or args.draft):
+            print("[run] 其中 " + ", ".join(_canvas_missing)
+                  + " 是整页画布且还没有配图：本次用占位 SVG 先把 HTML 生成出来"
+                    "（只看结构用；--draft 跑渲染时成片里也会是占位页），"
+                    "正式渲染前必须按当前画幅补真图。",
+                  file=sys.stderr)
+        elif _canvas_missing:
+            print("[run] 其中 " + ", ".join(_canvas_missing)
+                  + " 是整页画布（layout: \"canvas\"）：该页不生成标题层与句子流层，"
+                    "配图就是它唯一的画面，缺图时连预览 HTML 都生成不出来"
+                    "（不是「渲染前补齐即可」那一档），请先按当前画幅补图；"
+                    "只想先看整体结构可加 --until html --placeholder-missing，"
+                    "或直接 --draft。",
+                  file=sys.stderr)
+            _write_report(_report_path())
+            _print_report_summary()
+            sys.exit(2)
+        if args.until != "render" or args.draft:
+            print("[run] 继续生成 HTML 供预览（渲染前必须补齐上面这些段）。",
+                  file=sys.stderr)
+        else:
+            _write_report(_report_path())
+            _print_report_summary()
+            sys.exit(2)
+
+    # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
+    # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
+    # degraded 标记。manifest 复用 _image_coverage 那次已校验的加载——同一次 run
+    # 里文件不会被别人改写，再 load+全量校验一遍只是把坏文件报错推晚一步。
+    _deg_items = degraded_items(_tm)
+    # status 是 pipeline 写下的总旗标：明细一条都没读出来（键被写坏或整个漏写）
+    # 时照样拦，"以 manifest 的 status 为准"这条兜底不依赖下面的逐项计数。
+    if _deg_items or _tm.get("status") == "degraded":
+        _REPORT["degraded"].extend({"type": t, "count": c} for t, c, _w in _deg_items)
+        _why = "、".join(w for _t, _c, w in _deg_items) or "manifest 标记为 degraded"
+        # --until html 是迭代预览边界：允许先看版式，但不能把这个成功
+        # 状态误解成可交付成片。真正 render 仍要求显式 --allow-degraded。
+        if not args.allow_degraded and args.until == "render":
+            _write_report(_report_path())
+            print(f"[run] 检测到 {_why}，"
+                  "为避免把降级产物误当成正常成片，默认停止。"
+                  "需要有意发布时再加 --allow-degraded。", file=sys.stderr)
+            # 降级句带指纹缓存，静音占位会被 --resume 一直复用——不放一句
+            # 可执行的补录路径，定时任务/隔天重跑会永远卡在同一处。
+            print("[run] 补录：删除 " + os.path.join(out, "sentences")
+                  + " 下对应句子的 .wav 及 .sha/.spd/.failed sidecar，"
+                  "下次带 --resume 重跑会自动重合成该句；"
+                  "成功合成后 .failed marker 由管线自动清理。", file=sys.stderr)
+            sys.exit(3)
+        if args.allow_degraded:
+            print(f"[warn] 已显式允许降级：{_why}，"
+                  "生产报告将标记 degraded。", file=sys.stderr)
+        else:
+            print(f"[warn] HTML 预览继续生成，但 {_why}；"
+                  "最终渲染必须显式加 --allow-degraded。", file=sys.stderr)
+
+    # ── 第 4 步 a：生成 composition HTML ──────────────────────────
+    html_args = ["-m", manifest, "-o", os.path.join(project, "index.html"),
+                 "--aspect", args.aspect,
+                 "--fps", str(args.fps)]
+    if has_images:
+        html_args += ["--images", images_json]
+    # 占位档由上面的拦截逻辑放行；这里把同一个决定传给生成器，两处不各判一次。
+    if args.placeholder_missing and args.until == "html":
+        html_args.append("--placeholder-missing")
+        _REPORT["skipped"].append("占位真图（--placeholder-missing，预览档）")
+    # 草稿档总开关：透传 --draft，缺图/坏 src/比例/字号/ease 的放松都只由 gen
+    # 那一份 parser 生效——run.py 不逐个复刻旗标，避免两处各判一次分家。
+    if args.draft:
+        html_args.append("--draft")
+        _REPORT["skipped"].append(
+            "草稿档（--draft：占位 / ease 放行 / 缺 src 降级 / 比例·对比度·字号降 warn）")
+    # 视觉旋钮原样转给生成器：口径与取值校验只有 gen 那一份 parser，这里不复制。
+    for pair in args.set or ():
+        html_args += ["--set", pair]
+    if args.drift:
+        html_args += ["--drift", args.drift]
+    if args.allow_ease:
+        html_args.append("--allow-ease")
+        _REPORT["skipped"].append("ease 钉固目录（--allow-ease，预览档）")
+    _run_step(gen_hyperframes.main, html_args, "生成 HTML")
+
+    # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s
+    # 就能给出的信息（--until html 就是给人工预览收口的）。
+
+    # HTML 已生成；渲染复用同一次 Hyperframes 命令解析。
+    _HF_COMMAND = hyperframes_command(project)
+
+    if args.until == "html":
+        _REPORT["skipped"].append("render（--until html）")
+        _write_report(_report_path())
+        print(f"[run] 已生成 {os.path.join(project, 'index.html')}。"
+              "先在浏览器里打开它确认版式和配图，定稿后去掉 --until 直接渲染。",
+              file=sys.stderr)
+        _print_report_summary()
+        return
+
+    # ── 第 4 步 b：渲染 ───────────────────────────────────────────
+    # 渲染前置条件先问一遍：Node 版本不够时 CLI 侧的失败形态与"没装 Node"看不
+    # 出区别，等它失败再翻日志末尾是拿结果猜原因。
+    _verdict, _node_msg = node_version_gate()
+    if _verdict == "block":
+        raise SystemExit(f"[run] {_node_msg}")
+    if _verdict == "warn":
+        print(f"[run][warn] {_node_msg}", file=sys.stderr)
+
+    out_video = os.path.join(project, "out.mp4")
+    if args.low_memory and args.workers != 1:
+        # CLI 的低内存档把 worker 钉成 1（它自己的 --help 写明）。这里不出声，
+        # 用户会以为自己写的 --workers 生效了，然后对着"怎么这么慢"找半天原因。
+        print(f"[run][warn] 已开 --low-memory-mode：Hyperframes 会把抓帧 worker 钉成 1，"
+              f"本次的 --workers {args.workers} 不生效（低内存档靠它避免内存抖动）。",
+              file=sys.stderr)
+    # --draft 隐含 best-effort：粗剪档允许媒体缺失/抓帧未就绪也照出片，成片可能
+    # 无声或缺帧——这正是"先看一版动起来"要的宽容；报告已记 draft 留痕。
+    _best_effort = args.allow_best_effort or args.draft
+    if _best_effort:
+        _src = "（--draft 隐含）" if args.draft and not args.allow_best_effort else ""
+        print(f"[run][warn] 已开 --allow-best-effort{_src}：媒体缺失或抓帧未就绪时"
+              "渲染器照旧出片，成片可能无声或整段缺帧——这是调试档，不要拿去交付。",
+              file=sys.stderr)
+    hf_render = build_render_command(
+        out_video, args.quality, args.fps, args.workers, command=_HF_COMMAND,
+        low_memory=args.low_memory, allow_best_effort=_best_effort,
+    )
+    # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
+    # （162s 片 190–466s，后者是抓帧超时重抓的极端），10 倍 + 10 分钟
+    # 打底给出充足余量；默认硬上限（DEFAULT_MAX_WAIT）会把长片或 60fps/high
+    # quality 的正常渲染误杀成"超时"。地板取自 render_wait 的默认值而不是再写
+    # 一遍 1800——改默认值时这里跟着走。
+    _render_cap = max(DEFAULT_MAX_WAIT, float(_tm["total_duration"]) * 10 + 600)
+    t0_render = time.monotonic()
+    try:
+        render_wait(hf_render, out_video, cwd=project, max_wait=_render_cap)
+    except SystemExit:
+        _REPORT["steps"].append({"name": "渲染", "seconds": round(time.monotonic() - t0_render, 1), "ok": False})
+        _write_report(_report_path())
+        raise
+    _REPORT["steps"].append({"name": "渲染", "seconds": round(time.monotonic() - t0_render, 1), "ok": True})
+    # 走到这里成片必已存在且非空：_render_poll_loop 的所有 return 路径都以
+    # "实测 size>0"为前提（自然退出量一次，强杀路径再过 _verify_killed_render
+    # 的整容器解码），失败路径一律 SystemExit——不再补一遍 isfile/getsize。
+
+    # ── 成片时长契约：演完了才算完成 ──────────────────────────────────
+    # 容器完整证明不了内容完整。抓帧超时重抓、worker 崩、Chrome 提前退出都
+    # 能产出一支 ffmpeg 全解码过得去、却比时间轴短一截的片子：后面几段整段
+    # 不在片里，字幕、配图、导演节拍全跟着丢，而控制台照打"完成、成片：…"。
+    # 这是整条管线唯一没有契约的一段——渲染之前的每一步都有校验拦着，渲染
+    # 之后只剩"文件在且非空"。所以这里补最后一道：拿成片实测时长与 manifest
+    # 的 total_duration 对账，容差取全仓共用的那份（_timeline.duration_tolerance
+    # ——音频与 manifest 对账就是这一档），量不到（ffmpeg 不可用）只降级 warn，
+    # 不阻断交付。
+    _expected = float(_tm["total_duration"])
+    _tol = duration_tolerance(_expected)
+    _actual = probe_video_duration(out_video)
+    _REPORT["video"] = {
+        "path": out_video,
+        "expected_seconds": round(_expected, 3),
+        "seconds": None if _actual is None else round(_actual, 3),
+        "tolerance_seconds": round(_tol, 3),
+        "check": "skipped",
+    }
+    if _actual is None:
+        print("[run][warn] 成片时长未校验（ffmpeg 不可用或读不出 Duration）："
+              f"时间轴 {_expected:.2f}s，成片 {out_video}。\n"
+              "      成片已生成，但「演完了没有」这一条没人证明——"
+              "装好 ffmpeg 重跑本命令即可补上这道闸。", file=sys.stderr)
+    elif _actual + _tol < _expected:
+        _REPORT["video"]["check"] = "short"
+        _write_report(_report_path())
+        _print_report_summary()
+        print(
+            f"[run] 成片比时间轴短：实测 {_actual:.2f}s，时间轴 {_expected:.2f}s"
+            f"（容差 {_tol:.2f}s）——后段内容可能整个不在片里。\n"
+            "      常见成因：抓帧超时后重抓丢帧、worker 崩溃、Chrome 提前退出。\n"
+            "      先看渲染日志（成片同目录的 out.render.log）里有没有"
+            "`Parallel capture timed out`；有的话降 --workers 到 2 重渲。\n"
+            "      确认画面确实完整、只是尾帧差这点时长时，重跑本命令再核一次。"
+            f"成片已留在 {out_video}，未删除。", file=sys.stderr)
+        sys.exit(4)
+    elif _actual - _tol > _expected:
+        _REPORT["video"]["check"] = "long"
+        print(f"[run][warn] 成片比时间轴长：实测 {_actual:.2f}s，"
+              f"时间轴 {_expected:.2f}s（容差 {_tol:.2f}s）。\n"
+              "      画面内容完整，多出来的多半是末段音频尾巴或末帧余量；"
+              "若片尾出现明显空帧，检查 manifest 的 total_duration 是否漏算了"
+              "最后一段。", file=sys.stderr)
+    else:
+        _REPORT["video"]["check"] = "ok"
+
+    # ── 第 4 步 c：成片抽帧断言（可选，--check-frames）──────────────────
+    # 时长契约证明"演完了"，抽帧断言证明"画面里真的长出了内容"：抓帧超时、
+    # worker 崩、Chrome 提前退出可能产出一支时长刚好、画面整段黑屏/死平的
+    # 片子，而时长对账根本看不出。默认关闭（抽查是渲染后的一道额外闸，抽帧
+    # 有成本）；打开后量不到只降级（与时长契约同口径），断言失败阻断交付。
+    if args.check_frames:
+        try:
+            import check_frames
+            t0_fr = time.monotonic()
+            _fails, _fr = check_frames.check_video(
+                out_video, ocr=args.check_frames_ocr)
+            _REPORT["video"]["frames"] = {
+                # _fails 为 None = 一帧都没量到（"没查"），不能和空列表（"查了、
+                # 全过"）混成同一个 ok——报告里这两个结论的处置完全不同。
+                "check": "skipped" if _fails is None else (
+                    "ok" if not _fails else "failed"),
+                "skipped": _fails is None,
+                "seconds": round(time.monotonic() - t0_fr, 1),
+                # coverage 行一起留：它是"这些帧覆盖了成片的哪一段"的唯一说明
+                "detail": [l for l in (_fr or []) if "✗" in l or "跳过" in l
+                           or "coverage" in l],
+            }
+        except Exception as _e:
+            # 抽帧断言自己出 bug 不该让整条渲染失败：记进报告降级（画面验证
+            # 是附加闸，不是交付前提）。但"这道闸坏了"必须出声——只写进报告
+            # 的话，闸坏了与闸通过共用同一个 exit 0，控制台上分不出来。
+            _REPORT["video"]["frames"] = {
+                "check": "error", "skipped": True,
+                "detail": [f"抽帧断言执行异常：{type(_e).__name__}: {_e}"],
+            }
+            _fails, _fr = None, []
+            print(f"[run][warn] 抽帧断言自身异常，画面验证未执行"
+                  f"（{type(_e).__name__}: {_e}）：本次交付未经抽帧核画面，"
+                  f"请人工看一眼成片。", file=sys.stderr)
+        for line in _fr:
+            if "✗" in line or "跳过" in line or "coverage" in line:
+                print(f"[run][frame] {line}", file=sys.stderr)
+        if _fails:
+            _write_report(_report_path())
+            _print_report_summary()
+            print(
+                f"[run] 成片抽帧断言失败（{len(_fails)} 帧）：画面不是预期的"
+                f"内容（黑屏/死平/空帧）。\n"
+                "      先看渲染日志（成片同目录的 out.render.log）里有没有"
+                "`Parallel capture timed out`；有的话降 --workers 重渲。\n"
+                "      确认是某一段有意全黑（如过场）时，用 --timestamps 绕过"
+                f"该段再核。成片已留在 {out_video}，未删除。", file=sys.stderr)
+            sys.exit(5)
+
+    print(f"\n[run] 完成。成片：{out_video}", flush=True)
+    _write_report(_report_path())
+    _print_report_summary()
+
+
+if __name__ == "__main__":
+    main()

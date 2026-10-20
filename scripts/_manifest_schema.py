@@ -33,7 +33,10 @@ MANIFEST_FILENAME = "timing_manifest.json"
 # 接口，而读侧全是 .get()——takeaway 拼成 take_away 时结尾 agenda 那行悄悄退回
 # 标题、layout 拼错时段默默回到槽位版式，产物照样"完全正常"。
 MANIFEST_SENTENCE_KEYS = ("index", "text", "start_time", "duration",
-                          "speaker", "synth_failed")
+                          "speaker", "synth_failed",
+                          # 发声区间（_speech.py 量出来，二者成对出现）：句首静默
+                          # 与真正发声的长度。`duration` 仍是音频块长度、语义不变。
+                          "onset", "voiced")
 MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
                          "speed", "layout",
                          "voice_id", "voice_style",
@@ -59,6 +62,41 @@ def _validate_voice_id(value, where):
         raise ValueError(
             f"{where} 的 voice_id={value!r} 含不在预置音色里的值"
             f"（单个音色或逗号拼接串均可；可用：{', '.join(list_voice_ids())}）")
+
+
+def _validate_voiced_span(s, where):
+    """`onset` / `voiced`：成对出现，且必须物理上讲得通。
+
+    这两个字段是**精度的加分项**，不是必填——但"只写一个"永远不是有意义的状态：
+    只写 `onset` 说明手写时漏了另一条，下游会读到一个说半句的句子（换句延后了、
+    卡拉OK仍按整块时长走），而产物看起来完全正常。所以要么都写、要么都不写。
+
+    取值边界不是"规范好看"的要求，是下游真的会用它做减法：
+    `voiced` 超过 `duration` 时卡拉OK的分母比音频还长，进度永远走不满。
+    """
+    has_onset, has_voiced = "onset" in s, "voiced" in s
+    if not (has_onset or has_voiced):
+        return
+    if not (has_onset and has_voiced):
+        missing = "voiced" if has_onset else "onset"
+        raise ValueError(
+            f"{where} 只写了 {'onset' if has_onset else 'voiced'}，缺少 '{missing}'"
+            "——发声区间（句首静默 + 实际发声长度）是一对，必须同时给出或都不给"
+            "（都不给 = 按音频块从头计时，即旧行为）。正常路径是让 pipeline.py"
+            " 生成，它两个一起写。")
+    _validate_finite_number(s["onset"], f"{where}.onset", nonnegative=True)
+    _validate_finite_number(s["voiced"], f"{where}.voiced", positive=True)
+    if float(s["onset"]) + float(s["voiced"]) > float(s["duration"]) + 0.01:
+        raise ValueError(
+            f"{where} 的 onset({s['onset']}) + voiced({s['voiced']}) 超过了"
+            f" duration({s['duration']})——发声不可能比音频块还长。"
+            "手改过 start_time/duration 而没同步改这两个字段时最容易撞上这一点。")
+    if s.get("synth_failed") and float(s["voiced"]) > 0:
+        # 静音兜底句本来就没有"发声"：给它写一个正的发声长度，等于让字幕按一个
+        # 不存在的说话区间推进（画面里一片安静，字幕却在逐字点亮）。
+        raise ValueError(
+            f"{where} 是 synth_failed 的静音兜底句，不该有 voiced——"
+            "这一句没有发声区间可言，删掉 onset/voiced 两个字段即可。")
 
 
 def validate_timing_manifest(data):
@@ -153,6 +191,7 @@ def validate_timing_manifest(data):
             raise ValueError(f"{where}.speaker 必须是非空字符串")
         if "synth_failed" in s and not isinstance(s["synth_failed"], bool):
             raise ValueError(f"{where}.synth_failed 必须是布尔值")
+        _validate_voiced_span(s, where)
         if float(start) + float(duration) > float(total_duration) + TIMELINE_TOLERANCE:
             raise ValueError(f"{where} 超出 total_duration"
                              f"（允许 {TIMELINE_TOLERANCE * 1000:.0f}ms 浮点/编码裕量）")

@@ -30,6 +30,7 @@ from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: 
                        needs_speed_change, speed_marker_value, validate_speed)
 from _segments import is_content_sid  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
+from _speech import measure_voiced_span  # noqa: E402  句首发声点与发声长度（见 _speech.py）
 from _source_schema import load_segments_source  # noqa: E402
 from _manifest_schema import validate_timing_manifest, MANIFEST_FILENAME  # noqa: E402
 import _degraded as D  # noqa: E402  降级键常量（拼错即 AttributeError）
@@ -156,6 +157,23 @@ def load_env():
 # ===================================================================
 # 单句合成（网络请求经 _tts.py 的 provider 协议，本函数只管落盘/重试/变速）
 # ===================================================================
+def _sentence_entry(index, text, path, duration, ffmpeg_path):
+    """一句 → manifest 行（音频块长度 + 可选发声区间），三条产出路径共用。
+
+    三条路径（缓存命中 / 变速重测 / 新合成）各自 `round(dur, 3)` 一次，漏一条就
+    会出现"有的句子有 `onset` 有的没有"——而下游是逐句读的，缺字段的句子会静默
+    退回旧行为，看不出是哪一条漏了。所以收成一个函数，加新字段只改这里。
+
+    `onset`/`voiced` 见 `_speech.py`：量不出来就不写（下游退回按文件长度计时），
+    不进 degraded——它不改变产物内容，只是少了"这句话说到哪"的精度。
+    """
+    dur = round(duration, 3)
+    entry = {"index": index, "text": text, "file": path, "duration": dur}
+    span = measure_voiced_span(ffmpeg_path, path, dur)
+    if span:
+        entry["onset"], entry["voiced"] = span
+    return entry
+
 
 # 每句音频 (sNNN.wav) 的伴生文件后缀集合：.orig.wav 是变速前的原速备份，
 # .spd/.spd.*.tmp.wav 是语速状态，.failed 是"本句放弃"标记。凡动一句的音频，
@@ -671,6 +689,11 @@ def _manifest_sentence_entries(sentence_data):
             entry["speaker"] = s["speaker"]
         if s.get("synth_failed"):
             entry["synth_failed"] = True  # TTS 失败降级为静音占位（见 --on-fail）
+        # 发声区间（_speech.py 量出来的）：下游据此把"换句"与"念到哪"对齐到
+        # 真正开口的时刻，而不是音频块的开头。缺了就退回按文件长度计时。
+        if "onset" in s and "voiced" in s:
+            entry["onset"] = round(float(s["onset"]), 3)
+            entry["voiced"] = round(float(s["voiced"]), 3)
         manifest_sentences.append(entry)
     return manifest_sentences
 
@@ -1130,10 +1153,8 @@ def main(argv=None):
                         remove_if_exists(out_path + ".spd")
             # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
             # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
-            sd = {
-                "index": i, "text": sentences[i],
-                "file": out_path, "duration": round(dur, 3)
-            }
+            sd = _sentence_entry(i, sentences[i], out_path, dur,
+                                  ffmpeg_path)
             if i in sentence_speaker_labels:
                 sd["speaker"] = sentence_speaker_labels[i]
             if decision.synth_failed:
@@ -1215,10 +1236,8 @@ def main(argv=None):
                             voice_id=task["voice_id"],
                             voice_style=task["voice_style"], model=model,
                             base_url=base_url)
-                        sd = {
-                            "index": idx, "text": sent_orig,
-                            "file": out_path, "duration": round(dur, 3)
-                        }
+                        sd = _sentence_entry(idx, sent_orig, out_path, dur,
+                                              ffmpeg_path)
                         if idx in sentence_speaker_labels:
                             sd["speaker"] = sentence_speaker_labels[idx]
                         new_results.append(sd)
@@ -1308,6 +1327,8 @@ def main(argv=None):
                             "file": out_path, "duration": round(fallback_dur, 3),
                             "synth_failed": True,
                         }
+                        # 静音兜底句不量发声区间：它本来就没有"发声"，写了
+                        # 只会让字幕按一个不存在的说话区间推进。
                         if idx in sentence_speaker_labels:
                             sd["speaker"] = sentence_speaker_labels[idx]
                         new_results.append(sd)

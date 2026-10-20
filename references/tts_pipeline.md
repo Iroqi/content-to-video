@@ -51,8 +51,8 @@ manifest 由 pipeline 自动产出，手写少见；确需手写/裁剪时按此
   "status": "ok",
   "degraded": {},
   "sentences": [
-    {"index": 0, "text": "大家好，今天我们来看反向传播算法。", "start_time": 0.0, "duration": 3.2},
-    {"index": 1, "text": "它是神经网络学习的核心机制。", "start_time": 3.6, "duration": 2.8}
+    {"index": 0, "text": "大家好，今天我们来看反向传播算法。", "start_time": 0.0, "duration": 3.2, "onset": 0.18, "voiced": 2.74},
+    {"index": 1, "text": "它是神经网络学习的核心机制。", "start_time": 3.6, "duration": 2.8, "onset": 0.14, "voiced": 2.31}
   ],
   "total_duration": 6.4,
   "gap": 0.4,
@@ -74,7 +74,30 @@ manifest 由 pipeline 自动产出，手写少见；确需手写/裁剪时按此
 ```
 
 - 顶层必填：`schema_version`（只能 `2`）、`status`（`ok`/`degraded`）、`sentences`、`segments`（均非空）、数值 `total_duration`；`degraded` 仅 `status=degraded` 时必为非空对象。句子对象含 `index`/`text`/`start_time`/`duration`（对话段另有 `speaker`，降级句带 `synth_failed`）。
+- 其余字段见下面几段；`onset`/`voiced` 单独写在「发声区间」一节。
 - `closing_cta`（可选，单行字符串）：结尾 agenda 卡的 `→` 尾行，pipeline 从稿件顶层 `cta` 原样透传；无 agenda 版式结尾页可承载时打 `[warn] manifest 有 closing_cta，但本次没有 agenda 版式的结尾页可承载它`。
 - 每段必须自带**非空** `sentences`（分组渲染的数据源）；段内版面字段只有 `id`/`title`/`tagline`/`accent`，其余（`layout`/`speed`/`voice_id`/`voice_style`/`takeaway`/`turns`）是元数据、随段携带但不参与排版。`layout` 只在显式时才出现：opening/closing 由 pipeline 必盖（默认 `"agenda"`，稿件写 `opening_layout`/`closing_layout:"canvas"` 时改盖 `"canvas"`）。
 - 可选：`speed`（段级语速倍率，覆盖全局，例如开场/结尾用 `1.2`、正文段用 `1.5`，仅影响 atempo 变速，不影响字幕时间轴精度）；`voice_id`/`voice_style`（段级音色覆盖；opening/closing 不支持）；`turns`（对话段自动产出，`{start, end, speaker, label, voice_id?, voice_style?}`）。
 - `segments` 必须按时间轴顺序排列、恰好覆盖顶层每个 sentence index；缺句/重复/乱序直接拒。相邻两句区间不得重叠（正常至少隔 `--gap`，重叠说明时间轴被手改坏）；段内句子与顶层同 index 句子逐字段一致。
+
+## 发声区间（onset / voiced）
+
+`duration` 是**音频块**长度，里面含着句首吸气与句尾拖音。下游真正需要的是"这个人在说这话"的那一段，所以 pipeline 另量两个字段：
+
+| 字段 | 含义 | 取值 |
+| --- | --- | --- |
+| `onset` | 音频块开头到**真正开口**的秒数 | `≥ 0` |
+| `voiced` | 实际发声长度（首尾静默之外的部分，含句中换气停顿） | `> 0`，且 `onset + voiced ≤ duration` |
+
+量法：`ffmpeg silencedetect=noise=-35dB:d=0.05`（`scripts/_speech.py`），边界对齐到它的 20ms 扫描网格。50ms 是最短静音：低于它的不算停顿（齿音、爆破间隙不当停顿），句尾换气（通常 >100ms）算停顿。阈值取 −35dB 是因为实测 −30/−35/−40/−45 检出完全一致，它不是"最对"的值，是对两侧都不敏感的值。
+
+它们被谁读：
+
+- **字幕换句**：cue 起点 = `start_time + onset`，字幕在人开口那一刻才换（以前音频块一开始就换，观众读到的字幕比听到的话早半拍，页末那句还会在没人说话时亮着）。
+- **词级强调（卡拉OK）**：进度分母 = `voiced`，念完那一刻正好 100%（`references/rendering.md`「动画」）。
+
+几条边界，都是契约层直接报错（不是 warn）：只写一个、`onset + voiced > duration`、给 `synth_failed` 的静音兜底句写 `voiced`。这几种状态下游读出来都是"说半句的句子"，而产物看起来完全正常。
+
+量不出来（整句静音、非 WAV）就不写这对字段，下游退回按文件长度计时（旧行为）；**不记 degraded**——它只影响精度，不改变产物内容，不值得让正式渲染被 `--allow-degraded` 闸门拦下。
+
+手改 `start_time`/`duration` 时把这两个字段一起删掉或改对，否则会撞上面的边界。

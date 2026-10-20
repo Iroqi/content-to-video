@@ -546,6 +546,10 @@ const verseCacheOf = (v) => {
     c.lines.push({el: ln, top: ln.offsetTop,
       t0: parseFloat(ln.getAttribute("data-t0")),
       t1: parseFloat(ln.getAttribute("data-t1")),
+      // 发声长度（manifest 的 voiced，生成期写成 data-voiced）：词级强调的进度
+      // 分母。音频块开头/结尾各有一段静默，拿 t1−t0 当分母会让最后一个词先亮完
+      // 再干等。老 cue 没有这个属性 → NaN，退回整块时长（verseEmEnd 里判）。
+      voiced: parseFloat(ln.getAttribute("data-voiced")),
       // 有没有可强调的正文（生成期在行尾放的挂点，见 html_renderer._em_marker）
       em: ln.querySelector(".verse-em") !== null,
       // 覆盖层元素（生成期就位的空盒子，见 html_renderer._ved_layer）
@@ -751,6 +755,11 @@ const verseEmClear = (L) => {
   L.el.classList.remove("verse-ved-on", "verse-ved-done");
   if (L.vedSpans) for (const sp of L.vedSpans) sp.style.opacity = "";
 };
+// 念完这句的时刻：**发声**长度定，不是"到下一句开口"那一刻。
+// 没有 data-voiced（老 cue / 手写 manifest）时退回 t1——旧行为逐字节不变。
+// 上限夹在 t1：发声长度是量出来的，理论上不会越过下一句，但手改过的 manifest
+// 可能把 voiced 写大，那时宁可让进度提前走满，也别把高亮拖到下一句里。
+const verseEmEnd = (L) => (L.voiced > 0 ? Math.min(L.t1, L.t0 + L.voiced) : L.t1);
 const verseEmUpdate = (c, si, t) => {
   for (const L of c.lines) {
     if (!L.em) continue;
@@ -758,7 +767,7 @@ const verseEmUpdate = (c, si, t) => {
     const on = parseInt(el.getAttribute("data-i"), 10) === si
       && isFinite(L.t0) && isFinite(L.t1) && L.t1 > L.t0;
     if (!on) { verseEmClear(L); continue; }
-    const p = Math.max(0, Math.min(1, (t - L.t0) / (L.t1 - L.t0)));
+    const p = Math.max(0, Math.min(1, (t - L.t0) / (verseEmEnd(L) - L.t0)));
     const k = verseEmAt(el, p);
     if (k === L.lastK) continue;
     L.lastK = k;

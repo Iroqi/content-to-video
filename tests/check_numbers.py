@@ -97,6 +97,15 @@ FACTS = [
         [("references/imagery.md", r"2\.0\s*倍")],
         "严重档阈值；缺这一档说明少说了一级严重性",
     ),
+    # ── 时间轴：作者据此判断字幕什么时候换、卡拉OK从哪儿开始数 ──
+    (
+        "speech-min-silence",
+        ("const", "scripts/_speech.py", "MIN_SILENCE"), 0.05,
+        [("references/tts_pipeline.md", r"50ms 是最短静音")],
+        "发声区间的最短静音（秒）：它决定 `onset` 会不会把句尾换气吃进来，"
+        "于是直接决定字幕换句的时刻——文档与代码分开时，作者按文档算出来的"
+        "时间轴会和产物对不上",
+    ),
     (
         "crop-warn",
         ("const", "scripts/_media_size.py", "CROP_WARN"), 0.20,

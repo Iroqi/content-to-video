@@ -267,12 +267,24 @@ def _build_subtitle_cues(sentences):
     时长一律由"下一句的起点"倒推：t 与 d 各自独立四舍五入到 0.01s 时，相邻 cue
     之间会留下至多 10ms 的空洞，24fps 下恰好吞掉一帧——那一帧落在空洞里就沿用
     上一句的高亮，切换看起来慢了一帧。末句没有下一句，按自身实测时长收尾。
+
+    **起点取"开口那一刻"，不是音频块开头**：manifest 的 `onset` 是这句音频开头的
+    静默（TTS 的吸气与起音，实测几十到几百毫秒）。以前 cue 从 `start_time` 起，
+    上一句念完、下一句还没开口，字幕就已经换了——观众读到的字幕比听到的话早半拍，
+    而页末那句还会在"已经没人说话"时亮着。d 仍由相邻起点倒推，所以句间 gap 自动
+    变长（gap 的真实含义一直是"两句之间没声音的那段"）。老 manifest 没有 onset 时
+    退回 start_time。
     """
     n = len(sentences)
+
+    def _speak_on(sent):
+        return (float(sent["start_time"])
+                + max(0.0, float(sent.get("onset") or 0.0)))
+
     cues = []
     for i, sent in enumerate(sentences):
-        t = round(sent["start_time"], 2)
-        end = (round(sentences[i + 1]["start_time"], 2) if i + 1 < n
+        t = round(_speak_on(sent), 2)
+        end = (round(_speak_on(sentences[i + 1]), 2) if i + 1 < n
                else round(sent["start_time"] + sent["duration"], 2))
         si = sent.get("index", -1)
         # dt：本句"读到句尾"的区间（起点、终点）——词级强调按它把句子切成
@@ -825,12 +837,22 @@ def _verse_html(seg, sid, ac_text_attr):
         _t1 = (round(float(_sents[_k + 1]["start_time"]), 2)
                if _k + 1 < len(_sents)
                else round(float(_s2["start_time"]) + float(_s2["duration"]), 2))
+        # 发声区间（manifest 的 onset/voiced，见 _speech.py）：音频块开头与结尾
+        # 各有一段静默，真正开口的时刻在后面。词级强调的进度分母必须是**发声
+        # 长度**而不是 t1−t0，否则长句的最后一个词先亮完、再干等几百毫秒。
+        # 老 manifest 没有这两个字段 → 不写 data-voiced，运行时退回整块时长。
+        _onset = float(_s2.get("onset") or 0.0)
+        _voiced = _s2.get("voiced")
+        _voiced_attr = ""
+        if _voiced is not None:
+            _voiced_attr = f' data-voiced="{max(0.01, float(_voiced)):.2f}"'
         _vlines.append(
             # data-i 兜底与 cue 侧 si 保持一致（缺 index 都落 -1）：
             # 两边兜底值不一致时，库调用传入无 index 句子会让 JS 高亮
             # 永久失灵或错行——宁可都不高亮，也不错误高亮
             f'<div class="verse-line" data-i="{_s2.get("index", -1)}"'
-            f' data-t0="{_t0:.2f}" data-t1="{max(_t0 + 0.01, _t1):.2f}"'
+            f' data-t0="{_t0 + _onset:.2f}" data-t1="{max(_t0 + 0.01, _t1):.2f}"'
+            f'{_voiced_attr}'
             f' data-layout-allow-overlap'
             f' data-layout-allow-occlusion>'
             f'{_who_html}{esc(_s2["text"])}{_em_marker()}'

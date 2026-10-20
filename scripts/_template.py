@@ -386,6 +386,14 @@ _TEMPLATE_JSON = r'''
       }
     }
   },
+  "subtitle": {
+    "focus": {
+      "future": 0.62,
+      "past": 0.45,
+      "ratio": 0.726,
+      "cap": 3
+    }
+  },
   "canvasAmbience": {
     "rx": 135,
     "ry": 85,

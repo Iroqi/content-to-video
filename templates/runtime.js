@@ -46,11 +46,15 @@ const verseCacheOf = (v) => {
       // 分母。音频块开头/结尾各有一段静默，拿 t1−t0 当分母会让最后一个词先亮完
       // 再干等。老 cue 没有这个属性 → NaN，退回整块时长（verseEmEnd 里判）。
       voiced: parseFloat(ln.getAttribute("data-voiced")),
-      // 有没有可强调的正文（生成期在行尾放的挂点，见 html_renderer._em_marker）
+      // 有没有可强调的正文（生成期在行尾放的挂点，见 html_renderer._em_marker）。
+      // 收束也挂在它上面：没有挂点就没有逐字层，也就没有可退的 accent。
       em: ln.querySelector(".verse-em") !== null,
       // 覆盖层元素（生成期就位的空盒子，见 html_renderer._ved_layer）
       ved: ln.querySelector(".verse-ved"),
-      lastK: -1});
+      lastK: -1,
+      // 收束是否已经演过（一次性）：清场时一起复位，往回 seek 到句尾会重演，
+      // 与"cue 切回来重播词级强调"同一口径。
+      settled: false});
   }
   verseCache.set(v, c);
   return c;
@@ -147,6 +151,9 @@ const verseVedOrigin = (L) => {
 // 已念 0（彻底不画，露出正文的 accent）、未念 1（实色盖住 accent，观感等于 base 档）。
 const verseVedLit = "0";
 const verseVedDim = "1";
+// 收束态：已念的字从 accent 交还覆盖层实色。数值与 CSS 的
+// `.verse-ved-settled ... {opacity:.62}` 同值（内联会盖住 CSS，两边必须一致）。
+const verseVedSettled = "0.62";
 const verseVedGlyphs = (L) => {
   const text = L.ved ? (L.ved.getAttribute("data-text") || "") : "";
   if (L.vedSpans && L.vedText === text) return L.vedSpans;
@@ -248,7 +255,8 @@ const verseEmAt = (el, p) => {
 const verseEmClear = (L) => {
   if (L.lastK === -1) return;
   L.lastK = -1;
-  L.el.classList.remove("verse-ved-on", "verse-ved-done");
+  L.settled = false;
+  L.el.classList.remove("verse-ved-on", "verse-ved-settled");
   if (L.vedSpans) for (const sp of L.vedSpans) sp.style.opacity = "";
 };
 // 念完这句的时刻：**发声**长度定，不是"到下一句开口"那一刻。
@@ -263,6 +271,11 @@ const verseEmUpdate = (c, si, t) => {
     const on = parseInt(el.getAttribute("data-i"), 10) === si
       && isFinite(L.t0) && isFinite(L.t1) && L.t1 > L.t0;
     if (!on) { verseEmClear(L); continue; }
+    // 念到句尾那一刻做一次收束（见 verseEmSettle）。判据是**时间**、且必须写在
+    // 下面那个 `k === L.lastK` 提前返回**之前**：k 是取整后的字序号，最后不足半个字
+    // 的行程里 k 已经停在 n 不动，提前返回会把这条判据整个跳过——收束永远不触发，
+    // 且没有任何报错（踩过）。settle 自身幂等，每帧判一次代价为零。
+    if (t >= verseEmEnd(L) - 1e-6) verseEmSettle(L);
     const p = Math.max(0, Math.min(1, (t - L.t0) / (verseEmEnd(L) - L.t0)));
     const k = verseEmAt(el, p);
     if (k === L.lastK) continue;
@@ -271,8 +284,52 @@ const verseEmUpdate = (c, si, t) => {
     el.classList.add("verse-ved-on");
     verseVedOrigin(L);
     verseVedApply(L, k);
-    el.classList.toggle("verse-ved-done", k >= verseEmClip(el).n);
   }
+};
+// ── 念完之后的收束（settle）：把整句的 accent 交还给"下一句" ──────────────
+// 词级强调的目标是"念到哪儿亮到哪儿"，但念完那一刻整句仍是全亮 accent，而它
+// 与下一句刚亮起的第一个字**同色同重**——画面上同时有两个"现在的焦点"。前沿的
+// 歌词/字幕收束（Apple Music 的逐行歌词、Spotify 同步歌词、卡拉OK 的 bar 收尾）
+// 都在一句唱完时做一次回落：句内进度走满的同时整句退到"已过去"那一档，把焦点
+// 让给下一句。
+//
+// 做法不是"整句一起压暗"（一整句在 0.3s 里同时变灰，读成闪烁），而是**逐字错峰
+// 回落**：每个字按自己的序号从**句首**起依次交还覆盖层实色——于是笔画像被一支笔
+// 从前往后盖过去，收在句尾。观感是"这句话被念过去了"，不是"这句话坏掉了"。
+//
+// 时间口径只有一处真源：整段回落恰好铺满"最后一句已念完 → 下一次换句"那段留白
+// （生成期把 `--ctv-ved-settle` 按 cue 算出，见 html_renderer._settle_span 与
+// composition.css）。留白不够时**整段退化为瞬间**（不演半截），
+// 留白富余时上限封顶、不把回落拉成慢动作——两种退化都在生成期一次算完，运行时
+// 只读这两个数，不做第二次判断。没有留白的最后一句因此保持纯 accent 到页尾，
+// 与改动前逐字节一致。
+const verseSettleMs = () => {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--ctv-ved-settle");
+  return parseFloat(raw) || 0;
+};
+// 口径：整段回落铺满留白（见 _ved_settle_span 的推导），每字间隔 = 时长 ÷ 字数，
+// 于是第一个字在留白开头、最后一个字在留白收尾退回。
+const verseEmSettle = (L) => {
+  if (L.settled) return;
+  L.settled = true;
+  // 收束标记挂上（逐字延迟也要算），时长是否为 0 只决定"会不会真演"：CSS 那边
+  // 读到 0s 就是不演。这样"要不要演"只有一个判断点（生成期算出的那个数），
+  // 运行时不再重复决定一次。
+  if (verseSettleMs() <= 0) return;
+  const spans = L.vedSpans || [];
+  if (!spans.length) return;
+  // 逐字错峰：第 i 个字在「句首 + i×(时长÷字数)」那一刻开始退。整段因此恰好铺满
+  // 留白——第一个字在留白开头动，最后一个字在下一句开口前退回。
+  const step = verseSettleMs() / spans.length;
+  for (let i = 0; i < spans.length; i++) {
+    const sp = spans[i];
+    // 秒，三位小数：0.6s / 13 字 = 0.046s，`.toFixed(3)` 留得住；用两位小数会把
+    // 短句的间隔全部压成 0，整句同时退，读成闪烁（踩过）。
+    sp.style.transitionDelay = (i * step).toFixed(3) + "s";
+    // 已念的字（alpha 0）才需要退；还没念到的字本来就压暗，保持不动
+    if (sp.style.opacity === verseVedLit) sp.style.opacity = verseVedSettled;
+  }
+  L.el.classList.add("verse-ved-settled");
 };
 // ── 时间轴"这一刻"从哪来 ─────────────────────────────────────────────────
 // 逐帧渲染（截图档）**只**把 tl.time() 拨到帧时刻、不回调 onUpdate，回调只在该
@@ -287,9 +344,12 @@ const verseEmUpdate = (c, si, t) => {
 //      被误关、边界被并帧），谁报的时刻新就用谁。
 //   2. **句内书签**——每次收到时刻都重算（见 verseApply），不靠"又在同一句里"
 //      这个判断。句内仍是纯函数：只有 (t, t0, t1, 实测字宽) 四个输入。
-// 时钟锚：回调触发时 tl.time() 可能已被更晚的 seek 拨走（帧异步执行），所以先
-// 试 gsap.globalTimeline.time()——逐帧渲染下它是**渲染器当前这一帧**的时刻；
-// 它早于刚收到的时刻、或拿不到时退回收到的时刻。
+// 时钟锚：**只信主时间线的时刻**，两条通道（onUpdate 的 tl.time() 与 ticker 传
+// 来的 tl.time()）同源，取较大者只为处理"回调晚于 ticker"的次序。
+// 以前这里会先试 gsap.globalTimeline.time()（当时以为逐帧渲染下它就是"当前这一
+// 帧"），但它是**墙钟**：页面打开后一直在涨，只要碰巧 ≥ 当前 seek 到的 t 就会被
+// 当成帧时刻，于是短时间线的中后段字幕完全按墙钟跑（seek 到 1.40 却按 1.55 画，
+// 收束在句尾之前触发）。
 const cueClock = {t: -1};
 let cueSi = -1;
 // 时钟轨的时间位：按这个上限铺满全片（句末 gap 里也要有回调，否则跨句时上一句
@@ -381,13 +441,17 @@ const verseTick = (t) => {
   }
 };
 const verseSync = (t, t2) => {
-  // 时钟锚：优先全局时间线（= 当前渲染帧），它不比自己收到的时刻早就用它
+  // 时钟锚：只信"主时间线的时刻"。**不要**再拿 gsap.globalTimeline.time() 当锚：
+  // 那是墙钟（页面打开后一直在涨），只要它碰巧 ≥ 当前 seek 到的 t 就会被当成
+  // "这一帧的时刻"——于是短时间线的中后段（墙钟已经超过片长）字幕完全按墙钟
+  // 跑：seek 到 1.40 却按 1.55 画，settle 在句尾之前就触发、笔画像被快进。成片
+  // 里渲染器 seek 的时刻通常远大于墙钟，所以症状只在预览/短片上暴露，很难归因
+  // （踩过：settle 在 t=1.30 就挂上了，而句尾在 1.55）。
+  // t2 是 ticker 通道传来的 tl.time()，与 t 同源，取较大者只为处理"回调晚于
+  // ticker"的次序，不会跳到别的时钟上。
   let tt = t;
-  try {
-    const g = gsap.globalTimeline.time();
-    if (isFinite(g) && g + 1e-4 >= t) tt = g;
-  } catch (e) {}
-  if (t2 !== undefined && isFinite(t2) && t2 + 1e-4 >= t) tt = Math.max(tt, t2);
+  if (t2 !== undefined && isFinite(t2) && isFinite(tt)) tt = Math.max(tt, t2);
+  else if (!isFinite(tt) && t2 !== undefined) tt = t2;
   // 首帧（cueSi 还没定）必须放行：渲染器从 0 之外任意时刻开抓时，第一个回调
   // 就落在某句中间，这里若因"si 未定"直接返回，整片字幕都不会出现
   if (!isFinite(tt) || Math.abs(tt - cueClock.t) < 1e-4) return;

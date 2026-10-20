@@ -1,9 +1,16 @@
 """主题注册表。配色数据直接内联在本模块。包含：
   - "dark"：背景/文字主题配色（get_theme_colors；单一主题，无选择面）
   - "_ACCENT_PALETTE"：8 色 accent 色板，供 build_from_structured
-    按内容段序号轮询取色（get_accent_palette）
+    沿色温弧分配给各内容段（arc_accent_indices）
   - "_DEFAULT_ACCENT"：默认段落强调色
+  - "_ARC_CYCLE"：情绪弧循环，沿色板下标序列走一圈（arc_accent_indices）
 
+为什么色板要带"顺序"，而不是 8 支互相等价的色：色板原先是一个无序集合，
+按段序轮询 = 每段随机发一支，于是第一期片子开场是黄、第二段是蓝、第三段是
+绿……颜色只承担"这页和上页不一样"，不承担"我们讲到哪儿了"。前沿的章节式
+解说与产品片（Kurzgesagt 的章节配色、Apple 发布会按产品线换主色）用的都不
+是随机，而是**一条弧**：冷开场 → 推进段偏暖/中性 → 结论回到品牌色。观众在不
+知不觉中把"色温"读成"进度"，这是免费的一层信息。
 """
 import copy
 import functools
@@ -25,10 +32,21 @@ _THEMES = {
 }
 DEFAULT_THEME = "dark"
 _DEFAULT_ACCENT = "#2dd4bf"
+# 下标即"弧上的位置"（0 = 开场冷调，3 = 中段最暖，7 = 收束最冷）——顺序是有
+# 语义的，`tests/check_numbers.py` 不锁它，但 `_ARC_CYCLE` 依赖它。改顺序等于
+# 改全片色温走向，改之前先看一遍 test_arc_accent 里的期望序列。
 _ACCENT_PALETTE = [
-    "#ffd54f", "#4fc3f7", "#81c784", "#ffb74d",
-    "#ef5350", "#ba68c8", "#f06292", "#4dd0e1",
+    "#4fc3f7", "#81c784", "#4dd0e1", "#ffb74d",
+    "#ffd54f", "#f06292", "#ba68c8", "#ef5350",
 ]
+# 一条完整弧 = 开场一支 → 中段偏暖 → 收束回到冷调。8 支色板上走 6 步，
+# 跳过的是 1（#81c784 与 2 的青色太近，进入弧里读成"同一段"）与 6（紫，
+# 与 5 粉撞）。推进第 4 步（#ffd54f 黄，全片最亮）是全片的"峰值"——派给它
+# 的那一段在视觉上最有分量，写稿时留给结论/转折最狠的那一段。
+_ARC_CYCLE = (0, 2, 3, 4, 5, 7)
+# 弧上"峰值"位置：全片最亮的一档（#ffd54f）。arc_accent_indices 保证段数再少
+# 也走到这里，否则两三段的稿子永远看不到峰值色。
+_ARC_PEAK = 3
 
 
 def get_theme_colors(theme):
@@ -50,10 +68,12 @@ def get_theme_colors(theme):
 
 
 def get_accent_palette():
-    """返回 accent 色板（8 色列表），供按内容段序号轮询分配颜色。
+    """返回 accent 色板（8 色列表，顺序即色温弧上的位置）。
 
     唯一权威来源是本模块的 _ACCENT_PALETTE 常量；Python 侧
     （build_from_structured.py）必须从本函数读取，不要再落一份硬编码副本。
+    取色请用 `arc_accent_indices(count)` 得到下标，**不要**自己 `% len()`——
+    那会退化成"每段随机换一支"（理由见模块头）。
     """
     return list(_ACCENT_PALETTE)
 
@@ -65,6 +85,72 @@ def get_default_accent():
     （单一数据源：改动默认色只改这一处，不散落字面量）。
     """
     return _DEFAULT_ACCENT
+
+
+def arc_accent_indices(count):
+    """把 count 段映射到色板下标序列：沿 `_ARC_CYCLE` 走一条色温弧。
+
+    **为什么不是 `range(count) % len(palette)`**：那是"每段换一支"，相邻段
+    只保证不同、不保证有方向；count 一旦超过弧长就绕回开头，观众读到的是
+    "颜色又回来了"而非"又深了一层"。
+
+    **为什么返回的"下标"可以是小数**：色板只有 8 支，段数一多，整数档位
+    必然让相邻两段撞在同一支上（count=7 时中间两段同色，读成一段）。而
+    色板短本身就是事实——不该为了"每段一支整色"把弧切成碎块。所以这里按弧
+    等分取**连续位置** `pos_k = k × (span−1) / (count−1)`，小数部分表示
+    "在弧上第 i 档与第 i+1 档之间"：
+
+        3 段 → 0, 1.5, 3（冷 → 中间色 → 峰值黄）
+        4 段 → 0, 2, 2.67, 4（走到橙）
+        6 段 → 0, 2, 3, 4, 5, 7（走满整条弧）
+
+    弧尾按 `min(count, 弧长)` 与"至少走到峰值"两条取大：段数少时也要看得见
+    峰值，段数多时整条弧压进 count 段。
+
+    Returns:
+        list[float]：长度 count 的弧上位置（0 起，≤ n−1）；`int()` 得档位，
+        小数部分交给 `arc_accent()` 混色。
+    """
+    n = len(_ARC_CYCLE)
+    if count <= 0 or n == 0:
+        return []
+    if count == 1 or n == 1:
+        return [0.0] * count
+    last = count - 1
+    # 走到弧的哪一步为止：色板只有 8 支，count 一多就装不下——此时把整条弧
+    # 压进 count 段，相邻段靠 arc_accent 的中间色区分（见 docstring）。
+    # 至少走到弧上最亮那一档（_ARC_PEAK）：段数极少时若只取前两三档，全片
+    # 就永远到不了"峰值"，弧读成一条没有高潮的直线。
+    end = max(min(count, n), _ARC_PEAK + 1)
+    return [k * (end - 1) / last for k in range(count)]
+
+
+def _hex_channels(hex_color):
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def arc_accent(pos, palette=None):
+    """把弧上位置换成实际颜色：整档取原色，中间位置按比例混两支近邻色。
+
+    混色公式与 CSS `color-mix(in srgb, A 50%, B)` 同构（sRGB 通道线性插值），
+    所以同一段 accent 在 Python 侧（manifest / 画布自查）与浏览器侧
+    （`--seg-accent` 染氛围光、字幕、进度条）读到的是同一种颜色。
+    """
+    pal = palette or _ACCENT_PALETTE
+    lo = max(0, min(int(pos), len(_ARC_CYCLE) - 1))
+    frac = pos - lo
+    if frac <= 0.02 or lo == len(_ARC_CYCLE) - 1:
+        return pal[_ARC_CYCLE[lo]]
+    hi = pal[_ARC_CYCLE[lo + 1]]
+    if frac >= 0.98:
+        return hi
+    a = _hex_channels(pal[_ARC_CYCLE[lo]])
+    b = _hex_channels(hi)
+    return "#" + "".join(
+        "%02x" % int(round(a[i] + (b[i] - a[i]) * frac)) for i in range(3))
 
 
 # ── 颜色数学 ────

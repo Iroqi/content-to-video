@@ -107,8 +107,15 @@ class Render(unittest.TestCase):
     def test_who_color_var_is_per_segment(self):
         # 颜色是本段 accent 的文本安全副本，按段写在 .verse-clip 上，
         # CSS 只消费变量——CSS 里不许存第二份色值。
+        # 期望色由**同一份弧**推出（不写字面量）：测试要锁的是"标签跟着本段
+        # accent 走"，不是"第一段恰好是某支色"——后者会把色板钉死在测试里。
+        import _theme as T
+        first = T.arc_accent(T.arc_accent_indices(1)[0])
+        from _theme import ensure_text_contrast, theme_bg_stops
+        expect = ensure_text_contrast(
+            first, theme_bg_stops(T.DEFAULT_THEME), target=4.5)
         html = render()
-        self.assertIn('style="--ctv-verse-who-color:#ffd54f"', html)
+        self.assertIn(f'style="--ctv-verse-who-color:{expect}"', html)
         for aspect, font in (("portrait", "28px"), ("landscape", "24px")):
             with self.subTest(aspect=aspect):
                 self.assertIn(f"--ctv-verse-who-font:{font}", render(aspect))

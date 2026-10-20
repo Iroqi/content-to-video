@@ -15,10 +15,10 @@ from typing import Dict, List
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
-from _theme import get_accent_palette, get_default_accent  # noqa: E402
+from _theme import (arc_accent, arc_accent_indices,  # noqa: E402
+                    get_accent_palette, get_default_accent)
 from _timeline import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
-ACCENT_PALETTE = get_accent_palette()
 DEFAULT_ACCENT = get_default_accent()
 
 # 超长句提醒阈值：一句念完要憋一口气，字幕也会折成好几行占掉句子流窗口；
@@ -150,6 +150,14 @@ def _collect_blocks(source):
     # 字符集与唯一性，这里只需处理"部分段有 id、部分没有"时的命名冲突。
     explicit_ids = {(s.get("id") or "").strip()
                     for s in raw_segments} - {""}
+    # 未显式写 accent 的段沿一条色温弧取色（见 _theme.arc_accent_indices）：
+    # 弧长按"这一段在整片里的位置"算。计数只数**没写 accent**的段——显式染色
+    # 是作者已经做了决定，不该再被弧挤走，也不该把弧拉长。
+    # 注意弧是按"段序"而非"内容段序"排的：opening/closing 固定用默认色（它们是
+    # 结构性页，不属于章节弧），所以内容段 1 拿弧首、最后一段拿弧尾。
+    _unset = [i for i, s in enumerate(raw_segments)
+              if not str(s.get("accent") or "").strip()]
+    _arc_pick = dict(zip(_unset, arc_accent_indices(len(_unset))))
     for i, seg in enumerate(raw_segments, 1):
         title = seg.get("title", "")
         dialogue = seg.get("dialogue")
@@ -163,7 +171,8 @@ def _collect_blocks(source):
             if not sents:
                 raise ValueError(f"第 {i} 段（title={title!r}）分句后为空，"
                                   f"请检查文本是否以终止标点（。！？）结尾")
-        accent = seg.get("accent") or ACCENT_PALETTE[(i - 1) % len(ACCENT_PALETTE)]
+        accent = (seg.get("accent")
+                  or arc_accent(_arc_pick[i - 1]))
         extra = {}
         if seg.get("speed") is not None:
             extra["speed"] = seg["speed"]

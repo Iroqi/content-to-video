@@ -1092,8 +1092,9 @@ def _line_visibility_notes(spec, ctx):
                          "换更亮（或更暗）一档".format(key, pal[key], spec["theme"], ratio))
     accent = spec["accent"]
     if accent != get_default_accent() and accent not in get_accent_palette():
-        notes.append("accent {} 既不在本技能 accent 色板、也不是默认强调色——色板按段落轮询"
-                     "分配给各段，另挑一支会让这一页和相邻几页不同调".format(accent))
+        notes.append("accent {} 既不在本技能 accent 色板、也不是默认强调色——色板沿一条"
+                     "色温弧分配给各段（开场偏冷、中段最暖、收束回冷），另挑一支会让"
+                     "这一页脱出全片的色温走向".format(accent))
     return notes
 
 

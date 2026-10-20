@@ -491,6 +491,15 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # 句尾收束时长：这里先落 0（= 不演，CSS 规则自动失效），generate_html 的
     # 卡片循环里拿到全片 cue 之后再覆写成真值（那边才有句子表）。
     _settle_now = 0.0
+    # 句子流的焦点衰减（runtime.js 的 verseFocusOp 按离焦距离查表）。三个数都是
+    # **观感常量**，真源在模板 subtitle.focus：future/past 是"未念/已念"两档的
+    # 既有值（composition.css 里的同名兜底字面量与这里必须一致），ratio 是衰减
+    # 比——0.45 ≈ 0.62 × 0.726，"已念"本来就是"未念"沿同一条曲线多走的一步，
+    # 曲线在那里被砍断了，这里把它接下去。
+    _focus = tpl["subtitle"]["focus"]
+    _focus_future = float(_focus["future"])
+    _focus_past = float(_focus["past"])
+    _focus_ratio = float(_focus["ratio"])
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -545,7 +554,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
-  --ctv-ved-settle:{_settle_now:.2f}s;"""
+  --ctv-ved-settle:{_settle_now:.2f}s;
+  --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区

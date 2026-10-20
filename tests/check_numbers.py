@@ -130,6 +130,25 @@ FACTS = [
         [("references/writing.md", r"最多\s*6\s*字")],
         "说话人标签上墙字长上限；超了契约层直接报错，作者必须知道这个数",
     ),
+    # ── 字幕焦点衰减：作者改曲线就是改这三份抄写（模板/运行时兜底/文档） ──
+    (
+        "focus-future",
+        ("json", "scripts/_template.py", "subtitle.focus.future"), 0.62,
+        [("references/rendering.md", r"d=1→0\.62")],
+        "未念档的亮度；衰减曲线的锚点，composition.css 的兜底字面量与它必须一致",
+    ),
+    (
+        "focus-past",
+        ("json", "scripts/_template.py", "subtitle.focus.past"), 0.45,
+        [("references/rendering.md", r"d=-1→0\.45")],
+        "已念档的亮度；必须是 future×ratio（同一条曲线多走一档）",
+    ),
+    (
+        "focus-ratio",
+        ("json", "scripts/_template.py", "subtitle.focus.ratio"), 0.726,
+        [("references/rendering.md", r"ratio 0\.726")],
+        "每远一档的衰减比；0.62×0.726≈0.45 是「曲线本来就在那里」的证据",
+    ),
     # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
     (
         "default-speed",

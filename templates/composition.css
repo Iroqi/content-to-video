@@ -188,12 +188,15 @@ body{font-family:var(--ctv-font-family)}
 .verse{isolation:isolate}
 .verse::before{content:"";display:var(--ctv-verse-shade,block);position:absolute;left:calc(-1 * var(--ctv-verse-line) * 2);right:var(--ctv-verse-pad-right);bottom:calc(-1 * var(--ctv-verse-line) * 5);height:calc(var(--ctv-verse-h) * 0.8);z-index:-1;pointer-events:none;background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--ctv-bg-color) 74%,transparent) 58%,color-mix(in srgb,var(--ctv-bg-color) 90%,transparent))}
 /* active/past 与 base 的 .verse-line 是 0,2,0 对 0,1,0，层叠自然压过，不用
-   !important；运行时只往行上写 inline color，不写 opacity，没有对手。
+   !important；运行时往行上写 inline color 与 inline --ctv-line-op（焦点衰减，
+   见 runtime.js 的 verseFocusOp），后者按内联优先级盖过这两条档位。
    `--ctv-relay` 是换句接力（运行时见 runtime.js 的 verseRelay）：只在换句后的
    一小段行程里被写成 0.35→1 的实数，整段结束后运行时把它移除，这里的 `1`
    就是"没在接力"的常态值。opacity 用 min() 取两者较小者：active 行的 1.0 与
-   接力值取小 = 接力值；非活动行的 .62 与接力值取小 = 更暗的那个，两种状态
-   都不会被对方意外覆盖。 */
+   接力值取小 = 接力值；非活动行与接力值取小 = 更暗的那个，两种状态
+   都不会被对方意外覆盖。
+   0.62 / 0.45 是运行时未接管时的**兜底**；真源在 _template.py 的
+   subtitle.focus（经 --ctv-focus-* 注入），改值两边必须一起改。 */
 .verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚

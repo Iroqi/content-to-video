@@ -253,7 +253,10 @@ const verseEmAt = (el, p) => {
 // .verse-ved 复制整句原文、把未念到的字压暗——露出来的已念段就是行的 accent 色。
 // 覆盖物绝对定位、不占布局，不影响行高、折行与滚动锚点。
 const verseEmClear = (L) => {
-  if (L.lastK === -1) return;
+  // 不设"lastK === -1 就早退"的守卫（曾经有，删了）：字体就绪清缓存会把 lastK
+  // 归 −1，而行上可能还挂着上一份缓存时代写下的 verse-ved-on / settled 类——
+  // 早退会让这些类永远没人摘（症状：已过的行留着覆盖层，颜色对不齐）。全量重置
+  // 是幂等空操作，每帧多花的只是几个属性赋值。
   L.lastK = -1;
   L.settled = false;
   L.el.classList.remove("verse-ved-on", "verse-ved-settled");
@@ -355,6 +358,41 @@ let cueSi = -1;
 // 时钟轨的时间位：按这个上限铺满全片（句末 gap 里也要有回调，否则跨句时上一句
 // 的书签会冻在句尾——gap 里该维持"整句已念完"）
 const cueSpan = () => (cues.length ? cues[cues.length - 1].t + Math.max(cues[cues.length - 1].d, 0.01) : 0);
+// ── 焦点衰减（focus falloff）：句子流按"离当前句多远"决定亮度 ────────────
+// 三档阶跃（1.0 / 0.45 / 0.62）的问题在"同档内一视同仁"：0.62 的未念墙里，观众
+// 唯一找焦点的线索是最亮那行。前沿的歌词 UI（Apple Music 逐行、Spotify 同步）
+// 都按**离焦距离**衰减——渐变本身就是路标。
+//
+// 曲线不是新发明：0.62 × 0.726 ≈ 0.45，"已念"本来就是"未念"沿同一条几何衰减
+// 多走的一步，只是曲线一直被砍断在第二级。这里把它延长（真源在模板
+// subtitle.focus，经 :root 的 --ctv-focus-* 注入；下面三个默认值是**同一组数**
+// 的兜底抄写，两边必须一致——与 verseVedSettled 的内外两份同口径）：
+//   未来侧 d=1→0.62、d=2→0.45、d≥3→0.327 封住；
+//   过去侧整条提前一档：d=−1→0.45、d=−2→0.327、d≤−3→0.237。
+// 两侧在 0.45 / 0.327 处无缝拼接——"念过的比没念的同距更暗一档"是曲线错位一档
+// 的自然结果，不用特判。封在第三档：再远的行基本已滚出窗口。
+let focusRows = null;
+const focusTable = () => {
+  if (focusRows) return focusRows;
+  const cs = getComputedStyle(document.documentElement);
+  const fRaw = parseFloat(cs.getPropertyValue("--ctv-focus-future"));
+  const pRaw = parseFloat(cs.getPropertyValue("--ctv-focus-past"));
+  const rRaw = parseFloat(cs.getPropertyValue("--ctv-focus-ratio"));
+  const fut = isFinite(fRaw) && fRaw > 0 && fRaw <= 1 ? fRaw : 0.62;
+  const past = isFinite(pRaw) && pRaw > 0 && pRaw <= fut ? pRaw : 0.45;
+  const r = isFinite(rRaw) && rRaw > 0 && rRaw < 1 ? rRaw : past / fut;
+  const row = (a) => [1, a, a * r, a * r * r];
+  focusRows = {fut: row(fut), past: row(past)};
+  return focusRows;
+};
+// 返回要写上行内联的 --ctv-line-op；当前行（d=0）返回 ""＝撤内联，交还 CSS 的
+// active 档。行距 d 只在换句那一刻变，所以只在 verseApply（换句才跑）里写。
+const verseFocusOp = (d) => {
+  if (d === 0) return "";
+  const T = focusTable();
+  const row = d < 0 ? T.past : T.fut;
+  return row[Math.min(Math.abs(d), 3)].toFixed(3);
+};
 const verseApply = (si) => {
   cueSi = si;
   for (const v of verses) {
@@ -371,13 +409,16 @@ const verseApply = (si) => {
       // 非活动行恢复主题色。换色/换透明度必须是**瞬时**的：过渡只在人工预览里
       // 由 preview.js 注入，成片每一帧都得等于时间线时刻（见 composition.css）。
       L.el.style.color = (L === act && c.accent) ? c.accent : "";
+      // 焦点衰减：内联 --ctv-line-op 盖过 CSS 的 active/past 档；当前行与"本页
+      // 没有活跃句"的 verse（别的卡被盖着，不需要层级）都撤内联、交还 CSS。
+      const op = act ? verseFocusOp(di - si) : "";
+      if (op === "") L.el.style.removeProperty("--ctv-line-op");
+      else L.el.style.setProperty("--ctv-line-op", op);
     }
     if (!act) continue;
     // 两画幅里不滚动的那一侧 clip 比窗口矮，整体不滚
     c.clip.style.transform = "translateY(" + (c.clipH <= c.winH ? 0
       : Math.max(c.winH - c.clipH, Math.min(0, __CTV_VERSE_CLIP__ - act.top))) + "px)";
-    // 换句接力的起点：这一句第一次成为当前句的时刻（= 它的 cue 起点）。
-    c.relayT = _cueStart(si);
   }
 };
 // 换句接力：新句落位的那一小段行程里淡入，而不是"啪"地到位。
@@ -386,34 +427,41 @@ const verseApply = (si) => {
 // 外、平移结束时正好落位。给它补一次"从略暗到位"的 alpha，读起来是上一句被
 // 推走、下一句接着上来，而不是硬切。
 //
-// 四条约束（逐帧渲染逼出来的）：
+// 五条约束（逐帧渲染逼出来的）：
 //   1. **时间 t 的纯函数**：进度只由 (t − 本句 cue 起点) 算，不记"上一帧到哪"，
-//      乱序 seek 也幂等。
-//   2. **只动 opacity，不碰 transform**：滚动由 .verse-clip 独占；行上再写
+//      乱序 seek 也幂等。起点由 verseTick 传进来（就是当前 cue 的 t）——曾经把它
+//      缓存在 verse 缓存对象上，但字体就绪会整表清空那份缓存，relayT 丢了、行上
+//      已写出的内联值成了没人管的孤儿：开场句整句卡在接力起点 0.35，比未念档还
+//      暗（实测）。**缓存可以清，状态必须能从 t 重推**。
+//   2. **"这行上的内联值是不是我写的"看行本身**（getPropertyValue 非空），不另记
+//      布尔——那个布尔躺同一张被清的表里，丢了同样留下孤儿内联值。
+//   3. **只动 opacity，不碰 transform**：滚动由 .verse-clip 独占；行上再写
 //      transform 会与滚动叠加成错位。
-//   3. **只给"当前行"与"未来行"**：past 行有自己的 0.45 档，掺进接力会让
-//      "念过"和"刚到"两种暗法撞在一起，读不出区别。
-//   4. **结束后清掉内联值**：让 CSS 的 active/past 档位重新接管，否则内联
+//   4. **只给当前句所在 verse 的"当前行与未来行"**：past 行有自己的档位，掺进
+//      接力会让"念过"和"刚到"两种暗法撞在一起；别的 verse（被盖住的页）整表
+//      不参与——以前靠"relayT 只在有活跃行的 verse 上赋值"间接达成，状态删掉后
+//      这层保护改成显式判 di === si 是否在本 verse 里。
+//   5. **结束后清掉内联值**：让 CSS / 焦点衰减的档位重新接管，否则内联
 //      opacity 会永久压住 active 的 1.0。
 const RELAY_SECONDS = 0.32;
 const _cueStart = (si) => {
   for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
   return NaN;
 };
-const verseRelay = (c, t) => {
-  const t0 = c.relayT;
+const verseRelay = (c, t, t0, si) => {
   if (!isFinite(t0)) return;
   const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
+  const mine = c.lines.some((L) => parseInt(L.el.getAttribute("data-i"), 10) === si);
   for (const L of c.lines) {
     const past = L.el.classList.contains("past");
-    const on = (p < 1) && !past;
+    const on = mine && (p < 1) && !past;
     if (!on) {
-      if (L.relaySet) { L.el.style.removeProperty("--ctv-relay"); L.relaySet = false; }
+      if (L.el.style.getPropertyValue("--ctv-relay") !== "")
+        L.el.style.removeProperty("--ctv-relay");
       continue;
     }
     // 起点 0.35 ≈ past 档（0.45）之下一点，落位瞬间"几乎还没亮"，然后追上 1
     L.el.style.setProperty("--ctv-relay", (0.35 + 0.65 * p).toFixed(3));
-    L.relaySet = true;
   }
 };
 const verseTick = (t) => {
@@ -426,18 +474,21 @@ const verseTick = (t) => {
     // 片头/片尾的 lead-in 与 gap：沿用最后一句，但把它的 data-t1 时间之上的状态
     // 钉死在句尾——p 会随 t 继续涨，k 早已到 n，结果与句尾一致。
     if (cueSi < 0) return;
+    const tailT0 = _cueStart(cueSi);
     for (const v of verses) {
       const c = verseCacheOf(v);
       verseEmUpdate(c, cueSi, 1e9);
-      verseRelay(c, 1e9);
+      verseRelay(c, 1e9, tailT0, cueSi);
     }
     return;
   }
-  if (cues[found].si !== cueSi) verseApply(cues[found].si);
+  const curT0 = cues[found].t;
+  const curSi = cues[found].si;
+  if (curSi !== cueSi) verseApply(curSi);
   for (const v of verses) {
     const c = verseCacheOf(v);
     verseEmUpdate(c, cueSi, t);
-    verseRelay(c, t);
+    verseRelay(c, t, curT0, curSi);
   }
 };
 const verseSync = (t, t2) => {

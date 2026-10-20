@@ -165,7 +165,8 @@ from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa
                            is_full_bleed_backdrop, sanitize_svg_for_inline,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402
-from _stage_carry import bake_settled_state, global_ref_leaks  # noqa: E402
+from _stage_carry import (bake_settled_state, global_ref_leaks,  # noqa: E402
+                          infer_stage_keep)
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
                        beat_cycles, duration_tolerance)
 
@@ -1245,6 +1246,22 @@ def _director_beats(steps, seg, dflt_dur):
         return None
 
 
+def _infer_stage_keep(images, segments):
+    """接续页自动盖章：判据在 `_stage_carry.infer_stage_keep`（渲染端调同一份）。
+
+    这里只补两件生成期才有的事：按 manifest 段序传 id，以及给每个被盖章的段打
+    一行 `[notice]`——推断是"替作者写了默认值"，作者有权知道这页已经不是独立
+    起跑了（尤其在他本来就**想**让它独立重演的时候）。
+    """
+    stamped = infer_stage_keep(images, [seg["id"] for seg in segments])
+    for sid in stamped:
+        print(f"[notice] 段落 '{sid}'：与上一段同一张图、且上一段最后停在非原位的相机"
+              f"姿态，已自动按 stage:\"keep\" 接续（页界不换画、不重播入场）。要让这一页"
+              f"独立重演，把两页的 src 换开，或去掉上一段末拍那条运镜",
+              file=sys.stderr)
+    return stamped
+
+
 def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
     """跨段场景延续的生成期第二遍：上一页"演完之后"的画面 = 下一页的起点。
 
@@ -1257,6 +1274,9 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
     """
     if not images:
         return
+    # 自动接续盖章：必须在这里（第一遍已把上一页净化内联完）——判据要看
+    # `inline_svg`，提前到第一遍之前就问等于永远问不到。
+    _infer_stage_keep(images, segments)
     for i, seg in enumerate(segments):
         sid = seg["id"]
         entry = images.get(sid)

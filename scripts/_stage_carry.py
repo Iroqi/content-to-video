@@ -453,3 +453,62 @@ def global_ref_leaks(markup, steps):
                 out.append((i, sel))
                 break
     return out
+
+
+def infer_stage_keep(images, seg_ids, src_of=None):
+    """给"上一页推近、本页同一张图继续讲"的接续页自动盖章 `stage:"keep"`。
+
+    **为什么让机器推断**：`stage:"keep"` 曾是唯一一处"字面没写就一定是错的"的
+    字段——作者把一张 SVG 切成两页、第一页末拍把 `#cam` 推到局部、第二页接着讲
+    那个局部，漏写 `stage` 的代价是页界处整幅回弹（观众看到的是"换了一幅画"），
+    而生成期全绿、`hyperframes check` 也看不见。触发条件完全从稿子结构推得出来，
+    就不该让作者记住（与 ken burns 的收尾钉住、`draw` 的收起态前置同一类）。
+
+    **判据（三条同时成立；任何一条不成立就维持原样）**：
+
+    1. 本页 `src` 与上一段 `src` **完全相同**（不同图无从烘焙，硬写也是 error）；
+    2. 上一段**已内联**（写了 director 且净化过——没内联就没有可烘焙的元素态）；
+    3. 上一段 `#cam` 的**收尾位不是原位**：推近、平移，或显式给了原点都算。
+       收尾位回原位时"从原图起跑"与"从上一页收尾起跑"是同一幅画，不盖章更诚实。
+       收尾位读不出（`resolved=False`）或永不停下（`repeat:-1`）一律不推断——宁可
+       让作者显式写 stage，也不按一个编出来的姿态盖章。
+
+    **不覆盖显式声明**：本页自己写了 `stage` 就一个字不动。推断只补空缺。
+
+    **为什么不是 error**：漏写 stage 是默认值问题，不是数据错误；按 error 拦只会
+    让作者学会"无脑加一行"。盖章之后，这个字段从"必须记住"变成"只在想要非默认
+    行为时才需要写"——而那正是默认值该有的样子。
+
+    Args:
+        images: {段 id: 媒体条目}（同一份会被就地盖章）；
+        seg_ids: manifest 段序里的 id 列表；
+        src_of: 可选，``sid -> src`` 的取值器。渲染端手里是归一化后的
+            ``{src, type, opts}``，src 与 opts 分家存放，传 ``lambda s: imgs[s]["src"]``
+            即可；缺省读条目自己的 ``src`` 键。
+
+    Returns:
+        list[str]：本次被盖章的段 id（调用方据此打一行 `[notice]`）。
+    """
+    get_src = src_of or (lambda k: (images.get(k) or {}).get("src"))
+    stamped = []
+    for i, sid in enumerate(seg_ids):
+        if i == 0:
+            continue
+        entry = images.get(sid)
+        if not entry or entry.get("stage"):
+            continue
+        prev_entry = images.get(seg_ids[i - 1]) or {}
+        if not prev_entry.get("inline_svg"):
+            continue
+        src = get_src(sid)
+        if not src or src != get_src(seg_ids[i - 1]):
+            continue
+        steps = (prev_entry.get("director") or {}).get("steps") or []
+        pose = cam_resting_pose(steps)
+        if not pose or not pose.get("resolved") or not pose.get("rests"):
+            continue
+        if _pose_is_identity(pose) and pose.get("origin") is None:
+            continue
+        entry["stage"] = "keep"
+        stamped.append(sid)
+    return stamped

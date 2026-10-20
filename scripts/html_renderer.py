@@ -27,6 +27,7 @@ from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
+from _stage_carry import infer_stage_keep
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -2142,6 +2143,13 @@ def generate_html(manifest, audio_src, images=None,
     # ── 配图/视频归一化（只做一次）─────────────────────────────────
     # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
     images = _normalize_images(images or {})
+    # 接续页自动盖章：判据唯一真源在 `_stage_carry.infer_stage_keep`。放在这里是为了
+    # **渲染端与生成期看到同一个答案**——生成期（gen_hyperframes.director_prepare）
+    # 拿它决定"烘不烘焙"，渲染端拿它决定"要不要擦进来 / 重播入场"。两边各判一次
+    # 就一定会分家，而分家的症状是"烘了却照样擦进来"，烘焙的意义正好被抵消掉。
+    # 判据只读 src / director / inline_svg，这三样在归一化前后同值。
+    infer_stage_keep(images, [seg["id"] for seg in manifest["segments"]],
+                     src_of=lambda sid: images[sid]["src"])
     total_dur = manifest["total_duration"]
     sentences = manifest["sentences"]
     # <script src> 属性上下文转义：CLI 传的本地路径可能含 & 或引号，裸插

@@ -596,5 +596,136 @@ class CarriedPageIsNotReintroduced(unittest.TestCase):
         self.assertIn('id="line-seg-a"', html)
 
 
+class InferStageKeep(unittest.TestCase):
+    """接续页的**自动盖章**：漏写 `stage:"keep"` 不该让页面在接缝处回弹。
+
+    锁四件事：
+    1. 上一页末拍停在非原位相机姿态 + 同一张图 → 盖章（这是唯一会漏写的真实场景）；
+    2. 收尾位回原位 → 不盖章（此时"接续"与"重演"是同一幅画，不盖章更诚实）；
+    3. 读不出姿态 / 永不停下 / 不同图 / 上一页没内联 → 一律不推断（宁可让作者
+       显式写，也不按编出来的姿态盖章）；
+    4. **显式声明不被覆盖**（推断只补空缺），且渲染端与生成期看到同一个答案。
+    """
+
+    SAME = "images/stage.svg"
+
+    def _imgs(self, steps_a, *, src_a=None, src_b=None, stage_b=None, svg=True):
+        a = {"src": src_a or self.SAME, "director": {"steps": steps_a}}
+        if svg:
+            a["inline_svg"] = "<svg/>"
+        b = {"src": src_b or self.SAME}
+        if stage_b is not None:
+            b["stage"] = stage_b
+        return {"seg-a": a, "seg-b": b}
+
+    def _stamp(self, imgs):
+        return SC.infer_stage_keep(imgs, ["seg-a", "seg-b"])
+
+    def test_push_in_camera_gets_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6,
+                                                              "svgOrigin": "540 660"}}])
+        self.assertEqual(self._stamp(imgs), ["seg-b"])
+        self.assertEqual(imgs["seg-b"]["stage"], "keep")
+
+    def test_pan_only_camera_gets_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"x": -120}}])
+        self.assertEqual(self._stamp(imgs), ["seg-b"])
+
+    def test_resting_back_at_origin_is_not_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}},
+                           {"at": 1, "target": "#cam", "to": {"scale": 1, "x": 0, "y": 0}}])
+        self.assertEqual(self._stamp(imgs), [])
+        self.assertNotIn("stage", imgs["seg-b"])
+
+    def test_no_camera_at_all_is_not_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#plate", "to": {"opacity": 1}}])
+        self.assertEqual(self._stamp(imgs), [])
+
+    def test_infinite_camera_loop_is_not_stamped(self):
+        """`repeat:-1` 没有收尾位——不按编出来的姿态盖章。"""
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.3},
+                            "repeat": -1}])
+        self.assertEqual(self._stamp(imgs), [])
+
+    def test_unresolved_pose_is_not_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": "/=0"}}])
+        self.assertEqual(self._stamp(imgs), [])
+
+    def test_different_src_is_not_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
+                          src_b="images/other.svg")
+        self.assertEqual(self._stamp(imgs), [])
+
+    def test_previous_page_not_inlined_is_not_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}], svg=False)
+        self.assertEqual(self._stamp(imgs), [])
+
+    def test_explicit_stage_is_never_overwritten(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
+                          stage_b="keep")
+        self.assertEqual(self._stamp(imgs), [])
+        # 契约层放行的只有 keep；写成别的值时也**不覆盖**——由契约层去报，
+        # 推断不该悄悄把作者的字改成"正确"的值。
+        imgs2 = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
+                           stage_b="carry")
+        self.assertEqual(self._stamp(imgs2), [])
+        self.assertEqual(imgs2["seg-b"]["stage"], "carry")
+
+    def test_first_page_is_never_stamped(self):
+        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}])
+        self.assertEqual(SC.infer_stage_keep(imgs, ["seg-a"])[:1], [])
+
+
+class InferStageMatchesRenderer(unittest.TestCase):
+    """生成期盖的章必须让渲染端**也**认出来：否则烘了却照样擦进来。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_carried_page_hard_cuts_without_an_explicit_stage(self):
+        import contextlib
+        import io
+        from html_renderer import generate_html
+        rel = _write_svg(self.tmp.name, "stage", STAGE_SVG)
+        # 句子必须带 text、段必须带 title：渲染端 `_verse_html` / `title_wrap`
+        # 直接按这两个键取值，只给骨架会在这里 KeyError
+        segs = [{"id": "seg-a", "title": "甲",
+                 "sentences": [{"index": 0, "start_time": 0.0,
+                                "duration": 2.0, "text": "第一句。"}]},
+                {"id": "seg-b", "title": "乙",
+                 "sentences": [{"index": 1, "start_time": 2.4,
+                                "duration": 2.0, "text": "第二句。"}]}]
+        # str(rel) 而不是同一个对象：_write_svg 会**就地**把 src 改写成
+        # images/<name>.svg，两页共用同一个字符串实例时被改的会是同一份，
+        # 造出的"同一张图"其实是测试自己嫁接的
+        images = {
+            "seg-a": {"src": str(rel), "director": {"steps": [
+                {"at": 0, "target": "#cam", "to": {"scale": 1.4}}]}},
+            "seg-b": {"src": str(rel)},
+        }
+        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        self.assertEqual(errs, [])
+        # 生成期盖了章 → 第二页拿到烘焙后的副本
+        self.assertEqual(images["seg-b"].get("stage"), "keep")
+        self.assertIn("inline_svg", images["seg-b"])
+        m = {
+            "total_duration": 4.8,
+            "sentences": [
+                {"index": 0, "start_time": 0.0, "duration": 2.0, "text": "第一句。",
+                 "seg": "seg-a"},
+                {"index": 1, "start_time": 2.4, "duration": 2.0, "text": "第二句。",
+                 "seg": "seg-b"},
+            ],
+            "segments": segs,
+        }
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav", images=images)
+        # 渲染端同样认成接续页：挂载即音频起点（硬切），不擦进来
+        self.assertIn('id="seg-b" class="clip seg-card" data-start="2.40"', html)
+        self.assertNotIn('tl.from("#img-seg-b"', html)
+
+
 if __name__ == "__main__":
     unittest.main()

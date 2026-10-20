@@ -7,6 +7,7 @@ remain outside this module.
 """
 import html
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -258,6 +259,30 @@ def _normalize_images(images):
     return normalized
 
 
+def _subtitle_cue_spans(sentences):
+    """每句字幕 cue 的 (起点, 终点, 全局句序)：**唯一口径**，两个消费者共用。
+
+    - `_build_subtitle_cues` 把它序列化成运行时的 cue 数组；
+    - `_ved_settle_seconds` 读同一份，算"句尾留白有多长、下一个接手的是不是同一页"。
+
+    两处各算一遍的话，收束会以分钟级的偏差"以为"某句后面还有留白（对着另一份
+    起点/终点算），而症状只是"某几句念完之后没收"——没人会去查生成期的两份算术。
+    """
+    n = len(sentences)
+
+    def _speak_on(sent):
+        return (float(sent["start_time"])
+                + max(0.0, float(sent.get("onset") or 0.0)))
+
+    spans = []
+    for i, sent in enumerate(sentences):
+        t = _speak_on(sent)
+        end = (_speak_on(sentences[i + 1]) if i + 1 < n
+               else float(sent["start_time"]) + float(sent["duration"]))
+        spans.append((round(t, 2), round(end, 2), sent.get("index", -1)))
+    return spans
+
+
 def _build_subtitle_cues(sentences):
     """Build the JS cue payload (t/d/si) from sentence timing.
 
@@ -275,18 +300,8 @@ def _build_subtitle_cues(sentences):
     变长（gap 的真实含义一直是"两句之间没声音的那段"）。老 manifest 没有 onset 时
     退回 start_time。
     """
-    n = len(sentences)
-
-    def _speak_on(sent):
-        return (float(sent["start_time"])
-                + max(0.0, float(sent.get("onset") or 0.0)))
-
     cues = []
-    for i, sent in enumerate(sentences):
-        t = round(_speak_on(sent), 2)
-        end = (round(_speak_on(sentences[i + 1]), 2) if i + 1 < n
-               else round(sent["start_time"] + sent["duration"], 2))
-        si = sent.get("index", -1)
+    for t, end, si in _subtitle_cue_spans(sentences):
         # dt：本句"读到句尾"的区间（起点、终点）——词级强调按它把句子切成
         # "已念 / 未念"两段。与 d 的终点同一口径（下一句起点），末尾句取自身实测
         # 时长。写成定长小数，避免 json 里出现 3.5999999 这种尾巴。
@@ -295,12 +310,76 @@ def _build_subtitle_cues(sentences):
     return ",\n    ".join(cues)
 
 
+def _ved_settle_seconds(sentences, page_last_si):
+    """词级强调"念完之后的收束"该演多久（秒）：0 = 不演。
+
+    收束（见 runtime.js 的 verseEmSettle / composition.css 的 .verse-ved-settled）
+    是把整句 accent **逐字**交还给"已过去"那一档。它不占独立节拍，只借用**句尾
+    留白**——上一句念完、下一句还没开口的那段空档，以前是画面完全静止的空白，现在
+    让最后一个动作在里面收尾。
+
+    三条边界都在生成期一次算完（运行时只读一个数）：
+
+    - **只收"下一句会在同一页里接手"的句**：cues 是**每页一份**的（见 generate_html
+      的 __CTV_CUES__），所以某一页的最后一句后面跟的是转场——它整句的 accent 会随
+      页面被擦走。`page_last_si` 因此显式传进来，不靠 si 连续性去猜。
+    - **留白里先扣掉换句接力**：新一句浮起用 `--ctv-relay`（0.32s，composition.css
+      / runtime.js 的 RELAY_SECONDS）。收束要在这之前收干净，否则同一行里"旧的还在
+      退、新的已经进"两件事叠着演。
+    - **上限 SETTLE_MAX_SECONDS、地板两帧**：见那两个常量。
+    """
+    spans = _subtitle_cue_spans(sentences)
+    # 留白 = 下一句开口 − **本句念完**。`spans` 的第二项是"cue 的终点"（= 下一句
+    # 起点），不是"这句念完的时刻"——两者只在本句没有尾静默时才重合。所以念完
+    # 时刻要单独从 voiced 取，与运行时 verseEmEnd 同一口径（`_speak_on(sent)` 同
+    # 一函数，runtime 用 t0 + voiced，这里写成等价的 start + onset + voiced）。
+    # 首尾相接的 fixture（每句 start = 上一句 start + duration，无 onset/voiced）
+    # 因此得到 0 留白 → 不演，正是期望。
+    by_index = {s.get("index", -1): s for s in sentences}
+    best = None
+    for t, end, si in spans:
+        if si in page_last_si:
+            continue
+        sent = by_index.get(si) or {}
+        voiced = float(sent.get("voiced") or 0.0)
+        # 没有 voiced（老 cue / 手写 manifest）：运行时退回 t1，念完 = 本 cue 终点，
+        # 这里同口径写成 end，于是留白恒为负 → 不演，与改动前逐字节一致。
+        done = min(end, t + voiced) if voiced > 0 else end
+        hold = end - done - RELAY_SECONDS
+        if best is None or hold < best:
+            best = hold
+    if best is None or best <= 0:
+        return 0.0
+    # 上限封顶与网格取整：收束是逐字错峰的过渡，落在帧间的那几毫秒不会有人看见，
+    # 而整段时长的十进制尾巴（0.58）会一路带进 CSS 变量与文档的示例里。
+    # **向下**取整而不是四舍五入：这个数就是"留给收束的窗口"，向上圆会把最后一两
+    # 个字挤进下一句已经开口的那一帧——宁可少演 20ms，也不让两句的动作重叠。
+    d = math.floor(min(best, SETTLE_MAX_SECONDS) * 20) / 20
+    return d if d >= SETTLE_MIN_SECONDS else 0.0
+
+
 _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
 
 # Ken Burns 的单轴取景幅度下限：低于这个值观众读不出方向，这一拍就退化成纯推近
 # （等于白丢一次"每段各有取景"的机会）。用法见 `_image_drift_lines` 的 `_aim`。
 # 不登记进 check_numbers——它不改变作者写法，改了也不需要重算别的数。
 AIM_FLOOR = 0.35
+
+# 句尾收束（verse settle）的时长上限（秒）。收束只能演在"这句已经念完、下一句
+# 还没开口"的那段留白里（见 `_ved_settle_seconds`）。留白 = 下一句开口 − 本句
+# 念完 − 换句接力，与 `--gap` **不是**同一个东西：TTS 的句尾拖音、下一句的起音
+# 静默都会参与，长句之后偶尔能到 1s 以上。上限封顶的理由是**别让留白富余变成
+# 慢动作**：2 秒的空档里花 2 秒把一句话逐字退回去，观众读到的是"画面卡住了"，
+# 而它本该是一个几乎看不见的收尾动作。
+SETTLE_MAX_SECONDS = 0.6
+# 收束时长落到 0.05s 网格后低于这个值就不演（30fps 下一帧 = 0.033s，不足两帧的
+# 回落只会是一下闪烁）。不演 = 变量写 0，CSS 规则里那段过渡自动没有时长、整条
+# 失效，成片与改动前逐字节一致。
+SETTLE_MIN_SECONDS = 0.08
+# 换句接力的入场时长（秒）：新一句浮起、"旧的压到 0.45"的过渡窗。收束必须在这
+# 之前把旧句退干净，所以它在算留白时被扣掉。**这是第二份真源**，第一份在
+# templates/runtime.js 的 RELAY_SECONDS——test_ved_settle 锁住两者相等。
+RELAY_SECONDS = 0.32
 
 
 # ── 渲染上下文：一次派生，处处共用 ──────────────────────────────────────
@@ -409,6 +488,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # CSS 只拿 var(--ctv-amb-*) 拼字符串，不在 [data-aspect] 分支里存第二份。
     _amb = tpl_layout["ambience"]
     _camb = tpl["canvasAmbience"]
+    # 句尾收束时长：这里先落 0（= 不演，CSS 规则自动失效），generate_html 的
+    # 卡片循环里拿到全片 cue 之后再覆写成真值（那边才有句子表）。
+    _settle_now = 0.0
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -462,7 +544,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-amb-agenda-cx:{_amb["agendaCx"]}%;--ctv-amb-agenda-cy:{_amb["agendaCy"]}%;
   --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
-  --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;"""
+  --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
+  --ctv-ved-settle:{_settle_now:.2f}s;"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区
@@ -2266,8 +2349,15 @@ def generate_html(manifest, audio_src, images=None,
     # 不会撞到同一个来向。
     _image_ordinal = 0
     _title_ordinal = 0
+    # 句尾收束的时长：全片一个数，取**所有非页尾句**里最短的那段留白（见
+    # _ved_settle_seconds）——任何一句收不完都会和下一句撞车，所以按最紧的那句定。
+    # 页尾句的 si 来自同一批 manifest 句子。
+    _page_last_sis = {c["seg"]["sentences"][-1].get("index", -1)
+                      for c in clips if c["seg"]["sentences"]}
+    _settle_s = _ved_settle_seconds(sentences, _page_last_sis)
     for clip in clips:
         card = _prepare_card(rc, clip)
+        card.settle_s = _settle_s
         if _still_image_carrier_sid(rc, card) is not None:
             card.drift_ordinal = _drift_ordinal
             _drift_ordinal += 1
@@ -2287,6 +2377,11 @@ def generate_html(manifest, audio_src, images=None,
     # ── Subtitle cues ──────────────────────────────────────────────
     sub_cues_js = _build_subtitle_cues(sentences)
 
+    # 收束变量只在真会演时才改写（0 值已在上下文里写好，_fill 的替换串同长，
+    # 不存在的占位符不会被误替换）。
+    if _settle_s > 0:
+        rc.root_vars = rc.root_vars.replace(
+            "--ctv-ved-settle:0.00s;", f"--ctv-ved-settle:{_settle_s:.2f}s;")
     gsap_code = "\n  ".join(gsap_lines)
 
     # ── 装配最终 HTML ────────────────────────────────────

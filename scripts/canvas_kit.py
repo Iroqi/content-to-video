@@ -50,8 +50,7 @@ from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # n
                            seeded_wobble, write_text_atomic)
 # 满幅判据整个走 _svg_sanitize._covers_viewbox（阈值常量也在它那边）：check_svg
 # 与这里判的是同一件事，判据就该只有一份。
-from _svg_sanitize import (FULL_BLEED_EDGE, FULL_BLEED_FRAC,  # noqa: E402  满幅阈值唯一真源
-                           _covers_viewbox)
+from _svg_sanitize import FULL_BLEED_FRAC, _covers_viewbox  # noqa: E402  满幅阈值唯一真源
 from _template import (get_canvas, get_image_box, load_template,  # noqa: E402
                        normalize_aspect, put_override)
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
@@ -929,19 +928,24 @@ _EMITTERS = {"panel": _emit_panel, "polyline": _emit_polyline, "bars": _emit_bar
              "circle": _emit_circle, "text": _emit_text, "rule": _emit_rule}
 
 
-def _context(spec):
+def _context(spec, nodes=None):
+    """发射器共用的取值上下文（模板尺寸 + 取色表），顺带把这段 SVG 的 body 攒起来。
+
+    `nodes` 由调用方给一个空列表时，`note=True` 把它变成一段 SVG 注释；不给就丢掉。
+    render_svg 正文与 --epilog 的示例（要真的出图验证过才敢印）因此共用**同一个**
+    渲染管线，不必让第二处再写一遍"元素循环 + 起始态 + 注释"。
+    """
     w, h = get_canvas(spec["aspect"])
     return {"canvas": (w, h), "aspect": spec["aspect"], "theme": spec["theme"],
             "tiers": TIERS[spec["aspect"]], "line_w": LINE_W[spec["aspect"]],
             "panel_r": PANEL_R[spec["aspect"]],
-            "pal": _palette(spec["theme"], spec["accent"])}
+            "pal": _palette(spec["theme"], spec["accent"]),
+            "note": nodes.append if nodes is not None else lambda _line: None}
 
 
-def render_svg(spec):
-    """spec → 一张画布页 SVG 文本（viewBox 按画幅原生分辨率，页底透明）。"""
-    ctx = _context(spec)
-    cw, ch = ctx["canvas"]
-    nodes = []
+def _emit_body(spec, ctx):
+    """元素 → body 片段列表（每个元素一段，含它自己的起始态与可选注释）。"""
+    out = []
     for i, el in enumerate(spec["elements"], 1):
         where = f"spec 的 elements[{i}]（kind={el['kind']!r}）"
         if role_of(el) == "content" and "id" not in el:
@@ -968,16 +972,18 @@ def render_svg(spec):
                                 if not any(k == "opacity" for k, _ in node["attrs"])
                                 else []))
         if note:
-            nodes.append(("note", note.strip()))
-        nodes.append(("node", node))
+            out.append("  " + note.strip())
+        out.append(_dump(node, 1))
+    return out
+
+
+def render_svg(spec):
+    """spec → 一张画布页 SVG 文本（viewBox 按画幅原生分辨率，页底透明）。"""
+    ctx = _context(spec)
+    cw, ch = ctx["canvas"]
     font = load_template()["typography"]["fontFamily"]
     style = _node("style", OrderedDict(), text="text{font-family:%s}" % font, raw=True)
-    body = [_dump(style, 1)]
-    for kind_, val in nodes:
-        if kind_ == "note":
-            body.append("  " + val)
-        else:
-            body.append(_dump(val, 1))
+    body = [_dump(style, 1)] + _emit_body(spec, ctx)
     head = ('<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" '
             'viewBox="0 0 {} {}">').format(_num(cw), _num(ch), _num(cw), _num(ch))
     # 注释放在根节点**之内**：整张文件仍只有一个根元素，任何按 DOM 读它的工具
@@ -1111,6 +1117,40 @@ def _line_visibility_notes(spec, ctx):
 
 
 # ── CLI ─────────────────────────────────────────────────────
+# --help 印的那份完整 spec。它是**数据不是文案**：validate_spec 与 _emit_body
+# 真跑一遍，所以"照抄能跑"由代码保证，而不是靠人记得同步改示例。
+_EXAMPLE_SPEC = {
+    "aspect": "portrait",
+    "elements": [
+        {"kind": "panel", "id": "panel", "x": 80, "y": 300, "w": 920, "h": 700},
+        {"kind": "text", "id": "t", "x": 80, "y": 200, "content": "季度营收", "tier": "title"},
+        {"kind": "axis", "id": "ax", "orient": "y", "at": 940, "from": 400, "to": 940,
+         "ticks": [{"v": 400, "label": "8"}, {"v": 670, "label": "4"}, {"v": 940, "label": "0"}]},
+        {"kind": "bars", "id": "bars", "base_y": 940,
+         "bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"},
+                  {"x": 320, "w": 120, "h": 350, "label": "Q2"},
+                  {"x": 480, "w": 120, "h": 280, "label": "Q3"},
+                  {"x": 640, "w": 120, "h": 560, "label": "Q4"},
+                  {"x": 800, "w": 120, "h": 420, "label": "Q5"}]},
+        {"kind": "text", "id": "lab", "x": 500, "y": 1010, "content": "Q1–Q5", "tier": "label"},
+    ],
+}
+
+
+def _example_spec_text():
+    """把 _EXAMPLE_SPEC 印成 JSON：两空格缩进、一行一个元素（改坐标最顺手）。"""
+    rows = [_json_one_line(el) for el in _EXAMPLE_SPEC["elements"]]
+    return "\n".join(['  {',
+                       '    "aspect": %s,' % json.dumps(_EXAMPLE_SPEC["aspect"]),
+                       '    "elements": [',
+                       ",\n".join("      " + r for r in rows),
+                       "    ]", "  }"])
+
+
+def _json_one_line(value):
+    """紧凑 JSON：`{"a": 1, "b": 2}`（默认分隔符没有逗号后空格，这里补回来）。"""
+    return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+
 def _epilog():
     """--help 的尾巴：一份能照抄就跑的完整 spec + 七种 kind 的最小片段。
 
@@ -1131,24 +1171,9 @@ def _epilog():
              "  ⚠ 这份 spec 出的 SVG 只配 layout:\"canvas\" 的段落。槽位版式（默认）",
              "    铺的槽位框是 4:3（竖屏 {}×{}），不是整页画幅——尺寸错了不会报".format(bw, bh),
              "    错，cover 会切掉图边缘上的字。",
-             "",
-             "  {",
-             '    "aspect": "portrait",',
-             '    "elements": [',
-             '      {"kind": "panel", "id": "panel", "x": 80, "y": 300, "w": 920, "h": 700},',
-             '      {"kind": "text",  "id": "t",    "x": 80, "y": 200, "content": "季度营收", "tier": "title"},',
-             '      {"kind": "axis",  "id": "ax",   "orient": "y", "at": 940, "from": 400, "to": 940,',
-             '       "ticks": [{"v": 400, "label": "8"}, {"v": 670, "label": "4"}, {"v": 940, "label": "0"}]},',
-             '      {"kind": "bars",  "id": "bars", "base_y": 940,',
-             '       "bars": [{"x": 160, "w": 120, "h": 210, "label": "Q1"},',
-             '                {"x": 320, "w": 120, "h": 350, "label": "Q2"},',
-             '                {"x": 480, "w": 120, "h": 280, "label": "Q3"},',
-             '                {"x": 640, "w": 120, "h": 560, "label": "Q4"},',
-             '                {"x": 800, "w": 120, "h": 420, "label": "Q5"}]},',
-             '      {"kind": "text",  "id": "lab",  "x": 500, "y": 1010, "content": "Q1–Q5", "tier": "label"}',
-             "    ]",
-             "  }",
-             "",
+             ""]
+    lines += [_example_spec_text(), ""]
+    lines += [
              "七种 kind 的最小可跑片段（键集封闭，写错的键不生效也不被读出）："]
     for line in _kind_catalog():
         lines.append(line)

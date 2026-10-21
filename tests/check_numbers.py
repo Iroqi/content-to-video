@@ -149,6 +149,14 @@ FACTS = [
         [("references/rendering.md", r"ratio 0\.726")],
         "每远一档的衰减比；0.62×0.726≈0.45 是「曲线本来就在那里」的证据",
     ),
+    (
+        "focus-scale",
+        ("json", "scripts/_template.py", "subtitle.focus.scale"), 0.94,
+        [("references/rendering.md", r"subtitle\.focus\.scale.{0,12}默认\s*`0\.94`"),
+         ("references/rendering.md", r"0\.94³=0\.8306")],
+        "离焦的第二个维度（尺寸）每远一档的缩放比；封两档是守住 26px 可读下限，"
+        "改大改小都会动到「远处的行还读不读得出来」",
+    ),
     # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
     (
         "default-speed",

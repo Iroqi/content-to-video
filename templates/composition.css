@@ -197,7 +197,16 @@ body{font-family:var(--ctv-font-family)}
    都不会被对方意外覆盖。
    0.62 / 0.45 是运行时未接管时的**兜底**；真源在 _template.py 的
    subtitle.focus（经 --ctv-focus-* 注入），改值两边必须一起改。 */
-.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+/* 离焦的**第二个维度**是尺寸：远处的行不只更暗，也更小（前沿歌词 UI 的排版层级，
+   见 runtime.js 的 verseFocusScale）。它必须走 transform 而不是改 font-size——
+   改字号会重排：折行点变、offsetTop 变（滚动锚点漂移）、覆盖层那份复制文本折到
+   别处去，重影随之而来。transform 不动布局盒，上面三样一个都不碰。
+   min() 与 opacity 那条完全同一条合成规则：焦点档与接力值谁更"远"听谁的。
+   之所以**只写 scale 不写 translate**：滚动归 .verse-clip 独占（它的 translateY
+   按 offsetTop 算落位），行上再叠位移会让行偏离锚点；scale 不改布局盒，锚点照旧。
+   transform-origin 锚**左缘**：字幕是左对齐的，绕中心缩放会让行的左边界在换句时
+   左右抖——那道左缘是句子流里唯一不动的视觉基准线，不能让它动。 */
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */

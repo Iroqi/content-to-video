@@ -1940,6 +1940,20 @@ def _image_drift_lines(rc, card):
     return out + [pin]
 
 
+def _cycle_pick(base, rhythm, ordinal):
+    """按段序取节奏档：`rhythm[ordinal % len]` 逐项覆盖 `base`；没写 rhythm 就用 base。
+
+    标题与配图入场共用这一条取模——**有限集轮换而不是随机**：随机让相邻两段有概率
+    撞成同一种，严格轮换保证连续 len 段必不重样。两处各写一份 `%` 的话，"轮换周期"
+    就成了两个数，改档位表时没人看得出哪一处会先错位。
+    """
+    if not rhythm:
+        return base
+    pick = dict(base)
+    pick.update(rhythm[ordinal % len(rhythm)])
+    return pick
+
+
 def _title_rhythm(a_title, ordinal):
     """按段序取标题入场的节奏档，让每章开场不是同一套曲线。
 
@@ -1953,13 +1967,8 @@ def _title_rhythm(a_title, ordinal):
     `_template.titleEntrance.rhythm` 里，`from`/`y`/`ease` 逐项覆盖同一套键——
     缺 `rhythm` 时退回顶层的 `from`/`ease`，老产物行为不变。
     """
-    base = {"from": a_title["from"], "y": 0, "ease": a_title["ease"]}
-    rhythm = a_title.get("rhythm")
-    if not rhythm:
-        return base
-    pick = dict(base)
-    pick.update(rhythm[ordinal % len(rhythm)])
-    return pick
+    return _cycle_pick({"from": a_title["from"], "y": 0, "ease": a_title["ease"]},
+                       a_title.get("rhythm"), ordinal)
 
 
 def _tagline_entrance_lines(rc, card, rh):
@@ -2039,13 +2048,8 @@ def _settle_rhythm(a_img, ordinal):
     来向**（纵 / 右 / 纯收焦 / 左）——纵向一律与容器层同向（容器层 `vert_y` 是从
     下方上来），反向会让"框往上走、图往下沉"读成两层在打架。
     """
-    base = {k: a_img["settle"][k] for k in ("scale", "panX", "panY", "ease")}
-    rhythm = a_img.get("rhythm")
-    if not rhythm:
-        return base
-    pick = dict(base)
-    pick.update(rhythm[ordinal % len(rhythm)])
-    return pick
+    return _cycle_pick({k: a_img["settle"][k] for k in ("scale", "panX", "panY", "ease")},
+                       a_img.get("rhythm"), ordinal)
 
 
 def _image_settle_lines(rc, card, lead):

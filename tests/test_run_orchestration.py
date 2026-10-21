@@ -505,11 +505,10 @@ class ArchitecturePin(unittest.TestCase):
 
 
 class CheckFramesFlag(unittest.TestCase):
-    """--check-frames 编排契约：默认关、量不到降级、断言失败阻断 exit 5。
+    """--check-frames：默认不取帧；开了就编排官方 snapshot，失败只 warn 不阻断。
 
-    抽帧断言是渲染后的一道附加闸：不开绝不碰成片；开了且断言失败必须阻断
-    交付（黑屏/死平/空帧的片子不该照打"完成"）；检查器自己出 bug 只降级，
-    不让附加闸砸掉整条渲染。
+    取帧本身是"给人眼看"的手段，画面对不对由人判——所以这里锁的是编排契约
+    （传给官方的时刻表、产物路径进报告），不是像素阈值。
     """
 
     def setUp(self):
@@ -518,48 +517,38 @@ class CheckFramesFlag(unittest.TestCase):
         self.h.make_images_complete()
         self.h.video_duration = self.h.manifest["total_duration"]
 
-    def test_off_by_default_never_calls_checker(self):
-        import check_frames
-        with mock.patch.object(check_frames, "check_video",
-                               return_value=([], [])) as cv:
+    def _import(self):
+        import run as RUN
+        return RUN
+
+    def test_off_by_default_never_snapshots(self):
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=("/tmp/snap", "")) as sf:
             out, _ = self.h.invoke([])
-        cv.assert_not_called()
-        self.assertNotIn("frames", self.h.report()["video"])
+        sf.assert_not_called()
+        self.assertNotIn("snapshots", self.h.report()["video"])
 
-    def test_flag_runs_checker_and_reports_ok(self):
-        import check_frames
-        with mock.patch.object(check_frames, "check_video",
-                               return_value=([], ["[0.00s] ✓"])) as cv:
+    def test_flag_hands_official_snapshot_a_time_table(self):
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=("/tmp/snap", "")) as sf:
             out, _ = self.h.invoke(["--check-frames"])
-        cv.assert_called_once()
+        times = sf.call_args.args[2]
+        self.assertEqual(times[0], 0.0, "首帧必取：开场问题只在 t=0 附近看得见")
+        self.assertTrue(all(t < self.h.manifest["total_duration"] for t in times))
         self.assertIn("完成", out)
-        self.assertEqual(self.h.report()["video"]["frames"]["check"], "ok")
+        self.assertEqual(self.h.report()["video"]["snapshots"]["dir"], "/tmp/snap")
 
-    def test_failure_blocks_exit5(self):
-        import check_frames
-        with mock.patch.object(check_frames, "check_video",
-                               return_value=(["[0.00s] ✗ 非黑 0.0%"],
-                                             ["[0.00s] ✗ 非黑 0.0%"])):
-            with self.assertRaises(SystemExit) as cm:
-                self.h.invoke(["--check-frames"])
-        self.assertEqual(cm.exception.code, 5)
-        self.assertEqual(self.h.report()["video"]["frames"]["check"], "failed")
-        self.assertIn("抽帧断言失败", self.h.last_err)
-
-    def test_checker_exception_degrades_not_blocks(self):
-        import check_frames
-        with mock.patch.object(check_frames, "check_video",
-                               side_effect=RuntimeError("boom")):
-            out, _ = self.h.invoke(["--check-frames"])
+    def test_snapshot_failure_degrades_not_blocks(self):
+        """取帧失败不该砸掉一条已经过了时长契约的成片，但必须出声。"""
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=(None, "Chrome 起不来")):
+            out, err = self.h.invoke(["--check-frames"])
         self.assertIn("完成", out)
-        self.assertEqual(self.h.report()["video"]["frames"]["check"], "error")
-
-    def test_ocr_flag_forwarded(self):
-        import check_frames
-        with mock.patch.object(check_frames, "check_video",
-                               return_value=([], [])) as cv:
-            self.h.invoke(["--check-frames", "--check-frames-ocr"])
-        self.assertTrue(cv.call_args.kwargs.get("ocr"))
+        self.assertIn("Chrome 起不来", err)
+        self.assertIn("error", self.h.report()["video"]["snapshots"])
 
 
 if __name__ == "__main__":

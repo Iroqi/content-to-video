@@ -20,6 +20,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 # GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产。
 GSAP_VERSION = "3.14.2"
+# 与官方空白模板（`hyperframes init` 的 blank/index.html）引用的是同一个 CDN 资源。
 GSAP_CDN_URL = f"https://cdn.jsdelivr.net/npm/gsap@{GSAP_VERSION}/dist/gsap.min.js"
 # 供应链钉固：这个 JS 会被引擎内的浏览器真实执行，CDN 版本又是不可变的，
 # 所以把官方 dist 的 sha256 钉死——哈希一致即逐字节相同，是唯一判定口径。
@@ -997,13 +998,22 @@ def _zorder_warnings(markup, steps):
     盒相交是保守近似（不相交也可能同盒），且"把新内容刻意垫在旧内容下面"的取舍存在
     （如提示框垫在主体底下）。只查步骤揭示过的元素：结构底没有揭示顺序，不参与；
     class 选择器可命中多个元素，判据要单元素 id 才成立，跳过。
+
+    判"先亮后亮"看**拍**，不看步骤数组下标：同一句（at="1.25" 与 at="1.6"）的两拍
+    在时间线上先后分明，而数组序只是写法——按数组比会漏报真问题（同一张 SVG 的
+    reveal 顺序就是那条时间线）。时间只在**同一句内**排：不同句之间沿用数组序，
+    因为跨句的先后本来就是作者按稿序写的，再按秒比分不出新东西。
     """
     from check_svg import _shape_bounds
-    order = {}                       # target id → 最早揭示的步骤下标
+    order = {}                       # target id → 最早揭示的排序键 (句序, 句内秒, 步骤下标)
     for i, step in enumerate(steps):
         t = (step.get("target") or "").strip()
         if t.startswith("#") and len(t) > 1 and t[1:] not in order:
-            order[t[1:]] = i
+            if "at" in step:
+                at = float(step["at"])
+                order[t[1:]] = (int(at), at - int(at), i)
+            else:
+                order[t[1:]] = (float("inf"), 0.0, i)
     if len(order) < 2:
         return []
     try:
@@ -1045,8 +1055,8 @@ def _zorder_warnings(markup, steps):
             earlier, later = (a, b) if order[a] < order[b] else (b, a)
             if pos[earlier] > pos[later]:
                 warns.append(
-                    f"z 序与揭示顺序相反：#{earlier} 在第 {order[earlier]} 步先亮，"
-                    f"却写在 #{later}（第 {order[later]} 步后亮）的 DOM 后面——两者在"
+                    f"z 序与揭示顺序相反：#{earlier} 在第 {order[earlier][2]} 步先亮，"
+                    f"却写在 #{later}（第 {order[later][2]} 步后亮）的 DOM 后面——两者在"
                     f"画面上重叠，先亮的会把后亮的盖住。SVG 的叠压顺序 = DOM 顺序，"
                     f"后亮的内容要写在后面（上面）；把 #{earlier} 挪到 #{later} 前面，"
                     f"或确认这是故意垫底")

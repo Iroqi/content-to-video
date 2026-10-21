@@ -22,7 +22,6 @@ import _render_backend as RB  # noqa: E402
 import _stage_carry as SC  # noqa: E402
 import _svg_sanitize  # noqa: E402
 import _template as T  # noqa: E402
-import check_frames as CF  # noqa: E402
 import check_svg as CS  # noqa: E402
 import gen_hyperframes as GH  # noqa: E402
 
@@ -236,45 +235,6 @@ class EmptyBandNoFalseAlarm(unittest.TestCase):
         self.assertLessEqual(y1 - y0, 1440)      # 页数不会超过页高
         self.assertGreaterEqual(y0, 0.0)
         self.assertLessEqual(y1, 1440.0)
-
-
-class CheckFramesGuards(unittest.TestCase):
-    """抽帧断言的三条假守卫。"""
-
-    def _stub(self, metrics=None, ocr=None):
-        CF._get_ffmpeg = lambda: "ffmpeg"
-        CF._probe_duration = lambda ff, v: 10.0
-        CF.extract_frame = lambda ff, v, t, p: True
-        CF.analyze_frame = ((lambda p, ffmpeg_path=None: None) if metrics is None
-                            else (lambda p, ffmpeg_path=None: dict(metrics)))
-        CF._ocr_text = (lambda p: None) if ocr is None else (lambda p: ocr)
-
-    def test_ocr_unavailable_does_not_swallow_pixel_assertions(self):
-        """修复前：`--ocr` 且 tesseract 缺失时那一帧直接 `continue`，已经量出来的
-        黑屏/死平断言一起被吞掉——一支全黑片报"0 帧失败、通过"。"""
-        black = {"nonblack_ratio": 0.0, "color_buckets": 1}
-        self._stub(metrics=black, ocr=None)
-        without_ocr = CF.check_video("x.mp4", every=5, ocr=False)[0]
-        with_ocr = CF.check_video("x.mp4", every=5, ocr=True)[0]
-        self.assertEqual(len(without_ocr), 2)
-        self.assertEqual(len(with_ocr), len(without_ocr),
-                         "OCR 降级只能降级 OCR 那一条，不能吞掉像素断言")
-
-    def test_nothing_measured_is_not_a_pass(self):
-        """修复前：每帧 analyse 返回 None 就 `continue`，failures 恒为空，main
-        打印 '通过：N 帧全部过断言'、run.py 记 check:ok——把"没查"说成"查过了"。
-        （PIL/numpy 那会儿是这条路径最常见的成因，现已换成 ffmpeg + 标准库。）"""
-        self._stub(metrics=None)
-        failures, report = CF.check_video("x.mp4", every=5)
-        self.assertIsNone(failures, "一帧都没量到必须按'没量到'降级，不是空列表")
-        self.assertTrue(any("一帧都没量到" in l for l in report), report)
-
-    def test_timestamps_outside_the_film_are_reported(self):
-        """修复前：`--timestamps 10,20` 被 `or [0.0]` 静默换成首帧，结论写
-        '1 帧全部过断言'——用户点名的两个时刻一帧都没看。"""
-        self._stub(metrics={"nonblack_ratio": 0.5, "color_buckets": 9})
-        _f, report = CF.check_video("x.mp4", timestamps=[10, 20])
-        self.assertTrue(any("成片 10.0s 之外" in l for l in report), report)
 
 
 class PointsParsingSingleSource(unittest.TestCase):

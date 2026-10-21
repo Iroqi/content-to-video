@@ -353,6 +353,26 @@ class ZOrder(unittest.TestCase):
             [{"at": 0, "target": "#dot"}, {"at": 0, "target": "#panel"}])
         self.assertEqual(len(warns), 1, warns)
 
+    def test_same_sentence_uses_beat_time_not_array_order(self):
+        """同一句里的两拍按 frac 定先后，不按数组下标。
+
+        修复前：两个元素都挂 `at: 1`（同句）时下标不同就判"有先后"，而时间线上
+        at=1.6 的那拍其实后落子；把 at=1.6 写在数组前面的人，顺序是对的，却会被
+        报"先亮却写在后面"——误报等于让作者去改一段本来正确的东西。
+        """
+        # 数组序：dot(at 1.6) 在前、panel(at 1.25) 在后；DOM 序 dot 在前。
+        # 时间上 panel 先落子、dot 后落子 → dot 叠在 panel 上，正是想要的。
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 1.6, "target": "#dot"}, {"at": 1.25, "target": "#panel"}])
+        self.assertEqual(warns, [])
+        # 反过来：panel 先落子却写在 DOM 后面 → 真的会被 dot 盖住
+        warns = G._zorder_warnings(
+            self._svg(self._BODY),
+            [{"at": 1.6, "target": "#panel"}, {"at": 1.25, "target": "#dot"}])
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("#panel", warns[0])
+
     def test_class_targets_are_skipped(self):
         warns = G._zorder_warnings(
             self._svg(self._BODY),

@@ -11,7 +11,7 @@
 不认识稿件、manifest、制作报告——想换渲染后端，替换本模块即可。
 
 对外接口（run.py 实际消费）：hyperframes_command / build_render_command /
-render_wait。hyperframes_spec / resolve_command / fmt_cmd 是模块内部的命令解析
+render_wait / probe_video_duration / snapshot_frames。hyperframes_spec / resolve_command / fmt_cmd 是模块内部的命令解析
 链（Windows shim 处理与日志），由 tests/test_render_backend.py 直接覆盖，不对外。
 进程树清理（_try_kill_process_tree）只在本模块的失败/超时/中断路径里用，不对外。
 成片容器固定 mp4（由 -o 后缀决定），透明底/mov/webm 已从本技能移除。
@@ -460,3 +460,71 @@ def _render_poll_loop(proc, out_path, log_path, max_wait):
             stable_count = 0
             last_size, last_mtime = -1, -1.0
         time.sleep(_POLL_INTERVAL_SECONDS)
+
+
+# ── 取帧：交付前让人眼过一遍成片 ────────────────────────────────────────
+# 取帧不自己抽：官方 `hyperframes snapshot` 与渲染用同一套 Chrome、同一套时间线
+# seek，还会顺手拼一张 contact sheet。本模块只决定"看哪几帧"并把命令拼对。
+SNAPSHOT_MAX_FRAMES = 8
+
+
+def sample_snapshot_times(duration, cap=SNAPSHOT_MAX_FRAMES):
+    """成片时长 → 取帧时刻表（首帧必取，其余按整片均分），返回 (时刻列表, 是否被上限截断)。
+
+    首帧单独留在表里：成片第一秒最常见的问题（开场擦除盖住整页、字体没等到就抓帧）
+    只在 t=0 附近看得见。其余时刻均分到整片，**不踩末帧**（末帧多是转场/空档）。
+    """
+    dur = float(duration)
+    if dur <= 0:
+        return [0.0], False
+    n = int(cap) - 1
+    times, t, truncated = [0.0], 1.0, False
+    while t < dur - 1.0 and len(times) < n:
+        times.append(round(t, 2))
+        t += 1.0
+    if t < dur - 1.0:
+        # 一秒一帧装不下：改成按整片均分，否则只看得到开头几秒
+        truncated = True
+        step = dur / cap
+        times = [round(i * step, 2) for i in range(cap)]
+    return times, truncated
+
+
+def _newest_mtime(directory):
+    newest = None
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            try:
+                m = os.path.getmtime(os.path.join(root, name))
+            except OSError:
+                continue
+            newest = m if newest is None or m > newest else newest
+    return newest
+
+
+def snapshot_frames(project, video_path, times, out_dir, command=None):
+    """在成片上取帧，返回 (产物路径或 None, 说明)。
+
+    产物路径 = 含 contact-sheet 的目录（官方给的那张拼图是"一眼看全片"的入口）。
+    失败一律返回 (None, 人话)，由调用方决定只 warn。
+    """
+    cmd = list(command) if command else hyperframes_command(project)
+    cmd = resolve_command(cmd) if isinstance(cmd, list) else cmd
+    base = [cmd] if isinstance(cmd, str) else list(cmd)
+    args = base + ["snapshot", project, "-o", out_dir,
+                   "--against", video_path,
+                   "--at", ",".join(f"{t:g}" for t in times),
+                   "--no-end"]
+    os.makedirs(out_dir, exist_ok=True)
+    t0 = time.time()
+    try:
+        r = subprocess.run(args, cwd=project, capture_output=True, timeout=900)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"取帧命令执行失败：{type(e).__name__}: {e}"
+    if r.returncode != 0:
+        err = (r.stderr or b"").decode("utf-8", "replace").strip()
+        return None, f"hyperframes snapshot 退出码 {r.returncode}：{err[-300:]}"
+    newest = _newest_mtime(out_dir)
+    if newest is None or newest < t0 - 5:
+        return None, f"{out_dir} 下没有新产物（命令成功但没写出帧）"
+    return os.path.abspath(out_dir), ""

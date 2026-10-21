@@ -8,8 +8,8 @@
 
 1. **时长只从留白里来** —— 留白 = 下一句开口 − 本句念完 − 换句接力。留白为 0
    或负 → 不演（写 0，CSS 规则整条失效，成片与改动前逐字节一致）；
-2. **两份真源必须相等** —— `RELAY_SECONDS`（生成期）与 runtime.js 的
-   `RELAY_SECONDS`（运行期）是同一个数的两份抄写，抄错只会让收束和接力叠着演；
+2. **接力时长只有一个真源** —— 模板 `layout.<画幅>.subtitle.relay`，生成期算留白
+   时传入、运行期从 `--ctv-relay-s` 读回；runtime.js 里不许再出现数字字面量；
 3. **上下限** —— 封顶 `SETTLE_MAX_SECONDS`（留白富余时不把收束拉成慢动作）、
    地板 `SETTLE_MIN_SECONDS`（不足两帧的回落只是闪一下）；
 4. **向下取整** —— 窗口不够时宁可少演，也不能把最后几个字挤进下一句已开口的那帧；
@@ -20,12 +20,14 @@ import re
 import unittest
 
 import _helpers as H  # noqa: F401  副作用：把 scripts/ 放进 sys.path
+import _template as T
 from html_renderer import (
-    RELAY_SECONDS,
     SETTLE_MAX_SECONDS,
     SETTLE_MIN_SECONDS,
     _ved_settle_seconds,
 )
+
+RELAY_SECONDS = T.load_template()["layout"]["vertical"]["subtitle"]["relay"]
 
 REPO = H.SKILL_DIR
 SKILL = pathlib.Path(REPO)
@@ -48,51 +50,51 @@ class SettleSeconds(unittest.TestCase):
         突然多出一个白送的动画。
         """
         sents = [_sent(0, 0.0, 2.0), _sent(1, 2.0, 2.0)]
-        self.assertEqual(_ved_settle_seconds(sents, {1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.0)
 
     def test_butted_sentences_never_settle(self):
         """首尾相接（start 差 = duration）且 voiced 撑满整块：留白为 0 → 不演。"""
         sents = [_sent(0, 0.0, 2.0, 0.0, 2.0), _sent(1, 2.0, 2.0)]
-        self.assertEqual(_ved_settle_seconds(sents, {1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.0)
 
     def test_gap_maps_to_duration(self):
         """留白 0.35s（扣掉 0.32 接力剩 0.03）、留白 1.05s（扣完 0.73，封顶 0.6）。"""
         # 第 0 句 0.15 起念、念 1.40 → 1.55 念完；下一句 1.90 开口 → 留白 0.35
         sents = [_sent(0, 0.0, 2.0, 0.15, 1.40), _sent(1, 1.90, 2.0)]
         # 0.35 − 0.32 = 0.03 < 地板 0.08 → 退化为不演
-        self.assertEqual(_ved_settle_seconds(sents, {1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.0)
         # 留白拉到 0.60：0.60 − 0.32 = 0.28 → 0.25（向下取整到 0.05 网格）
         sents = [_sent(0, 0.0, 2.0, 0.15, 1.40), _sent(1, 2.15, 2.0)]
-        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}), 0.25, places=6)
+        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.25, places=6)
 
     def test_capped(self):
         """留白大幅富余时封顶：不把收束拉成慢动作。"""
         sents = [_sent(0, 0.0, 5.0, 0.0, 1.0), _sent(1, 5.0, 2.0)]
-        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}), SETTLE_MAX_SECONDS, places=6)
+        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), SETTLE_MAX_SECONDS, places=6)
 
     def test_floor(self):
         """落到地板附近仍要演；落不到就严格不演（一次闪烁比没有更糟）。"""
         # 留白 = 0.15；0.15 − 0.32 < 0 → 0
         sents = [_sent(0, 0.0, 2.0, 0.0, 1.85), _sent(1, 2.0, 2.0)]
-        self.assertEqual(_ved_settle_seconds(sents, {1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.0)
         # 留白 = 0.49 → 0.49 − 0.32 = 0.17 → 向下取整到 0.05 网格 = 0.15，演
         sents = [_sent(0, 0.0, 2.0, 0.0, 1.51), _sent(1, 2.0, 2.0)]
-        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}), 0.15, places=6)
+        self.assertAlmostEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.15, places=6)
         # 留白 = 0.39 → 0.07 → 网格 0.05 < 地板 0.08 → 不演
         sents = [_sent(0, 0.0, 2.0, 0.0, 1.61), _sent(1, 2.0, 2.0)]
-        self.assertEqual(_ved_settle_seconds(sents, {1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {1}, RELAY_SECONDS), 0.0)
 
     def test_floor_rounding_down(self):
         """窗口 0.28 必须给 0.25，不能给 0.30：多出来的 20ms 会落在下一句里。"""
         sents = [_sent(0, 0.0, 2.0, 0.15, 1.40), _sent(1, 2.15, 2.0)]
-        got = _ved_settle_seconds(sents, {1})
+        got = _ved_settle_seconds(sents, {1}, RELAY_SECONDS)
         self.assertLessEqual(got, 0.28)
         self.assertAlmostEqual(got, 0.25, places=6)
 
     def test_page_last_never_settles(self):
         """页末句后面是转场，整句 accent 会被擦走 → 不演。"""
         sents = [_sent(0, 0.0, 5.0, 0.0, 1.0), _sent(1, 5.0, 2.0)]
-        self.assertEqual(_ved_settle_seconds(sents, {0, 1}), 0.0)
+        self.assertEqual(_ved_settle_seconds(sents, {0, 1}, RELAY_SECONDS), 0.0)
 
     def test_min_over_all_interior_sentences(self):
         """一页里多句时取**最小**的那段留白：任何一句收不完都会和下一句撞车。"""
@@ -102,17 +104,23 @@ class SettleSeconds(unittest.TestCase):
             _sent(1, 3.0, 2.0, 0.0, 1.20),
             _sent(2, 4.80, 2.0),
         ]
-        self.assertAlmostEqual(_ved_settle_seconds(sents, {2}), 0.25, places=6)
+        self.assertAlmostEqual(_ved_settle_seconds(sents, {2}, RELAY_SECONDS), 0.25, places=6)
 
 
 class RuntimeContract(unittest.TestCase):
     """生成期与运行期的两份抄写必须相等。"""
 
-    def test_relay_constants_agree(self):
+    def test_runtime_reads_relay_from_the_template(self):
+        """运行期不许再抄一份数字：接力时长从 --ctv-relay-s 读，与生成期同一真源。"""
         src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
-        m = re.search(r"^const RELAY_SECONDS = ([\d.]+);", src, re.MULTILINE)
-        self.assertIsNotNone(m, "runtime.js 里找不到 RELAY_SECONDS")
-        self.assertAlmostEqual(float(m.group(1)), RELAY_SECONDS, places=6)
+        self.assertIn('getPropertyValue("--ctv-relay-s")', src)
+        self.assertIsNone(re.search(r"^const RELAY_SECONDS = [\d.]+;", src, re.MULTILINE),
+                          "runtime.js 里又出现了写死的 RELAY_SECONDS")
+
+    def test_template_carries_relay_for_both_aspects(self):
+        tpl = T.load_template()
+        for asp in ("vertical", "landscape"):
+            self.assertGreater(float(tpl["layout"][asp]["subtitle"]["relay"]), 0)
 
     def test_settle_var_is_read_from_root(self):
         """运行期只读一个 CSS 变量、不做第二次判断（"要不要演"只在生成期决定）。"""

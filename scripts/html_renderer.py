@@ -310,7 +310,7 @@ def _build_subtitle_cues(sentences):
     return ",\n    ".join(cues)
 
 
-def _ved_settle_seconds(sentences, page_last_si):
+def _ved_settle_seconds(sentences, page_last_si, relay_seconds):
     """词级强调"念完之后的收束"该演多久（秒）：0 = 不演。
 
     收束（见 runtime.js 的 verseEmSettle / composition.css 的 .verse-ved-settled）
@@ -323,9 +323,9 @@ def _ved_settle_seconds(sentences, page_last_si):
     - **只收"下一句会在同一页里接手"的句**：cues 是**每页一份**的（见 generate_html
       的 __CTV_CUES__），所以某一页的最后一句后面跟的是转场——它整句的 accent 会随
       页面被擦走。`page_last_si` 因此显式传进来，不靠 si 连续性去猜。
-    - **留白里先扣掉换句接力**：新一句浮起用 `--ctv-relay`（0.32s，composition.css
-      / runtime.js 的 RELAY_SECONDS）。收束要在这之前收干净，否则同一行里"旧的还在
-      退、新的已经进"两件事叠着演。
+    - **留白里先扣掉换句接力**：新一句浮起用 `--ctv-relay`（`relay_seconds`，取自模板
+      layout.<画幅>.subtitle.relay，运行期读同一个 `--ctv-relay-s`）。收束要在这之前
+      收干净，否则同一行里"旧的还在退、新的已经进"两件事叠着演。
     - **上限 SETTLE_MAX_SECONDS、地板两帧**：见那两个常量。
     """
     spans = _subtitle_cue_spans(sentences)
@@ -345,7 +345,7 @@ def _ved_settle_seconds(sentences, page_last_si):
         # 没有 voiced（老 cue / 手写 manifest）：运行时退回 t1，念完 = 本 cue 终点，
         # 这里同口径写成 end，于是留白恒为负 → 不演，与改动前逐字节一致。
         done = min(end, t + voiced) if voiced > 0 else end
-        hold = end - done - RELAY_SECONDS
+        hold = end - done - relay_seconds
         if best is None or hold < best:
             best = hold
     if best is None or best <= 0:
@@ -376,10 +376,6 @@ SETTLE_MAX_SECONDS = 0.6
 # 回落只会是一下闪烁）。不演 = 变量写 0，CSS 规则里那段过渡自动没有时长、整条
 # 失效，成片与改动前逐字节一致。
 SETTLE_MIN_SECONDS = 0.08
-# 换句接力的入场时长（秒）：新一句浮起、"旧的压到 0.45"的过渡窗。收束必须在这
-# 之前把旧句退干净，所以它在算留白时被扣掉。**这是第二份真源**，第一份在
-# templates/runtime.js 的 RELAY_SECONDS——test_ved_settle 锁住两者相等。
-RELAY_SECONDS = 0.32
 
 
 # ── 渲染上下文：一次派生，处处共用 ──────────────────────────────────────
@@ -555,6 +551,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
   --ctv-ved-settle:{_settle_now:.2f}s;
+  --ctv-relay-s:{_sl["relay"]};
   --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
@@ -594,6 +591,10 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-l-title-lh:{_tl["lineHeight"]};
   --ctv-l-img-w:{int(_il["width"])}px;--ctv-l-img-h:{_l_img_h}px;
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
+    # 换句接力的入场时长（秒）：生成期算收束留白要扣它，运行期做接力补间要读它。
+    # 两处读同一个值、真源是模板 layout.<画幅>.subtitle.relay —— 抄成两份常量时
+    # 改一格要改三处，只靠测试盯相等。
+    rc.relay_s = float(_sl["relay"])
     rc.root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
     return rc
 
@@ -2375,7 +2376,7 @@ def generate_html(manifest, audio_src, images=None,
     # 页尾句的 si 来自同一批 manifest 句子。
     _page_last_sis = {c["seg"]["sentences"][-1].get("index", -1)
                       for c in clips if c["seg"]["sentences"]}
-    _settle_s = _ved_settle_seconds(sentences, _page_last_sis)
+    _settle_s = _ved_settle_seconds(sentences, _page_last_sis, rc.relay_s)
     for clip in clips:
         card = _prepare_card(rc, clip)
         card.settle_s = _settle_s

@@ -443,7 +443,11 @@ const verseApply = (si) => {
 //      这层保护改成显式判 di === si 是否在本 verse 里。
 //   5. **结束后清掉内联值**：让 CSS / 焦点衰减的档位重新接管，否则内联
 //      opacity 会永久压住 active 的 1.0。
-const RELAY_SECONDS = 0.32;
+// 换句接力的入场时长（秒）：真源是模板 layout.<画幅>.subtitle.relay，生成期写成
+// :root 的 --ctv-relay-s。这里不抄数字——抄了就得靠测试盯两份相等，而生成期的
+// 收束留白也是从同一个变量算的（两边不同步＝收束和接力叠着演）。
+const RELAY_SECONDS = parseFloat(
+  getComputedStyle(document.documentElement).getPropertyValue("--ctv-relay-s")) || 0.32;
 const _cueStart = (si) => {
   for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
   return NaN;

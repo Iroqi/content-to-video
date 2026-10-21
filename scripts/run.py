@@ -33,7 +33,8 @@ from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, DEFAULT_MAX_WAIT, render_wait,
-                             probe_video_duration, node_version_gate)
+                             probe_video_duration, node_version_gate,
+                             sample_snapshot_times, snapshot_frames)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
                            media_verdict)  # noqa: E402  素材可用性判据（与 gen 同一份函数）
@@ -328,14 +329,9 @@ def _build_parser():
                              "不写任何文件；--until 在 dry-run 下不生效（HTML/"
                              "渲染步骤整体跳过）")
     parser.add_argument("--check-frames", action="store_true",
-                        help="渲染完成后自动抽帧断言成片画面（非黑占比/颜色桶数；"
-                             "装了 tesseract 可再加 --check-frames-ocr）。默认关闭："
-                             "抽查是渲染后的一道额外闸，抽帧每几秒一帧，量不到只降级"
-                             "不阻断，断言失败会阻断交付——黑屏/死平/整段空帧的片子"
-                             "不该照打'完成'")
-    parser.add_argument("--check-frames-ocr", action="store_true",
-                        help="配合 --check-frames：整帧 OCR 断言至少认出一个词"
-                             "（字幕/大字版式整段丢失会暴露；tesseract 缺失只降级）")
+                        help="用官方 `hyperframes snapshot` 在成片上取几帧（含首末帧，"
+                             "拼一张 contact sheet）落进 hf-project/snapshots/，交付前"
+                             "就能翻看成片长什么样。默认关闭；取帧失败只 warn 不阻断")
     return parser
 
 
@@ -707,54 +703,25 @@ def main():
     else:
         _REPORT["video"]["check"] = "ok"
 
-    # ── 第 4 步 c：成片抽帧断言（可选，--check-frames）──────────────────
-    # 时长契约证明"演完了"，抽帧断言证明"画面里真的长出了内容"：抓帧超时、
-    # worker 崩、Chrome 提前退出可能产出一支时长刚好、画面整段黑屏/死平的
-    # 片子，而时长对账根本看不出。默认关闭（抽查是渲染后的一道额外闸，抽帧
-    # 有成本）；打开后量不到只降级（与时长契约同口径），断言失败阻断交付。
+    # ── 第 4 步 c：取帧给人工过目（可选，--check-frames）──────────────
+    # 画面对不对只有人眼判得准（黑屏/死平是"几十种真实坏画面"里的两种，自己写像素
+    # 阈值只是把它猜一遍）。取帧这件事官方有：`hyperframes snapshot` 按时刻取 PNG
+    # 并拼 contact-sheet，与渲染同一套 Chrome、同一套时间线 seek。这里只做编排：
+    # 传给成片的时刻表，把产物路径写进报告。取帧失败只 warn——它是附加的查看手段，
+    # 不是交付前提（成片本身已过时长契约）。
     if args.check_frames:
-        try:
-            import check_frames
-            t0_fr = time.monotonic()
-            _fails, _fr = check_frames.check_video(
-                out_video, ocr=args.check_frames_ocr)
-            _REPORT["video"]["frames"] = {
-                # _fails 为 None = 一帧都没量到（"没查"），不能和空列表（"查了、
-                # 全过"）混成同一个 ok——报告里这两个结论的处置完全不同。
-                "check": "skipped" if _fails is None else (
-                    "ok" if not _fails else "failed"),
-                "skipped": _fails is None,
-                "seconds": round(time.monotonic() - t0_fr, 1),
-                # coverage 行一起留：它是"这些帧覆盖了成片的哪一段"的唯一说明
-                "detail": [l for l in (_fr or []) if "✗" in l or "跳过" in l
-                           or "coverage" in l],
-            }
-        except Exception as _e:
-            # 抽帧断言自己出 bug 不该让整条渲染失败：记进报告降级（画面验证
-            # 是附加闸，不是交付前提）。但"这道闸坏了"必须出声——只写进报告
-            # 的话，闸坏了与闸通过共用同一个 exit 0，控制台上分不出来。
-            _REPORT["video"]["frames"] = {
-                "check": "error", "skipped": True,
-                "detail": [f"抽帧断言执行异常：{type(_e).__name__}: {_e}"],
-            }
-            _fails, _fr = None, []
-            print(f"[run][warn] 抽帧断言自身异常，画面验证未执行"
-                  f"（{type(_e).__name__}: {_e}）：本次交付未经抽帧核画面，"
-                  f"请人工看一眼成片。", file=sys.stderr)
-        for line in _fr:
-            if "✗" in line or "跳过" in line or "coverage" in line:
-                print(f"[run][frame] {line}", file=sys.stderr)
-        if _fails:
-            _write_report(_report_path())
-            _print_report_summary()
-            print(
-                f"[run] 成片抽帧断言失败（{len(_fails)} 帧）：画面不是预期的"
-                f"内容（黑屏/死平/空帧）。\n"
-                "      先看渲染日志（成片同目录的 out.render.log）里有没有"
-                "`Parallel capture timed out`；有的话降 --workers 重渲。\n"
-                "      确认是某一段有意全黑（如过场）时，用 --timestamps 绕过"
-                f"该段再核。成片已留在 {out_video}，未删除。", file=sys.stderr)
-            sys.exit(5)
+        snap_dir = os.path.join(project, "snapshots")
+        _ts, _samp = sample_snapshot_times(float(_tm["total_duration"]))
+        _snap, _why = snapshot_frames(project, out_video, _ts, snap_dir, command=_HF_COMMAND)
+        _REPORT["video"]["snapshots"] = (
+            {"dir": _snap, "times": _ts, "even_sample": _samp}
+            if _snap else {"error": _why})
+        if _snap:
+            print(f"[run] 取帧 {len(_ts)} 张 + contact sheet：{_snap}"
+                  + ("（时长超出逐秒取帧上限，已按整片均分）" if _samp else ""))
+        else:
+            print(f"[run][warn] 取帧未完成（{_why}）：成片已生成，但这一眼没人替你看。",
+                  file=sys.stderr)
 
     print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())

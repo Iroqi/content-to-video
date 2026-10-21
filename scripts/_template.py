@@ -266,7 +266,8 @@ _TEMPLATE_JSON = r'''
         "glow": 40
       },
       "subtitle": {
-        "fontSize": 40
+        "fontSize": 40,
+        "relay": 0.32
       },
       "progressBar": {
         "height": 4
@@ -346,7 +347,8 @@ _TEMPLATE_JSON = r'''
       "margin": 96,
       "columnGap": 48,
       "subtitle": {
-        "fontSize": 33
+        "fontSize": 33,
+        "relay": 0.32
       },
       "progressBar": {
         "height": 5

@@ -55,8 +55,7 @@ def _decode_env(raw, path):
        下每两字节一个 0x00，能"解码成功"但内容是 mojibake）；
     ③ 仍失败 → gb18030（记事本 ANSI 保存的中文注释），再失败就报编码错。
 
-    报错必须指向"编码问题"：若让 UnicodeDecodeError 从 load_env() 穿透，爆炸点在
-    main() 读配置那步，看起来像"没有 API key"，真正原因差着十万八千里。
+    编码错必须在这里就报：穿透到 main() 会被读成"没有 API key"。
     """
     for enc in ("utf-16", "utf-8-sig"):
         if enc == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -85,8 +84,8 @@ def _decode_env(raw, path):
 def _parse_env_file(path):
     """解析一个 KEY=VALUE 格式的 .env 文件，返回 dict。
 
-    编码判别见 `_decode_env`。值里 `KEY=abc%2Fdef` 这种百分号转义按 URL 解码处理
-    （token 常从浏览器地址栏 / 文档链接里连 % 一起粘过来，不去掉就是 401）。
+    编码判别见 `_decode_env`。值里的百分号转义（`abc%2Fdef`）按 URL 解码——
+    token 常连 % 一起从浏览器粘过来，不去掉就是 401。
     """
     result = {}
     if not os.path.isfile(path):
@@ -111,9 +110,8 @@ def _parse_env_file(path):
             # key 上的 export 前缀剥掉，否则查表永远 miss
             k = k.removeprefix("export ").strip()
             v = v.strip()
-            # 引号与转义交给 shlex：手写 find(引号) 吃不下 `"a\"b"` 这类转义，
-            # 而这一步错了直接变成 401。闭引号之后的东西（行内注释 / 多余词）
-            # 理所当然地丢掉。
+            # 引号/转义交给 shlex（手写 find(引号) 吃不下 `"a\"b"`）；
+            # 闭引号之后的行内注释 / 多余词丢掉。
             if v[:1] in ("\"", "'"):
                 try:
                     parts = shlex.split(v)
@@ -121,8 +119,8 @@ def _parse_env_file(path):
                     parts = [v]      # 引号不成对：原样保留，别静默改值
                 v = parts[0] if parts else ""
             elif " #" in v:
-                # 未加引号的值才可能有行内注释；只认"空格 + #"，紧贴的 # 是值
-                # 本身（色值 `#f59e0b`、`a#b` 片段），不能动。
+                # 未加引号的值才可能有行内注释；只认"空格 + #"——紧贴的 #
+                # 是值本身（`#f59e0b`），不能动。
                 v = v.split(" #", 1)[0].rstrip()
             if "%" in v:
                 v = unquote(v)
@@ -133,9 +131,7 @@ def _parse_env_file(path):
 
 def load_env():
     """
-    按优先级合并两级 .env 来源，返回合并后的 dict。
-    高优先级的值覆盖低优先级：
-      ~/.config/ai-video/.env < os.environ
+    合并两级 .env 来源（`~/.config/ai-video/.env` < `os.environ`），返回 dict。
     """
     merged = {}
     user_env = _parse_env_file(_USER_ENV_PATH)
@@ -155,12 +151,11 @@ def load_env():
 def _sentence_entry(index, text, path, duration, ffmpeg_path):
     """一句 → manifest 行（音频块长度 + 可选发声区间），三条产出路径共用。
 
-    三条路径（缓存命中 / 变速重测 / 新合成）各自 `round(dur, 3)` 一次，漏一条就
-    会出现"有的句子有 `onset` 有的没有"——而下游是逐句读的，缺字段的句子会静默
-    退回旧行为，看不出是哪一条漏了。所以收成一个函数，加新字段只改这里。
+    加字段只改这里：三条路径（缓存命中 / 变速重测 / 新合成）各写一份就会出现
+    "有的句子有 `onset` 有的没有"，而下游是逐句读的，缺字段的句子静默退回旧行为。
 
-    `onset`/`voiced` 见 `_speech.py`：量不出来就不写（下游退回按文件长度计时），
-    不进 degraded——它不改变产物内容，只是少了"这句话说到哪"的精度。
+    `onset`/`voiced` 见 `_speech.py`：量不出来就不写（下游按文件长度计时），
+    不进 degraded——只是少了精度，不改产物内容。
     """
     dur = round(duration, 3)
     entry = {"index": index, "text": text, "file": path, "duration": dur}
@@ -170,23 +165,19 @@ def _sentence_entry(index, text, path, duration, ffmpeg_path):
     return entry
 
 
-# 每句音频 (sNNN.wav) 的伴生文件后缀集合：.orig.wav 是变速前的原速备份，
-# .spd/.spd.*.tmp.wav 是语速状态，.failed 是"本句放弃"标记。凡动一句的音频，
-# 这些后缀都要跟着动（见 _clear_stale_sidecars / _drop_stale_cache）。
-# 条目是**拼在句子路径后面的 glob 片段**，不是字面后缀：变速中转名带 mkstemp
-# 的随机串（两个进程变同一批句子时不互踩），写成 `.spd.tmp.wav` 就再也扫不到
-# 它的残留。其余几个里面没有通配符，等价于原来的精确路径。
+# 每句音频 (sNNN.wav) 的伴生文件后缀：.orig.wav 原速备份、.spd/.spd.*.tmp.wav
+# 语速状态、.failed 放弃标记。凡动一句的音频都要连这些一起动。
+# 条目是**拼在句子路径后的 glob 片段**，不是字面后缀：变速中转名带 mkstemp
+# 随机串，写成 `.spd.tmp.wav` 就扫不到残留。
 _SIDECAR_SUFFIXES = (".orig.wav", ".spd", ".spd.*.tmp.wav", ".failed")
 
 
 def _clear_stale_sidecars(out_path):
     """新合成前清掉上一轮残留的变速/兜底 sidecar。
 
-    这些文件属于上一次运行的稿件/参数。返回是否全部清理干净（或本来就没有
-    残留）。删除失败（Windows 下杀毒扫描/播放器占用文件）时先尝试改名隔离
-    （加 .stale 后缀，隔离后不会再被任何流程按原名读到）；改名也失败才返回
-    False——调用方必须据此跳过变速，否则残留的旧 .orig.wav 会顶掉新合成的
-    音频（改稿后不带 --resume 重跑即触发，成片念旧稿配新字幕）。
+    返回是否清干净（或本来没有残留）。删不掉（Windows 下被占用）就先改名加
+    `.stale` 隔离；改名也失败才返回 False，调用方必须据此跳过变速——残留的旧
+    .orig.wav 会顶掉新音频（改稿后不带 --resume 重跑即触发，成片念旧稿配新字幕）。
     """
     ok = True
     for suffix in _SIDECAR_SUFFIXES:
@@ -427,9 +418,7 @@ class ResumeDecision:
     write_spd: str = None
     restore_first: bool = False
     synth_failed: bool = False
-    # 为什么判定缓存失效。regen 有六种成因（无指纹 / 指纹变了 / 文件没了
-    # / 量不出时长 / 文件被截断 / 语速状态无法证明），对写稿人来说是完全
-    # 不同的三件事（改稿？坏文件？换参数？）。不报出来就只能靠猜。
+    # 判定 regen 的成因（改稿？坏文件？换参数？）必须报出来，否则只能靠猜。
     reason: str = None
 
 
@@ -449,10 +438,8 @@ class ResumeFacts:
 
 
 def resolve_resume_state(facts, requested_speed):
-    # 内容指纹缺失 = 无法证明这段音频就是当前文本。旧写法是"只在 .sha 存在
-    # 且不一致时才失效"，于是删掉 .sha（或上一次写入失败）后，改稿重跑会走
-    # cached 分支、再顺手给旧音频补写一个新文本的 .sha（self-certify）——
-    # 错位音频从此永久固化，且没有任何一处再报出来。缺证明就当没缓存。
+    # 缺 .sha 就当没缓存：否则删掉 .sha 后改稿重跑会走 cached、再给旧音频补写
+    # 一个新文本的 .sha（self-certify），错位音频从此固化且再无一处报出来。
     if not facts.sha_exists:
         return ResumeDecision("regen", reason="缺少内容指纹 .sha，无法确认这段音频就是当前稿件")
     if not facts.sha_matches:
@@ -470,14 +457,13 @@ def resolve_resume_state(facts, requested_speed):
             applied = 1.0
             restore_first = True
         else:
-            # 没有可读 marker、也没有原速备份时，无法证明当前 WAV
-            # 已经处于 requested_speed。复用会让旧版本缓存静默带错语速；
-            # 宁可重新合成，也不把错误音频配上“看似正确”的时间轴。
+            # 无可读 marker、也无原速备份：无法证明当前语速。宁可重合成，
+            # 也不让旧缓存静默带错语速配上"看似正确"的时间轴。
             return ResumeDecision("regen",
                                   reason="语速 marker 不可读且无原速备份，无法证明当前 WAV 的语速")
     if applied is None and facts.orig_wav_exists:
-        # 旧版/人工清理可能只留下 .orig.wav 而没有 .spd marker。原速备份
-        # 是唯一可证明的基线，先恢复它再按本次请求重新施加语速。
+        # 只剩 .orig.wav（旧版或人工清理）：原速是可证明的基线，
+        # 先恢复再按本次请求施加语速。
         restore_first = True
     if (applied is None
             and needs_speed_change(requested_speed)
@@ -630,9 +616,8 @@ def _validate_args(parser, args):
 def _concat_voice_audio(args, ffmpeg_path, sentence_data):
     """拼接句音频成母带并做时长对账，返回 (combined_path, total_dur)。
 
-    拼接失败 / 测量失败 / 与逐句预期对不上都是硬失败——缺音频 = 字幕从
-    某一刻起整体提前，成片照样能播完，所以宁可在这里停住让人查，也不要
-    悄悄少一段。
+    拼接失败 / 测量失败 / 与逐句预期对不上都是硬失败：缺音频 = 字幕从某一刻
+    起整体提前，成片照样播完，宁可停住也不要悄悄少一段。
     """
     # ── Concatenate ────────────────────────────────────────────────
     print(f"\n[concat] {len(sentence_data)} clips (gap {args.gap}s)...", flush=True)
@@ -646,21 +631,18 @@ def _concat_voice_audio(args, ffmpeg_path, sentence_data):
 
     total_dur = measure_duration(ffmpeg_path, combined_path)
     if not total_dur or total_dur <= 0:
-        # 测量失败时 total_dur=0 仍能通过契约的数值校验，产出"合法但废掉"
-        # 的 manifest（data-duration=0 的 composition 渲染出无声空片）——
-        # 在这里拦下比让废品流到渲染端好
+        # total_dur=0 能过契约的数值校验，产出"合法但废掉"的 manifest
+        # （data-duration=0 渲染出无声空片），必须在这里拦。
         print("[error] combined.wav 时长测量失败（0.0s）——ffmpeg 无法读取"
               "拼接产物？检查磁盘空间与 ffmpeg 可用性", file=sys.stderr)
         sys.exit(1)
-    # 实测总时长必须跟"逐句时长之和 + 句间静音"对得上：拼接本体已是标准库
-    # wave 逐帧串接（不会再截断），这道对账改抓的是上游单句产物被写坏/截断
-    # 那一类（实测这种文件 ffmpeg 仍量得出"正常"时长，只看头部检不出）。
+    # 对账抓的是上游单句被写坏/截断：这类文件 ffmpeg 仍量得出"正常"时长，
+    # 只看头部检不出。
     expected_total = (sum(sd["duration"] for sd in sentence_data)
                       + args.gap * max(0, len(sentence_data) - 1))
     drift = expected_total - total_dur
-    # 容差与下游契约用的是 _timeline 里的同一个 TIMELINE_TOLERANCE：这一步放行、
-    # 下游却拒收，等于 TTS 额度烧完才告诉用户产物不能用。真正的截断量级是秒到
-    # 几十秒，这点裕量足够吸收逐句 round(x,3) 的累计舍入与 concat 边界误差。
+    # 必须用 _timeline 里同一个 TIMELINE_TOLERANCE：这一步放行、下游拒收，
+    # 等于额度烧完才告诉用户产物不能用。
     if drift > TIMELINE_TOLERANCE:
         print(f"[error] 拼接产物比预期短 {drift:.2f}s（实测 {total_dur:.2f}s / "
               f"预期 {expected_total:.2f}s）——多半是句子音频格式不一致或写盘被"
@@ -683,13 +665,12 @@ def _manifest_sentence_entries(sentence_data):
             "duration": s["duration"],
         }
         if s.get("speaker"):
-            # 对话段：说话人标签进 manifest 数据层，渲染端据此在轮次切换的
-            # 首句行首挂出这枚标签（见 html_renderer._verse_html）
+            # 对话段：渲染端在轮次切换的首句行首挂标签（见 html_renderer._verse_html）
             entry["speaker"] = s["speaker"]
         if s.get("synth_failed"):
             entry["synth_failed"] = True  # TTS 失败降级为静音占位（见 --on-fail）
-        # 发声区间（_speech.py 量出来的）：下游据此把"换句"与"念到哪"对齐到
-        # 真正开口的时刻，而不是音频块的开头。缺了就退回按文件长度计时。
+        # 发声区间（_speech.py 量出来）：下游据此把换句/念到哪对齐真正开口的
+        # 时刻。缺了就按文件长度计时。
         if "onset" in s and "voiced" in s:
             entry["onset"] = round(float(s["onset"]), 3)
             entry["voiced"] = round(float(s["voiced"]), 3)
@@ -699,23 +680,17 @@ def _manifest_sentence_entries(sentence_data):
 
 def _reconcile_timeline(manifest_sentences, total_dur, degraded):
     """把成片长度与时间轴终点对账，返回最终 total_dur。"""
-    # 成片长度必须罩住时间轴：音频比最后一句的结束时刻短一分，画面就会在字幕
-    # 还没走完时提前结束。用写进 manifest 的（已 round 的）值算，与契约层
-    # "最后一句不得超出 total_duration + 250ms" 校验的是同一个量。
-    # 宁可让 composition 比音频长几十毫秒（末句字幕本来就要显示完），也不让下游
-    # 按一条它自己必然违反的规则拒收这份 manifest。
+    # 用写进 manifest 的（已 round 的）值算——与契约层"最后一句不得超出
+    # total_duration + 250ms"是同一个量。宁可让 composition 比音频长几十毫秒，
+    # 也不让下游按一条它自己必然违反的规则拒收。
     _timeline_end = max((s["start_time"] + s["duration"])
                         for s in manifest_sentences)
-    # 0.005s 显示精度门槛：逐句 start/duration 都是 round(x,3) 的浮点累加，
-    # 与实测值之间必然存在亚毫秒级噪声。用裸 `>` 判定时每次运行几乎都命中，
-    # 打出来的却是"音频实测 5.48s 短于时间轴终点 5.48s"——两个数按 .2f
-    # 格式化后相同，自相矛盾的日志比没有日志更糟。
+    # 0.005s 门槛吸收 round(x,3) 的累加噪声：用裸 `>` 会常打出"实测 5.48s
+    # 短于终点 5.48s"这种自相矛盾的日志。
     if _timeline_end - total_dur > 0.005:
-        # 补长只能兜住"round 到毫秒后差一点点"（几十毫秒量级）。契约层允许
-        # 最后一句超出 total_duration 至多 250ms，所以超出 250ms 就不是舍入
-        # 问题，而是音频文件真被截断了。
-        # 无条件按时间轴取值会把这种截断抹平成一份 status=ok 的 manifest：
-        # 片尾几秒没声音，没人知道。记进 degraded 让 run.py 的闸门拦得住。
+        # 超出 250ms 就超出契约容差，是音频真被截断。无条件按时间轴取值会把
+        # 它抹平成 status=ok 的 manifest（片尾几秒没声），必须记 degraded 让
+        # run.py 的闸门拦得住。
         _deficit = _timeline_end - total_dur
         if _deficit > TIMELINE_TOLERANCE:
             degraded[D.AUDIO_SHORTER_THAN_TIMELINE] = round(_deficit, 3)
@@ -734,8 +709,8 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
 
 def _group_segments(seg_config, manifest_sentences, degraded):
     """段落分组：manifest 的 segments 逐段构造；没有任何可用音频的段剔除并记降级。"""
-    # seg_config 由 build_parts 生成，_source_schema 保证至少一段、每段都能分句
-    # 出内容，所以这里无条件执行（少一段是下面 dropped 的事）。
+    # _source_schema 保证至少一段且每段都能分句出内容，无条件执行；
+    # 少一段是下面 dropped 的事。
     grouped = []
     dropped = []
     for seg in seg_config:
@@ -747,23 +722,17 @@ def _group_segments(seg_config, manifest_sentences, degraded):
         ]
         _seg_id = seg["id"]
         if not seg_sentences:
-            # 该段所有句子都没产出音频（TTS 连续失败 + --on-fail abort，
-            # 或段落本身被上游丢空）。空段落进 manifest 会被 _manifest_schema
-            # 的校验直接拒收（"缺少非空 sentences 列表"），
-            # gen_hyperframes 随之退出——一次失败就让整条视频出不来。
-            # 剔除并报对人，而不是写出一份下游必然拒收的 manifest。
+            # 空段进 manifest 会被 _manifest_schema 拒收（"缺少非空 sentences
+            # 列表"），gen_hyperframes 随之退出、整条视频出不来。剔除并点名。
             dropped.append(_seg_id)
             continue
-        # tagline 兜底：只对 seg… 内容段落兜底为 "补充阅读"，避免画面
-        # 缺字；opening/closing 是结构性段落，留空即不显示小标题，不塞
-        # 通用标签。兜底文案必须是内容中立词（本技能信源不限于 AI 资讯），
-        # 与 SKILL.md 字段说明保持一致。
+        # tagline 兜底只给 seg… 内容段（文案须内容中立）；opening/closing 是
+        # 结构段，留空即不显示小标题。
         _tagline = seg["tagline"]
         if not _tagline and is_content_sid(_seg_id):
             _tagline = "补充阅读"
-        # id/title/tagline/accent/start/end 由 build_from_structured 的
-        # _segments_from_blocks 逐段构造，必然存在——这里直接下标取值，
-        # 缺键就是上游写坏了，该崩在该崩的地方而不是被默认值掩盖。
+        # id/title/tagline/accent 由 _segments_from_blocks 保证存在：直接下标
+        # 取值，缺键就是上游写坏了，不该被默认值掩盖。
         seg_out = {
             "id": _seg_id,
             "title": seg["title"],
@@ -771,9 +740,7 @@ def _group_segments(seg_config, manifest_sentences, degraded):
             "accent": seg["accent"],
             "sentences": seg_sentences,
         }
-        # 透传可选字段：speed（段落级语速）、voice_id/voice_style（段落级音色）、
-        # layout（版式：内容段的 canvas 由作者写，结构页的 agenda 由
-        # build_from_structured 盖，这里一律原样带走）。
+        # 可选字段原样带走（段落级 speed / 音色、layout）。
         if seg.get("speed") is not None:
             seg_out["speed"] = seg["speed"]
         if seg.get("layout") is not None:
@@ -788,8 +755,7 @@ def _group_segments(seg_config, manifest_sentences, degraded):
             seg_out["turns"] = seg["turns"]
         grouped.append(seg_out)
     if dropped:
-        # 整段消失是这行日志里最重的一种降级：稿子写了 8 段、画面只有 6 段。
-        # 光打 [warn] 不够——下游只看 manifest 状态就会当正常片放行。
+        # 整段消失是最重的降级，只打 [warn] 不够——下游只看 manifest 状态。
         degraded[D.SEGMENTS_DROPPED] = list(dropped)
         # 静默剔除会让"我写了 8 段、成片只有 6 段"变成无解的困惑；
         # 报出被剔除的 sid 与原因，让失败可归因。
@@ -805,9 +771,8 @@ def _group_segments(seg_config, manifest_sentences, degraded):
 def _validate_and_write_manifest(args, manifest, degraded):
     """降级状态收口 → 写盘前自证 → 原子落盘。
 
-    产物不合格要在产出这一刻说：这些校验原本只在 run.py / gen_hyperframes
-    加载时跑——于是 pipeline 报"[done] 成功"、额度也花了，用户却在几秒后
-    收到一份"manifest 不合法"。
+    不合格必须在产出这一刻说：留到 run.py / gen_hyperframes 加载时才报，
+    等于额度花完、报了"[done] 成功"之后才告诉用户不能用。
     """
     # ── Write manifest ─────────────────────────────────────────────
     # 降级状态收口：上面任何一条"显式要了却没做到"都会把 status 翻成
@@ -827,10 +792,8 @@ def _validate_and_write_manifest(args, manifest, degraded):
               f"       音频中间产物仍保留在 {args.output}，修掉上面这条原因后重跑"
               "（不要手工改 manifest 绕过校验）。", file=sys.stderr)
         sys.exit(1)
-    # 原子写：timing_manifest.json 是下游（gen_hyperframes / run.py 渲染）
-    # 唯一的时间轴数据源，写到一半被 Ctrl-C 打断会留下一份
-    # 截断的 JSON——下次 --resume 直接崩在 json.load，且堆栈完全不指向
-    # "上次中断了，重跑一遍就好"。先写 .tmp 再 replace，要么完整要么不存在。
+    # 原子写：写到一半被 Ctrl-C 会留下截断的 JSON，下次 --resume 崩在
+    # json.load 且堆栈看不出"上次中断了，重跑一遍就好"。
     manifest_path = os.path.join(args.output, MANIFEST_FILENAME)
     write_json_atomic(manifest_path, manifest, indent=2)
 
@@ -842,10 +805,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
                                  voices_used):
     """TTS 之后的收口编排：拼接 → 时长对账 → 组装 manifest → 校验落盘。
 
-    任何"用户显式要了、但这次没做到"的事都记进 degraded 明细，最后统一翻成
-    status=degraded 交给 run.py 的 --allow-degraded 闸门。只打一行滚动过的
-    [warn] 就等于静默降级——链路照样跑通、成片照样出，没人会回头看警告，
-    而少了一整段这些事实都已经丢了。
+    "用户显式要了但这次没做到"的事都记进 degraded，统一翻成 status=degraded
+    交给 run.py 的 --allow-degraded 闸门——只打一行滚过去的 [warn] 等于静默降级。
     """
     degraded = {}
 
@@ -863,12 +824,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
     manifest_sentences = _manifest_sentence_entries(sentence_data)
     total_dur = _reconcile_timeline(manifest_sentences, total_dur, degraded)
 
-    # 丢失句数按"应产出 − 实产出"算，而不是复用调用方的 failed 列表：
-    # 每个 index 在 sentence_data 里恰好出现一次（缓存分支或合成分支各
-    # append 一次），所以差额就是凭空消失的句子。这样任何一条"某句没进
-    # manifest"的路径（含静音兜底自身也失败）都会把 status 翻成 degraded，
-    # 而不是只剩一行滚动过的 [warn]，下游 run.py 的 --allow-degraded 闸门
-    # 才有东西可拦。
+    # 丢失句数按"应产出 − 实产出"算（每个 index 恰好 append 一次），不复用
+    # 调用方的 failed 列表：任何一条"某句没进 manifest"的路径都要翻 degraded。
     lost_count = max(0, total_sentences - len(sentence_data))
     if silence_fallback_count:
         degraded[D.SILENCE_FALLBACK_COUNT] = silence_fallback_count
@@ -883,9 +840,8 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
         "sentences": manifest_sentences,
         "total_duration": round(total_dur, 3),
         "gap": args.gap,
-        # 本次真正用到的音色：对话稿/分段音色会让顶层 --voice-id 只代表"默认值"，
-        # 照抄 args.voice_id 等于在 manifest 里声明一件不成立的事。单一音色时
-        # 仍是那一个词，多音色时是逗号连接的清单。
+        # 本次真正用到的音色（分段音色时顶层 --voice-id 只代表默认值）：
+        # 单音色是那一个词，多音色是逗号清单。
         "voice_id": ",".join(_voices),
         "combined_audio": os.path.abspath(combined_path),
     }
@@ -899,9 +855,7 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
 
     _validate_and_write_manifest(args, manifest, degraded)
 
-    # total_sentences / cached_count 由调用方传入：它们都是 main() 的局部
-    # 变量，这里若直接引用会在每次 TTS 成功走到这一行时崩 NameError
-    # （该路径必须保持独立守卫，避免单行输入触发假死）。
+    # total_sentences / cached_count 必须由调用方传入：它们是 main() 的局部变量。
     # 计数按"有没有配音"算，不按行数算：--on-fail silence 的静音占位也在
     # sentence_data 里，整条 API 打不通时旧写法会打成 "6/6 sentences OK"，
     # 紧接着三行就是 [degraded] 与 run.py 的渲染阻断——自相矛盾的流水账会让

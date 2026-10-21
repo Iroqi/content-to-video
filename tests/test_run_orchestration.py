@@ -39,6 +39,13 @@ class Harness:
         # 渲染之后 run.py 会拿它跟 manifest 的 total_duration 对账，测试靠
         # 这个注入点覆盖那道闸——不注入会去调真 ffmpeg（CI 上没有）。
         self.video_duration = None
+        # 官方门禁（每次定稿渲染前都会跑）：默认"干净通过"，个别用例注入 findings。
+        self.gate_findings = []
+        self.gate_calls = 0
+
+    def fake_check(self, project, command=None):
+        self.gate_calls += 1
+        return list(self.gate_findings), 1.0
 
     def cleanup(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -99,6 +106,7 @@ class Harness:
                 mock.patch.object(R.gen_hyperframes, "main", self.fake_gen),
                 mock.patch.object(R, "render_wait", self.fake_render),
                 mock.patch.object(R, "hyperframes_command", lambda p: ["fakehf"]),
+                mock.patch.object(R, "run_check", self.fake_check),
                 mock.patch.object(R, "probe_video_duration", self.fake_probe),
                 contextlib.redirect_stdout(out),
                 contextlib.redirect_stderr(err),
@@ -480,7 +488,7 @@ class HappyPath(unittest.TestCase):
         self.assertIn("完成", out)
         rep = self.h.report()
         self.assertEqual([s["name"] for s in rep["steps"]],
-                         ["TTS", "生成 HTML", "渲染"])
+                         ["TTS", "生成 HTML", "官方门禁 check", "渲染"])
         self.assertTrue(all(s["ok"] for s in rep["steps"]))
         # 进程内直调的行为凭证：假入口是 patch 在 pipeline.main /
         # gen_hyperframes.main 上的，argv 被记下来就说明 run.py 走的是模块属性
@@ -549,6 +557,54 @@ class CheckFramesFlag(unittest.TestCase):
         self.assertIn("完成", out)
         self.assertIn("Chrome 起不来", err)
         self.assertIn("error", self.h.report()["video"]["snapshots"])
+
+
+class OfficialGateWiring(unittest.TestCase):
+    """官方门禁接在编排里的两个位置：`--until check` 挡在渲染前、定稿路径自动跑。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        self.h.make_images_complete()
+        self.h.video_duration = self.h.manifest["total_duration"]
+
+    def test_until_check_stops_before_render(self):
+        """`--until check`：出 HTML、跑门禁、不进渲染（也不量成片）。"""
+        out, _ = self.h.invoke(["--until", "check"])
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(self.h.render_calls, [])
+        self.assertEqual(self.h.probe_calls, [])
+        self.assertIn("官方门禁 check", [s["name"] for s in self.h.report()["steps"]])
+
+    def test_until_check_with_error_exits_nonzero(self):
+        """门禁有 error 就停，且把条目写进报告——否则报告看起来像通过。"""
+        self.h.gate_findings = [("error", "font_family_without_font_face", "缺 @font-face")]
+        with self.assertRaises(SystemExit):
+            self.h.invoke(["--until", "check"])
+        gate = self.h.report()["gate"]
+        self.assertEqual(gate[0]["rule"], "font_family_without_font_face")
+
+    def test_render_path_runs_gate_first(self):
+        """定稿路径：先门禁后渲染，报告里两步都在。"""
+        self.h.invoke([])
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(len(self.h.render_calls), 1)
+        names = [s["name"] for s in self.h.report()["steps"]]
+        self.assertLess(names.index("官方门禁 check"), names.index("渲染"))
+
+    def test_gate_error_blocks_render(self):
+        """门禁 error 拦在渲染前：不花几分钟渲染一版已知有问题的片子。"""
+        self.h.gate_findings = [("error", "clip_media_fit", "音频短于段时长")]
+        with self.assertRaises(SystemExit):
+            self.h.invoke([])
+        self.assertEqual(self.h.render_calls, [], "有 error 就不该起渲染")
+
+    def test_unregistered_warning_does_not_block(self):
+        """未登记的新 warning 只点名、不拦——它是"去读一眼新规则"的提示。"""
+        self.h.gate_findings = [("warning", "unregistered:brand_new", "新检查")]
+        _, err = self.h.invoke([])
+        self.assertIn("brand_new", err)
+        self.assertEqual(len(self.h.render_calls), 1)
 
 
 if __name__ == "__main__":

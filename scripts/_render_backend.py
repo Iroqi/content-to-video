@@ -16,6 +16,7 @@ render_wait / probe_video_duration / snapshot_frames。hyperframes_spec / resolv
 进程树清理（_try_kill_process_tree）只在本模块的失败/超时/中断路径里用，不对外。
 成片容器固定 mp4（由 -o 后缀决定），透明底/mov/webm 已从本技能移除。
 """
+import json
 import os
 import re
 import shutil
@@ -194,11 +195,102 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
     return resolve_command(cmd)
 
 
+# 官方门禁（v0.8.181）能找到的 finding 码全集。只登记**需要判读**的类型没有意义
+# ——那样每升级一次 CLI 都会把新检查当成"未知错误"拦下。所以这里是白名单式全集：
+# 出现集合外的码 = CLI 多了新检查，该去读一遍规则，而不是默默放行。
+# ⚠ 升级 CLI 后这张表要跟着 `hyperframes check <项目> --json` 的实际输出复核；
+# 与 references/rendering.md「官方校验命令」那张噪声表由 tests/check_docs.py 对账。
+GATE_STAGES = ("lint", "runtime", "layout", "motion", "contrast")
+GATE_NOISE_CODES = {
+    # lint：本模板结构决定必然出现，不是待修问题
+    "composition_file_too_large": "HTML 体量随稿子规模走",
+    "nested_structure_needs_subcomposition": "每张卡一条",
+    "timeline_track_too_dense": "字幕时钟轨按帧打点",
+    "negative_z_index": "各层靠负 z-index 垫底，isolation 是静态扫描看不见的",
+    "gsap_callback_dom_measurement": "补间回调里读 DOM 量字宽",
+    "gsap_infinite_repeat": "开屏页的常驻循环",
+    "gsap_repeated_fromto_without_baseline": "同一 fromTo 先后落在不同元素上",
+    "overlapping_gsap_tweens": "入场与运镜在交接处碰同一属性",
+    "css_transition_used": "模板兜底 CSS 的过渡，运行时由 GSAP 接管",
+    "gsap_timeline_set_initial_hide": "开场前显式藏层，避免首帧闪一下",
+}
+# 必须当真的码（其余集合外的码也一样当真）：列在这里是为了让"哪些是静默过错"
+# 有据可查，别让下一个人把它们当噪声一起放过。
+GATE_STRICT_CODES = frozenset({
+    "clip_media_fit", "missing_asset", "runtime_error", "clipped_text",
+    "content_overlap", "font_family_without_font_face", "non_deterministic_math",
+    "external_script", "missing_composition_duration", "missing_locator",
+    "low_contrast",
+})
+GATE_FINDING_CODES = frozenset(GATE_NOISE_CODES) | GATE_STRICT_CODES
+
+
+def build_check_command(project, command=None):
+    """拼一条 `hyperframes check --json`（lint + runtime + layout + motion + contrast）。"""
+    base = list(command) if command else hyperframes_command(project)
+    return resolve_command(base + ["check", project, "--json"])
+
+
+def check_verdict(report, known_codes=GATE_FINDING_CODES):
+    """`hyperframes check --json` 的输出 → [(严重度, code, 说明)]，只留该当真的条目。
+
+    判读口径：
+    - **error 一律当真**；`ok: false` 但拿不到 error 也当真（不能报通过）。
+    - warning：已登记的 noise 放过，**集合外的新 code 当真**——CLI 加了新检查。
+    - **Lint 有 error ⇒ browser 四阶段整个没跑**（CLI 的 shouldBlockRender），
+      那四个 0 是"没量"不是"通过"。此时显式点一条，别让人误读成全绿。
+    """
+    if not isinstance(report, dict) or "ok" not in report:
+        return [("error", "check_output", "check --json 的输出读不懂（不是 JSON 对象）")]
+    findings = []
+    for stage in GATE_STAGES:
+        body = report.get(stage)
+        if not isinstance(body, dict):
+            continue
+        for f in body.get("findings") or []:
+            sev = str(f.get("severity", "")).lower()
+            code = f.get("code") or "?"
+            msg = f.get("message") or ""
+            if sev == "error":
+                findings.append(("error", code, msg))
+            elif sev == "warning" and code not in known_codes:
+                findings.append(("warning", "unregistered:" + code, msg))
+    if not report.get("ok") and not any(s == "error" for s, _, _ in findings):
+        findings.append(("error", "check_not_ok", "check 返回 ok=false，但没有可定位的 error"))
+    if (report.get("lint") or {}).get("errorCount") and report.get("browserSkipped"):
+        findings.append(("warning", "browser_stages_skipped",
+                         "Lint 有 error，browser 四阶段整个没跑——那四个 0 是"
+                         "「没量」不是「通过」。先修 Lint 再判后面四阶段"))
+    return findings
+
+
 _EXIT_GRACE_SECONDS = 12.0
 _GRACE_PER_MB = 0.15
 _GRACE_CAP_SECONDS = 90.0
 _POLL_INTERVAL_SECONDS = 2.0
 _STABLE_SIZE_CHECKS = 2
+
+
+def run_check(project, command=None, timeout=1800):
+    """跑官方门禁 `hyperframes check --json`，返回 (该当真的 findings, 秒数)。
+
+    进程在这里起、不散在 run.py：run.py 只做编排（架构上它不碰 subprocess），
+    起 CLI 的地方全在本题。
+    """
+    args = build_check_command(project, command=command)
+    t0 = time.time()
+    try:
+        r = subprocess.run(args, cwd=project, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"官方门禁跑不起来（{type(e).__name__}: {e}）")
+    raw = (r.stdout or b"").decode("utf-8", "replace")
+    # --json 把整份报告打到 stdout，前后可能夹着 CLI 的进度行：从第一个 { 起解析。
+    start = raw.find("{")
+    try:
+        report = json.loads(raw[start:]) if start >= 0 else None
+    except ValueError:
+        report = None
+    return check_verdict(report), time.time() - t0
 
 
 def _adaptive_grace(size_bytes):

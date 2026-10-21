@@ -31,7 +31,8 @@ from _manifest_schema import load_timing_manifest, MANIFEST_FILENAME  # noqa: E4
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
 from _render_backend import (hyperframes_command,  # noqa: E402
-                             build_render_command, DEFAULT_MAX_WAIT, render_wait,
+                             build_render_command, run_check,
+                             DEFAULT_MAX_WAIT, render_wait,
                              probe_video_duration, node_version_gate,
                              sample_snapshot_times, snapshot_frames)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
@@ -154,6 +155,25 @@ def _report_path():
     return os.path.join(_REPORT_DIR, _REPORT_FILE)
 
 
+def _official_gate(project, command):
+    """跑官方门禁 `hyperframes check`，返回该当真的 findings（[] = 通过）。
+
+    渲染一次是分钟级，check 是十秒级且本来就要人手动跑一遍；把"跑"这件事收进
+    run.py，定稿路径就不再依赖"记得去跑"。判读口径（哪些 warning 是噪声）在
+    `_render_backend.check_verdict`，这里只管报人话。
+    """
+    try:
+        findings, seconds = run_check(project, command=command)
+    except RuntimeError as e:
+        raise SystemExit(f"[run] {e}")
+    _REPORT["steps"].append({"name": "官方门禁 check", "ok": not findings,
+                             "seconds": round(seconds, 1)})
+    if findings:
+        _REPORT["gate"] = [{"severity": s_, "rule": k, "message": m}
+                           for s_, k, m in findings]
+    return findings
+
+
 def _load_manifest_or_exit(manifest_path):
     """读并校验 timing_manifest.json，坏文件报成人话而不是 traceback。
 
@@ -233,10 +253,11 @@ def _build_parser():
                         help="音频/中间产物输出目录（默认 audio_output）")
     parser.add_argument("--project", default=None,
                         help="HTML/渲染项目目录（默认 <output 同级>/hf-project）")
-    parser.add_argument("--until", choices=["tts", "images", "html", "render"],
+    parser.add_argument("--until", choices=["tts", "images", "html", "check", "render"],
                         default="render",
                         help="跑到该步骤为止（默认 render；迭代时用 html："
-                             "生成 HTML 即停，先看版式和配图再渲染）")
+                             "生成 HTML 即停，先看版式和配图再渲染；check：出 HTML "
+                             "后跑官方门禁 hyperframes check，有 error 即停，不进渲染）")
     parser.add_argument("--aspect", default="portrait",
                         choices=["portrait", "landscape"],
                         help="画幅：portrait（默认，1080×1440 竖屏）或 "
@@ -598,6 +619,21 @@ def main():
         _print_report_summary()
         return
 
+    # ── 第 4 步 a'：官方门禁 ─────────────────────────────────────
+    # 与 --until html 同一类"迭代档"：只跑 check，不进渲染（没 Node 也能用它判版式）。
+    # 不接在 --until html 后面自动跑：那条路的意图是"3 秒出 HTML 先看一眼"，check
+    # 要起 Chrome、十几秒。
+    if args.until == "check":
+        issues = _official_gate(project, _HF_COMMAND)
+        _REPORT["skipped"].append("render（--until check）")
+        _write_report(_report_path())
+        for sev, kind, msg in issues:
+            print(f"[run][{sev}] {kind}: {msg}", file=sys.stderr)
+        _print_report_summary()
+        if any(sev == "error" for sev, _, _ in issues):
+            raise SystemExit("[run] 官方门禁有 error，见上方条目；修完再跑渲染")
+        return
+
     # ── 第 4 步 b：渲染 ───────────────────────────────────────────
     # 渲染前置条件先问一遍：Node 版本不够时 CLI 侧的失败形态与"没装 Node"看不
     # 出区别，等它失败再翻日志末尾是拿结果猜原因。
@@ -606,6 +642,15 @@ def main():
         raise SystemExit(f"[run] {_node_msg}")
     if _verdict == "warn":
         print(f"[run][warn] {_node_msg}", file=sys.stderr)
+
+    # 定稿路径自动跑一次官方门禁：error 拦在渲染前，未登记的新 warning 也点名。
+    # 渲染是分钟级，这一步是十秒级；以前靠文档要求人手跑，漏跑就是拿成片换结论。
+    for sev, kind, msg in _official_gate(project, _HF_COMMAND):
+        print(f"[run][{sev}] 官方门禁 {kind}: {msg}", file=sys.stderr)
+        if sev == "error":
+            _write_report(_report_path())
+            raise SystemExit("[run] 官方门禁有 error，未进渲染；修完再跑")
+
 
     out_video = os.path.join(project, "out.mp4")
     if args.low_memory and args.workers != 1:

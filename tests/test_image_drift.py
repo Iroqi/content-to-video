@@ -309,6 +309,23 @@ class SeekSafety(unittest.TestCase):
     def test_render_is_deterministic(self):
         self.assertEqual(render()[1], render()[1])
 
+    def test_image_container_declares_its_overflow_on_purpose(self):
+        """配图容器必须自带 overflow 豁免，两个画幅都要。
+
+        运镜与入场收拢全程以 `scale≥1` 铺满槽位，子元素 bbox 每帧都比容器大几
+        像素——`hyperframes check` 的 Layout 阶段会按"元素超出裁切容器"每段报一
+        条 `container_overflow`。这是设计，所以容器上挂 `data-layout-allow-overflow`
+        （理由见 `_render_image`）。丢了这个标记不会报错，只会让门禁多出一堆假
+        告警、把真的（SVG 比例失配）埋掉。
+        """
+        for aspect in ("portrait", "landscape"):
+            html = render(aspect=aspect)[1]
+            for sid in ("seg-a", "seg-b"):
+                tag = re.search(r'<div class="seg-image[^"]*" id="img-%s"([^>]*)>' % sid, html)
+                self.assertIsNotNone(tag, f"{aspect}：找不到 {sid} 的配图容器")
+                self.assertIn("data-layout-allow-overflow", tag.group(1),
+                              f"{aspect}：{sid} 的配图容器丢了 overflow 豁免")
+
 
 if __name__ == "__main__":
     unittest.main()

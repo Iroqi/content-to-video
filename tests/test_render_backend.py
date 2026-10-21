@@ -296,3 +296,60 @@ class NodeVersionGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfficialGate(unittest.TestCase):
+    """`hyperframes check --json` 的判读：哪些 finding 该拦、哪些是登记过的噪声。"""
+
+    def _report(self, **stages):
+        body = {"ok": True, "browserSkipped": False}
+        for name in RB.GATE_STAGES:
+            body[name] = {"ok": True, "errorCount": 0, "warningCount": 0, "findings": []}
+        for name, findings in stages.items():
+            errs = sum(1 for f in findings if f["severity"] == "error")
+            warns = sum(1 for f in findings if f["severity"] == "warning")
+            body[name] = {"ok": not errs, "errorCount": errs,
+                          "warningCount": warns, "findings": findings}
+            if errs:
+                body["ok"] = False
+        return body
+
+    def test_build_check_command_shape(self):
+        cmd = RB.build_check_command("proj", [sys.executable, "hf"])
+        self.assertEqual(cmd[-3:], ["check", "proj", "--json"])
+
+    def test_clean_report_passes(self):
+        self.assertEqual(RB.check_verdict(self._report()), [])
+
+    def test_registered_noise_does_not_block(self):
+        """负 z-index / 嵌套结构 / 时间线密度这些在每份产物上都报到吐：放过。"""
+        rep = self._report(lint=[
+            {"code": "negative_z_index", "severity": "warning"},
+            {"code": "nested_structure_needs_subcomposition", "severity": "warning"},
+            {"code": "timeline_track_too_dense", "severity": "warning"},
+        ])
+        self.assertEqual(RB.check_verdict(rep), [])
+
+    def test_error_blocks(self):
+        rep = self._report(lint=[{"code": "font_family_without_font_face",
+                                  "severity": "error", "message": "x"}])
+        verdict = RB.check_verdict(rep)
+        self.assertEqual([(s, c) for s, c, _ in verdict],
+                         [("error", "font_family_without_font_face")])
+
+    def test_new_code_is_reported_not_swallowed(self):
+        """CLI 升级后多出来的检查必须点名——否则"全绿"是自动失效的承诺。"""
+        rep = self._report(lint=[{"code": "brand_new_rule", "severity": "warning"}])
+        self.assertEqual([c for _, c, _ in RB.check_verdict(rep)],
+                         ["unregistered:brand_new_rule"])
+
+    def test_lint_error_means_browser_stages_did_not_run(self):
+        """Lint 有 error 时 browser 四阶段被整段跳过：那四个 0 不是"通过"。"""
+        rep = self._report(lint=[{"code": "external_script", "severity": "error"}])
+        rep["browserSkipped"] = True
+        codes = [c for _, c, _ in RB.check_verdict(rep)]
+        self.assertIn("browser_stages_skipped", codes)
+
+    def test_unreadable_output_is_an_error(self):
+        self.assertEqual(RB.check_verdict(None)[0][0], "error")
+        self.assertEqual(RB.check_verdict({"whatever": 1})[0][0], "error")

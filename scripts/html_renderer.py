@@ -770,7 +770,7 @@ def _media_html(rc, sid, s, d):
         poster = media_opts.get("poster", "")
         poster_attr = f'poster="{quote(poster)}" ' if poster else ""
         return (
-            f'\n    <div class="seg-image" id="img-{sid}">\n'
+            f'\n    <div class="seg-image" id="img-{sid}" data-layout-allow-overflow>\n'
             f'      <video id="vid-{sid}" src="{quote(media_path)}" '
             # 窗口值两位小数，与卡片标签的写法同型（唯一来源都是同一组 clip 值）
             f'data-start="{s:.2f}" data-duration="{d:.2f}" '
@@ -783,16 +783,22 @@ def _media_html(rc, sid, s, d):
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
+    # 容器带 `data-layout-allow-overflow`：入场收拢（settle 起手 scale 1.05~1.08）与
+    # Ken Burns 全程都在以 scale≥1 铺满槽位，子元素 bbox 每帧都比容器大几像素。
+    # 这是设计，不是版式错——不打标的话 Layout 阶段每段报一条 container_overflow，
+    # 而它真挡住的（SVG 比例失配）由 gen_hyperframes 的槽位比例护栏在生成期拦。
     _bare = " bare-media" if is_svg_path(media_path) else ""
     inline_svg = media_opts.get("inline_svg")
     if inline_svg:
         return (
-            f'\n    <div class="seg-image{_bare} svg-inline" id="img-{sid}">\n'
+            f'\n    <div class="seg-image{_bare} svg-inline" id="img-{sid}"'
+            f' data-layout-allow-overflow>\n'
             f'      {inline_svg}\n'
             f'    </div>'
         )
     return (
-        f'\n    <div class="seg-image{_bare}" id="img-{sid}">\n'
+        f'\n    <div class="seg-image{_bare}" id="img-{sid}"'
+        f' data-layout-allow-overflow>\n'
         f'      <img src="{quote(media_path)}" alt="">\n'
         f'    </div>'
     )

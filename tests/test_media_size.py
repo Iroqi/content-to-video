@@ -85,6 +85,67 @@ class RasterHeaderParsing(unittest.TestCase):
         self.assertIsNone(raster_size("/nonexistent/nope.png"))
 
 
+class PillowAndFallback(unittest.TestCase):
+    """尺寸读取两条路径：Pillow 主路径（覆盖全部格式）与无 Pillow 时的头解析兜底。
+
+    这里改的是一条**覆盖面**契约：手写头解析只认 PNG/JPEG/WebP/GIF，"读不出"在本
+    模块等于**静默放行**——AVIF/TIFF 这类浏览器与 ffmpeg 都认的素材会绕过"像素够
+    不够、被裁多少"两道告警。Pillow 一条 `Image.open` 把它们全部收进来；兜底路径仍
+    要保住，否则"装不上依赖"会静默退化成"整段校验失效"。
+    """
+
+    def setUp(self):
+        import _media_size as M
+        self.M = M
+        # 每条用例后恢复真实可用性，别把"假装没装"泄漏给别的用例
+        self.addCleanup(setattr, M, "_PILImage", M.__dict__["_PILImage"])
+
+    def _write(self, fmt, size, suffix):
+        try:
+            from PIL import Image
+        except Exception:  # noqa: BLE001
+            self.skipTest("本机没有 Pillow，主路径无从测起（降级路径另有用例）")
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        p = os.path.join(d, "f" + suffix)
+        Image.new("RGB", size, (10, 20, 30)).save(p, format=fmt)
+        return p
+
+    def test_pillow_reads_formats_the_header_parser_does_not(self):
+        """AVIF/TIFF：内置头解析一个都不认，Pillow 全认得。"""
+        for fmt, suffix in (("AVIF", ".avif"), ("TIFF", ".tiff")):
+            with self.subTest(fmt=fmt):
+                p = self._write(fmt, (1024, 768), suffix)
+                self.assertEqual(self.M.raster_size(p), (1024, 768))
+
+    def test_without_pillow_the_builtin_headers_still_answer(self):
+        """把 Pillow 摘掉：PNG/JPEG 照旧答得出，格式外的一如既往返回 None。"""
+        self.M._PILImage = None
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        p = os.path.join(d, "a.png")
+        with open(p, "wb") as f:
+            f.write(_png(800, 600))
+        self.assertEqual(self.M.raster_size(p), (800, 600))
+        p2 = os.path.join(d, "a.tiff")
+        with open(p2, "wb") as f:
+            f.write(b"II*\x00\x08\x00\x00\x00")     # TIFF 头，内置解析不认
+        self.assertIsNone(self.M.raster_size(p2))
+
+    def test_pillow_failure_falls_back_instead_of_raising(self):
+        """Pillow 在、但文件它打不开（截断/伪造）时，必须降级而不是抛异常。
+
+        伪造一个 PNG 头（尺寸可读、像素数据不存在）：Pillow 报 truncated，
+        内置头解析仍能给出尺寸——校验不能因为"解码器不高兴"就整段失效。
+        """
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        p = os.path.join(d, "fake.png")
+        with open(p, "wb") as f:
+            f.write(_png(640, 480))          # 只有 33 字节头
+        self.assertEqual(self.M.raster_size(p), (640, 480))
+
+
 class VideoSizeFromFfmpeg(unittest.TestCase):
     """视频尺寸只能问 ffmpeg（与时长同一条路：那次全解码探测已经在跑了）。"""
 

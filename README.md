@@ -16,7 +16,8 @@
 - **`MIMO_API_KEY` 是硬闸门**：配音走外部付费 TTS，是整条链路唯一的付费外部依赖；没有 key 第 2 步直接停，即使全部命中缓存也不放行。
 - **ffmpeg**（只要 `ffmpeg`）：音频处理
 - **Node.js 22+**（+ `npx hyperframes`）：渲染成片
-- Python 3.9+（脚本只用标准库，无 pip 步骤）
+- Python 3.9+（脚本只依赖标准库）
+- **Pillow**（可选，建议装 `pip install pillow`）：用来判"配图够不够大、会被裁掉多少"。装不上时退回内置头解析，只认 PNG/JPEG/WebP/GIF，其余格式（AVIF/HEIC/TIFF…）会跳过这两道告警。
 
 ## 深入文档
 

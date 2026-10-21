@@ -34,7 +34,8 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 
 | 依赖 | 用途 | 缺了会怎样 |
 | --- | --- | --- |
-| Python 3.9+（脚本只用标准库，无 pip 步骤） | 全部脚本 | — |
+| Python 3.9+（脚本只依赖标准库） | 全部脚本 | — |
+| Pillow（可选，建议装） | 配图尺寸与比例校验（`_media_size`） | 退回内置头解析：只认 PNG/JPEG/WebP/GIF，AVIF/HEIC/TIFF 等静默跳过"像素够不够/被裁多少"两道告警 |
 | **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 2 步失败（全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 2 步失败；配图探测降级为仅查存在性 |
 | **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |

@@ -3,7 +3,7 @@ import io
 import unittest
 
 import _helpers as H  # noqa: F401
-from _text import split_sentences
+from _text import _quote_stack, split_sentences
 
 
 class Split(unittest.TestCase):
@@ -37,6 +37,58 @@ class Split(unittest.TestCase):
 
     def test_newline_splits(self):
         self.assertEqual(len(split_sentences("第一行内容足够长一些\n第二行内容也足够长一些")), 2)
+
+
+class QuoteOwnership(unittest.TestCase):
+    """句末的 ” ’ " ' 归上一句，不能起下一句。
+
+    判错的形状很难受：下一句以孤零零一个引号开头，TTS 把引号音节化、
+    字幕第一格挂个孤立符号。老实现按"左边最近一枚同类引号"判，
+    `张三说："好的。"然后走了。` 里收尾那枚的左边只有它自己那对的开头，
+    于是被判成"开"，劈出 `'"然后走了。'`。
+    """
+
+    def test_closing_quote_closes_the_sentence(self):
+        self.assertEqual(split_sentences('张三说："好的。"然后走了。'),
+                         ['张三说："好的。"', '然后走了。'])
+
+    def test_curly_quote_pair_same_way(self):
+        self.assertEqual(split_sentences("张三说：‘好的。’然后走了。"),
+                         ["张三说：‘好的。’", "然后走了。"])
+
+    def test_every_sentence_quoting_itself(self):
+        # 每句各打一对引号 ⇒ 引号总数是偶数。按"总数奇偶"判必错，按配对栈判才对。
+        self.assertEqual(split_sentences('"现在开始。"他说完了。'),
+                         ['"现在开始。"', '他说完了。'])
+        self.assertEqual(split_sentences('"第一句话。"他说："第二句话。"'),
+                         ['"第一句话。"', '他说："第二句话。"'])
+
+    def test_nested_quotes_close_inside(self):
+        # 内层收尾不该把后面的 `然后：“` 一起吞掉
+        self.assertEqual(split_sentences("他说：“第一点。”然后：“第二点。”结束了。"),
+                         ["他说：“第一点。”", "然后：“第二点。”结束了。"])
+
+    def test_bracket_and_quote_mix(self):
+        self.assertEqual(split_sentences("：（她说：“走吧。”）然后大家散了。"),
+                         ["：（她说：“走吧。”）", "然后大家散了。"])
+
+    def test_apostrophe_is_not_an_opener(self):
+        # dogs' 里的 ' 是英文所有格，不该开启引号，也不该让后面一直算"在引号里"
+        self.assertEqual(split_sentences("dogs' toys. Next one."),
+                         ["dogs' toys.", "Next one."])
+
+    def test_unpaired_curly_quote_still_absorbed(self):
+        # 竖排/手打稿常漏开引号：句末这枚 ’ 左边没有 ‘，仍按收尾并进当前句，
+        # 否则下一句首个字符就是孤零零一个右引号
+        self.assertEqual(split_sentences("张三说：好的。’然后走了。"),
+                         ["张三说：好的。’", "然后走了。"])
+
+    def test_stack_depth_reports_top_of_stack(self):
+        # stacks[i] 是 text[:i] 的栈快照；长度是 len+1
+        self.assertEqual(_quote_stack('说："好'),
+                         [(), (), (), ('"',), ('"',)])
+        self.assertEqual(_quote_stack("说：“好"),
+                         [(), (), (), ("“",), ("“",)])
 
 
 # 两句样例稿件：一句 38 字（落在 32–45 的第二档），一句 56 字（超过 45 的逐句档）。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""媒体像素尺寸：只读文件头，不引 Pillow / 不解码。
+"""媒体像素尺寸：问 Pillow 要，没有 Pillow 就退回读文件头（不解码）。
 
 存在的理由是一条**此前无人拦的静默退化**：配图一律 `cover` 铺满画布（见
 `references/imagery.md`「统一使用同一个内容画布」），`cover` 只保证填满，
@@ -18,8 +18,20 @@
 
 **矢量不验**：SVG 缩放不失真，它另有比例与字号两道门禁（见
 `gen_hyperframes.canvas_layout_errors`），这里一律跳过。
+
+**为什么引 Pillow**：手写头解析只认得 PNG/JPEG/WebP/GIF 四种，而"读不出"在本
+模块等于**静默放行**——AVIF/HEIC/JPEG XL/TIFF/JXL 这类素材（浏览器与 ffmpeg
+都认，作者也会用）会绕过全部三道判据，正是这个模块存在的理由。Pillow 一条
+`Image.open` 覆盖它全部，几百种格式、EXIF 旋转也替我们处理。它读惰性头
+（`size` 不解码像素），一次验证几十张的耗时可以忽略。没有 Pillow 时退回手写
+头解析（四种常见格式仍被兜住），保证"装不上依赖"不是"整段失效"。
 """
 import struct
+
+try:  # 主路径：Pillow（可选依赖，见模块说明）
+    from PIL import Image as _PILImage
+except Exception:  # noqa: BLE001  装了但加载失败（缺 libjpeg 之类）同样退回头解析
+    _PILImage = None
 
 # cover 铺满的放大倍率阈值。
 # 1.0 是"刚好铺满"；1.25 以下留作不报——出图端常见的 1024×768、1024×1024 落在
@@ -114,18 +126,35 @@ def _webp_size(buf):
     return None
 
 
-# 扩展名 → 解析器。只收渲染端真会遇到的栅格格式；SVG 不在此列（矢量不验），
-# 其余（.avif/.heic 之类）浏览器未必认、ffmpeg 兜得住，读不出来就当"没法验"。
+# 扩展名 → 解析器。只收渲染端真会遇到的栅格格式；SVG 不在此列（矢量不验）。
+# 没有 Pillow 时这是唯一路径：读不出的格式（avif/heic/jxl…）当"没法验"，
+# 有 Pillow 时它们走 _pil_size，不会走到这里。
 _PARSERS = (_png_size, _jpeg_size, _webp_size, _gif_size)
+
+
+def _pil_size(path):
+    """问 Pillow 要尺寸；没装、打不开、返回非正数都返回 None。"""
+    if _PILImage is None:
+        return None
+    try:
+        # with 打开：不 close 会留着文件句柄，Windows 上随后删临时目录会失败
+        with _PILImage.open(path) as im:
+            w, h = im.size
+    except Exception:  # noqa: BLE001  Pillow 的异常类型按格式各不相同，一律"读不出"
+        return None
+    return (int(w), int(h)) if w > 0 and h > 0 else None
 
 
 def raster_size(path):
     """栅格图的固有像素尺寸 (w, h)；读不出返回 None。
 
-    不解码、不校验——"图是不是坏的"由 `gen_hyperframes.validate_images_files`
-    的 ffmpeg 全解码探测管，这里只回答"它有多少像素"。四种格式按顺序试，
-    命中即返回；都不命中返回 None，调用方按"没法验"处理（不报，不猜）。
+    Pillow 先答（覆盖全部格式），没有 Pillow 才按头解析四种常见格式。
+    不解码、不校验——"图是不是坏的"由 `gen_hyperframes` 的 ffmpeg 全解码探测
+    管，这里只回答"它有多少像素"。调用方对 None 按"没法验"处理（不报，不猜）。
     """
+    got = _pil_size(path)
+    if got:
+        return got
     try:
         with open(path, "rb") as f:
             buf = f.read(_HEADER_READ)

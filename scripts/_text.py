@@ -17,7 +17,46 @@ _CN_TERMINATORS = "。！？\uFF1B;\n"
 # 终止符后可并入当前句的收尾字符：连发标点（？！/。。——第二枚若另起片段
 # 会因"游离标点"过滤整枚丢失）与闭引号/括号（” 被劈进下句句首会让字幕挂
 # 孤立引号、TTS 引号配对错乱）。只收**闭**引号：开引号 “ 永远属于下一句。
-_CN_TRAILERS = "。！？；”」』）】》'"
+# 弯右单引号 ’ 也收：它是英文所有格（dogs’）与单引号收尾的公共收口。
+_CN_TRAILERS = "。！？；”」』）】》'’"
+
+# 引号/括号配对：收尾 → 自己的开。ASCII 直引号两种朝向是同一个字符，所以
+# 开/收不能靠"在不在表里"分，必须另存一份开集合。
+_QUOTE_PAIRS = {"”": "“", "’": "‘", "」": "「", "』": "『", "）": "（", "】": "【",
+                "》": "《", '"': '"', "'": "'"}
+_QUOTE_OPENERS = frozenset(_QUOTE_PAIRS.values())
+_QUOTE_CHARS = frozenset(_QUOTE_PAIRS) | _QUOTE_OPENERS
+
+
+def _quote_stack(text):
+    """逐位置返回扫描到**该位置之前**的引号栈快照（元组的浅拷贝列表）。
+
+    stacks[i] 是 text[:i] 里尚未配对的引号序列，长度 len(text)+1。
+    只给 split_sentences 判断句末引号用，所以直接存元组，读的地方只关心栈顶。
+    """
+    stacks = [()] * (len(text) + 1)
+    stack = []
+    for i, c in enumerate(text):
+        if c in _QUOTE_CHARS:
+            if stack and c == stack[-1]:
+                stack.pop()          # 配上了栈顶那个开引号（含直引号自配自）
+            elif c in _QUOTE_OPENERS:
+                stack.append(c)      # 本身是开引号
+            # 剩下的是"没开过的闭引号"（裸奔的右括号之类），忽略
+        stacks[i + 1] = tuple(stack)
+    return stacks
+
+
+def _is_closer(ch, stack):
+    """句末那枚 `"` 该并入上一句吗。stack 是它**之前**的引号栈。
+
+    中文引号与括号本身就是"只当收尾"的字符，走 _CN_TRAILERS 那条路，
+    真正要在这里判的只有朝向相同的 ASCII `"`：
+      - 栈顶就是 `"` ⇒ 它在收自己那一对，并入上一句；
+      - 栈顶是别的（外层中文引号/括号）或栈空 ⇒ 它是新开的一对，留给下一句。
+    """
+    return bool(stack) and stack[-1] == ch
+
 
 # 常见英文缩写词尾：句点即使后面跟着空白也不视为句子结束。全小写比对；
 # 含内部点的形式（e.g / i.e / u.s）。维护原则：漏收一个缩写只是"少切一刀"
@@ -113,12 +152,14 @@ def split_sentences(text):
     parts = []
     start = 0
     n = len(text)
+    stacks = _quote_stack(text)
     i = 0
     while i < n:
         ch = text[i]
         if ch in _CN_TERMINATORS:
             i += 1
-            while i < n and text[i] in _CN_TRAILERS:
+            while i < n and (text[i] in _CN_TRAILERS
+                             or (text[i] in '"' and _is_closer(text[i], stacks[i]))):
                 i += 1
             parts.append(text[start:i])
             start = i

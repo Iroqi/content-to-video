@@ -1,0 +1,5 @@
+# 可选依赖：装上之后配图尺寸/比例校验覆盖全部格式（AVIF/HEIC/TIFF…）。
+# 不装也能跑：_media_size 退回内置文件头解析（PNG/JPEG/WebP/GIF），其余格式
+# 跳过"像素够不够 / 会被裁多少"两道告警。
+# 只用在本机验证文档时：pip install -r requirements.txt
+pillow>=9.0

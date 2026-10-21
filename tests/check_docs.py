@@ -14,6 +14,10 @@
 顺带量一次 SKILL.md 的行数：它是每次调用必然整份进上下文的那一份，超出上限
 说明细节又爬回主文档了，该下沉到 references/。
 
+还有一道「官方门禁噪声表对账」：`_render_backend.GATE_NOISE_CODES` 是判读的真源，
+`references/rendering.md` 是给人看的那份复制品。复制品会漂——代码登记了、文档没写，
+读者就以为那是新错误；文档写了、代码漏了，那条会被当成 error 拦下来。两边逐码对账。
+
 用法：python tests/check_docs.py          # 有悬空引用时退出码 1
 """
 import glob
@@ -83,6 +87,35 @@ SKILL_MD_MAX_LINES = 150
 REFERENCE_MAX_BYTES = 44_000
 
 
+# 官方门禁噪声表的对账真源：代码里的码 → 文档里必须出现 `` `码` ``。
+NOISE_SOURCE = os.path.join("scripts", "_render_backend.py")
+NOISE_DOC = os.path.join("references", "rendering.md")
+
+
+def noise_codes():
+    """从 `_render_backend.py` 里抠出 GATE_NOISE_CODES 的键（不执行模块）。"""
+    with open(os.path.join(ROOT, NOISE_SOURCE), encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r"^GATE_NOISE_CODES = \{(.*?)^\}", src, re.S | re.M)
+    if not m:
+        return None
+    return set(re.findall(r'"([a-z0-9_]+)":', m.group(1)))
+
+
+def noise_table_drift():
+    """返回噪声表两边的差异说明（[] = 一致）。"""
+    code = noise_codes()
+    if code is None:
+        return [(NOISE_SOURCE, "GATE_NOISE_CODES", "?", "读不到这张表")]
+    with open(os.path.join(ROOT, NOISE_DOC), encoding="utf-8") as f:
+        doc = f.read()
+    documented = set(re.findall(r"`([a-z][a-z0-9_]{5,})`", doc))
+    # 只查单向（代码 → 文档）：漏写的码在文档里根本不存在，读者会把它当新错误；
+    # 反方向全是误报——文档里的反引号词还有路径名、字段名、工具名。
+    return [(NOISE_SOURCE, NOISE_DOC, c, "代码登记了、文档没写")
+            for c in sorted(code - documented)]
+
+
 def main():
     cache, bad = {}, []
     sources = [os.path.join(ROOT, "SKILL.md")]
@@ -117,6 +150,7 @@ def main():
         if not H1_REF.match(first):
             bad.append((ref, os.path.relpath(ref, ROOT), first,
                         "H1 不是 `第 N 步 · 主题` 模板，改标题或改检查"))
+    bad += noise_table_drift()
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
     n = skill_md_lines()

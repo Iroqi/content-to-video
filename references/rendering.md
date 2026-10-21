@@ -160,16 +160,19 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 
 `check` = lint + browser 四阶段，**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
 
-本节口径对着 **v0.8.162** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法。
+**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_FINDING_CODES` 之外的新 code 当真，Lint 有 error 时额外点一条 `browser_stages_skipped`。
+
+本节口径对着 **v0.8.181** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_FINDING_CODES` 与下面这张噪声表一起复核。
 
 - 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - **Lint 有 error ⇒ browser 四阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast 显示 `0 issues across 0 sample(s)` / `0/0 text checks` 不是通过，是失明**——那四个 0 是"没量"。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
 - 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
-  - 噪声：`gsap_callback_dom_measurement`（1）、`timeline_track_too_dense`（1）、`composition_file_too_large`（0~1，HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）。
+  - 噪声（**全表以 `scripts/_render_backend.py` 的 `GATE_NOISE_CODES` 为准**，`tests/check_docs.py` 逐码对账，改一边不改另一边会报错）：
+    `gsap_callback_dom_measurement`（补间回调里量字宽）、`timeline_track_too_dense`（字幕时钟轨按帧打点）、`composition_file_too_large`（HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）、`css_transition_used`（模板兜底 CSS 的过渡，运行时由 GSAP 接管）、`overlapping_gsap_tweens`（入场与运镜在交接处碰同一属性）、`gsap_repeated_fromto_without_baseline`（同一 `fromTo` 先后落在不同元素上）、`gsap_infinite_repeat`（**开屏页才有**，默认强绑定）、`gsap_timeline_set_initial_hide`（开场前显式藏层）。
   - 误报：`negative_z_index`（**恒 5 条**＝ CSS 里负 z-index 规则的条数：`.seg-card::after`、`.apple-halo`、`.apple-glow`、`.seg-card>.bg/.grid`、`.verse::before`），Fix 是 `isolation: isolate`（已加在各层的直接父元素上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
-  - `gsap_infinite_repeat`（**开屏页才有**，1 条，默认强绑定）：噪声。别处的 `repeat:-1` 与无界 duration 都要当真。
-  - 于是条数≈`5 + 卡片数 + 2~3`——**条数随卡片数走，别拿任何一个样本当固定值**。
-  - **判据**：6 类之外的新增条目一律当真，**类型多出一类就要查**（类型在 8 种稿子／两画幅的实测里恒定，条数才是变的）。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
+  - 于是条数≈`5 + 卡片数 + 6`（candidate 与整条链实测：竖屏 3 卡 14 条、横屏 3 卡 14 条，类型逐条相同）；**条数随卡片数走，别拿任何一个样本当固定值**。
+  - `container_overflow` **不该再出现**：入场收拢（settle 起手 `scale` 1.05~1.08）与 Ken Burns 全程以 `scale≥1` 铺满槽位，子元素 bbox 每帧都比容器大几像素——配图容器 `#img-*` 带 `data-layout-allow-overflow` 把这条豁免掉。真出现就是**有人拿掉了那个标记**或**槽位里塞了比例不对的 SVG**（后者由生成期槽位比例护栏拦，见 `references/imagery.md`）。
+  - **判据**：`GATE_NOISE_CODES` 之外的新增条目一律当真（`run.py` 会以 `unregistered:<code>` 点名）。**类型多出一类就要查**——条数随卡片数变，类型本该恒定。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
 - `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
 - Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，判成"文字藏在不透明元素下"。做法是打豁免属性，而**三个属性的继承规则不同，别按一套打**：
   - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：只认元素**自己身上**、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带。

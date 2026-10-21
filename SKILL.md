@@ -77,12 +77,13 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 ```bash
 python scripts/run.py --source SOURCE -o OUTPUT --until html   # 迭代：出 HTML 即停
+python scripts/run.py --source SOURCE -o OUTPUT --until check  # 只过官方门禁：有 error 停，不进渲染
 python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS → 配图 → HTML → render
 ```
 
 用浏览器打开 `hf-project/index.html` 预览：默认停在首帧，点播放后时间线与音频一起走。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致、agenda 有没有行被截掉。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号、配图不够大/比例不贴合、视频不够这一段长）都要回头处理。
 
-**渲染前跑 `hyperframes check`**（渲染阶段没有自动版式检查），已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG——**是取帧工具，不是门禁**，按症状定位走同文件「画面翻车速查表」。
+**`hyperframes check` 已接进 `run.py`**：不给 `--until` 时渲染前自动跑一次，有 error 直接停下、不进渲染；要单独验收版式就用 `--until check`。已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG——**是取帧工具，不是门禁**，按症状定位走同文件「画面翻车速查表」。
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。
 
@@ -93,7 +94,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 参数只认一处真源：`python scripts/run.py --help`（取值、默认值、用途都在那里）。这里只留两条 `--help` 看不出来的：
 
 - `--workers` 同名不同义：`run.py` 的是**渲染抓帧**并行度，`pipeline.py` 的是 **TTS 并发**数。
-- `--until html` 是迭代档（出 HTML 即停、人工预览），`--until render`（默认）才出成片。
+- `--until html` 是迭代档（出 HTML 即停、人工预览），`--until check` 停在官方门禁之后，`--until render`（默认）才出成片。
 - 四个调试旗标都不进交付：`--placeholder-missing` 与 `--allow-ease` 只配 `--until html`（带它们跑渲染在入口 exit 2）；`--allow-best-effort` 放行缺媒体/未就绪的抓帧（成片可能无声或缺帧，报告留痕）。**`--draft` 是这些逃生口的总开关**：一次放行占位 / ease / 缺 src 降级 / 槽位比例·对比度与画布字号降 warn / 渲染 best-effort，差异由 `production_report` 的 `draft` 标记与 skipped 清单点名。探索期一条 `--draft` 随便跑，定稿去掉它；安全类与画布档判据在 draft 下照旧拦截。`check_svg.py` 同样吃 `--draft`（槽位比例/对比度降 warn、端点悬空静音、满幅底板提示合并）。
 
 探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.director.duration=0.8`，键是 `scripts/_template.py` 的叶子路径），`--drift off|subtle|boring` 给全片静态图选一个运镜档（逐段微调在 images.json 的 `drift` 字段）。两者都只在本次进程生效，定稿的取值写回模板。

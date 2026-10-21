@@ -4,10 +4,9 @@
 把 TTS → 配图 → HTML → 渲染串成一条命令，内部按依赖顺序调用各步骤；
 不改变任何子脚本的独立性，只做组合与默认值。
 
-TTS / 生成 HTML 两步是**进程内直调**子脚本的 main(argv)（参数校验只在
-子脚本自己那一份 parser 里做一次，错误以 SystemExit 传回、语义与旧的
-子进程退出码一致）；全文件唯一的子进程是 `npx hyperframes render`，
-由 _render_backend 负责进程树与成片完整性。
+TTS / 生成 HTML 两步**进程内直调**子脚本的 main(argv)（参数校验只在子脚本
+那份 parser 做一次，错误以 SystemExit 传回）；唯一的子进程是
+`npx hyperframes render`，进程树与成片完整性归 _render_backend。
 
   python scripts/run.py --source segments_source.json -o audio_output --until html
   # ↑ 迭代用：跑到 HTML 为止，在 hf-project/ 打开 index.html 看版式和配图。
@@ -405,26 +404,23 @@ def main():
     # --resume 恒开（指纹缓存能证明一致才复用；要整重跑时直接调 pipeline.py，
     # 不加 --resume 即可）。
     tts_args = ["--source", args.source, "-o", out, "--resume"]
-    # --speed / --voice-id 都有 argparse 默认值，永远透传：显式写进子步骤参数，
-    # 让 pipeline 的 resume 指纹与本次参数一致，不依赖两边默认值恰好相同。
+    # --speed / --voice-id 有 argparse 默认值也要永远透传：否则 resume 指纹
+    # 依赖两边默认值恰好相同。
     tts_args += ["--speed", str(args.speed), "--voice-id", args.voice_id]
     if args.voice_style:
         tts_args += ["--voice-style", args.voice_style]
     if args.gap is not None:
         tts_args += ["--gap", str(args.gap)]
-    # 单句 TTS 失败的降级策略同样永远透传（同上一条规则）。silence 会把失败句
-    # 降级为静音占位并让 manifest 进入 degraded 状态——那是 SKILL.md
-    # 「降级显式化」规则与下方 degraded 拦截真正能触达的入口。
+    # --on-fail 同理永远透传：silence 会让 manifest 进 degraded，那是下方拦截
+    # 真正能触达的入口。
     tts_args += ["--on-fail", args.on_fail]
     if args.dry_run:
         tts_args.append("--dry-run")
     _run_step(pipeline.main, tts_args, "TTS")
 
     # ── 第 3 步：配图 ─────────────────────────────────────────────
-    # 配图不由本脚本产出：agent 在第 3 步用 ImageGen 生图、
-    # 手绘 SVG 矢量示意，落进 images/ 并把映射写进 images.json。
-    # run.py 只负责统计这份映射的覆盖率，并只在真要渲染时拦缺图
-    # （--until html 只警告）。
+    # 配图不由本脚本产出（第 3 步生图/画 SVG 落进 images/ 并写 images.json）。
+    # run.py 只统计覆盖率，并且只在真要渲染时拦缺图。
     # 文件名与 pipeline 写侧同源（MANIFEST_FILENAME）：各拼一遍的话，改一侧
     # 就等于把"manifest 不存在"这条分支永久打开。
     manifest = os.path.join(out, MANIFEST_FILENAME)

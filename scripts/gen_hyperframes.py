@@ -818,9 +818,8 @@ def _svg_selectable_tokens(raw):
 
 
 # ── 导演节拍 ↔ 旁白对轴───────────────────────────────────────────
-# 落点解析在 _timeline.beat_positions（与渲染端同一函数），这里只负责"把落点
-# 说成人话"：门禁要的窗外判定、以及 --beat-report 要的每拍落句表。之所以放在
-# 生成期而不是 check_svg：判据需要 manifest 的句子时间，而 check_svg 只看单个 SVG。
+# 落点解析在 _timeline.beat_positions（与渲染端同一函数），这里只说人话：窗外判定与
+# --beat-report 的每拍落句表。放在生成期而非 check_svg：判据要 manifest 的句子时间。
 
 _BEAT_EPS = 0.005   # 落点已与时间轴同精度（round 2 位），这里只吸收浮点尾巴
 
@@ -918,11 +917,8 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
                        "多半是 at_time 按旧配音手算后过期了：跟旁白的节拍改用 at（句序锚），"
                        "或把秒数调小")
         elif next_start is not None:
-            # 跨度按 beat_span 算：写了 repeat 的这一拍要演好几遍，只按单遍 duration 判
-            # 就是四倍误差——"演到一半被盖过来"的门禁必须拿成片里真正的那个大括号。
-            # repeat:-1 没有终点，也不报：它本来就要被页界切掉，报它是训练作者忽略 warn。
-            # stagger 另加：一组元素逐个错开，最后那个的收尾比 span 更晚（见
-            # _stagger_extra——拿不到元素数，按"至少多一个间隔"的下界算）。
+            # 跨度按 beat_span 算（含 repeat，否则四倍误差）；repeat:-1 没有终点也不报
+            # ——它本来就被页界切掉。stagger 另加下界（见 _stagger_extra）。
             span = beat_span(step, dur)
             extra = _stagger_extra(step)
             total = None if span is None else span + extra
@@ -1379,10 +1375,8 @@ def audio_fallback_check(audio_path, want_total):
 
 
 # ── 运镜档：三种"省心选择"而不是自由参数 ──────────────────────────────
-# 自由参数（速率/封顶/幅度逐项写）的问题是没人知道该填多少，调出来的结果又互相
-# 打架。这里给三档具名的组合，逐段还想微调就写 images.json 的 drift 字段覆盖。
-# 取值都落在模板缺省的同一量级上：subtle 是"更有呼吸"的那一侧，boring 是"几乎
-# 看不出在动"的那一侧，两端都仍在"不露底"的安全区（推近 < 1.1、pan ≤ 1）。
+# 三档具名组合取代自由参数（逐项填没人知道填多少，还互相打架）；逐段微调写
+# images.json 的 drift。三档都在"不露底"的安全区（推近 < 1.1、pan ≤ 1）。
 DRIFT_PRESETS = {
     "off": {"ratePerSec": 0.0, "maxScale": 1.0, "panX": 0.0, "panY": 0.0},
     "subtle": {"ratePerSec": 0.009, "maxScale": 1.10, "panX": 0.45, "panY": 0.75},

@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
 """把 SVG 净化成可安全内联进成片 HTML 的活 DOM。
 
-背景：`references/canvas.md`「图内文字的对比度」记的那条老规矩是
-"交付 HTML 必须保持 `<img>`"——理由是 `<img>` 载入的 SVG 按 data 处理，
-浏览器不执行它的 `<script>`；一旦内联进 DOM 它就成了同源活 SVG，脚本照跑。
-"导演"（时间轴同步的 SVG 动画，见 `references/canvas.md`「SVG 动画：两档」）必须内联才能让
-GSAP 逐帧驱动图内元素，所以内联不再是禁区，但**必须先净化**：这一层就是把
-"内联会执行脚本"的风险拆掉，让内联回到和 `<img>` 同样安全的水位。
+内联会让 SVG 成为同源活 DOM（`<img>` 载入时按 data 处理、脚本不执行），所以导演档
+（见 `references/canvas.md`「SVG 动画：两档」）**必须先净化**，让它回到 `<img>` 的安全水位。
 
-同时服务第二个不变量——**逐帧 seek 的决定性**（见 rendering.md「动画」）：
-渲染器按时间线时刻 seek 每一帧，凡按墙上时钟自走的东西（CSS `@keyframes` /
-`transition`、SMIL `<animate*>`）都会在成片里漂移、不可复现。所以净化时把这
-类墙钟动画一并剥掉；导演的运动全部改由时间线补间驱动。要"氛围循环"就别写
-director，走 `<img>` 那条路（墙钟循环，见 `references/canvas.md`「SVG 动画：两档」）。
+同时保证**逐帧 seek 的决定性**（见 rendering.md「动画」）：墙钟自走的东西（CSS
+`@keyframes`/`transition`、SMIL `<animate*>`）在成片里会漂移，一并剥掉。要氛围循环
+就别写 director，走 `<img>`。
 
-只用标准库。净化基于 ElementTree 结构化改写，不做正则删标签那种能被绕过的活。
+基于 ElementTree 结构化改写，不用正则删标签（那种能被绕过）。
 """
 import os
 import re
@@ -40,23 +34,16 @@ _DROP_TAGS = {"script", "foreignObject"}
 # 墙钟动画元素：逐帧 seek 下不可复现，director 模式剥掉，运动交给时间线补间。
 _WALLCLOCK_TAGS = {"animate", "animateTransform", "animateMotion", "set"}
 # CSS 里驱动墙钟动画的属性名（在 <style> 文本与 inline style 上都清）。
-# 值的终止要同时认 `;` 和 `}`：手绘 SVG 里 `.a{animation:x}` 结尾没有分号，
-# 若值吃到 `;` 为止会把闭合 `}` 之后下一条规则一起吞掉。
-#
-# 左边必须是一个**声明起始**（规则开括号 / 前一条声明的分号 / 串开头）。没有这个
-# 边界，CSS 自定义属性会被拦腰截断：`--animation-duration:2s;fill:red` 里
-# `animation-duration:` 同样命中旧写法，剥完之后 `--` 残留、`fill` 那条真声明被
-# 当成属性值一并吃掉（实测剩 `--fill:red`）——作者写的颜色在成片里静默消失。
-# 单短横的厂商前缀（-webkit-animation）照样放行，那是真 CSS 属性；
-# `--` 开头是自定义属性，天然不匹配。
+# 值的终止同时认 `;` 和 `}`：`.a{animation:x}` 结尾没有分号，吃到 `;` 会把闭合 `}`
+# 之后下一条规则一起吞掉。
+# 左边必须是**声明起始**（`{` / `;` / 串首）：否则 `--animation-duration:2s;fill:red`
+# 里的自定义属性会被拦腰截断，连带吃掉后面那条真声明（剩 `--fill:red`）。
 _WALLCLOCK_CSS = re.compile(
     r"(?:(?<=[;{])|^)\s*(?:-[a-z]{1,10}-)?(?:animation|transition)(?:-[a-z]+)?\s*:[^;}]*;?",
     re.I | re.M)
-# 外链 / 脚本 URL：@import、url(http…)、以及 href 里的 javascript:。
-# url() 上下文一并拦 file:/data:——CSS 里 url(file:…) 同样会把本地文件拉进
-# 成片（HTML 以 file:// 打开时可达本机磁盘）。
-# 匹配一直吃到收尾的 `)`：替换是"整颗 url() 换成 about:blank"，只吃 scheme 那一截
-# 会留下半截（`url(about:blank//evil.com/x.png)` 既不成语法、URL 也还看得见）。
+# 外链 / 脚本 URL：@import、url(http…)、href 里的 javascript:。url() 里一并拦
+# file:/data:（以 file:// 打开 HTML 时可达本机磁盘）。
+# 必须吃到收尾 `)`：只吃 scheme 那一截会留下半截坏语法。
 _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re.I)
 # CSS 转义序列（CSS Syntax §4.3.7）：`\XXXXXX`（1~6 位十六进制，后可跟一个空白被
 # 吃掉）、`\<其它字符>`、以及 `\`+换行（续行，整体抹掉）。浏览器解析 CSS 值与
@@ -253,11 +240,9 @@ def _polygon_backdrop(el, vb_w, vb_h):
 def _path_fill_ratio(d, vb_w, vb_h):
     """path 的填充（even-odd 扫描线）占 viewBox 的比例。
 
-    bbox 铺满不等于填充铺满：`M0 0 L980 735` 这种一条对角线占位整个画面，
-    填充面积是 0——它不是底板，报它就是误报（而 warn 贬值比漏报更贵）。
-    逐水平线求交点、奇偶配对累加覆盖宽，是"这个形状盖住了多少背景"的直接回答，
-    矩形/折线（含 Z 闭合、以及未闭合时浏览器隐式补的那条）在这套近似下是精确的；
-    曲线按 `path_segments` 的弦近似，误差只让面积略小（安全方向）。
+    bbox 铺满不等于填充铺满：一条对角线的 bbox 占满画面、面积是 0，报它就是误报
+    （warn 贬值比漏报更贵）。逐水平线奇偶配对累加覆盖宽；曲线按弦近似，误差只让
+    面积略小（安全方向）。
     """
     try:
         segs = path_segments(d)
@@ -292,12 +277,9 @@ def _path_fill_ratio(d, vb_w, vb_h):
 def _path_backdrop(el, vb_w, vb_h):
     """path：`d` 的轴投影占位铺满，且**填充**也铺满。
 
-    bbox 复用 `_path_morph.x_span / y_span`——它按命令语义走光标（相对命令累加
-    当前点、Z 送回子路径起点），比"把 d 里的数字全切出来取极值"准。bbox 只当
-    快筛：铺不满的直接否掉；铺满的再过填充面积那道（见 `_path_fill_ratio`），
-    对角线/细线因此不误报。面积按 SVG 默认的 even-odd 规则算，所以"挖空一条"
-    的 path（外矩形套同向内矩形）如实只算框条那部分——挖空够大就不算铺满，
-    挖空只剩一丝时才 warn 一声让人确认，比 bbox 判据准。
+    bbox 用 `_path_morph.x_span / y_span`（按命令语义走光标，比切数字取极值准），
+    只当快筛：铺满的再过 `_path_fill_ratio` 的填充面积，对角线/细线因此不误报。
+    面积按 even-odd 算，"挖空一条"的 path 如实只算框条。
     """
     d = el.get("d")
     if not d:
@@ -316,9 +298,8 @@ def _path_backdrop(el, vb_w, vb_h):
 def is_full_bleed_backdrop(el, vb_w, vb_h):
     """元素的可见填充形状是否铺满 viewBox（背景底板）。
 
-    `vb_w/vb_h` 必须来自坐标系尺寸（`root_viewbox_size`）——拿固有像素尺寸判
-    会把铺满的底板判成只占一半。覆盖 rect / polygon / path 三种等价写法；
-    `fill:none` / `opacity:0` 不判（没有可见填充）。
+    `vb_w/vb_h` 必须来自 `root_viewbox_size`（拿固有像素尺寸判会把铺满的底板判成
+    只占一半）。覆盖 rect/polygon/path；`fill:none` / `opacity:0` 不判。
     """
     if not vb_w or not vb_h:
         return False
@@ -347,8 +328,8 @@ def is_full_bleed_backdrop(el, vb_w, vb_h):
 def root_px_size(root):
     """根标签的**固有像素尺寸** (宽, 高, 说明)；读不出时宽高为 None。
 
-    `check_svg` 的静态自查与 `gen_hyperframes` 的生成期门禁都调这一份。说明串非空
-    表示 width/height 与 viewBox 比例不一致（preserveAspectRatio 会留白或拉伸）。
+    `check_svg` 与 `gen_hyperframes` 都调这一份。说明串非空 = width/height 与
+    viewBox 比例不一致（preserveAspectRatio 会留白或拉伸）。
     """
     w, h = _parse_num(root.get("width")), _parse_num(root.get("height"))
     vbw, vbh = _viewbox_size(root)
@@ -391,15 +372,12 @@ def _viewbox_size(root):
 def _strip_keyframes(css):
     """剥掉 @keyframes（含厂商前缀）规则体：墙钟动画的定义本身。
 
-    声明剥掉后规则体还留在 <style> 里，等于把作者写死的旧动画原样带进
-    成片——@keyframes 本身不驱动任何元素（惰性），但"墙钟动画已剥净"的
-    不变量应该连定义一起兑现。用括号配平扫：规则体里每个 keyframe 选择器
-    各带一层 {}（总深度 2），配平到 0 就是规则结束。遇到未闭合的残缺规则
-    就保留剩余文本（解析器对坏 CSS 的容忍，净化不越权去修它）。
+    只删声明会把规则体留在 `<style>` 里，"墙钟动画已剥净"就不成立。括号配平扫到
+    深度 0（每个 keyframe 选择器各带一层 {}）；未闭合的残缺规则原样保留，净化不
+    越权去修。
 
-    存在性判定用 `_KEYFRAMES_AT`（唯一真源）而不是再写一遍 "@keyframes" 子串：
-    子串认不出厂商前缀（实测 `@-webkit-keyframes` 整块留下不剥），而前缀形式正是
-    它存在的理由。
+    存在性判定走 `_KEYFRAMES_AT`，别写 "@keyframes" 子串：子串认不出厂商前缀
+    （`@-webkit-keyframes` 会整块留下）。
     """
     m0 = _KEYFRAMES_AT.search(css)
     if not m0:
@@ -437,9 +415,8 @@ def _clean_style_text(css, notes):
     """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）与外链 url()/@import。"""
     if not css:
         return css
-    # 注释先剥、转义后还原，这个次序与浏览器一致：CSS 注释不过转义（`/* \*/`
-    # 里的 `*/` 照样收尾），而转义还原必须赶在所有判定之前——`\75rl(https://…)`
-    # 在浏览器眼里就是一条外链 url()、`\61nimation:x 2s` 就是一条墙钟声明。
+    # 先剥注释再还原转义，与浏览器一致：`\75rl(https://…)`、`\61nimation:x`
+    # 在浏览器眼里就是外链与墙钟声明，还原必须赶在所有判定之前。
     out = _css_unescape(_CSS_COMMENT.sub("", css))
     if re.search(r"@import", out, re.I):
         out = re.sub(r"@import[^;]*;?", "", out, flags=re.I)
@@ -491,13 +468,12 @@ def sanitize_svg_for_inline(raw):
         notes 是人类可读的净化说明（去掉了什么），调用方按 [warn] 打出来。
 
     Raises:
-        ValueError：不是 SVG、含 DOCTYPE/ENTITY、或 XML 解析失败——这些一律
-        拒绝内联，退回 `<img>`（由调用方决定报错口径）。
+        ValueError：不是 SVG / 含 DOCTYPE-ENTITY / 解析失败——一律拒绝内联，
+        退回 `<img>`（报错口径由调用方定）。
     """
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("SVG 内容为空")
-    # 先拦实体声明再解析：ENTITY 膨胀（billion laughs）在解析阶段就已经发生，
-    # 结构化改写救不回来，只能在入口拒。
+    # 必须在解析前拦：ENTITY 膨胀在解析阶段就发生，事后改写救不回来。
     if re.search(r"<!DOCTYPE|<!ENTITY", raw, re.I):
         raise ValueError("含 DOCTYPE/ENTITY 声明，拒绝内联（实体膨胀风险）；"
                          "请删掉这些声明，或改用 <img> 载入")

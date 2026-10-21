@@ -576,6 +576,15 @@ class OfficialGateWiring(unittest.TestCase):
         self.assertEqual(self.h.probe_calls, [])
         self.assertIn("官方门禁 check", [s["name"] for s in self.h.report()["steps"]])
 
+    def test_until_check_rejects_old_node_before_cli(self):
+        """check 也运行 Hyperframes CLI，不能只在 render 分支拦旧 Node。"""
+        with mock.patch.object(R, "node_version_gate",
+                               return_value=("block", "Node 版本过旧")):
+            with self.assertRaises(SystemExit) as cm:
+                self.h.invoke(["--until", "check"])
+        self.assertIn("Node 版本过旧", str(cm.exception))
+        self.assertEqual(self.h.gate_calls, 0)
+
     def test_until_check_with_error_exits_nonzero(self):
         """门禁有 error 就停，且把条目写进报告——否则报告看起来像通过。"""
         self.h.gate_findings = [("error", "font_family_without_font_face", "缺 @font-face")]
@@ -605,6 +614,9 @@ class OfficialGateWiring(unittest.TestCase):
         _, err = self.h.invoke([])
         self.assertIn("brand_new", err)
         self.assertEqual(len(self.h.render_calls), 1)
+        gate_step = next(s for s in self.h.report()["steps"]
+                         if s["name"] == "官方门禁 check")
+        self.assertTrue(gate_step["ok"], "非阻断 warning 不应把报告步骤记成失败")
 
 
 if __name__ == "__main__":

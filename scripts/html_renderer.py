@@ -467,10 +467,23 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _focus_future = float(_focus["future"])
     _focus_past = float(_focus["past"])
     _focus_ratio = float(_focus["ratio"])
-    # 尺寸那一档（离焦的第二个维度，见 runtime.js 的 verseFocusScale）：它只决定
-    # "远处的行缩多少"，封在第几档是结构常数（运行时与亮度的 cap 并列写死），
-    # 这里只搬观感常量。
     _focus_scale = float(_focus["scale"])
+    for _name, _value, _valid in (
+        ("future", _focus_future, 0 < _focus_future <= 1),
+        ("past", _focus_past, 0 < _focus_past <= _focus_future),
+        ("ratio", _focus_ratio, 0 < _focus_ratio < 1),
+        ("scale", _focus_scale, 0 < _focus_scale <= 1),
+    ):
+        if not _valid:
+            raise ValueError(f"[template] subtitle.focus.{_name} 的值 {_value!r} 越界")
+    # 过去侧最深档是 scale³；两种画幅都必须守住统一可读下限。
+    for _focus_aspect in ("vertical", "landscape"):
+        _focus_font = float(tpl["layout"][_focus_aspect]["subtitle"]["fontSize"])
+        if _focus_font * _focus_scale ** 3 < MIN_READABLE_FONT_PX:
+            raise ValueError(
+                f"[template] {_focus_aspect} 字幕最深焦点档 "
+                f"{_focus_font * _focus_scale ** 3:.1f}px 小于可读下限 "
+                f"{MIN_READABLE_FONT_PX}px")
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -1629,8 +1642,8 @@ def _apple_opening_lines(rc, card):
         # kicker 字距展开：blur + 逐字 x 从拉开态收拢。**不 animate
         # letterSpacing**——那是 reflow 属性，逐帧吸附整数设备像素，被
         # hyperframes 门禁判 gsap_non_transform_motion（error，无抑制开关），
-        # 且 Lint 有 error 时 shouldBlockRender 直接把 browser 四阶段
-        # （Runtime/Layout/Motion/Contrast）整个跳过——不是红叉，是半副
+        # 且 Lint 有 error 时 shouldBlockRender 直接把 browser 五阶段
+        # （Runtime/Layout/Motion/Contrast/Craft）整个跳过——不是红叉，是半副
         # 门禁失明。改走门禁处方：拆字 + 逐字 animate x。
         # 等价性：单行 nowrap 下 letter-spacing L 让第 i 字左缘位移 i×L，
         # 于是 from 态 = 静态字距 rest + 每字 x=i×(tracking−rest)，两式

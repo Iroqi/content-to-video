@@ -77,9 +77,27 @@ class FocusScaleTemplate(unittest.TestCase):
         self.assertIn(f"--ctv-focus-scale:{_focus()['scale']}", html)
 
     def test_override_reaches_the_injected_var(self):
-        with T.override_layer(["subtitle.focus.scale=0.9"]):
-            html = _render()
-        self.assertIn("--ctv-focus-scale:0.9;", html)
+        for value in (0.95, 1):
+            with self.subTest(value=value), T.override_layer(
+                    [f"subtitle.focus.scale={value}"]):
+                html = _render()
+            self.assertIn(f"--ctv-focus-scale:{value};", html)
+
+    def test_invalid_focus_overrides_fail_before_html(self):
+        bad = (
+            "subtitle.focus.future=0",
+            "subtitle.focus.past=0.9",
+            "subtitle.focus.ratio=1",
+            "subtitle.focus.scale=0.9",
+        )
+        for assignment in bad:
+            with self.subTest(assignment=assignment), T.override_layer([assignment]):
+                with self.assertRaisesRegex(ValueError, r"subtitle|可读下限"):
+                    _render()
+
+    def test_unused_cap_is_not_exposed_as_an_override(self):
+        with self.assertRaises(ValueError):
+            T.put_override("subtitle.focus.cap=3")
 
 
 class CssContract(unittest.TestCase):
@@ -137,6 +155,11 @@ class RuntimeContract(unittest.TestCase):
         """
         self.assertIn("rEl.width / w", RUNTIME)
         self.assertIn("dx / s", RUNTIME)
+
+    def test_emphasis_width_starts_at_the_first_glyph(self):
+        """字宽进度必须减正文起点，不能把页面左边距算进句子总宽。"""
+        self.assertIn("if (k === 1) xs.push(box.left)", RUNTIME)
+        self.assertNotIn("const xs = [0]", RUNTIME)
 
 
 if __name__ == "__main__":

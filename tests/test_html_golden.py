@@ -517,7 +517,7 @@ class AppleOpening(unittest.TestCase):
         self.assertIn('<span class="k-ch">W</span>', html)
         self.assertIn('#opening .k-ch",{x:(i)=>i*3.36', html)
         # 门禁红线：reflow 属性（letterSpacing 等）不许进补间——它是 error，
-        # 且 Lint 有 error 时 browser 四阶段整个被跳过（半副门禁失明）
+        # 且 Lint 有 error 时 browser 五阶段整个被跳过（半副门禁失明）
         self.assertNotIn("letterSpacing", html)
         # agenda 行两拍：编号先行 scale+blur、行内容随后 x 滑入，同 stagger 波次
         self.assertIn('#opening .agenda-row .ag-idx', html)

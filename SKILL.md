@@ -40,7 +40,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 2 步失败；配图探测降级为仅查存在性 |
 | **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |
 
-其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本钉固，默认 `hyperframes`）。CLI 默认取最新版，跨机逐帧可复现要钉版本（写 `hyperframes@1.2.3`）或走 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
+其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本，默认 `hyperframes@0.8.185`）。跨机逐帧一致用 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
 
 GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用（sha256 钉固），**新机器首次生成需联网**，之后离线；取不到 CDN 用 `--gsap-src` 指定本地文件。
 

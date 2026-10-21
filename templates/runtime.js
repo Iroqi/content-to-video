@@ -88,11 +88,13 @@ const verseEmClip = (el) => {
   const cut = {key: key, n: len, xs: null, total: len, text: node ? node.nodeValue : ""};
   if (len > 0) {
     const r = document.createRange();
-    const xs = [0];
+    const xs = [];
     for (let k = 1; k <= len; k++) {
       r.setStart(node, k - 1);
       r.setEnd(node, k);
-      xs.push(r.getBoundingClientRect().right);
+      const box = r.getBoundingClientRect();
+      if (k === 1) xs.push(box.left);
+      xs.push(box.right);
     }
     // 折行会让右缘非单调（第二行回到左边）：逐字取累计最大值，折行处的字仍按
     // 顺序点亮，进度退化成按字宽加权的均匀分布——仍是时间与宽度的纯函数。

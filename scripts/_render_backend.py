@@ -1,7 +1,7 @@
 """Hyperframes 渲染后端：命令解析、进程管理、成片完整性。
 
 本模块的全部职责：
-  - 找到 hyperframes CLI（项目本地 node_modules → npx），并把命令解析成当前平台
+  - 用 npx 启动钉固的 hyperframes CLI，并把命令解析成当前平台
     能直接执行的形态（含 Windows .cmd/.bat shim 的注入安全处理）；
   - 启动渲染、轮询成片、在成片稳定后不再死等 Node/Chrome 退出、
     失败/中断/超时时收掉整棵进程树并丢弃半截 mp4；
@@ -24,33 +24,22 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import remove_if_exists  # noqa: E402
 
 
+DEFAULT_HYPERFRAMES_SPEC = "hyperframes@0.8.185"
+
+
 def hyperframes_spec() -> str:
-    return os.environ.get("CTV_HYPERFRAMES_PACKAGE", "hyperframes").strip() or "hyperframes"
-
-
-def _resolve_local_hyperframes(project: Optional[str]) -> Optional[str]:
-    local = str((Path(project or os.getcwd()).resolve() / "node_modules" / ".bin" / "hyperframes"))
-    # Windows 的 npm shim 是 .cmd，优先它；POSIX 下 .bin/hyperframes 本身可执行。
-    candidates = [local + ".cmd", local, "hyperframes.cmd", "hyperframes"] if os.name == "nt" \
-        else [local, "hyperframes"]
-    for candidate in candidates:
-        resolved = shutil.which(candidate) if not os.path.isabs(candidate) else candidate
-        if resolved and (os.path.isfile(resolved) or shutil.which(resolved)):
-            return resolved
-    return None
+    return (os.environ.get("CTV_HYPERFRAMES_PACKAGE", "").strip()
+            or DEFAULT_HYPERFRAMES_SPEC)
 
 
 def hyperframes_command(project: Optional[str] = None) -> list[str]:
-    local = _resolve_local_hyperframes(project)
-    if local:
-        return [local]
+    # 版本相关门禁只对 DEFAULT_HYPERFRAMES_SPEC 验证过；始终交给 npx 按 spec 解析。
     npx = shutil.which("npx")
     return [npx or "npx", "--yes", hyperframes_spec()]
 
@@ -195,12 +184,11 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
     return resolve_command(cmd)
 
 
-# 官方门禁（v0.8.181）能找到的 finding 码全集。只登记**需要判读**的类型没有意义
-# ——那样每升级一次 CLI 都会把新检查当成"未知错误"拦下。所以这里是白名单式全集：
-# 出现集合外的码 = CLI 多了新检查，该去读一遍规则，而不是默默放行。
+# 官方门禁（v0.8.185）已登记的 finding 码：预期噪声静默放过、明确错误保留；
+# 未登记 warning 仍会点名，避免 CLI 升级后新增检查被默认吞掉。
 # ⚠ 升级 CLI 后这张表要跟着 `hyperframes check <项目> --json` 的实际输出复核；
 # 与 references/rendering.md「官方校验命令」那张噪声表由 tests/check_docs.py 对账。
-GATE_STAGES = ("lint", "runtime", "layout", "motion", "contrast")
+GATE_STAGES = ("lint", "runtime", "layout", "motion", "contrast", "craft")
 GATE_NOISE_CODES = {
     # lint：本模板结构决定必然出现，不是待修问题
     "composition_file_too_large": "HTML 体量随稿子规模走",
@@ -237,8 +225,8 @@ def check_verdict(report, known_codes=GATE_FINDING_CODES):
     判读口径：
     - **error 一律当真**；`ok: false` 但拿不到 error 也当真（不能报通过）。
     - warning：已登记的 noise 放过，**集合外的新 code 当真**——CLI 加了新检查。
-    - **Lint 有 error ⇒ browser 四阶段整个没跑**（CLI 的 shouldBlockRender），
-      那四个 0 是"没量"不是"通过"。此时显式点一条，别让人误读成全绿。
+    - **Lint 有 error ⇒ browser 五阶段整个没跑**（CLI 的 shouldBlockRender），
+      那些 0 是"没量"不是"通过"。此时显式点一条，别让人误读成全绿。
     """
     if not isinstance(report, dict) or "ok" not in report:
         return [("error", "check_output", "check --json 的输出读不懂（不是 JSON 对象）")]
@@ -259,8 +247,8 @@ def check_verdict(report, known_codes=GATE_FINDING_CODES):
         findings.append(("error", "check_not_ok", "check 返回 ok=false，但没有可定位的 error"))
     if (report.get("lint") or {}).get("errorCount") and report.get("browserSkipped"):
         findings.append(("warning", "browser_stages_skipped",
-                         "Lint 有 error，browser 四阶段整个没跑——那四个 0 是"
-                         "「没量」不是「通过」。先修 Lint 再判后面四阶段"))
+                         "Lint 有 error，browser 五阶段整个没跑——那些 0 是"
+                         "「没量」不是「通过」。先修 Lint 再判后面五阶段"))
     return findings
 
 
@@ -476,8 +464,7 @@ def render_wait(cmd, out_path, cwd=None, max_wait=DEFAULT_MAX_WAIT):
             raise
     except (FileNotFoundError, OSError) as e:
         raise SystemExit(f"[run] 无法启动渲染命令 {fmt_cmd(cmd)}：{e}\n"
-                         "请确认 Node.js 已安装且 npx 在 PATH 上"
-                         "（或在项目目录 npm install hyperframes 使用本地 CLI）。")
+                         "请确认 Node.js 已安装且 npx 在 PATH 上。")
     finally:
         if log_fh is not None:
             try:

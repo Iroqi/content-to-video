@@ -43,7 +43,6 @@ class FocusTemplate(unittest.TestCase):
         for key in ("future", "past", "ratio"):
             self.assertGreater(f[key], 0.0, key)
             self.assertLess(f[key], 1.0, key)
-        self.assertGreaterEqual(int(f["cap"]), 2)
 
     def test_past_is_dimmer_than_future(self):
         """念过的比没念的退得更快：同距下过去侧永远更暗。"""

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """整页画布（layout:"canvas"）那页 SVG 的脚手架：一份 spec.json → 一张按画幅原生分辨率画的画布页 + 一份 director 草稿。
 
-为什么需要它：画布页是目前最贵的一档。按 1080×1440 原生手画、十几个轴刻度逐一定位，
-而导演层还要求内容元素第 0 帧就写 opacity="0"，于是每一页都在重复同一段机械劳动。
-本模块收走的正是机械的部分（画布几何、三档字号、取色、初始态、节拍编排），**构图仍归人**：
+收走的只是机械部分（画布几何、三档字号、取色、初始态、节拍编排），**构图仍归人**：
 所有坐标由 spec 给，脚本不做任何自动布局——那是版式引擎，不是脚手架。
 
 用法：
@@ -13,24 +11,19 @@
   - seg1.svg：透明底（绝不自铺满幅底板；模板的渐变/网格/氛围光三层要从内容背后透出来）
   - stdout（或 steps.json）：{"steps": […]}，整块塞进 images.json 该段条目的 "director" 就能用
 
-三条决定成败的隐藏约束（代码里各有对应动作）：
-  - **谁能藏、谁不能藏**：结构底随页面一起到位（不写 opacity）；内容元素靠导演逐拍点亮，
-    所以写 opacity="0"。但 draw/count/type 这三种"演"的起始态由渲染端自己配（dash 收起 /
-    显示 from 值 / 文本清空），再给它们写 opacity="0" 就永远不会亮。
-  - **锚点只用 at（句序），不用 at_time**：绝对秒是按某一版配音手算的，重配音后整体漂移
-    且不报错；at 跟着 manifest 的句子走，改配音自动对得上。
-  - **输出必须过 check_svg 的 canvas 门禁**：空带 / 对比度 / 字号三条都在它那里判，所以生成后
-    照它同一口径自查一遍（判据不重抄一份——抄一份就会漂）。
+三条隐藏约束（代码里各有对应动作）：
+  - **谁能藏、谁不能藏**：结构底随页面到位（不写 opacity）；内容元素由导演逐拍点亮，写
+    opacity="0"。但 draw/count/type 的起始态由渲染端自己配，再写 opacity="0" 就永远不亮。
+  - **锚点只用 at（句序），不用 at_time**：绝对秒绑定某一版配音，重配音后整体漂移且不报错。
+  - **输出必须过 check_svg 的 canvas 门禁**（空带/对比度/字号）：生成后调它自查，不重抄判据。
 
 公共旋钮 duration / ease / stagger / repeat / yoyo 都能写进内容元素，草稿原样带出；
 repeat/yoyo 的取值与互斥校验跟 _images_schema 同一套（yoyo 必须带 repeat、只挂内容元素），
 跨键约束（如 morph 不能配 repeat:-1）由 selfcheck 过真契约时兜底。
 
-roughness 是图形侧的手绘旋钮：只改 SVG 里的坐标，不进 director 草稿（草稿按 #id
-寻址，与坐标抖动无关）。坐标轴与文字不收这个键——前者是数据标尺（刻度与标签全
-钉在它上面，抖了读者就没法信这个比例），后者抖一下就不成字；抖的是
-panel / polyline / bars / circle / rule。取值与官方 rough.js 同名同义，上限借它
-那句"over 10 is mostly useless"。
+roughness 只改 SVG 坐标，不进 director 草稿（草稿按 #id 寻址）。只收在
+panel / polyline / bars / circle / rule 上——坐标轴是数据标尺、文字抖了不成字。
+取值与 rough.js 同名同义，上限沿用它的"over 10 is mostly useless"。
 """
 import argparse
 import json
@@ -246,9 +239,7 @@ def _jit_pos(v, amp, seed_key, i):
 def _jit_size(v, amp, seed_key, i):
     """尺寸类数值（宽/高/半径）的抖动：幅度随自身大小收缩，抖完仍为正。
 
-    宽高抖成 0 或负 = 一个不存在、且非法的 rect；收缩上限取自身一半。正常尺寸
-    （远大于幅度）时就是全幅度，只有贴着幅度的极小尺寸才收敛——那时"保住形状"
-    比"抖满"重要。
+    宽高抖成 0 或负 = 非法 rect；收缩上限取自身一半，正常尺寸时就是全幅度。
     """
     if amp <= 0:
         return v
@@ -301,9 +292,8 @@ def _opt_num(el, key, where, default, *, nonnegative=False, positive=False):
 def _ink_invisible(fill, opacity):
     """这块图元盖不盖得住东西：`fill:"none"` 与 `opacity:0` 都不盖。
 
-    与 `_svg_sanitize._fill_hidden` 同一条判据（那边读元素属性，这里读发射时已
-    解析好的值）。只差"看不见"这一种——class/id 控制的 fill 读不到，那种按"看得
-    见"算（报错方向，不漏报）。
+    与 `_svg_sanitize._fill_hidden` 同一条判据（那边读属性，这里读已解析的值）。
+    class/id 控制的 fill 读不到，按"看得见"算（报错方向，不漏报）。
     """
     if isinstance(fill, str) and fill.strip().lower() == "none":
         return True
@@ -398,13 +388,11 @@ def _validate_element(el, i):
 def _roughness_of(el, where):
     """roughness 的判据全份：取值 + 适配 kind（校验层与渲染层共用这一份）。
 
-    坐标轴与文字不吃这个键：轴是数据标尺（刻度与标签全钉在它上面，抖了读者就没法
-    信这个比例），字抖一下就不成字；手绘感由 panel / polyline / bars / circle /
-    rule 出。写了也白写的键必须当场拒——静默忽略比没有这个键更坏（作者以为到手，
-    其实没有）。render_svg 也调它：那条路被测试与其它入口直接走，校验层不是唯一
-    关口。
-    幅度按线宽换算（线宽是模板真源，见 LINE_W）：抖动量随画幅原生分辨率缩放，
-    不需要另写一个 px 常数——写一个就会和线宽各漂各的。
+    坐标轴与文字不吃（轴是数据标尺、字抖了不成字）；写了也白写的键必须当场拒——
+    静默忽略比没有这个键更坏。render_svg 也调它：那条路被测试直接走，校验层不是
+    唯一关口。
+
+    幅度按线宽换算（LINE_W）：不另写 px 常数，写一个就会和线宽各漂各的。
     """
     if "roughness" not in el:
         return 0.0
@@ -426,11 +414,9 @@ def _validate_common_keys(el, where):
     """公共旋钮（role / beat / duration / ease / stagger / repeat / yoyo / roughness）
     的取值判据。
 
-    与 _images_schema 同一套判据（那里管 images.json 的 director，这里管 spec）：
-    整数遍数、yoyo 必须是 JSON 布尔、yoyo 必须有 repeat。
-    另外只挂内容元素——结构底不进 steps，写了等于没写，且没有"哪一拍"可反复。
-    roughness 是例外中的例外：它只改 SVG 坐标、不进草稿，所以结构底也能写
-    （面板抖一抖正是手绘感的一部分）；坐标轴与文字则由 _roughness_of 拦掉。
+    与 _images_schema 同一套判据（整数遍数、yoyo 是 JSON 布尔、yoyo 必须有 repeat）。
+    只挂内容元素——结构底不进 steps。例外是 roughness：它只改坐标、不进草稿，
+    结构底也能写（见 _roughness_of）。
     """
     if "role" in el:
         _choice(el["role"], ("structure", "content"), where, "role")
@@ -548,9 +534,8 @@ def _validate_colors(el, where):
 def _validate_content_id(el, where):
     """内容元素必须给 id。
 
-    这条判据原来在渲染层（render_svg）报，于是它会被渲染层更早抛出的颜色错盖住，
-    作者补完 id 重跑才看到颜色错。契约该在校验层一次报全，所以搬到这里（渲染层
-    那道保留为纵深防御——render_svg 也被 tests 与 pipeline 直接调用）。
+    判在校验层才不会被渲染层更早抛的颜色错盖住（渲染层那道保留为纵深防御：
+    render_svg 也被 tests 与 pipeline 直接调用）。
     """
     if role_of(el) == "content" and "id" not in el:
         raise ValueError(f"{where} 是内容元素却缺 id：director 的 step 要靠 "
@@ -558,9 +543,8 @@ def _validate_content_id(el, where):
                          '给它一个 id（或写 "role": "structure" 把它归成结构底）')
 
 
-# fill/stroke 的合法取值：命名档 + 任意 css_color_to_hex 认得的安全颜色。
-# 与 _color 的判定同源（那份要ctx 才能把命名档解析成色值，这份在 spec 校验阶段
-# 就能判"这个名字存不存在"）——两处判据必须一致，所以列表只在这里定义一次。
+# fill/stroke 的合法取值：命名档 + css_color_to_hex 认得的安全颜色。列表只在这里
+# 定义一次，_color 解析命名档时同源读它。
 COLOR_NAMES = ("accent", "text", "dim", "plate", "line")
 
 
@@ -999,14 +983,11 @@ def render_svg(spec):
 def build_director(spec, sentences=None):
     """结构底不进 steps（它和页面一起到位），内容元素按文档顺序一拍一个 at 锚点。
 
-    句序锚点只在"这一拍跟着某句话"的意义上成立，具体秒数由渲染端按 manifest 的句子算——
-    所以草稿不需要知道配音时长，也不会因为重配音而漂移。这就是本模块只用 at 的理由。
+    句序锚点在"这一拍跟着某句话"，秒数由渲染端按 manifest 算——草稿不必知道配音时长。
 
-    `sentences` 是该段旁白句数。给了它，自动拍的游标就按它取模回绕，让"内容元素比句子多"
-    的稿子也产出一份**能直接生成**的草稿：多出来的元素与前面的同拍一起亮，而不是把 at
-    顶到句序之外、被生成期当 error 拒掉（实测一个 3 句段配 5 个内容元素，自动拍到 at=4
-    就整条管线 exit 1）。    不给时游标只增不减——那份草稿的 at 是否越界由 `--sentences` 的
-    告警和生成期兜底，脚本不替作者猜段里有几句。
+    `sentences` 是该段旁白句数：给了就按它回绕，让"内容元素比句子多"的稿子也能直接
+    生成（否则 at 顶到句序外被生成期拒）；不给则游标只增不减，越界交给 `--sentences`
+    告警与生成期兜底。
     """
     steps = []
     cursor = 0
@@ -1019,12 +1000,8 @@ def build_director(spec, sentences=None):
             cursor = max(cursor, at + 1)   # 显式钉拍也把游标推过去，后面的自动拍不会插到它前面
             pinned = True
         else:
-            # 显式钉拍是作者意图，越界要照实报（见 main 的告警）；自动拍是机械分配，
-            # 已知句数时按句数回绕，产出的草稿才真的能直接用。
-            # 回绕**只在没钉过拍时**用：取模会把已经被钉拍推过的游标拉回句首，
-            # 作者钉的那一拍反倒成了本段的倒数几拍（实测 3 句稿 beat=2 之后的两个
-            # 自动拍算出 at=0.5/1.5，落在它前面）。钉过拍就顶到末句为止：多出来的
-            # 元素和末句一起亮，跟回绕一样不越界，且不推翻作者排的顺序。
+            # 回绕只在没钉过拍时用：取模会把已被钉拍推过的游标拉回句首，作者的
+            # 钉拍反倒落到倒数几拍。钉过拍就顶到末句为止（不越界，也不推翻作者的顺序）。
             if not sentences:
                 at = cursor
             elif pinned:
@@ -1041,26 +1018,21 @@ def build_director(spec, sentences=None):
         elif el.get("type"):
             step["type"] = {}
         else:
-            # 起始态 SVG 已经写了 opacity=0，这里仍给全 from：草稿要能在作者删掉
-            # SVG 那行 opacity 之后依旧演得对（fromTo 不依赖元素当前值）。
-            # to 带作者写的 opacity（panel 的"落定透明度"）：SVG 帧 0 归零是导演
-            # 约定，落定到几成透明是作者意图，两件事都归这一拍说话。
+            # 仍给全 from：删掉 SVG 那行 opacity 之后草稿还得演得对（fromTo 不依赖
+            # 元素当前值）。to 带作者写的落定透明度。
             step["from"] = {"opacity": 0}
             step["to"] = {"opacity": _rest_opacity(el)}
         if "stagger" in el:
             step["stagger"] = el["stagger"]
-        # repeat / yoyo：新特性同样给脚手架出口（呼吸/脉动的"一条步"写法）。
-        # repeat:0 与缺省等价，不塞进去省字节（与渲染端 _cycle_vars 同口径）。
-        # 校验在 _validate_element 做（yoyo 必须有 repeat、只挂内容元素），
-        # 互斥与 morph:repeat:-1 那类跨键约束由 selfcheck 过真契约时兜底。
+        # repeat:0 与缺省等价，不塞（与渲染端 _cycle_vars 同口径）；跨键约束由
+        # selfcheck 过真契约时兜底。
         if el.get("repeat") not in (None, 0):
             step["repeat"] = el["repeat"]
         if el.get("yoyo"):
             step["yoyo"] = True
         for key, dflt in (("duration", DIRECTOR_DEFAULT["duration"]),
                           ("ease", DIRECTOR_DEFAULT["ease"])):
-            # 只在与模板缺省不同值时才印出来：与缺省相同的值写进 JSON 就是第二份真源，
-            # 模板改一档时这些副本永远不会跟着改。
+            # 只用与模板缺省不同的值：相同值写进 JSON 就是第二份真源，模板改档它不跟。
             if el.get(key) is not None and el[key] != dflt:
                 step[key] = el[key]
         steps.append(step)
@@ -1070,9 +1042,8 @@ def build_director(spec, sentences=None):
 def selfcheck_fragment(spec, sid="seg1", sentences=None):
     """把草稿套成一份 images.json 过一遍真契约。
 
-    为什么不自己判 steps 的形状：_images_schema 才是那份契约的正文，它改一个键集，
-    这里就该同时报错——否则脚手架印出的草稿要等 run.py 在渲染前才拒掉。
-    sid 用一个合法段 id 当壳（真实段 id 由作者替换）。
+    形状判给 _images_schema（契约正文），否则脚手架印出的草稿要等 run.py 在渲染前
+    才拒掉。sid 用合法段 id 当壳，真实段 id 由作者替换。
     """
     frag = build_director(spec, sentences=sentences)
     if not frag["steps"]:
@@ -1085,8 +1056,8 @@ def selfcheck_fragment(spec, sid="seg1", sentences=None):
 def lint_file(path, aspect, theme):
     """按 check_svg 的口径复查生成的 SVG；返回 (error, warn) 两份可执行问题。
 
-    画布档那条无条件的"知情提示"滤掉（见 _STANDING_ADVISORY），其余一律照原样报——
-    包括那条只看竖向的空带 warn：它判的是"暂停一帧还是不是一页空白"，脚手架替不了构图。
+    滤掉画布档那条无条件提示（见 _STANDING_ADVISORY），其余照原样报——包括只看
+    竖向的空带 warn：脚手架替不了构图。
     """
     errors, warns = check_svg.check_file(path, "canvas", aspect, theme)
     return (sorted(set(errors)),

@@ -110,23 +110,20 @@ def _fmt_mmss(seconds):
 def _agenda_rows(seg_id, clips, manifest, ag):
     """开屏/结尾纯文字 agenda 的行数据：返回 (正文行, 尾行) 两段。
 
-    - opening：章节罗列——所有内容段的标题 + 时长（m:ss）。
-    - closing：要点总结——每段 takeaway（缺省回退标题）、无时长，
-      外加至多一条可选尾行（manifest.closing_cta，行动号召或下期预告二选一）。
-    - 超上限静默截断（要点优先）：总行数 > maxRows 时先整条丢弃 cta 尾行，
-      正文要点能放多少放多少；正文仍超 maxRows 才裁尾丢正文行。画面不放
-      「…另有 N 条」提示行（上限本身就是给写稿的硬约束），两种丢弃都打
-      [warn] 报给写稿人。
+    - opening：内容段标题 + 时长（m:ss）。
+    - closing：每段 takeaway（缺省回退标题）、无时长，外加至多一条可选尾行
+      （`manifest.closing_cta`）。
+    - 超 `maxRows` 时**要点优先**：先整条丢 cta 尾行，正文仍超才裁正文。画面不放
+      「…另有 N 条」提示，两种丢弃都打 `[warn]`。
     """
     trim = int(ag["nameTrim"])
     content_clips = [c for c in clips if is_content_sid(c["seg"]["id"])]
 
     def _cell(raw, sid):
-        """agenda 单元格文本：按 nameTrim 硬截断，截掉字数要报出来。
+        """agenda 单元格文本：按 `nameTrim` 硬截断。
 
-        超出部分是被 Python 切掉的（CSS 的 text-overflow 只对没截断、纯靠宽度
-        溢出的行生效），所以画面不会出现省略号——不 warn 就是"稿子里写的要点
-        少了几字，且无人知道"。
+        Python 切掉的字画面不会给省略号（`text-overflow` 只管纯靠宽度溢出的行），
+        所以必须 `[warn]`，否则就是"稿子里写的要点少了几字、无人知道"。
         """
         text = str(raw or "").strip()
         if len(text) > trim:
@@ -178,17 +175,14 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                      title_size, bgs, apple_opening=False, card=None):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
-    调用方拼上句子流（verse）后再闭合 .agenda-col——flex 列"题头在顶、
-    agenda 垂直居中、句子流锚底"两画幅共用同一套 DOM，几何差异全在 CSS。
-    kicker 取 opening/closing 的 tagline 字段（可选的一行小标题）。
-    apple_opening 时额外带一枚题头光晕（.apple-halo）与 data 标记——光晕在
-    DOM 最前、z-index:-1，衬在标题后面，由 _card_timeline_lines 编排淡入与
-    呼吸；data 标记供 CSS/调试识别人，不参与渲染路径。
+    调用方拼上句子流后再闭合 .agenda-col：flex 列"题头在顶、agenda 垂直居中、
+    句子流锚底"，两画幅共用同一套 DOM，几何差异全在 CSS。kicker 取 tagline 字段。
 
-    card 形参只用于**回写**实际画出来的行数（_apple_opening_lines 要拿它算
-    整支舞的收尾时刻）。行数只在这里算得出，而 `_agenda_rows` 超上限时会打
-    [warn]——时间线侧再算一遍就是把同一条 warn 打两次，所以把结果递过去，
-    不重算。
+    apple_opening 时额外带题头光晕（`.apple-halo` / `.apple-glow`，DOM 最前、
+    `z-index:-1`），由 `_card_timeline_lines` 编排淡入与呼吸。
+
+    `card` 只用于回写实际画出来的行数（苹果开场按它算收尾时刻）——行数只在这里算得
+    出，时间线侧重算等于把同一条 `[warn]` 打两次。
     """
     sid = seg["id"]
     halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n'
@@ -215,13 +209,11 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
-    # 标题：静态开场 = 纯文本；苹果开场 = 逐字拆成 .t-ch span（空格为 .t-sp），
-    # GSAP 按字符 stagger 浮出。拆在 esc() 之前：拆的是原文、逐字符转义再包。
+    # 苹果开场把标题逐字拆成 .t-ch span（空格为 .t-sp）交给 stagger。
+    # 拆的是**原文**、逐字符转义再包：先 esc 整句再拆会把 &amp; 拆成五个独立 span，
+    # 标题里的 & / < / > 以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
     title_html = esc(seg["title"])
     if apple_opening:
-        # 逐字拆 span 拆的是**原文**、每个字符各自转义后再包：先 esc 整句再拆
-        # 会把 &amp; 拆成五个独立 span，浏览器不再把它当实体解析，标题里的
-        # & / < / > 会以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
         title_html = "".join(
             f'<span class="t-ch t-sp">{esc(ch)}</span>' if ch.isspace()
             else f'<span class="t-ch">{esc(ch)}</span>'
@@ -236,13 +228,12 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
 
 
 def _normalize_images(images):
-    """把媒体条目归一成渲染器的单一形状 {src, opts}。
+    """把媒体条目归一成渲染器的单一形状 `{src, type, opts}`。
 
-    入参必须是过 _images_schema.validate_images_json 的数据（契约先校验是本
-    技能的入口规则：gen_hyperframes 经 load_images_json 进来，键合法性、
-    媒体对象形状、src 非空都在那里拦下），这里只做归一与丢键提醒。
-    素材类型分两档：静态图（image/svg/gif 走 <img>）与视频（video 走 <video>
-    自动循环静音播放）。gif 与 image 同档——它就是一张会自己动的静态图。
+    入参必须已过 `_images_schema.validate_images_json`（键合法性、媒体对象形状、
+    src 非空都在那里拦下），这里不重复校验也不重复告警。素材两档：静态图
+    （image/svg/gif 走 `<img>`，gif 就是会自己动的静态图）与视频（`<video>`，自动
+    循环静音播放）。
     """
     normalized = {}
     for sid, media in (images or {}).items():
@@ -262,11 +253,9 @@ def _normalize_images(images):
 def _subtitle_cue_spans(sentences):
     """每句字幕 cue 的 (起点, 终点, 全局句序)：**唯一口径**，两个消费者共用。
 
-    - `_build_subtitle_cues` 把它序列化成运行时的 cue 数组；
-    - `_ved_settle_seconds` 读同一份，算"句尾留白有多长、下一个接手的是不是同一页"。
-
-    两处各算一遍的话，收束会以分钟级的偏差"以为"某句后面还有留白（对着另一份
-    起点/终点算），而症状只是"某几句念完之后没收"——没人会去查生成期的两份算术。
+    `_build_subtitle_cues` 序列化成运行时的 cue 数组，`_ved_settle_seconds` 读同一份
+    算句尾留白。两处各算一遍时，收束会对着另一份起点/终点"以为"某句后面还有留白，
+    症状只是"某几句念完之后没收"。
     """
     n = len(sentences)
 
@@ -284,21 +273,15 @@ def _subtitle_cue_spans(sentences):
 
 
 def _build_subtitle_cues(sentences):
-    """Build the JS cue payload (t/d/si) from sentence timing.
+    """由句表生成 JS cue 数组（t/d/si/dt）。
 
-    cue 里只有数字：文案由 verse 静态 DOM 承载（见 esc），运行时按 si 切高亮、
-    按 t/d 判定当前句，不需要序列化任何文本。
+    文案由 verse 静态 DOM 承载，cue 里只有数字。
 
-    时长一律由"下一句的起点"倒推：t 与 d 各自独立四舍五入到 0.01s 时，相邻 cue
-    之间会留下至多 10ms 的空洞，24fps 下恰好吞掉一帧——那一帧落在空洞里就沿用
-    上一句的高亮，切换看起来慢了一帧。末句没有下一句，按自身实测时长收尾。
-
-    **起点取"开口那一刻"，不是音频块开头**：manifest 的 `onset` 是这句音频开头的
-    静默（TTS 的吸气与起音，实测几十到几百毫秒）。以前 cue 从 `start_time` 起，
-    上一句念完、下一句还没开口，字幕就已经换了——观众读到的字幕比听到的话早半拍，
-    而页末那句还会在"已经没人说话"时亮着。d 仍由相邻起点倒推，所以句间 gap 自动
-    变长（gap 的真实含义一直是"两句之间没声音的那段"）。老 manifest 没有 onset 时
-    退回 start_time。
+    - **t 取开口那一刻**：`start_time + onset`（`onset` 是音频块开头的吸气与起音，
+      几十到几百毫秒）。从 `start_time` 起会让字幕比话早半拍。老 manifest 无 onset
+      时退回 `start_time`。
+    - **d 由下一句起点倒推**：t 与 d 各自四舍五入到 0.01s 会留下至多 10ms 空洞，
+      24fps 下恰好吞掉一帧。末句按自身实测时长收尾。
     """
     cues = []
     for t, end, si in _subtitle_cue_spans(sentences):
@@ -318,23 +301,18 @@ def _ved_settle_seconds(sentences, page_last_si, relay_seconds):
     留白**——上一句念完、下一句还没开口的那段空档，以前是画面完全静止的空白，现在
     让最后一个动作在里面收尾。
 
-    三条边界都在生成期一次算完（运行时只读一个数）：
+    三条边界都在生成期算完，运行时只读这一个数：
 
-    - **只收"下一句会在同一页里接手"的句**：cues 是**每页一份**的（见 generate_html
-      的 __CTV_CUES__），所以某一页的最后一句后面跟的是转场——它整句的 accent 会随
-      页面被擦走。`page_last_si` 因此显式传进来，不靠 si 连续性去猜。
-    - **留白里先扣掉换句接力**：新一句浮起用 `--ctv-relay`（`relay_seconds`，取自模板
-      layout.<画幅>.subtitle.relay，运行期读同一个 `--ctv-relay-s`）。收束要在这之前
-      收干净，否则同一行里"旧的还在退、新的已经进"两件事叠着演。
-    - **上限 SETTLE_MAX_SECONDS、地板两帧**：见那两个常量。
+    - **只收"下一句在同一页里接手"的句**。cues 每页一份，页末句后面跟的是转场，整句
+      accent 会随页面被擦走，所以 `page_last_si` 显式传入，不靠 si 连续性去猜。
+    - **留白里先扣掉换句接力**（`relay_seconds` = 模板 `layout.<画幅>.subtitle.relay`，
+      运行期读同一个 `--ctv-relay-s`），否则同一行里"旧的还在退、新的已经进"。
+    - **上限 `SETTLE_MAX_SECONDS`、地板两帧**，见那两个常量。
     """
     spans = _subtitle_cue_spans(sentences)
-    # 留白 = 下一句开口 − **本句念完**。`spans` 的第二项是"cue 的终点"（= 下一句
-    # 起点），不是"这句念完的时刻"——两者只在本句没有尾静默时才重合。所以念完
-    # 时刻要单独从 voiced 取，与运行时 verseEmEnd 同一口径（`_speak_on(sent)` 同
-    # 一函数，runtime 用 t0 + voiced，这里写成等价的 start + onset + voiced）。
-    # 首尾相接的 fixture（每句 start = 上一句 start + duration，无 onset/voiced）
-    # 因此得到 0 留白 → 不演，正是期望。
+    # 留白 = 下一句开口 − **本句念完**。`spans` 第二项是 cue 终点（= 下一句起点），
+    # 只在本句没有尾静默时才等于"念完"。念完时刻单独从 voiced 取，与运行时
+    # verseEmEnd 同一口径（等价于 start + onset + voiced）。
     by_index = {s.get("index", -1): s for s in sentences}
     best = None
     for t, end, si in spans:
@@ -342,18 +320,15 @@ def _ved_settle_seconds(sentences, page_last_si, relay_seconds):
             continue
         sent = by_index.get(si) or {}
         voiced = float(sent.get("voiced") or 0.0)
-        # 没有 voiced（老 cue / 手写 manifest）：运行时退回 t1，念完 = 本 cue 终点，
-        # 这里同口径写成 end，于是留白恒为负 → 不演，与改动前逐字节一致。
+        # 没有 voiced（老 manifest）：念完 = 本 cue 终点 → 留白恒 ≤ 0 → 不演。
         done = min(end, t + voiced) if voiced > 0 else end
         hold = end - done - relay_seconds
         if best is None or hold < best:
             best = hold
     if best is None or best <= 0:
         return 0.0
-    # 上限封顶与网格取整：收束是逐字错峰的过渡，落在帧间的那几毫秒不会有人看见，
-    # 而整段时长的十进制尾巴（0.58）会一路带进 CSS 变量与文档的示例里。
-    # **向下**取整而不是四舍五入：这个数就是"留给收束的窗口"，向上圆会把最后一两
-    # 个字挤进下一句已经开口的那一帧——宁可少演 20ms，也不让两句的动作重叠。
+    # 按 0.05s 网格**向下**取整：这个数就是"留给收束的窗口"，向上圆会把最后一两个字
+    # 挤进下一句已开口的那一帧。顺带避免 0.58 这种尾巴进 CSS 变量与文档示例。
     d = math.floor(min(best, SETTLE_MAX_SECONDS) * 20) / 20
     return d if d >= SETTLE_MIN_SECONDS else 0.0
 
@@ -727,27 +702,21 @@ def _duck_chain_attr():
 
 
 def _video_audio_attrs(media_opts, sid, d):
-    """视频音轨那几个 data-* 属性（每项自带一个尾随空格，见末行）。
+    """视频音轨那几个 data-* 属性（每项自带一个尾随空格）。
 
-    Hyperframes 的 ffmpeg 混音只读两类源：`<audio>` 元素，和声明了
-    `data-has-audio="true"` 的 `<video>`。**不写就一条都不混**——所以
-    `muted: false`（用户明确要原声）时必须补上这个声明，否则成片有画面、
-    没原声，而整条链上没有任何报错。这是本函数存在的第二个理由。
+    两条规则：
 
-    第一个理由是**让路**：口播是 <audio id="main-audio">（见
-    templates/composition.html），视频原声是第二条进混音器的轨，两条默认都按
-    1.0 进混音器。默认结果就是"原声压着旁白一起播"，跑完不报错、成片没法听。
-    所以关掉 muted 而没写 volume 时，这里直接落一个让路默认增益
-    （`MEDIA_DUCK_VOLUME`）并说明怎么覆盖——**默认那一版必须是不盖旁白的那一版**，
-    "记得自己压音量"不是一道门禁，只是句话。显式写了 volume 就完全按写的来。
+    - `muted: false` 必须补 `data-has-audio="true"`——Hyperframes 的 ffmpeg 混音
+      只读 `<audio>` 与带这个声明的 `<video>`，不写就一条都不混，成片有画面没原声
+      且零报错。
+    - 关掉 muted 而没写 volume 时落让路增益 `MEDIA_DUCK_VOLUME`（口播是主轨，视频
+      原声默认按 1.0 进混音器就是压着旁白播）。写了 volume 完全照写。
 
-    反过来，`muted: true`（默认）时**不能**写 data-has-audio：契约是二选一，
-    同时挂 muted 和 data-has-audio 会让 lint 的 video_missing_muted 判据失效。
+    `muted: true` 时**不能**写 data-has-audio：契约二选一，同时挂会让 lint 的
+    video_missing_muted 判据失效。
 
-    **每项都以一个空格收尾**（`" ".join(a + " ")`）：调用方把它直接拼在
-    `poster="…"` 后面，两边都不带空格就会产出
-    `poster="x.png"data-has-audio="true"` ——两个属性粘成一个畸形属性名。
-    主流解析器会自行恢复，但拼接这件事本身不该靠解析器的容错兜底。
+    每项以空格收尾：调用方直接拼在 `poster="…"` 后面，两边都不带空格会产出
+    `poster="x.png"data-has-audio="true"` 这种粘成一个畸形属性名的结果。
     """
     attrs = []
     muted = media_opts.get("muted", True)
@@ -843,44 +812,30 @@ def _media_html(rc, sid, s, d):
 
 
 def _em_marker():
-    """行文的词级强调挂点：一个**空** span，放在正文之后。
+    """词级强调的挂点：正文之后一个**空** span。生成期只给挂点、不切字。
 
-    生成期只给挂点、不切任何字——切成什么取决于成片时刻（逐帧 seek）与浏览器
-    实测字宽，都属于运行时；正文因此保持成**一个裸文本节点**，运行时不用改
-    DOM 也能把它量出来。
-
-    两条都是实测撞出来的，不是风格：
-    · 正文不能被 span 包住。含文字的叶子元素会被 Layout 门禁逐字量重叠，滚出
-      窗口的行 rect 仍在原位，于是静态内容段成批报 text_occluded（散文级的
-      proseCoverageFloor 救不了——包成 span 之后它就不再是散文单元）。
-    · 挂点本身必须**空**：空 span 零宽零高，不参与重叠判定；一旦写成整行宽的
-      盒子（display:block）或带上文字，门禁立刻按它报 text_occluded。
+    正文要留成**一个裸文本节点**（运行时靠它量字宽），挂点必须零宽零高——含文字的
+    叶子元素会被 Layout 门禁逐字量重叠，滚出窗口的行 rect 仍在原位，整段报
+    `text_occluded`（包成 span 之后 proseCoverageFloor 也救不了，它已不是散文单元）。
     """
     return '<span class="verse-em"></span>'
 
 
 def _ved_layer(text):
-    """词级强调的覆盖层：一个**生成期就位、内容为整句原文**的定位盒子。
+    """词级强调的覆盖层：内容为**整句原文**的定位盒子，生成期就位。
 
-    它的任务是让"还没念到"的那半句压暗。做法上复制整句原文、由运行时逐字把已念
-    部分的 alpha 抹成 0（见 composition.css / runtime.js 的 verseVedGlyphs）。
-    **内容必须在生成期写死**：运行时只改每个字的不透明度，不改文本、不改宽度——
-    覆盖层与正文排版完全一致，逐字重合，没有位移也没有折行差异。
+    运行时只逐字把已念部分的 alpha 抹成 0（composition.css / runtime.js 的
+    verseVedGlyphs），不改文本、不改宽度，于是覆盖层与正文逐字重合。
 
-    为什么是完整一句而不是"剩下那截"：这是踩出来的。覆盖层若只写 slice(k)，它自己
-    从头起排，折行点与正文不同，中段起每个字都被推挤，屏幕上出现一格叠一格的重影。
+    三条是踩出来的，照做：
 
-    为什么模板里先放一个空盒子、而不是让运行时插节点：逐帧渲染每一帧都要重测
-    布局，DOM 结构在同一份 HTML 里恒定才能保证"同一时刻同一画面"；盒子与文字都是
-    生成期就位的骨架。
-
-    为什么是**元素**而不是行上的 ::before：伪元素 + content:attr() + clip-path
-    在 Chrome 144 上有实测漂移（裁切左缘落后于 DOM 值几十像素、随机跳动、有时
-    整层不再被裁），真元素走普通层叠没有这个问题，详见 composition.css 的注释。
-    它是 data-layout-allow-occlusion 自带的一份豁免来源：覆盖层与正文逐字重合是
-    设计使然，重叠本就预期，豁免由自身属性承担（不继承祖先的规则）。
-
-    data-text 存原文：运行时按字符建 span、逐字上 alpha，字符与正文一一对应。
+    - 内容必须是**完整一句**。只写 `slice(k)` 的话它自己从头起排，折行点与正文不同，
+      中段起每个字被推挤，屏幕上一格叠一格的重影。
+    - 盒子与文字都在**生成期**放好，运行时只改不透明度。逐帧渲染每帧都要重测布局，
+      DOM 结构在同一份 HTML 里恒定才能保证"同一时刻同一画面"。
+    - 必须是**真元素**，不是行上的 `::before`：伪元素 + `content:attr()` + `clip-path`
+      在 Chrome 144 上实测漂移（裁切左缘落后 DOM 值几十像素、随机跳动、有时整层不裁）。
+      豁免也由它自己带（`data-layout-allow-*` 不继承祖先）。
     """
     return ('<div class="verse-ved" aria-hidden="true"'
             ' data-layout-allow-overlap data-layout-allow-occlusion'
@@ -896,20 +851,12 @@ def _verse_html(seg, sid, ac_text_attr):
     选得相近时，观众手里只剩一串分不清轮次的字幕。只在轮次首句挂，同一
     说话人连着说三句不刷三遍标签（那会让字幕行首变成一列复读的抬头）。
     """
-    # 三个 layout 豁免属性的继承规则**不一样**，别按一套规则打：
-    #   · allow-occlusion / allow-overlap —— 检查器只认元素自己身上的标记，
-    #     **不继承祖先**：每行 .verse-line 与 .verse-who span 都得自带。缺了
-    #     就量那一行滚出窗口后仍在原位的 rect，判 text_occluded 报 error
-    #     （实测：只打 .verse 报 1 error；补上每行后 0 error，warning 条数不变）。
-    #   · allow-overflow —— **继承到子树**（感知探针向上遍历祖先），只打在
-    #     .verse（overflow:hidden 所在层）就覆盖整棵子树。曾经三个属性一起
-    #     打在每一层，行数是冗余的：实测改成只在 .verse 打，check 的 Layout
-    #     输出逐条一致（7 段稿与 12 句长段稿都是）。
-    # 留着 overflow 的理由：撤掉它，长段滚动时 check 会报一批 info 级的
-    # text_box_overflow / container_overflow——行滚出窗口本来就是歌词式滚动
-    # 的预期行为，那批 info 会随段落长度线性增长、把真正的噪声清单淹掉。
-    # 代价是它顺带抑制子树内的 text-clipping / content-cramped-container /
-    # foreground-over-panel；这三样在 verse 里本就无意义（行天生要被窗口裁）。
+    # 三个豁免属性的继承规则不同，别按一套打（详见 references/rendering.md
+    # 「官方校验命令」的 text_occluded 一条）：
+    #   · allow-occlusion / allow-overlap —— 只认元素自己身上，**不继承祖先**，
+    #     每行 .verse-line 与 .verse-who span 都得自带。
+    #   · allow-overflow —— **继承到子树**，只打在 .verse 一处即可（顺带压掉长段
+    #     滚动会刷出的一批 info 级 text_box_overflow，那批随段落长度线性增长）。
     _prev_who = None
     _vlines = []
     _sents = seg["sentences"]
@@ -918,26 +865,20 @@ def _verse_html(seg, sid, ac_text_attr):
         # 轮次首句才标：与上一句同一说话人时不再重复。
         _who_html = ""
         if _who and _who != _prev_who:
-            # occlusion/overlap 不继承，span 自己必须带（实测加了 span 之后
-            # Layout 立刻报 text_occluded … span:nth-of-type(1)，判据与行那层
-            # 一样：滚出窗口的 rect 仍在原位，只是又往下走了一层 DOM）。
-            # overflow 不写：祖先 .verse 上的那份会继承覆盖到它。
+            # occlusion/overlap 不继承，span 自己必须带；overflow 不写（祖先上那份
+            # 会继承覆盖到它）。
             _who_html = (f'<span class="verse-who"'
                          f' data-layout-allow-overlap'
                          f' data-layout-allow-occlusion>{esc(_who)}</span>')
         _prev_who = _who
-        # 句内读到的时刻区间挂进行上：词级强调按它算"这句话已经念到第几个字"。
-        # 终点取**下一句起点**而不是 start+duration——与 cue 的 d 同一口径（推理
-        # 见 _build_subtitle_cues 的 docstring），否则末字高亮会比字幕切换晚半拍，
-        # 中间那段句间静音是"整句念完、等下一句"的状态。
+        # 行上的读到区间：终点取**下一句起点**（与 cue 的 d 同一口径），否则末字高亮
+        # 会比字幕切换晚半拍。
         _t0 = round(float(_s2["start_time"]), 2)
         _t1 = (round(float(_sents[_k + 1]["start_time"]), 2)
                if _k + 1 < len(_sents)
                else round(float(_s2["start_time"]) + float(_s2["duration"]), 2))
-        # 发声区间（manifest 的 onset/voiced，见 _speech.py）：音频块开头与结尾
-        # 各有一段静默，真正开口的时刻在后面。词级强调的进度分母必须是**发声
-        # 长度**而不是 t1−t0，否则长句的最后一个词先亮完、再干等几百毫秒。
-        # 老 manifest 没有这两个字段 → 不写 data-voiced，运行时退回整块时长。
+        # 进度分母是**发声长度**而不是 t1−t0，否则长句最后一个词先亮完、再干等几百
+        # 毫秒。老 manifest 无 voiced → 不写 data-voiced，运行时退回整块时长。
         _onset = float(_s2.get("onset") or 0.0)
         _voiced = _s2.get("voiced")
         _voiced_attr = ""
@@ -1262,21 +1203,15 @@ def _cycle_js(step):
 
 
 def _canvas_first_beat(card, director, beats):
-    """画布页的首拍前置：让"这一页的第一件事"尽量发生在段的头一帧。
+    """画布页的首拍前置：让这一页的第一件事发生在段的头一帧。
 
-    **要解决的现象**：整页画布段没有标题层也没有句子流层，画面上只有一张 SVG。
-    若导演的第一拍落在第 2 句（`at:1`）或更晚，画面从段起点到那一刻是**完全
-    静止的一帧**——观众切页后先看到一张不动的海报，再"突然开始动"。门禁里那条
-    "画布没有 appear 补间"的 warn 说的就是它。
+    现象：整页画布没有标题层也没有句子流，导演第一拍若落在第 2 句或更晚，从段起点
+    到那一刻是**完全静止的一帧**——切页后先看到一张不动的海报，再突然开始动（门禁里
+    "画布没有 appear 补间"的 warn 说的就是它）。
 
-    **做法**：不替作者改节拍（那会篡改他写的时间轴），而是在段起点给所有"第一拍
-    之前还不会动到"的目标补一次**就位**（`tl.set`），让它们在 t=s 那一刻处于
-    自己 `from` 态——画面从一开始就"已经在演"，而不是从浏览器默认态静止。
-    这不会让任何元素提前出现（`from` 态本身就是补间的起点），只是把"起点"从
-    第一拍的瞬间挪到段起点，代价为零、可逆。
-
-    只处理**首拍晚于段起点 + 0.2s** 的情形；首拍本来就在开头的画布不重复写。
-    也只看 `from`/`fromTo` 与 `set` 这类有明确起点态的目标，`to` 没有起点语义。
+    做法：不替作者改节拍，只在段起点给"第一拍之前还不会动到"的目标补一次就位
+    （`tl.set` 写成它自己的 `from` 态）。起点从第一拍挪到段起点，代价为零、不会让任何
+    元素提前出现。只处理首拍晚于段起点 + 0.2s 的情形；`to` 没有起点语义，不碰。
     """
     if not card.is_canvas or not beats:
         return []
@@ -1576,19 +1511,12 @@ def _kicker_entrance_lines(rc, card):
 def _apple_opening_budget(rc, card):
     """苹果风开场的等比压缩系数（1.0 = 原速不压）。
 
-    这支舞的收尾时刻由**标题字数、行数与编号列**共同决定：最后一个字符落定 =
-    chars.delay + stagger×(非空格字数−1) + duration，最后一行编号落定 =
-    rows.idx.delay + stagger×(行数−1) + duration，最后一行内容滑入 =
-    rows.content.delay + stagger×(行数−1) + duration。而它能用到的时长是
-    开屏页的**可见窗口**（锚在擦除起点 win_start 的整段 life，不是口播段长）。
-    两者不挂钩，于是短开场会静默丢尾巴：opening 写一句话（~1.0s）、内容段
-    写满 7 行时，最后几行是在页面已被下一页盖住之后才浮起来的——没人看得到，
-    日志也不吭声。
+    收尾时刻取几条补间里最晚的那条（标题逐字、编号列、内容行、kicker）；可用时长是
+    开屏页的**可见窗口**（锚在擦除起点 `win_start` 的整段 life，不是口播段长）。两者
+    不挂钩，短开场会静默丢尾巴——最后几行在页面已被盖住之后才浮起来。
 
-    口径对齐 entranceBudget：够就原速，不够按比例压，压到 minFactor 就停手
-    并告警（压得更狠就成闪烁了，那比"演到一半被切"更难看）。光晕主光的呼吸
-    与副光漂移不参与压缩——它们是淡入之后的稳态循环，压缩它们等于让开场一直
-    在喘，而它们也不参与"舞是否演完"的判定。
+    口径对齐 entranceBudget：够就原速，不够按比例压，压到 `minFactor` 停手并告警
+    （再狠就是闪烁）。光晕呼吸与副光漂移不参与压缩：它们是淡入后的稳态循环。
     """
     ap = rc.anim["opening"]["apple"]
     bud = ap["budget"]
@@ -1792,15 +1720,11 @@ def _entrance_lead(rc, card):
 def _unit_frac(v):
     """把"占某个上限的比例"钳到 [-1,1]，**符号即方向**。
 
-    这类量一律写比例、不写绝对值，是因为**上限本身随画幅与段长变**：写绝对值的
-    话，一份在竖屏长段安全的输入换到横屏短段就越界了（运镜的 panX/panY 是同一
-    条约束，见 `_image_drift_lines`）。同一件事只该有一份钳制。
+    这类量一律写比例、不写绝对值：上限本身随画幅与段长变，写绝对值的一份在竖屏长段
+    安全的输入，换到横屏短段就越界。同一件事只该有一份钳制。
 
-    两种用法，符号各来自一处，互不干扰：
-    · 入场收拢（`_image_settle_lines`）**直接把符号当方向**——档位表里写 `-0.6`
-      就是"从左侧来"，所以这里必须保号；早先取 `abs` 的版本把四档里的两档压成
-      同一个来向，轮换只剩三种。
-    · 持续运镜的符号由 `_aim` 按段序给（相邻两张必反向），传进来的应当只带幅度。
+    保号：入场收拢把符号当来向（`-0.6` = 从左侧来）；持续运镜的符号由 `_aim` 按段序
+    给，传进来的只带幅度。
     """
     try:
         f = float(v)
@@ -1831,36 +1755,25 @@ def _drift_for(rc, card, tpl_drift):
 def _image_drift_lines(rc, card):
     """静态图在画面上的持续缓慢运镜（Ken Burns）。
 
-    **为什么需要这一条**：配图入场那 0.8s 的淡入上移演完之后，这张图在剩下的
-    8~20 秒里是**完全静止**的。一段里实时在动的只有句子流，画面本身是一张钉死的
-    海报——这正是 README 开篇要划清的那条线（"不是幻灯片录屏"）。前沿做法（纪录片
-    Ken Burns、Kurzgesagt、Apple 产品页）给静止素材叠一层**恒定速率的缓慢推近**：
-    不为演出什么，只为让画面维持呼吸感。
+    入场演完之后这张图还有 8~20 秒完全静止，一段里在动的只剩句子流——画面成了钉死
+    的海报。这里给它叠一层**恒定速率**的缓慢推近，只为维持呼吸感。
 
-    **三条约束是 cover 语义直接推出来的，不是审美偏好**：
+    三条约束由 `object-fit:cover` 直接推出，不是审美：
 
-    1. **只推近，不拉远。** 图片载体已是 `width:100%;height:100%;object-fit:cover`
-       铺满槽位，任何 `scale < 1` 都会被槽位的 `overflow:hidden` 切出一个露背景的
-       边——不是"图小了一点"，是**露底**。所以补间只在 [1, maxScale] 上单调推进，
-       极小值就是起点 1；要"来回"必须让最小值仍等于 1，否则端点即事故。
-    2. **位移必须落在推近让出来的盈余里。** 放大 s 倍后单侧各多出 (s−1)/2 × 槽位
-       边长；越过这个数同样露底。所以位移**不写绝对 px**，写"最多用掉多少盈余"
-       （panX/panY ∈ [0,1]，1 = 边缘刚好贴住槽位边），再按当前画幅的槽位尺寸乘
-       出来——换画幅、改槽位几何都不会把一份安全的输入变成露底。
-       **方向不写在这里**：所有段的图都往同一侧漂本身就是种会被读出来的模式，
-       实际方向按"第几张静态图"轮 Four 象限（见 `_aim`）。
-    3. **匀速。** 要的是"发现有运动"同时"别注意到运动"：任何 ease 都会把一层背景
-       运动读成有意图的镜头调度（"它为什么在这儿加速"）。所以 ease 恒为 `none`，
-       不开放成旋钮——这一层不该有脾气。
+    1. **只推近、不拉远**：载体已是 cover 铺满槽位，`scale < 1` 会被槽位的
+       `overflow:hidden` 切出露背景的边（是露底，不是"图小了"），所以区间只在
+       [1, maxScale] 上单调推进。
+    2. **位移落在推近让出的盈余里**：放大 s 倍单侧多 `(s−1)/2 × 槽位边长`，越过同样
+       露底。所以 panX/panY 写"最多用掉多少盈余"（[0,1]）而不是绝对 px，换画幅、
+       改槽位几何都不会让一份安全的输入变成露底。方向不写在这里，由 `_aim` 轮换。
+    3. **匀速**：ease 恒为 `none` 且不开放成旋钮——任何缓动都会被读成有意图的镜头
+       调度。呼吸档（`breathe`）的进度系数单调不减但不均匀。
 
-    **作用点是图载体本身**（`#img-{sid} > img`）而不是槽位盒 `#img-{sid}`：盒上挂着
-    圆角、外发光与 `::after` 内描边（见 composition.css），对盒 scale 会把描边和辉光
-    一起放大；盒的 transform 也被入场补间的 `y` 独占着。分开两个元素，各演各的。
+    作用点是图载体 `#img-{sid} > img` 而非槽位盒：盒上挂圆角、外发光与 `::after`
+    内描边，对盒 scale 会把它们一起放大，且盒的 transform 已被入场补间的 `y` 独占。
 
-    **不漂的三类载体**（判据在 `_drift_carrier_sid`）：`<video>`（每秒 24 帧自己在
-    放，再加运镜是运动冗余）、写了 `director` 的内联 SVG（那段作者已手写过编排，
-    别替他叠第二层意图）、整页画布与 `stage:"keep"` 接续页——后两条与跳过**入场
-    补间**的口径同源（画布由导演负责、接续页搬的是上一页演完的终态）。
+    三类载体不漂（判据在 `_still_image_carrier_sid`）：`<video>`（自己在放）、写了
+    `director` 的内联 SVG（作者已手写编排）、整页画布与 `stage:"keep"` 接续页。
     """
     if _still_image_carrier_sid(rc, card) is None:
         return []
@@ -1887,15 +1800,10 @@ def _image_drift_lines(rc, card):
     def _aim(axis):
         """第 axis 轴的取景方向：[-1,-AIM_FLOOR] ∪ [AIM_FLOOR,1] 上的值。
 
-        **为什么按"第几张图"而不是按 id 哈希取符号**：所有段都朝同一侧漂本身就是
-        一种能被读出来的模式——连看三段"图都往上飘"，观众学到的是"它是个模板"
-        而不是每段各有取景。先试过纯哈希（`seeded_wobble` 的符号），它长期分布
-        均匀但**局部会扎堆**：实测 seg-a…seg-f 连续六张全落在同一侧。**相邻同侧的
-        概率太高**，正是要防的那件事，所以符号必须由段序保证严格交替、哈希只
-        负责幅度（让速度/距离各异，不像处方式 repeat）。
-
-        y 轴按序号奇偶翻、x 轴按每两张翻一张 —— 四张一轮回走遍四个象限，像
-        纪录片 per-take 换过的机位，而不是"左右横跳"。
+        符号**由段序严格交替**（y 轴按奇偶翻、x 轴每两张翻一张，四张一轮走遍四个
+        象限），幅度交给 `seeded_wobble`（与 canvas_kit 的手绘抖动同源，重跑逐字节
+        一致）。别改成哈希取符号：实测 seg-a…seg-f 连续六张会落在同一侧，而"所有段
+        朝同一侧漂"正是要防的模式。
         """
         ordinal = getattr(card, "drift_ordinal", 0)
         flip = ordinal % 2 if axis == 1 else (ordinal // 2) % 2
@@ -1957,62 +1865,33 @@ def _cycle_pick(base, rhythm, ordinal):
 def _title_rhythm(a_title, ordinal):
     """按段序取标题入场的节奏档，让每章开场不是同一套曲线。
 
-    **为什么需要**：`back.out(1.7)` + `scale:0.5` 是好的默认，但**每段都一样**时，
-    观众在第二段就学会了"哦，又是这样弹一下"——标题变成装饰而非节奏。前沿的
-    章节式解说（Kurzgesagt、Apple 发布会章节页）会让开场在"弹一下 / 滑上来 /
-    清爽淡入"之间轮换，同一部片子里读得出推进。
-
-    **档位是有限集而不是随机数**：随机让相邻两段有概率撞成同一种（与 Ken Burns
-    那边踩过的坑同源），而严格轮换保证连续四段必不重样。档位表在
-    `_template.titleEntrance.rhythm` 里，`from`/`y`/`ease` 逐项覆盖同一套键——
-    缺 `rhythm` 时退回顶层的 `from`/`ease`，老产物行为不变。
+    档位表在 `_template.titleEntrance.rhythm`，按**卡片序**取模逐项覆盖
+    `from`/`y`/`ease`；缺 `rhythm` 时退回顶层 `from`/`ease`。
+    有限集轮换而不是随机：随机让相邻两段有概率撞成同一种，严格轮换保证连续四段不重样。
     """
     return _cycle_pick({"from": a_title["from"], "y": 0, "ease": a_title["ease"]},
                        a_title.get("rhythm"), ordinal)
 
 
 def _tagline_entrance_lines(rc, card, rh):
-    """副标题行的入场：跟着标题那一档节奏进来，幅度小一号、起点错峰。
+    """副标题行的入场：跟着标题那一档进来，幅度小一号、起点错峰。
 
-    **为什么需要**：题头组是两行（标题 + 副标题），而副标题曾经是画面上**唯一
-    一个从头到尾没进过时间线的元素**——转场（擦除 + 引导线 + 剥离）、标题、
-    配图（框 / 收拢 / 运镜）、字幕（接力 + 词级强调）、背景三层、苹果风开场
-    都各有一拍，唯独它从卡片第一帧就在那儿、钉到被下一页盖走。前沿的章节页
-    （Material 的 choreography、Apple Keynote 的 build、Framer 的
-    staggerChildren）里同一组元素**从不一起到位**：主线先起、附属层错峰跟上，
-    读出来是"一支编排"而不是"一块东西浮上来"——这与第四轮「框先落位、图本体
-    后收拢」是同一条原则，只是从图内部的两层升到题头组的两行。
-
-    **为什么挂在标题那一档上，不另开一组旋钮**：副标题是**这一组里的第二行**，
-    另开一组参数等于允许"标题弹进来、副标题滑上来"——两层各有脾气就不再是
-    编排，是两块各自为政的动效。所以它的幅度写成标题那一档的**比例**：
+    副标题是题头组里的第二行，所以只写**标题那一档的比例**，不另开一组旋钮——两层
+    各有脾气就不再是编排：
 
         y_tag    = y_title × ampFrac
         from_tag = 1 − (1 − from_title) × ampFrac
+        start    = 标题入场时长 × delayFrac
 
-    `ampFrac ∈ [0,1]`，于是"副标题永远不比标题动得多"是**结构上恒成立**的
-    （与运镜 panX/panY 写"占盈余的比例"同源：让越界不可表达，而不是生成期钳
-    住并 warn）。符号也随之继承，两层不会反向打架——第四轮"纵向一律与容器层
-    同向"是同一条理由。`ampFrac = 0` = 明确不要这层（退回改动前的行为）。
+    `ampFrac ∈ [0,1]` 让"副标题不比标题动得多"结构上恒成立，符号也随之继承；
+    `delayFrac < 1` 让两拍交叠（首尾相接就成了 PPT 的逐条出现）；`ampFrac = 0` 关闭。
 
-    **起点由结构推出，不是第二个数**：起点 = 标题入场时长 × delayFrac。"标题
-    先起、副标题跟上"因此不需要人对着两个数字，改标题时长时副标题自动跟。两拍
-    **交叠**而不是首尾相接（`delayFrac < 1`）是刻意的：overlapping action 才
-    有编排感，排成首尾相接的队列是 PPT 的"逐条出现"。
+    **曲线固定**（`tagline.ease`），不跟着标题那一档跳：标题四档里的 `expo.out` 实测
+    0→76% 只占 2 帧，错峰读不出来；`back.out` 会让小字号副标题冲过 1 再弹回，是抖动
+    不是弹性。
 
-    **曲线固定，不跟着标题那档跳**（`tagline.ease`）。幅度与方向继承标题，是为
-    了证明"它属于这一组"；**速度**不继承，是逐帧实测逼出来的：标题 rhythm 四档
-    里有 `expo.out`，Chromium 上按 30fps 网格 seek 实测，副标题在这条曲线上
-    0→76% 只用了 0.08s ≈ **2 帧**，"错峰"在成片里根本读不出来（同一个
-    delayFrac 下换成慢起慢收的 `power2.out`，可见行程才有 ~0.25s ≈ 7 帧）；
-    另一档 `back.out(1.7)` 会让副标题冲过 1 再弹回来——小字号上那一下是抖动
-    不是弹性。代价是副标题少了轮换那一层变化，而轮换本就由标题那一档提供：
-    "主线快、附庸稳"本身就是一种对比。
-
-    **给 `opacity:0`**：`from` 补间在页面加载时就把起点态写在元素上
-    （immediateRender），而卡片从擦除起点起就部分可见——没有 opacity 的话，
-    副标题会在擦除窗里以缩放态先露一小截。标题的 `scale 0.5` 读成"正在进来"，
-    小字号副标题的缩放态读成"半截字"。
+    `from` 补间会给元素写 `opacity:0`——卡片从擦除起点就部分可见，不压透明度的话
+    副标题会以缩放态在擦除窗里先露半截。
     """
     tg = rc.anim["titleEntrance"].get("tagline")
     if not tg or not card.tagline_html:
@@ -2038,15 +1917,10 @@ def _tagline_entrance_lines(rc, card, rh):
 def _settle_rhythm(a_img, ordinal):
     """按段序取素材入场的收拢档，让每张图不是以同一种方式到位。
 
-    **为什么需要**：`scale 1.06 + panY 0.6` 是好的默认，但**每段都一样**时，观众
-    在第二段就学会了"哦，图又是从下面浮上来的"——入场变成装饰而非节奏。这与
-    `_title_rhythm` 是同一件事的同一类毛病，所以结构照抄它：档位是有限集、按段序
-    取模、逐项覆盖同一套键。
-
-    **档位是有限集而不是随机数**：随机让相邻两段有概率撞成同一种（与 Ken Burns
-    那边踩过的坑同源），严格轮换保证连续四段必不重样。四档刻意给四个**不同的
-    来向**（纵 / 右 / 纯收焦 / 左）——纵向一律与容器层同向（容器层 `vert_y` 是从
-    下方上来），反向会让"框往上走、图往下沉"读成两层在打架。
+    与 `_title_rhythm` 同构：档位表 `_template.imageEntrance.rhythm`，按"第几张静态
+    图"取模、逐项覆盖 `scale`/`panX`/`panY`/`ease`；缺 `rhythm` 用顶层 settle。
+    四档给四个不同来向（纵 / 右 / 纯收焦 / 左），纵向必须与容器层同向——反向会读成
+    "框往上走、图往下沉"两层在打架。
     """
     return _cycle_pick({k: a_img["settle"][k] for k in ("scale", "panX", "panY", "ease")},
                        a_img.get("rhythm"), ordinal)
@@ -2055,30 +1929,21 @@ def _settle_rhythm(a_img, ordinal):
 def _image_settle_lines(rc, card, lead):
     """内容层（图本体）的收拢落位：从"略大、略偏"收拢到精确位置。
 
-    **为什么需要**：容器层入场（`opacity` + `y`）把圆角、1px 内描边、外发光和图
-    本体四样东西**同时、同曲线、同方向**送到位——画面上读出来的是"一块东西浮
-    上来"，而不是"镜头落到素材上"。前沿的素材入场（Apple 产品页 hero、Kurzgesagt
-    的 B-roll 入画、电影 rack focus）是 **settle**：素材从略大、略偏的状态收拢到
-    精确位置。"滑进来"是素材在动，"收拢"是镜头在落，读起来是两回事。
+    容器层（`#img-{sid}`）只演 `opacity` + `y`；`scale`/`x`/`y` 给图本体
+    （`> img`），落位才是"镜头落上去"。两层分开是因为容器上挂着圆角、1px 内描边与
+    外发光，对它 scale 会把三样一起放大，且它的 transform 已被入场的 `y` 独占。
 
-    **为什么不写进容器层**：容器层（`> img` 之外的 `#img-{sid}`）上挂着圆角、描边
-    与外发光，对它 scale 会把这三样一起放大（与 `_image_drift_lines` 不漂盒是同一
-    条理由）；它的 transform 也被入场补间的 `y` 独占着。两层分开，各演各的。
+    **不露底靠结构**：`panX/panY` ∈ [-1,1] 是"最多用掉多少盈余"，实际 px 由
+    `(scale−1) × 槽位边长 / 2` 乘出，于是 `|y₀| ≤ (s₀−1)·bh/2` 恒成立，换画幅、
+    改槽位几何都不会变成露底（GSAP 的 transform 是 `translate(x,y) scale(s)`，平移是
+    未缩放的屏幕 px，算式不用再乘 s）。
 
-    **不露底靠结构，不靠钳制**：偏移写成"最多用掉多少盈余"的比例（`panX/panY` ∈
-    [0,1]，与运镜同源同构，见 `_unit_frac`），实际 px 由 `(scale−1) × 槽位边长 / 2`
-    乘出来——于是 `|y₀| ≤ (s₀−1)·bh/2` **恒成立**，换画幅、改槽位几何都不会把一份
-    安全的输入变成露底。GSAP 写出的 transform 是 `translate(x,y) scale(s)`，平移量
-    是未被缩放的屏幕 px，所以盈余算式不用再乘 `s`。
+    **终点恒等于运镜起点 `lead`**：duration 由 `lead − 起点` 推出，不独立配置——
+    写死会出现"没收完就开始推"或"收完了干等"，成片里都是速度突变。`startFrac` 是
+    唯一旋钮，占入场预算的比例。
 
-    **终点恒等于运镜起点**：duration 不独立配置，由 `lead − 起点` 推出。写死
-    duration 就会出现"还没收完、运镜已经开始推"的重叠或"收完了干等"的空档，两者
-    在成片里都是速度突变。`startFrac` 是唯一旋钮，且它占的是入场预算的比例，因此
-    起点永远落在预算之内。
-
-    **顺序**：本函数返回的补间必须排在运镜补间**之前**——运镜末尾那条钉住补间的
-    终值（`scale:1,x:0,y:0`）是最后落地的值，GSAP 建时间线时的预渲染才不会把
-    `scale 1.06` 留在元素上（同样的坑见 `_image_drift_lines` 的 pin 注释）。
+    返回的补间必须排在运镜补间**之前**：运镜末尾钉住补间的终值（`scale:1,x:0,y:0`）
+    要最后落地，见 `_image_drift_lines` 的 pin。
     """
     if _still_image_carrier_sid(rc, card) is None:
         return []
@@ -2109,19 +1974,12 @@ def _image_settle_lines(rc, card, lead):
 def _breath_segments(breathe, avail, scale_to):
     """把单调推近切成"推 → 缓 → 推"的小段，让长段落后半程不再死住。
 
-    **为什么需要**：匀速推近在 8~20 秒里只做一件事——一直变大。段尾那几秒观众
-    读到的是"还在动"，但读不出节奏；而前沿的纪录片/产品页运镜是**有呼吸的**：
-    推近一段、几乎停住、再推一段。这里给同一段总时长加一层低频起伏。
+    起伏的是**进度系数** A ∈ [1−depthFrac, 1]（`depthFrac` 上限 0.5），所以
+    s(t) = 1 + A(t)·(scale_to−1) 恒 ≥ 1 且不越过峰值——回弹落在推近让出的盈余里，
+    不缩到 1 以下（cover 语义，见 `_image_drift_lines`）。位移按同一比例缩放。
 
-    **回弹只能落在盈余里**（与 cover 语义同一条硬约束，见 `_image_drift_lines`）：
-    scale 永远 ≥ 1，且永不越过 `scale_to`——回弹是把当前值往回退到 1 与峰值之间，
-    不是缩到 1 以下。所以在 s(t) = 1 + A(t)·(scale_to−1) 里起伏的是**进度系数**
-    A ∈ [1−depth, 1]，A 的下界由 depth 钳住（`depthFrac` 上限 0.5，留足余量）。
-    位移同比例缩放，保证"图始终盖满槽位"。
-
-    返回 [(duration, scale, xRatio, yRatio, ease), …]；空列表 = 走原来的单段匀速。
-    只有**够长**的段才分段：呼吸感要靠"推 → 缓 → 推"的完整周期读出来，8 秒以内
-    的段切三段只会读成卡顿；短段保持一段匀速，行为与加这个旋钮之前逐像素一致。
+    返回 [(duration, scale, xRatio, yRatio, ease), …]，空列表 = 走单段匀速。
+    不足两个周期（`avail < period×2`）不分段：切三段只会读成卡顿。
     """
     if not breathe or avail <= 0 or scale_to <= 1.0:
         return []

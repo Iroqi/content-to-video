@@ -393,7 +393,6 @@ _TEMPLATE_JSON = r'''
       "future": 0.62,
       "past": 0.45,
       "ratio": 0.726,
-      "cap": 3,
       "scale": 0.94
     }
   },

@@ -139,7 +139,7 @@ hf-project/
 - **`fps` / `workers` / `quality` 的最优组合别猜，让机器量**——官方 `benchmark` 自己变这几个变量跑几组，给耗时与体积对比：
 
   ```bash
-  npx -y hyperframes benchmark <项目目录> --runs 3 --json
+  npx -y hyperframes@0.8.185 benchmark <项目目录> --runs 3 --json
   ```
 
   下面那几条（如 workers 饱和点）是本机量出来的经验，**换机器、换稿件规模就该重跑一次**；要把这次的结果喂给编排，`--json` 的输出直接可读。
@@ -158,20 +158,20 @@ hf-project/
 ## 官方校验命令（优先于手搓探针）
 
 ```bash
-npx -y hyperframes check <项目目录>          # lint + runtime + layout + motion + contrast，一个门禁
-npx -y hyperframes lint <项目目录>           # 只跑静态那一阶段（不开浏览器）：改 HTML 的迭代期用它
-npx -y hyperframes snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
-npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
+npx -y hyperframes@0.8.185 check <项目目录>          # lint + runtime + layout + motion + contrast，一个门禁
+npx -y hyperframes@0.8.185 lint <项目目录>           # 只跑静态那一阶段（不开浏览器）：改 HTML 的迭代期用它
+npx -y hyperframes@0.8.185 snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
+npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
 ```
 
-`check` = lint + browser 四阶段，**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
+`check` = lint + browser 五阶段（Runtime / Layout / Motion / Contrast / Craft），**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
 
 **`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_FINDING_CODES` 之外的新 code 当真，Lint 有 error 时额外点一条 `browser_stages_skipped`。
 
-本节口径对着 **v0.8.181** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_FINDING_CODES` 与下面这张噪声表一起复核。
+本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_FINDING_CODES` 与下面这张噪声表一起复核。
 
 - 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
-- **Lint 有 error ⇒ browser 四阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast 显示 `0 issues across 0 sample(s)` / `0/0 text checks` 不是通过，是失明**——那四个 0 是"没量"。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
+- **Lint 有 error ⇒ browser 五阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast/Craft 显示 0 项不是通过，是失明**。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
 - 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
   - 噪声（**全表以 `scripts/_render_backend.py` 的 `GATE_NOISE_CODES` 为准**，`tests/check_docs.py` 逐码对账，改一边不改另一边会报错）：
     `gsap_callback_dom_measurement`（补间回调里量字宽）、`timeline_track_too_dense`（字幕时钟轨按帧打点）、`composition_file_too_large`（HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）、`css_transition_used`（模板兜底 CSS 的过渡，运行时由 GSAP 接管）、`overlapping_gsap_tweens`（入场与运镜在交接处碰同一属性）、`gsap_repeated_fromto_without_baseline`（同一 `fromTo` 先后落在不同元素上）、`gsap_infinite_repeat`（**开屏页才有**，默认强绑定）、`gsap_timeline_set_initial_hide`（开场前显式藏层）。
@@ -188,9 +188,9 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
   - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式，画面正常就是某层漏打了豁免，按 `check` 报的选择器补。
   - **横屏的段落标题**（`#title-*`）会在**段落入场附近**多出 info 级 `text_occluded`（竖屏没有）：检查器恰在擦除进行中采样。`snapshot --at` 看标题好好在那儿就是这条，info 不进退出码，确认画面正常即可忽略。
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
-- 渲染前用 `npx -y hyperframes doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
-- **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；要 warning 也卡住交付，给 `--strict`。
-- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes preview --background`。
+- 渲染前用 `npx -y hyperframes@0.8.185 doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
+- **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`doctor` 不支持 `--strict`，要 warning 也阻断的是 `check --strict`。
+- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes@0.8.185 preview --background`。
 
 ## 画面翻车速查表
 
@@ -206,7 +206,7 @@ npx -y hyperframes doctor                    # 渲染依赖体检（Chrome headl
 | 图内文字右缘出血（量出来的右缘超过上限） | `text-anchor="end"` 的落点要按量出来的字宽倒推，不是按字符数估 | `canvas.md`「整页画布」里「安全边距照页面走」 |
 | 图里两行文字压在一起（`hyperframes check` 报 `content_overlap`） | 两条 y 只差十来个像素——`canvas_kit` 的柱标签固定落在 `base_y+32`，自己加的说明文字很容易撞上它。`check_svg` 查不到图内压字，只有 `check` 的 Layout 阶段能量 | `canvas.md`「画布几何」的末条 |
 | `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报——豁免标记已由模板打在每一行上，见下 |
-| `check` 的 Runtime/Layout/Motion/Contrast 全是 `0 issues across 0 sample(s)` / `0/0 text checks` 空占位 | Lint 有 error，browser 四阶段被 `shouldBlockRender` 整个跳过——那些 0 是"没量"不是"量过"。先修 Lint 到 0 error 再判后面四阶段 | `rendering.md`「官方校验命令」 |
+| `check` 的 Runtime/Layout/Motion/Contrast/Craft 全是空结果 | Lint 有 error，browser 五阶段被 `shouldBlockRender` 整个跳过。先修 Lint 到 0 error 再判后面五阶段 | `rendering.md`「官方校验命令」 |
 | 压缩成片后轴线/网格/分隔线像是没画 | 色档太暗 + 线宽不足 3px 在压缩后被抹平 | `canvas.md`「整页画布的密度与层次」里「辅助线要敢用亮档」 |
 | 整张画面发闷、像一片渐变加一块图 | 背景网格太暗被整体 alpha 再合成一次（模板 `_theme.grid_color`），或氛围光椭圆边界还看得出来（`ambience.alpha`/`edge`） | 本节「画面结构」的氛围光与网格两条（改前成片对比度只有 1.08:1） |
 | 暂停一帧像一页空白（中段整条空带） | 标题/主视觉/注脚没分成三段并用中景连起来 | `canvas.md`「整页画布的密度与层次」里「竖向不许有整条空带」 |

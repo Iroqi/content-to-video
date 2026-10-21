@@ -166,7 +166,8 @@ def _official_gate(project, command):
         findings, seconds = run_check(project, command=command)
     except RuntimeError as e:
         raise SystemExit(f"[run] {e}")
-    _REPORT["steps"].append({"name": "官方门禁 check", "ok": not findings,
+    blocked = any(sev == "error" for sev, _, _ in findings)
+    _REPORT["steps"].append({"name": "官方门禁 check", "ok": not blocked,
                              "seconds": round(seconds, 1)})
     if findings:
         _REPORT["gate"] = [{"severity": s_, "rule": k, "message": m}
@@ -619,8 +620,16 @@ def main():
         _print_report_summary()
         return
 
+    # check 与 render 都要启动 Hyperframes CLI；先拦明确过旧的 Node，避免把
+    # engines 不兼容伪装成 npx、语法或 Chrome 错误。
+    _verdict, _node_msg = node_version_gate()
+    if _verdict == "block":
+        raise SystemExit(f"[run] {_node_msg}")
+    if _verdict == "warn":
+        print(f"[run][warn] {_node_msg}", file=sys.stderr)
+
     # ── 第 4 步 a'：官方门禁 ─────────────────────────────────────
-    # 与 --until html 同一类"迭代档"：只跑 check，不进渲染（没 Node 也能用它判版式）。
+    # 与 --until html 同一类"迭代档"：只跑 check，不进渲染。
     # 不接在 --until html 后面自动跑：那条路的意图是"3 秒出 HTML 先看一眼"，check
     # 要起 Chrome、十几秒。
     if args.until == "check":
@@ -635,14 +644,6 @@ def main():
         return
 
     # ── 第 4 步 b：渲染 ───────────────────────────────────────────
-    # 渲染前置条件先问一遍：Node 版本不够时 CLI 侧的失败形态与"没装 Node"看不
-    # 出区别，等它失败再翻日志末尾是拿结果猜原因。
-    _verdict, _node_msg = node_version_gate()
-    if _verdict == "block":
-        raise SystemExit(f"[run] {_node_msg}")
-    if _verdict == "warn":
-        print(f"[run][warn] {_node_msg}", file=sys.stderr)
-
     # 定稿路径自动跑一次官方门禁：error 拦在渲染前，未登记的新 warning 也点名。
     # 渲染是分钟级，这一步是十秒级；以前靠文档要求人手跑，漏跑就是拿成片换结论。
     for sev, kind, msg in _official_gate(project, _HF_COMMAND):

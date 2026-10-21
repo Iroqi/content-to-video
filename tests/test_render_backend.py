@@ -106,10 +106,22 @@ class Commands(unittest.TestCase):
         self.assertTrue(line.endswith('"'))
 
     def test_spec_env_override(self):
-        with mock.patch.dict(os.environ, {"CTV_HYPERFRAMES_PACKAGE": "hyperframes@9.9.9"}):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(RB.hyperframes_spec(), RB.DEFAULT_HYPERFRAMES_SPEC)
+        self.assertEqual(RB.DEFAULT_HYPERFRAMES_SPEC, "hyperframes@0.8.185")
+        with mock.patch.dict(os.environ,
+                             {"CTV_HYPERFRAMES_PACKAGE": "hyperframes@9.9.9"}, clear=True):
             self.assertEqual(RB.hyperframes_spec(), "hyperframes@9.9.9")
-        with mock.patch.dict(os.environ, {"CTV_HYPERFRAMES_PACKAGE": "  "}):
-            self.assertEqual(RB.hyperframes_spec(), "hyperframes")
+        with mock.patch.dict(os.environ, {"CTV_HYPERFRAMES_PACKAGE": "  "}, clear=True):
+            self.assertEqual(RB.hyperframes_spec(), RB.DEFAULT_HYPERFRAMES_SPEC)
+
+    def test_command_uses_the_selected_spec(self):
+        """命令必须运行已验证的 pin，不能被项目本地的其它版本替换。"""
+        with mock.patch.dict(os.environ,
+                             {"CTV_HYPERFRAMES_PACKAGE": "hyperframes@9.9.9"}, clear=True), \
+             mock.patch.object(RB.shutil, "which", return_value="/usr/bin/npx"):
+            self.assertEqual(RB.hyperframes_command("project"),
+                             ["/usr/bin/npx", "--yes", "hyperframes@9.9.9"])
 
     def test_fmt_cmd(self):
         self.assertEqual(RB.fmt_cmd(["a", "b"]), "a b")
@@ -343,8 +355,14 @@ class OfficialGate(unittest.TestCase):
         self.assertEqual([c for _, c, _ in RB.check_verdict(rep)],
                          ["unregistered:brand_new_rule"])
 
+    def test_craft_findings_are_not_dropped(self):
+        """v0.8.185 新增的 craft 阶段与其它阶段走同一份判读。"""
+        rep = self._report(craft=[{"code": "craft_new_rule", "severity": "warning"}])
+        self.assertEqual([c for _, c, _ in RB.check_verdict(rep)],
+                         ["unregistered:craft_new_rule"])
+
     def test_lint_error_means_browser_stages_did_not_run(self):
-        """Lint 有 error 时 browser 四阶段被整段跳过：那四个 0 不是"通过"。"""
+        """Lint 有 error 时 browser 五阶段被整段跳过：那些 0 不是"通过"。"""
         rep = self._report(lint=[{"code": "external_script", "severity": "error"}])
         rep["browserSkipped"] = True
         codes = [c for _, c, _ in RB.check_verdict(rep)]

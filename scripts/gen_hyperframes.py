@@ -257,38 +257,18 @@ def _warn_if_local_vendor_missing(src, out_dir):
           file=sys.stderr)
 
 
-def _warn_if_upscaled(sid, media_path, box, size):
-    """素材铺进它那一页的框要被放大时打一条 `[warn]`（只提示，不拦）。
+def _size_warnings(sid, media_path, box, size):
+    """素材固有尺寸 vs 它要被 cover 铺进的框 → 两条 warn：糊不糊、构图丢多少。
 
-    这一问此前没人管：配图一律 `cover` 铺满画布，而 `cover` 只管填满、不管清
-    楚——一张不够大的图会被悄悄放大成糊的，生成期、`hyperframes check`、渲染
-    日志全都不出声，只有成片里看得见。所以这里拿固有尺寸跟框比一次。
-
-    不拦是因为"糊不糊"还有主观成分（一张柔和的渐变背景放大 1.4 倍没人看得出来），
-    把整轮生成拦在半路不值当；要的是知情 + 可执行去处，判据与阈值在 `_media_size`。
-    box 或 size 缺失（不知道框多大 / 读不出尺寸）就静默——没得比就不比，
-    拿猜的数报警比不报更糟。
+    这两问在生成期、`hyperframes check`、渲染日志里都不声不响，只有成片看得见，
+    所以在这里拿固有尺寸跟框比一次。判据与阈值在 `_media_size`；box 或 size 缺失
+    就静默——没得比就不比，猜着报比不报更糟。只提示不拦：糊不糊有主观成分
+    （柔和渐变放大 1.4 倍没人看得出来），裁哪里更是构图决策。
     """
-    note = upscale_note(media_path, size, box)
-    if note:
-        print(f"[warn] 段落 '{sid}' 的配图不够大：{note}", file=sys.stderr)
-
-
-def _warn_if_cropped(sid, media_path, box, size):
-    """素材比例与槽位不一致、cover 要裁掉一大块时打一条 `[warn]`（只提示，不拦）。
-
-    与 `_warn_if_upscaled` 各管一件事：那边问"糊不糊"（分辨率），这边问"构图丢
-    多少"（比例）。渲染端是 `object-fit: cover`——裁边，不是 contain 留黑边；
-    ImageGen 又没有 4:3 档，按竖屏比例出图铺进 4:3 槽会被裁掉一半画面，而这件事
-    在生成期、`hyperframes check`、渲染日志里同样一声不吭，只有成片看得见。
-
-    同样不拦：裁哪里是构图决策（一张人像裁掉两侧背景正合适），机器只负责让作者
-    知情 + 给出路（换最接近 4:3 的档位，或入库前自己裁）。判据与阈值在
-    `_media_size`；box 或 size 缺失就静默。
-    """
-    note = aspect_note(media_path, size, box)
-    if note:
-        print(f"[warn] 段落 '{sid}' 的配图比例不贴合：{note}", file=sys.stderr)
+    for note, what in ((upscale_note(media_path, size, box), "配图不够大"),
+                       (aspect_note(media_path, size, box), "配图比例不贴合")):
+        if note:
+            print(f"[warn] 段落 '{sid}' 的 {what}：{note}", file=sys.stderr)
 
 
 # 视频"够不够这一段"的容差（秒）：差得比它少就是刚好，不报。
@@ -442,8 +422,7 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
                         corrupt_imgs.append((sid, media_path, head))
                     elif kind in ("short", "long"):
                         print(f"[warn] {head}", file=sys.stderr)
-            _warn_if_upscaled(sid, media_path, (seg_boxes or {}).get(sid), _size)
-            _warn_if_cropped(sid, media_path, (seg_boxes or {}).get(sid), _size)
+            _size_warnings(sid, media_path, (seg_boxes or {}).get(sid), _size)
             continue
         # svg 是文本格式，ffmpeg 打不开，存在性校验已足够；矢量也不验尺寸
         # （缩放不失真，它另有比例与字号两道门禁）
@@ -460,8 +439,7 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
                                      f"图片损坏或无法解码: {reason}"))
             # 头解析读不出的格式（avif/heic 之类）退回 ffmpeg 的流信息
             _size = _size or _probe_size
-        _warn_if_upscaled(sid, media_path, (seg_boxes or {}).get(sid), _size)
-        _warn_if_cropped(sid, media_path, (seg_boxes or {}).get(sid), _size)
+        _size_warnings(sid, media_path, (seg_boxes or {}).get(sid), _size)
     if not _ffmpeg_probe and images:
         print("[warn] ffmpeg 不可用，跳过配图完整性（损坏/截断）校验，"
               "仅做了文件存在性校验（ffmpeg 是渲染必需依赖，正常环境"

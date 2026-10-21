@@ -15,6 +15,7 @@ import os
 import random
 import shlex
 import sys
+from urllib.parse import unquote
 import time
 
 
@@ -46,20 +47,46 @@ from _tts import (DEFAULT_MODEL, DEFAULT_BASE_URL, MimoTtsClient,  # noqa: E402
 _USER_ENV_PATH = os.path.join(os.path.expanduser("~"), ".config", "ai-video", ".env")
 
 
+def _decode_env(raw, path):
+    """`.env` 的字节 → 文本；解不出来返回 None（已打过带处置建议的 warn）。
+
+    ① 有 UTF-16 BOM（PowerShell 5.1 的 `>` 会写它）→ utf-16；
+    ② 严格 utf-8-sig；解出 NUL 字节则弃用（无 BOM UTF-16 的 ASCII 文本在 utf-8
+       下每两字节一个 0x00，能"解码成功"但内容是 mojibake）；
+    ③ 仍失败 → gb18030（记事本 ANSI 保存的中文注释），再失败就报编码错。
+
+    报错必须指向"编码问题"：若让 UnicodeDecodeError 从 load_env() 穿透，爆炸点在
+    main() 读配置那步，看起来像"没有 API key"，真正原因差着十万八千里。
+    """
+    for enc in ("utf-16", "utf-8-sig"):
+        if enc == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
+        try:
+            text = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        if "\x00" not in text:
+            return text
+    if b"\x00" in raw:
+        print(f"[warn] {path} 内容含 NUL 字节——多半是无 BOM 的 UTF-16 编码"
+              f"（PowerShell 5.1 重定向产物）。请用 UTF-8 重新保存该文件",
+              file=sys.stderr)
+        return None
+    try:
+        return raw.decode("gb18030")
+    except UnicodeDecodeError:
+        print(f"[warn] 无法读取 {path}: 不是可识别的文本编码"
+              f"(尝试过 utf-8 / utf-16 / gb18030)。"
+              f"请用 UTF-8 重新保存该文件（记事本另存为右下角选 UTF-8）",
+              file=sys.stderr)
+        return None
+
+
 def _parse_env_file(path):
     """解析一个 KEY=VALUE 格式的 .env 文件，返回 dict。
 
-    编码策略（先读字节再判别，避免"解码成功但内容是 mojibake"的误判链）：
-    ① UTF-16 BOM（PowerShell 5.1 重定向 `>` 的产物）→ 按 utf-16 解；
-    ② 严格 utf-8（含 BOM 的 utf-8-sig 一并覆盖）；
-    ③ utf-8 解出 NUL 字节 → 多半是无 BOM 的 UTF-16（ASCII 文本在
-       UTF-16 下每两字节一个 0x00，而 0x00 本身是合法 UTF-8，所以
-       "utf-8 解码成功"不代表内容正确）——改试 utf-16-le/be；
-    ④ utf-8 彻底失败 → gb18030（记事本 ANSI/GBK 保存的中文注释）。
-    UnicodeDecodeError 是 ValueError 子类，不在这里接住就会从
-    load_env() 裸栈穿透；且报错必须指向"编码问题"——爆炸点
-    若在 main() 读配置那一步，连 --dry-run 都会瘫痪，提示信息却是
-    "没有 API key"，完全无法定位。
+    编码判别见 `_decode_env`。值里 `KEY=abc%2Fdef` 这种百分号转义按 URL 解码处理
+    （token 常从浏览器地址栏 / 文档链接里连 % 一起粘过来，不去掉就是 401）。
     """
     result = {}
     if not os.path.isfile(path):
@@ -70,43 +97,9 @@ def _parse_env_file(path):
     except OSError as e:
         print(f"[warn] 无法读取 {path}: {e}", file=sys.stderr)
         return result
-    text = None
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        try:
-            text = raw.decode("utf-16")
-        except UnicodeDecodeError:
-            text = None
+    text = _decode_env(raw, path)
     if text is None:
-        try:
-            candidate = raw.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            candidate = None
-        if candidate is not None and "\x00" not in candidate:
-            text = candidate
-        elif candidate is not None:
-            # utf-8 解码"成功"却满纸 NUL：无 BOM UTF-16 的典型形态
-            for enc in ("utf-16-le", "utf-16-be"):
-                try:
-                    alt = raw.decode(enc)
-                except UnicodeDecodeError:
-                    continue
-                if "\x00" not in alt:
-                    text = alt
-                    break
-            if text is None:
-                print(f"[warn] {path} 内容含 NUL 字节——多半是无 BOM 的 "
-                      f"UTF-16 编码（PowerShell 5.1 重定向产物）。"
-                      f"请用 UTF-8 重新保存该文件", file=sys.stderr)
-                return result
-        else:
-            try:
-                text = raw.decode("gb18030")
-            except UnicodeDecodeError:
-                print(f"[warn] 无法读取 {path}: 不是可识别的文本编码"
-                      f"(尝试过 utf-8 / utf-16 / gb18030)。"
-                      f"请用 UTF-8 重新保存该文件（记事本另存为右下角选 UTF-8）",
-                      file=sys.stderr)
-                return result
+        return result
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -131,6 +124,8 @@ def _parse_env_file(path):
                 # 未加引号的值才可能有行内注释；只认"空格 + #"，紧贴的 # 是值
                 # 本身（色值 `#f59e0b`、`a#b` 片段），不能动。
                 v = v.split(" #", 1)[0].rstrip()
+            if "%" in v:
+                v = unquote(v)
             if k:
                 result[k] = v
     return result

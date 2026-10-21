@@ -347,16 +347,14 @@ AIM_FLOOR = 0.35
 # 慢动作**：2 秒的空档里花 2 秒把一句话逐字退回去，观众读到的是"画面卡住了"，
 # 而它本该是一个几乎看不见的收尾动作。
 SETTLE_MAX_SECONDS = 0.6
-# 收束时长落到 0.05s 网格后低于这个值就不演（30fps 下一帧 = 0.033s，不足两帧的
-# 回落只会是一下闪烁）。不演 = 变量写 0，CSS 规则里那段过渡自动没有时长、整条
-# 失效，成片与改动前逐字节一致。
+# 收束时长落到 0.05s 网格后低于这个值就不演（30fps 下不足两帧，只会是一下闪烁）。
+# 不演 = 变量写 0，那段过渡自动没有时长、整条失效。
 SETTLE_MIN_SECONDS = 0.08
 
 
 # ── 渲染上下文：一次派生，处处共用 ──────────────────────────────────────
-# generate_html 只做三件事：归一化入参 → 建上下文 → 逐卡装配。主题、模板
-# 几何与 :root 变量表都在 _build_render_context 里派生一次；单卡的归一、
-# 装配与动画各自成函数，版式差异只体现在装配一处。
+# generate_html 只做三件事：归一化入参 → 建上下文 → 逐卡装配。主题、几何与
+# :root 变量表在 _build_render_context 派生一次；版式差异只体现在装配一处。
 
 
 def _build_render_context(tpl, aspect, width, height, theme, images,
@@ -393,10 +391,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     css_sub_font = f'{_sl["fontSize"]}px'
 
     # ── 分画幅几何派生 ──────────────────────────────────────────────
-    # 两画幅各挂一块 verse / 图片 / agenda 几何，数值互不共用；只有两画幅
-    # 都消费的键才两边都写。竖屏独有的定位键（segCard.padding、verse.bottom、
-    # image.marginSide/bottomGapToVerse）只存在于 vertical 块——横屏是弹性
-    # 列，没有这些概念，放一个 0 值占位只会让人以为改得动。
+    # 数值互不共用。竖屏独有的定位键只存在于 vertical 块——横屏是弹性列，
+    # 放 0 值占位只会让人以为改得动。
     rc.verse_clip = _vv["clipPad"]
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
@@ -483,12 +479,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     css_tagline_mt = _tgl["marginTop"]
 
     # ── :root 变量表 ──────────────────────────────────────────────────────
-    # templates/*.css 里不出现硬编码尺寸，一律走 var(--ctv-*)；本表从 _template
-    # 派生。命名空间：无后缀 = 两画幅同名派生（值各取各块），--ctv-v-* 仅竖屏、
-    # --ctv-l-* 仅横屏，--ctv-ag-* agenda 两画幅同名、值取各自 layout 的 agenda。
-    # 覆盖层压暗未念段要一个**实色**底：把文本色按 0.62 混到页面主底色上，
-    # 得到与 .verse-line base 档同观感的不透明色。底色取渐变第一个色标
-    # （面积最大的一段），没有色标时退回纯黑。
+    # templates/*.css 不写硬编码尺寸，一律 var(--ctv-*)。前缀：无后缀 = 两画幅
+    # 同名各取各块，-v- 仅竖屏，-l- 仅横屏，-ag- agenda 同名取各自 layout。
+    # 压暗覆盖层要**实色**底：文本色按 0.62 混到主底色（渐变第一个色标，无则纯黑）。
     _bg_flat = rc.bgs[0] if rc.bgs else "#000000"
     _kicker_pad = _kicker_kern_pad_px(rc)
     root_shared = f"""  --ctv-w:{width}px;--ctv-h:{height}px;
@@ -669,16 +662,10 @@ def _fmt_attr_num(v):
 
 
 # ── 视频原声的让路 EQ ────────────────────────────────────────────────
-# 只压整条轨的音量（volume）是把原声整个拧小：环境声、音乐、现场厚度一起没
-# 了，"有原声"这一诉求只剩下一点残余。Hyperframes 的 voiceover carve 走的是
-# 另一条路——只在人声占住的那几档频段上开槽，床铺的其余部分保持原样。那是
-# Studio 分析语音后落下来的一条 `data-fx-chain`（`data-fx-carve` 本身在播放
-# 期不读，见官方 audio-effects 参考），本技能没有那次分析，就给同一类链的**静态
-# 保守版**：三段 peaking 窄带衰减，落在人声最占地方的中高频。
-# 为什么是这三档：carve 的候选中心是 160~6000 Hz 的 1/3 倍频程，而官方明确写了
-# "真正掩蔽人声的频段更高"——按能量排会一直选到基频（160/250 Hz），切那里只是
-# 把床铺削薄，对听清旁白几乎没有帮助。所以取 1.6k / 2.5k / 4k，深度 -3/-3/-2 dB、
-# Q=1（宽到不留下"被挖了个洞"的听觉痕迹）。
+# 这是官方 voiceover carve 的**静态保守版**：三段 peaking 窄带衰减，只削人声占
+# 住的中高频，床铺其余部分不动（见官方 audio-effects 参考）。
+# 取 1.6k / 2.5k / 4k、-3/-3/-2 dB、Q=1：官方明说"真正掩蔽人声的频段更高"，
+# 按能量选会一直选到基频（160/250 Hz），那里只是把床铺削薄。
 _DUCK_BANDS = ((1600.0, -3.0, 1.0), (2500.0, -3.0, 1.0), (4000.0, -2.0, 1.0))
 
 
@@ -2118,25 +2105,19 @@ def generate_html(manifest, audio_src, images=None,
 
         字幕/内容呈现模式不作为参数暴露；固定为 verse（歌词式句子流）。
     """
-    # 先归一化画幅，再按对应画幅取默认画布。否则库调用方省略
-    # width/height 时，即使传入 landscape 也会拿到竖屏尺寸。
+    # 先归一化画幅再取默认画布：否则传 landscape 也会拿到竖屏尺寸。
     aspect = normalize_aspect(aspect)
     tpl = load_template()
     if width is None or height is None:
         width, height = get_canvas(aspect)
 
-    # ── 配图/视频归一化（只做一次）─────────────────────────────────
-    # 后续渲染阶段都复用这份结果，同一输入不经过第二次归一化。
+    # ── 配图/视频归一化（只做一次，后续阶段复用这份结果）───────────
     images = images or {}
-    # 接续页自动盖章：判据唯一真源在 `_stage_carry.infer_stage_keep`。放在这里是为了
-    # **渲染端与生成期看到同一个答案**——生成期（gen_hyperframes.director_prepare）
-    # 拿它决定"烘不烘焙"，渲染端拿它决定"要不要擦进来 / 重播入场"。两边各判一次
-    # 就一定会分家，而分家的症状是"烘了却照样擦进来"，烘焙的意义正好被抵消掉。
+    # 接续页自动盖章，判据唯一真源在 `_stage_carry.infer_stage_keep`：生成期据此
+    # 决定"烘不烘焙"、渲染端据此决定"要不要擦进来"，两边各判一次必然分家。
     #
-    # 必须在归一化**之前**盖章：判据读的 `inline_svg` / `director` / `stage` 是
-    # images.json 的顶层键，归一化会把它们搬进 `opts`——盖章后再归一化，`stage`
-    # 跟着进 opts，正是渲染端 `_is_keep_page` 读的位置；反过来实现过一次（先归一
-    # 化再盖章），判据条条落空、盖出来的 `stage` 还写在顶层，渲染端永远看不见。
+    # 必须在归一化**之前**盖章：判据读的是 images.json 顶层键，归一化会把它们搬进
+    # `opts`——顺序反了判据条条落空，盖出来的 stage 渲染端永远看不见。
     infer_stage_keep(images, [seg["id"] for seg in manifest["segments"]])
     images = _normalize_images(images)
     total_dur = manifest["total_duration"]
@@ -2190,11 +2171,9 @@ def generate_html(manifest, audio_src, images=None,
         clip["win_start"] = round(max(0.0, s_i - clip["wipe"]), 2)
         win_end = clips[i + 1]["start"] if i + 1 < len(clips) else round(total_dur, 2)
         clip["vis"] = round(win_end - clip["win_start"], 2)
-        # line 档的剥离挂在被犁走的旧卡上：本卡揭开窗口 [win_start, +wipe]
-        # 就是上一页的"被推走"窗口（旧卡窗口恰铺到本段音频起点，补间在窗内）。
-        # wipe 被 gap 钳到 0 的段没有扫过的空间，线与剥离都不生成（瞬间切）。
-        # 上一页是整页画布段时也不剥：把一张活diagram 像纸一样掀走正是"演"要取代的 PPT 转场，
-        # 画布页退场同样走硬切（被下一页直接盖住）。
+        # line 档的剥离挂在被犁走的旧卡上（旧卡窗口恰铺到本段音频起点）。
+        # wipe 被 gap 钳到 0 就不生成线，瞬间切。上一页是画布段也不剥——把活的
+        # diagram 像纸一样掀走正是"演"要取代的 PPT 转场，画布页一律硬切。
         #
         # gets_line 与 gets_peeled 在这里一次算定，是"这一页挂不挂引导线"的**唯一
         # 真源**：线元素由 _reveal_line_html 注入、它的补间由 _line_timeline_lines 生成、
@@ -2261,17 +2240,15 @@ def generate_html(manifest, audio_src, images=None,
     # ── Subtitle cues ──────────────────────────────────────────────
     sub_cues_js = _build_subtitle_cues(sentences)
 
-    # 收束变量只在真会演时才改写（0 值已在上下文里写好，_fill 的替换串同长，
-    # 不存在的占位符不会被误替换）。
+    # 只在真会演时改写收束变量（0 值已在上下文写好，替换串同长）。
     if _settle_s > 0:
         rc.root_vars = rc.root_vars.replace(
             "--ctv-ved-settle:0.00s;", f"--ctv-ved-settle:{_settle_s:.2f}s;")
     gsap_code = "\n  ".join(gsap_lines)
 
     # ── 装配最终 HTML ────────────────────────────────────
-    # 骨架在 templates/composition.html。样式与脚本各自装配好后填入占位符；
-    # CSS 走 <style> 内联（无头浏览器首帧不能等外链 CSS，否则白屏错版），
-    # GSAP 是脚本、可以外链（vendor/ 相对路径）。
+    # CSS 必须内联 <style>（无头浏览器首帧等不了外链，否则白屏错版）；
+    # GSAP 是脚本，可以外链 vendor/。
     style = _fill(_load_asset("composition.css"), {
         "__CTV_ROOT_VARS__": rc.root_vars,
     }, "composition.css")

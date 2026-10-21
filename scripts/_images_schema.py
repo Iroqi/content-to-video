@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """images.json 与媒体路径的契约。
 
-配图由 agent/人工产出、渲染端按这份映射消费；坏路径会让 HTML 静默产出
-空白裂图，所以引用完整性在 load_images_json / validate_images_json
-fail-fast，路径语义（禁绝对路径/越出项目根）由 validate_relative_project_path
-统一收口。媒体类型判定（扩展名 → image/video/gif）也在这里，与
-html_renderer 的媒体分支共用。
+坏路径会让 HTML 静默产出裂图，所以引用完整性在 load_images_json /
+validate_images_json fail-fast；路径语义由 validate_relative_project_path 收口。
+媒体类型判定（扩展名 → image/video/gif）也在这里，与 html_renderer 共用。
 """
 import os
 import re
@@ -26,9 +24,8 @@ def validate_relative_project_path(src, where):
     norm = src.replace("\\", "/")
     if "\x00" in norm:
         raise ValueError(f"{where} 不得包含 NUL 字节")
-    # 注意：Windows 的 ntpath.isabs("/tmp/a.png") 返回 False——盘符缺省的
-    # POSIX 绝对路径会被误判成相对路径，下游 abspath 再解析到 <当前盘>:\tmp。
-    # 所以任何前导 "/"（含 UNC 的 "//"）都必须显式拦掉，不能只靠 isabs。
+    # 任何前导 "/" 都要显式拦：ntpath.isabs("/tmp/a") 返回 False（盘符缺省），
+    # 下游 abspath 会解析到 <当前盘>:\tmp。
     if (os.path.isabs(norm) or norm.startswith("/")
             or re.match(r"^[A-Za-z]:/", norm)
             or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", norm)):
@@ -43,66 +40,45 @@ def validate_relative_project_path(src, where):
             depth += 1
     return norm
 
-# images.json 条目里渲染端**真正会读**的键。
-# src/type/poster/loop/muted/autoplay/playsinline → html_renderer 的媒体分支；
-# 其余五个是 provenance 记账字段，画面不读、但按 SKILL.md 要求留存。
-# 之外的键（`position`/`fit`/`alt` 这类凭空发明的写法）过去会被静默丢掉：
-# "我明明写了 alt，画面上什么都没有"变成无解的困惑。判定收口在这一个函数，
+# images.json 条目里渲染端**真正会读**的键。之外的键一律 warn 点名
+# （`position`/`fit`/`alt` 这类凭空发明的写法不该被静默丢掉）。
 # warn 只在预检（validate_images_json）打；html_renderer._normalize_images
-# 契约要求入参已过本预检，不重复打（见该函数 docstring）。
+# 要求入参已过本预检，不重复打。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director：SVG 的"时间轴同步动画"编排（见 references/canvas.md
-    # 「SVG 动画：两档」）。写了它这张 SVG 才走净化内联，否则仍是 <img>。
+    # director：写了才走净化内联（见 references/canvas.md「SVG 动画：两档」）。
     "director",
-    # stage："keep" = 跨段场景延续（persistent stage，见 _stage_carry）。写在**接续页**
-    # 上：本页画面从上一页演完的样子起跑。只有这一个取值，所以是枚举而不是布尔——
-    # 将来要"只搬相机不搬元素态"这类档位时不必把 keep:true 的语义改掉。
+    # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
+    # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
     "stage",
-    # inline_svg：**内部键**，由 gen_hyperframes 在读盘净化后回填，渲染端消费。
-    # 它进 MEDIA_ENTRY_KEYS 只是为了不被 unknown_media_keys 误报；用户手写在
-    # images.json 里会被 validate_images_json 直接拒（见下），否则等于开了一个
-    # "绕过净化、把任意字符串塞进成片 DOM"的注入口。
+    # inline_svg：**内部键**，由 gen_hyperframes 净化后回填。进这个集合只为不被
+    # unknown_media_keys 误报；用户手写会被 validate_images_json 直接拒（否则等于
+    # 开了"绕过净化、把任意字符串塞进 DOM"的注入口）。
     "inline_svg",
-    # 视频音轨四件套：volume/fade_in/fade_out/media_start。前三个管"这条原声在
-    # 成片里多响、怎么进出"，media_start 管从源片第几秒起播。它们只对 video
-    # 成立（ImageGen 图/SVG/GIF 没有音轨，也没有可 trim 的时间轴），写在非 video 上
-    # 一律按"写了不会生效"拒掉，口径与 director/stage 一致。
-    # 为什么必须显式开这四个口子：<video> 的音轨是唯一一条**不经过第 2 步
-    # TTS、却照样混进成片**的声音（见 html_renderer._media_html）。不给它增益
-    # 旋钮，"要了原声"就等于"原声压着口播一起播"，而这条链上没有任何报错。
+    # 视频音轨四件套：前三个管响度与进出，media_start 管从第几秒起播。只对
+    # video 成立，写在非 video 上按"写了不会生效"拒掉（口径同 director/stage）。
+    # <video> 的音轨是唯一不经过 TTS 却混进成片的声音（见 html_renderer._media_html），
+    # 没增益旋钮就等于原声压着口播一起播，且链上没有任何报错。
     "volume", "fade_in", "fade_out", "media_start",
-    # duck：让路开关（默认开）。它与 volume 管的不是同一件事——volume 压的是整
-    # 条轨的响度，duck 只压人声占住的那几档频段，把环境声与音乐的厚度留下来。
-    # 默认开是因为"要了原声"的默认结果（原声与口播等响、互相盖）本来就是错的，
-    # 不该由人记住"还要额外写点什么"才对。真要让原声当主体（采访原声、现场
-    # 同期声）就显式写 duck:false 把它关掉。
+    # duck：让路开关，默认开。volume 压整条轨的响度，duck 只压人声占住的频段。
+    # 要原声当主体（采访、同期声）显式写 duck:false。
     "duck",
-    # drift：逐段覆盖静态图的运镜（Ken Burns，见 html_renderer._image_drift_lines）。
-    # false = 这一段完全不动（正对着镜头的人脸、图表页这类，"推近一点"反而是干扰）；
-    # 对象 = 只改你写的那几项，其余走模板 animation.imageEntrance.drift。
-    # 为什么要开这个口子：模板里那四个数是"全片平均手感"，而一段 20 秒的访谈特写
-    # 和一段 4 秒的数据页想要的取景本来就不一样。不给逐段旋钮，作者只有两个选择——
-    # 全片一个手感，或者绕开模板改常量（那等于改所有项目）。
+    # drift：逐段覆盖静态图运镜（见 html_renderer._image_drift_lines）。
+    # false = 这段完全不动；对象 = 只改写的几项，其余走模板 drift。
     "drift",
 })
 
-# Hyperframes 的音轨增益上限：data-volume 超过 3.98（+12dB）不再被放大。
-# 抄自官方 html-schema 契约，不在这里另立一个数——将来上游改了上限，
-# 只改这一处常量，报错文案与渲染端随即跟着走。
+# Hyperframes 的音轨增益上限（+12dB），抄自官方 html-schema 契约，不另立数。
 MEDIA_VOLUME_MAX = 3.98
 
-# 视频原声的**让路默认增益**：关掉 muted 却没写 volume 时，渲染端按它落
-# data-volume（见 html_renderer._video_audio_attrs）。取 0.25 是实测可听档的
-# 下沿（0.15~0.3 还能听清旁白）——默认那一版必须是不盖旁白的那一版：把 1.0
-# 留作默认等于默认交付一支旁白被压住的片子。想要别的响度就显式写 volume，
-# 写了就不再自动兜底。
+# 关掉 muted 却没写 volume 时的默认增益（见 html_renderer._video_audio_attrs）。
+# 0.25 是实测可听下沿（0.15~0.3 旁白仍清楚）；1.0 作默认等于默认交付一支旁白
+# 被压住的片子。显式写 volume 就不再兜底。
 MEDIA_DUCK_VOLUME = 0.25
 
-# 视频音轨四件套的取值范围：(下限, 上限, 报错误文案里的人话)。上限 None = 不封顶。
-# 上限只有一个（volume），其余三项只要非负——"淡入比整段还长"这类不合理不是
-# 取值越界，而是与片段时长的关系，那件事只有渲染端知道段有多长，交给它 warn。
+# 取值范围：(下限, 上限, 文案)。None = 不封顶。"淡入比整段还长"不是取值越界，
+# 而是与片段时长的关系，交给渲染端 warn。
 _VIDEO_AUDIO_OPTS = {
     "volume": (0.0, MEDIA_VOLUME_MAX, "增益倍数，1 = 0 dB"),
     "fade_in": (0.0, None, "淡入秒数"),
@@ -110,18 +86,14 @@ _VIDEO_AUDIO_OPTS = {
     "media_start": (0.0, None, "从源片第几秒起播"),
 }
 
-# 扩展名 → 媒体类型。gif 与 image 同档（都走 <img>，语义上 gif 就是一张会自己
-# 动的静态图），单列出来只为让 images.json 能显式写 type:"gif" 而不被拒。
+# gif 与 image 同档（都走 <img>），单列只为让 images.json 能显式写 type:"gif"。
 MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
 def is_svg_path(path):
-    """这条路径是不是 SVG（"能不能被净化内联、有没有图内命名元素"那一问）。
-
-    生成端有三处各自问过它（缺图探测跳过、整页画布段必须 SVG、渲染端加 bare-media
-    类），契约层还有两处（director / stage 只挂在 SVG 上）。五处各写一遍
-    endswith/splitext 就是五份真源：将来认一个 .svgz、或把大小写规则改一下，
-    只改到的一处会和其他四处分家，症状是"契约说能挂 director、渲染端却不内联"。
+    """这条路径是不是 SVG。五处（缺图探测/整页画布/renderer bare-media/director/
+    stage）共用这一份：各写一遍 splitext 时，改了大小写规则只会改到其中一处，
+    症状是"契约说能挂 director、渲染端却不内联"。
     """
     return os.path.splitext(str(path).lower())[1] == ".svg"
 
@@ -173,14 +145,12 @@ _RELATIVE_AT_TIME_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 def _validate_tween_vars(vars_, where):
     """GSAP 补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
 
-    这些字典会被 json.dumps 成 JS 对象字面量注入内联脚本——JSON 转义挡住了
-    字符串注入，但回调键（onStart/onUpdate/…）本身不是注入而是"在渲染页里
-    执行任意 JS 逻辑"的入口，且信源不可信（SKILL.md 核心规则），一律不收。
-    允许嵌套 dict（GSAP 的 attr:{} 等非 CSS 属性走它），逐层校验叶子是标量。
+    这些字典会被 json.dumps 注入内联脚本：JSON 转义挡住了字符串注入，但 on*
+    回调键等于在渲染页里执行任意 JS，一律不收。允许嵌套 dict（attr:{}），逐层
+    校验叶子是标量。
 
-    控制旋钮（_PAYLOAD_CONTROL_KEYS）判在这里而不是调用点判一次：调用点只认顶层，
-    `{"to": {"attr": {"duration": 2}}}` 就漏过去，把 duration="2" 写进 SVG 元素——
-    递归的这一层才是"每一层都不许有"的正确位置。
+    控制旋钮（_PAYLOAD_CONTROL_KEYS）必须在这一层判：调用点只认顶层，
+    `{"to": {"attr": {"duration": 2}}}` 会漏过去。
     """
     if not isinstance(vars_, dict):
         raise ValueError(f"{where} 必须是对象（GSAP 补间变量）")
@@ -227,8 +197,8 @@ def _validate_tween_leaf(v, where):
 def _validate_morph(morph, where):
     """director 步骤的 morph：一条同拓扑 path 的形变（from→to 只换坐标）。
 
-    同拓扑（命令字母序列 + 每条数值个数一致）在这里就 fail-fast：不同拓扑到生成期
-    只能报错、且人早已把 JSON 写完，报错点越靠契约层越好。真·形变核见 _path_morph。
+    同拓扑（命令字母序列 + 每条数值个数一致）在契约层就拦，别等生成期。核见
+    _path_morph。
     """
     if not isinstance(morph, dict):
         raise ValueError(f"{where} 必须是对象 {{\"from\": path_d, \"to\": path_d}}（实际: {type(morph).__name__}）")
@@ -246,10 +216,9 @@ def _validate_morph(morph, where):
 def _validate_count(count, where):
     """director 步骤的 count：一个 <text> 的数字滚动（from→to 随时间缓动）。
 
-    渲染端把它展开成"代理对象补间 + onUpdate 写 textContent"——onUpdate 是这里
-    生成的、只读我们校验过的标量，不是信源塞进来的回调（那类仍被 _validate_tween_vars
-    一律拒）。字段全可选除 to：decimals 控制小数位，prefix/suffix 裹住数字（如
-    "≈" 前缀、"×10²³" 后缀）。
+    渲染端展开成"代理对象补间 + onUpdate 写 textContent"——那个 onUpdate 是我们
+    生成的，不是信源塞进来的回调。除 to 外全可选：decimals 控制小数位，
+    prefix/suffix 裹数字。
     """
     if not isinstance(count, dict):
         raise ValueError(f"{where} 必须是对象 {{\"to\": 数字, ...}}（实际: {type(count).__name__}）")
@@ -276,9 +245,8 @@ def _validate_count(count, where):
 
 def _validate_type(typ, where):
     """director 步骤的 type：打字机逐字揭示——把 <text> 里现成的整段文本按进度
-    逐字写回。参数刻意只留空对象 `{}`：写多少字取决于 SVG 里那条 <text> 的文本长度
-    （渲染端运行时读 textContent），节奏由 step 级 duration/ease 控制，没有别的旋钮
-    要校。想改揭示哪段文字，直接改 SVG 的 <text> 内容即可，不必在这里配。
+    逐字写回。只收空对象 `{}`：字数取自那条 <text>（运行时读 textContent），节奏
+    走 step 级 duration/ease。
     """
     if not isinstance(typ, dict):
         raise ValueError(f"{where} 必须是空对象 {{}}（节奏用 step 级 duration/ease 调；"
@@ -292,8 +260,8 @@ def _validate_type(typ, where):
 def _validate_stagger(stagger, where):
     """director 步骤的 stagger：一条 step 命中一组元素时，逐个之间的时间间隔。
 
-    收两种写法：数字（= 每个间隔秒数，GSAP 的 stagger:0.1），或对象（GSAP 原生
-    stagger 配置：each / amount / from / grid / ease）。值仍走标量/数组校验、禁 on*。
+    收数字（每个间隔秒数）或对象（GSAP stagger 配置：each/amount/from/grid/ease）。
+    值走标量/数组校验、禁 on*。
     """
     if not isinstance(stagger, dict):
         if not is_finite_number(stagger):
@@ -327,15 +295,12 @@ def _validate_stagger(stagger, where):
 def _validate_repeat_yoyo(step, where):
     """repeat / yoyo 的取值判据——**唯一真源**。
 
-    images.json 的 `director.steps[]` 与 canvas_kit 的 spec 元素都调这一份（spec
-    侧另加"只挂内容元素"、director 侧另加"必须挂在可重放的步上"，那两条是各自的
-    上下文，判据本身只有这一份）。两处各写一遍的代价在**改判据那天**才付：改了
-    "repeat 允许到几"，只有改的那一处生效，另一处照旧放行一个渲染端不认的值
-    （或反过来拒一个合法值），而两边报错文案一模一样，作者分不清是哪道门在说话
-    ——同文件里的 stagger / count 早已是共用一份，这两条当时漏了。
+    images.json 的 `director.steps[]` 与 canvas_kit 的 spec 元素共用这一份（各自
+    只另加上下文约束）。两处各写一遍会在改判据那天分家：一处放行、一处拒收，
+    报错文案还一模一样。
 
-    整数而非小数是故意的：GSAP 吃 0.5 这种"半遍"，而跨段接续与出画自查都要按
-    "最后停在哪一头"说话，半遍收尾在两者里都是猜。
+    repeat 只收整数：GSAP 吃 0.5 这种半遍，而跨段接续与出画自查都要说"最后停在
+    哪一头"，半遍收尾在两者里都是猜。
     """
     if "repeat" in step:
         v = step["repeat"]
@@ -516,14 +481,12 @@ def validate_images_json(data):
         {"seg1": {"src": "images/seg1.png"},
          "seg2": {"src": "images/seg2.svg", "director": {...}},
          "seg3": {"src": "images/seg3.gif"}}
-      "type" 可选（auto=按扩展名判断；image/video/gif 显式指定），其余字段均为
-      可选（静态图只需 src）。不接受裸字符串路径。gif 也走 <img>，与 image 同档。
+      "type" 可选（auto=按扩展名；image/video/gif 显式指定），其余字段可选
+      （静态图只需 src），不接受裸字符串路径。
 
-    契约层只校验**结构**（路径 / 类型 / 锚点 / 尺寸这类），不读图像像素，因此
-    **不要求图片不透明**——带 alpha 通道的透明 PNG/WEBP 与 SVG 等价，渲染端当 <img>
-    放进同一 scene 后透明处透出主题渐变与 accent 辉光，可直接叠在画布背景上（无需抠图）；
-    "本该透明却被出图端填了不透明底色"这种信源问题不在本层拦截（见 imagery.md
-    「透明通道」一节）。别为"防盖背景"而在契约层加 opacity 校验，那会误伤合法的透明前景图。
+    只校验结构，不读像素，因此**不要求图片不透明**：透明 PNG/WEBP 与 SVG 等价，
+    透明处会透出主题渐变与 accent 辉光。别为"防盖背景"加 opacity 校验——那会误伤
+    合法的透明前景图（信源问题见 imagery.md「透明通道」）。
     """
     if not isinstance(data, dict):
         raise ValueError("images.json 顶层必须是对象 {segment_id: 媒体对象}")
@@ -534,11 +497,8 @@ def validate_images_json(data):
     if errs:
         raise ValueError("images.json 有{} 处问题：\n{}".format(
             len(errs), "\n".join(errs)))
-    # 未知键：清单外键会跟着进 opts 而无人读（静默丢 = "明明写了 alt，画面
-    # 上什么都没有"变成无解的困惑）。在**预检**阶段点名叫出，与渲染端
-    # （html_renderer._normalize_images 的丢键路径）同一判据，但只打一次——
-    # 渲染端不再重复（见 _normalize_images 注释）。不阻断：封闭字段集只对
-    # source JSON 强制，images.json 保留宽松（历史写法多，先提醒不拦）。
+    # 未知键在**预检**点名叫出，与渲染端丢键路径同一判据但只打一次。不阻断：
+    # 封闭字段集只对 source JSON 强制，images.json 保留宽松。
     for key, value in data.items():
         if isinstance(value, dict):
             unknown = unknown_media_keys(value)
@@ -555,11 +515,8 @@ def validate_images_json(data):
 def _collect(errs, what):
     """跑一项检查，把它的 ValueError 收进 errs 而不是中断整段。
 
-    只收 ValueError：别的异常（TypeError 之类）是代码有 bug，攒起来只会让
-    报错变成一堆噪声。
-
-    按行摊平：一组检查内部可能一次报多条（四个播放开关、四个音轨键各自独立），
-    不摊平的话开头那句"N 处问题"会少数落。
+    只收 ValueError（TypeError 之类是代码 bug）。按行摊平：一组检查可能一次报
+    多条，不摊平开头那句"N 处问题"会少数落。
     """
     try:
         what()
@@ -611,16 +568,9 @@ def _validate_entry(key, value, errs):
 def _check_video_only_opts(key, value, src):
     """poster 与四个播放开关：只对 video 成立，写在非 video 上一律拒。
 
-    与 `_check_audio_opts`（volume/fade_*/media_start）同一条口径，而且理由
-    是同一个：**渲染端的 `<img>` 分支只输出 `src`**（见
-    `html_renderer._media_html`），这几个键写在 ImageGen 图/SVG/GIF 上会被静默丢弃，
-    没有 warn、没有 unknown-key 提示——它们都在 MEDIA_ENTRY_KEYS 里，"写了
-    poster 但封面根本没出现"会变成无解的困惑。
-
-    早先只有音轨四件套做了 video-only 门禁，这一组漏了：同一个文件里两种
-    口径，作者从报错文案里学到的规则就是错的。
-
-    调用方保证 src 是字符串。
+    与 `_check_audio_opts` 同一口径：渲染端 `<img>` 分支只输出 `src`（见
+    `html_renderer._media_html`），这些键写在非视频上会被静默丢弃——它们都在
+    MEDIA_ENTRY_KEYS 里，连 unknown-key 提示都没有。调用方保证 src 是字符串。
     """
     if _is_video_src(value, src):
         return
@@ -792,10 +742,9 @@ def _check_director(key, value, src):
 def _check_stage(key, value, src):
     """stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
 
-    契约层只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有
-    读得到 manifest 的 gen_hyperframes 判得了，那边按段落点名报错。
-    不要求本页自己写 director：一段演完、下一页只是"停在那幅画上说话"是合法演法，
-    那种页面 steps 为空，画面照常接续（inline_svg 由接续烘焙给出，不靠本页 steps）。
+    只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有读得到
+    manifest 的 gen_hyperframes 判得了。本页可以不写 director：steps 为空的页面照样
+    接续（inline_svg 由接续烘焙给出）。
     """
     if "stage" not in value:
         return
@@ -821,9 +770,8 @@ _DRIFT_KEYS = {"ratePerSec": (0.0, None, "每秒推近的比例（0.006 = 每 10
 def _check_drift(key, value):
     """drift：逐段覆盖静态图的运镜。false 关掉，或只写要改的那几个数。
 
-    取值区间与模板同一套语义（见 html_renderer._image_drift_lines 的三条约束）：
-    速率与 pan 幅度非负、pan ≤ 1。pan > 1 不是"再推远一点"，而是**露底**——
-    推近让出的盈余就那么多，多出来的位移会把图边缘拖进槽位里。
+    区间与模板同一套语义（见 html_renderer._image_drift_lines 的三条约束）：
+    速率与 pan 非负、pan ≤ 1——pan > 1 不是"再推远"，而是把图边缘拖进槽位（露底）。
     """
     if "drift" not in value:
         return

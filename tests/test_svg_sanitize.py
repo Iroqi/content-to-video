@@ -50,6 +50,82 @@ class WallclockDefinitions(unittest.TestCase):
         self.assertIn(".a{fill:red}", out)
 
 
+class AtRulesAndStrings(unittest.TestCase):
+    """@import / @font-face / @media 与字符串字面量：删的是"指令"，不是"这一行"。"""
+
+    def test_import_does_not_eat_the_rule_after_it(self):
+        """@import 只吃指令本身，紧跟其后的规则必须留着。
+
+        证伪：旧写法 `@import[^;]*;?` 是贪婪的——`@import "a.css"` 漏了分号时一路
+        吃到下一个分号，中间那条 `.a{fill:red}` 整条消失。**例外是漏分号**：那时按
+        CSS 语法 `@import "a.css" .a{…}` 本来就是一条（坏）at-rule，浏览器同样不认
+        `.a`，删掉并出声是对的——所以那一档只断言"出声了"。
+        """
+        out = _clean('@import "a.css";.a{fill:red}')
+        self.assertNotIn("a.css", out)
+        self.assertIn(".a{fill:red}", out)
+        out = _clean("@import url(https://evil.com/x.css);.a{fill:red}")
+        self.assertNotIn("evil.com", out)
+        self.assertIn(".a{fill:red}", out)
+
+    def test_import_without_semicolon_swallows_the_next_rule_but_says_so(self):
+        """漏分号时整块被删（与浏览器同判），但必须留一条 note 说明吃掉了什么。"""
+        notes = []
+        out = S._clean_style_text('@import "a.css"\n.a{fill:red}', notes)
+        self.assertNotIn("a.css", out)
+        self.assertTrue(any("整块已删除" in n for n in notes), notes)
+
+    def test_font_face_block_goes_whole_and_keeps_the_next_rule(self):
+        """@font-face 是整块：块体（可能带 url(data:…)）必须一起删，下一条规则留着。
+
+        证伪：只删块头时，块体里的 `src:url(...)` 变成裸声明，还会把后面的选择器
+        一起拖进上一条规则里。
+        """
+        out = _clean('@font-face{font-family:X;src:url(data:font/woff2;base64,AAA)}'
+                     '.a{fill:red}')
+        self.assertNotIn("base64", out)
+        self.assertNotIn("font-family", out)
+        self.assertIn(".a{fill:red}", out)
+
+    def test_media_block_goes_whole_even_with_braces_in_a_string(self):
+        """@media 整块删；块体里的字符串花括号不参与配平。
+
+        证伪：套 `_outside_strings` 按串切段时，块体被剖成几份、配平从半截开始，
+        `@media (x){.a{content:"{}"}}` 会把后面那条 `.c` 一起吞掉（实测）。
+        """
+        out = _clean('@media (max-width:600px){.a{content:"{}";fill:url(http://e/x)}}'
+                     ".c{fill:#0f0}")
+        self.assertNotIn("@media", out)
+        self.assertNotIn("http://e", out)
+        self.assertIn(".c{fill:#0f0}", out)
+
+    def test_prefixed_block_at_rule_goes_whole_too(self):
+        """带厂商前缀的块头同样整块删：只删题头会把块体里的规则放进全局。"""
+        out = _clean("@-moz-document url(x){.a{fill:red}} .swatch{fill:#0f0}")
+        self.assertNotIn("@-moz-document", out)
+        self.assertNotIn(".a{fill:red}", out)
+        self.assertIn(".swatch{fill:#0f0}", out)
+
+    def test_string_literals_are_never_rewritten(self):
+        """字符串字面量里的 @import / @media / 花括号是内容，不是指令。
+
+        证伪：不区分字符串时，`content:"@import x;"` 被当成真指令删掉（content 变空），
+        `content:"@media{}"` 里的花括号被当成规则体配对，把整条规则删掉。实拍文案与
+        图内标注常这样自嘲地引用 CSS。
+        """
+        css = '.a{content:"@import \\"x\\";"} .b{content:"@media{}"} .c{fill:red}'
+        out = _clean(css)
+        self.assertIn('content:"@import', out)
+        self.assertIn('content:"@media{}"', out)
+        self.assertIn(".c{fill:red}", out)
+
+    def test_unbalanced_block_only_loses_its_head(self):
+        """括号没配平时只删块头，剩余文本原样保留（不越权修作者的 CSS）。"""
+        out = _clean("@media print{.a{fill:red}")
+        self.assertNotIn("@media", out)
+        self.assertIn(".a{fill:red}", out)
+
+
 class ExternalUrls(unittest.TestCase):
     def _sanitize(self, markup):
         """过一遍整份 SVG 的净化器，返回 (产物, notes)。"""

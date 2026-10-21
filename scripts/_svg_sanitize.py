@@ -52,6 +52,15 @@ _EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re
 # 存在、在浏览器眼里成立（Chromium 与 Firefox 均实测执行）。
 _CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(\r\n|[\r\n\f])|(.))",
                          re.S)
+# CSS 字符串字面量（含转义，整段原子）。所有"按标点扫描"的清理都必须把串当作
+# 一个整体：`content:"a;b}"` 里的 `;`/`}`、`content:"@import"` 里的 `@` 都不是语法。
+# 串尾未闭合时吃到串末——作者写坏的 CSS 原样保留，净化不越权替他修。
+_CSS_STRING = re.compile(r'"(?:[^"\\]|\\.)*"?|\'(?:[^\'\\]|\\.)*\'?', re.S)
+# 单条 at-rule（CSS Syntax §5.4：`@` + 关键字 + prelude，到 `;` 或 `{` 为止）。
+# `;` / `{}` 是块的边界，prelude 里不会真出现（要出现只可能在串里，而串由
+# _drop_at_rules 整颗跳过）。关键字按 `@[\w-]+` 取：`@-webkit-keyframes` 也要认，
+# 否则整块会被当成"不带块体的指令"，只删题头、块体里的规则落进全局。
+_AT_RULE = re.compile(r"@[\w-]+[^{};]*")
 # CSS 注释：下面每条判定（@import / 外链 / 墙钟 / @keyframes）都只看真 CSS，所以注释
 # 先剥。不剥的后果实测过：`/* 用 @keyframes 做循环 */ .a{fill:red}` 里那条 .a 会被
 # 当成 @keyframes 的规则体吃掉。注释无语义，剥掉不损失任何东西。
@@ -411,30 +420,100 @@ def _strip_keyframes(css):
     return "".join(out)
 
 
+def _outside_strings(pattern, css, fn):
+    """对 css 里每个字符串字面量**之外**的片段执行 fn（串原样保留）。"""
+    parts, last = [], 0
+    for m in pattern.finditer(css):
+        parts.append(fn(css[last:m.start()]))
+        parts.append(m.group(0))
+        last = m.end()
+    parts.append(fn(css[last:]))
+    return "".join(parts)
+
+
+def _at_key(head):
+    """at-rule 块头 → note 里那个名字（只取 `@` 与关键字，别把整段 prelude 抄进去）。"""
+    return head.strip().split(None, 1)[0].rstrip("{:")
+
+
+def _drop_at_rules(css, notes):
+    """删掉所有 at-rule，且**不碰字符串字面量**。
+
+    这里不能套 `_outside_strings`：它要求 pattern 的匹配边界与"串边界"一致，而
+    at-rule 块是任意长的（块体里本来就有串），一旦按串切段，块体被剖成几份、配平
+    从半截开始——实测 `@media (x){.a{content:"{}"}}` 会把后面的规则一起吃掉。
+    所以整条扫描：自己认串（整颗跳过），只在串外认 at-rule。
+
+    - 带块体的（`@media …{}` / `@supports …{}` / `@font-face{}`）：连块头带块体
+      一起删。只删块头会让块体里的选择器变成全局规则，作用于作者没期望的元素；
+      `@media` 在成片里本就没有意义（SVG 按画布整体缩放，视口宽度不是画图坐标系）。
+    - 不带块体的（`@import …;` / `@charset …;` / `@namespace …;`）：只删指令。
+    """
+    out, i, n = [], 0, len(css)
+    while i < n:
+        ch = css[i]
+        if ch in "\"'":
+            m = _CSS_STRING.match(css, i)
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        m = _AT_RULE.match(css, i) if ch == "@" else None
+        if not m:
+            out.append(ch)
+            i += 1
+            continue
+        if css[m.end():m.end() + 1] != "{":
+            # 无块体：指令到 `;` 为止，`;` 一起吃掉（作者漏写就算了）。
+            j = m.end() + (css[m.end():m.end() + 1] == ";")
+            notes.append(f"<style> 里的 {_at_key(m.group(0))} 已删除"
+                         "（外链资源不进成片）")
+            i = j
+            continue
+        depth, j = 1, m.end() + 1
+        while j < n and depth:
+            depth += {"{": 1, "}": -1}.get(css[j], 0)
+            j += 1
+        if depth == 0:
+            why = ("（作者漏了分号，按 CSS 语法它已吞进下一条规则）"
+                   if "\n" in m.group(0) else "（成片里要么无意义，要么是外部资源）")
+            notes.append(f"<style> 里的 {_at_key(m.group(0))} 整块已删除{why}")
+            i = j
+        else:
+            # 括号没配平 = 作者写坏了 CSS：只删块头，剩余文本原样保留。
+            notes.append(f"<style> 里的 {_at_key(m.group(0))} 块头已删除"
+                         "（括号没配平，剩余文本原样保留）")
+            i = m.end()
+    return "".join(out)
+
+
 def _clean_style_text(css, notes):
-    """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）与外链 url()/@import。"""
+    """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）、外链 url()/@import
+    与其余整块 at-rule。
+
+    顺序：剥注释 → 还原 CSS 转义 → at-rule（整块删，自带串识别）→ @keyframes →
+    其余四条按"串外片段"处理。前两步与浏览器解析 CSS 的前置处理同序，否则
+    `\\75rl(https://…)`、`\\61nimation:x` 在正则眼里不存在、在浏览器眼里成立。
+    """
     if not css:
         return css
-    # 先剥注释再还原转义，与浏览器一致：`\75rl(https://…)`、`\61nimation:x`
-    # 在浏览器眼里就是外链与墙钟声明，还原必须赶在所有判定之前。
-    out = _css_unescape(_CSS_COMMENT.sub("", css))
-    if re.search(r"@import", out, re.I):
-        out = re.sub(r"@import[^;]*;?", "", out, flags=re.I)
-        notes.append("<style> 里的 @import 已删除（外链资源不进成片）")
-    if _EXT_URL.search(out):
-        out = _EXT_URL.sub("url(about:blank)", out)
-        notes.append("<style> 里的外链 url() 已中和")
-    if _WALLCLOCK_CSS.search(out):
-        out = _WALLCLOCK_CSS.sub("", out)
-        notes.append("<style> 里的 CSS animation/transition 声明已剥离"
-                     "（墙钟动画在逐帧渲染里不可复现；要动请用 director 补间）")
+    out = _drop_at_rules(_css_unescape(_CSS_COMMENT.sub("", css)), notes)
     if _KEYFRAMES_AT.search(out):
         out = _strip_keyframes(out)
         notes.append("<style> 里的 @keyframes 规则已剥离"
                      "（墙钟动画的定义；要动请用 director 补间）")
-    # 声明被剥掉后留下的空壳选择器（.a{}）一并清掉，不留死规则。
-    out = re.sub(r"[^{}]*\{\s*\}", "", out)
-    return out
+
+    def strip(s):
+        if _EXT_URL.search(s):
+            s = _EXT_URL.sub("url(about:blank)", s)
+            notes.append("<style> 里的外链 url() 已中和")
+        if _WALLCLOCK_CSS.search(s):
+            s = _WALLCLOCK_CSS.sub("", s)
+            notes.append("<style> 里的 CSS animation/transition 声明已剥离"
+                         "（墙钟动画在逐帧渲染里不可复现；要动请用 director 补间）")
+        # 剥空的规则体连选择器一起清掉（`.a{animation:x 1s}` 剥完只剩 `.a{}`）
+        return re.sub(r"(?m)^[ \t]*[^{}\n]*\{[ \t\r\n]*\}[ \t]*\n?", "", s)
+
+    return _outside_strings(_CSS_STRING, out, strip)
 
 
 def _clean_style_attr(el, notes):

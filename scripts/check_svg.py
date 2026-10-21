@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """手绘 SVG 配图的静态自查（只依赖标准库）。
 
-管线对槽位版式的 SVG 只校验"文件存在"，对整页画布只校验比例与 px 字号。
-`references/canvas.md` 里那几条"没有门禁替你查"的硬约束，这里补一道
-**尽力而为**的静态检查——它能抓明显的错，抓不到的（文字实际溢出、数据图比例
-是否画对）仍然要自己看图。
+管线对槽位 SVG 只校验"文件存在"，对整页画布只校验比例与 px 字号。
+`references/canvas.md` 里"没有门禁替你查"的硬约束由这里补一道**尽力而为**的静态
+检查；文字实际溢出、数据图比例仍然要自己看图。
 
 用法：
     python scripts/check_svg.py images/seg1.svg images/seg2.svg
@@ -30,8 +29,7 @@
   - 含中文却没有任何 font-family（<img> 载入读不到页面字体）             [warn]
   - 整页画布：字面 x 坐标落进安全边距（竖屏 50px / 横屏 96px）           [warn]
   - 整页画布密度：存在高度 ≥25% 页高、横着没有任何图元的**整幅空带**      [warn]
-    （实拍复现的"画布页中间一大块空白"就是这个形状。盲区：只投到 y 轴，所以横向留白、
-    挤成一团、以及一根贯穿上下的细线替整页"占位"，它都看不见——构图仍归人眼）
+    （盲区：只投到 y 轴，横向留白、挤成一团、一根贯穿上下的细线占位都看不见）
   - 墙钟动画（SMIL <animate*> / CSS animation / transition）：无法与口播
     时间轴同步，提示改用 images.json 的 director                        [warn]
   - 图元越出画布边界：rect/circle/ellipse/line/polygon/polyline 与 path 的
@@ -39,13 +37,9 @@
     槽位图按框裁切、画布页就是成片的一页，越界内容必然被裁掉/出画——
     跟"比例不等"是同一类"贴边内容会丢"的失败模式。带 transform 祖先的
     元素跳过（最终位置静态算不出，不误报）                          [error]
-  - 线条端点悬空：line/polyline/带描边的开 path，首尾端点 4‰ 画幅内
-    没有落在任何"别的"笔画/描边/圆点/文字上。与 craft 的"线要结束在某
-    处"同一条规则：悬空线头是画到一半的残线。只查 stroke 可见的元素、
-    只以**其他元素**为落点目标（自己的线段不算）；带 `data-free-ends`
-    属性的线条跳过（canvas_kit 的 rule 分隔线/下划线就是有意悬空的装饰
-    线，手绘作者同样可以用它声明"这条线就是悬空的"）。有意悬空的装饰线
-    可忽略本条（warn 不挡 CI）                                        [warn]
+  - 线条端点悬空：line/polyline/带描边的开 path，首尾端点在 4‰ 画幅内没有落到
+    任何**别的**元素上（自己的线段不算）。只查 stroke 可见的元素；有意悬空的
+    装饰线（canvas_kit 的 rule/下划线）加 `data-free-ends` 跳过        [warn]
 """
 import argparse
 import math
@@ -65,28 +59,20 @@ from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
                        load_template, same_aspect, seg_card_pad_x, svg_text_band)
 
-# 画布与槽位尺寸的真源在 _template（视觉单一数据源规则）：这里读模板而不是
-# 手抄数值——上一版手抄的页底色就漂过一次，颜色基准从此全部改为从注册表派生。
-# 走 get_canvas / get_image_box 而不是自己下标取：生成期判"素材够不够大"用的是
-# 那两个函数（`gen_hyperframes` 的 `_seg_boxes`），自查若另开一份下标，两边取到
-# 的就不是同一个框——模板改结构时一边跟着变、一边不动，"建议尺寸"和"实际拦截"
-# 分家。
+# 画布与槽位尺寸从这里读 _template，不手抄数值：生成期判"素材够不够大"走的是
+# 同一对函数（`gen_hyperframes` 的 `_seg_boxes`），另开一份下标会让"建议尺寸"和
+# "实际拦截"分家。
 CANVAS = {"portrait": get_canvas("portrait"), "landscape": get_canvas("landscape")}
-# 槽位尺寸**按画幅**取：竖屏是 4:3 主图槽（980×735），横屏是右侧槽位
-# （1067×800，也是 4:3 但更大）。早期这里只读 vertical 一份，于是横屏槽位
-# 也按 980 折算字号——系统性低估 8.2%，一张 1067×800 上 26px 的字会被算成
-# 24px 而误报"小于下限"，且建议尺寸恒写竖屏的 980×735。封面式的"整幅一图"
-# 与槽位共用一个 cover 语义，但框的大小由版式决定，不由素材决定。
+# 槽位尺寸**按画幅**取（竖屏 980×735、横屏 1067×800）：只读一份会把横屏
+# 字号系统性低估 8.2%，26px 被算成 24px 误报。
 SLOT = {"portrait": get_image_box("portrait"), "landscape": get_image_box("landscape")}
 
 
 def _margin_pair():
     """画布页四周留白：竖屏 = segCard 左右内边距，横屏 = layout.landscape.margin。
 
-    竖屏那份走 `_template.seg_card_pad_x`，与 `html_renderer` 算内容盒用的是同一
-    个函数。修复前这里自己 `.split()` 解一遍 padding 简写，靠注释声称"与
-    html_renderer 读同一键同一口径"——模板把 `50px` 改成 `40px 50px` 这类写法时，
-    只有 html_renderer 跟着变。
+    竖屏走 `_template.seg_card_pad_x`（与 html_renderer 算内容盒同一个函数）：
+    自己 split padding 简写会在模板改成 `40px 50px` 时与渲染端错开。
     """
     return {"portrait": int(seg_card_pad_x()),
             "landscape": load_template()["layout"]["landscape"]["margin"]}
@@ -95,19 +81,14 @@ def _margin_pair():
 def safe_margins():
     """一次取齐两画幅的安全边距 {portrait, landscape}。
 
-    早先是 import 期的模块常量（SAFE_MARGIN），改成函数是因为 CLI 的 `--set`：
-    模块常量在 import 那一刻就定死了，而覆盖层要到解析参数才生效——快照会在
-    "生成按新边距、门禁按旧边距"这一种情况下悄悄自证清白。模板读取本身有缓存，
-    每次调这个函数不构成开销。
+    必须是函数不能是模块常量：CLI 的 `--set` 覆盖层到解析参数才生效，import 期
+    定死会让"生成按新边距、门禁按旧边距"悄悄自证清白（模板读取有缓存，无开销）。
     """
     return _margin_pair()
 
 
-# 文字填充色的唯一判据是对页底（主题渐变各档 stop）的对比度：填充色只要暗到
-# 接近页底（对比度 <3:1）就是瞎字，按最坏一档 stop 算就能抓住——不需要另养
-# 一份"背景色族"字面量。历史上那份手抄族（#0c1320/#16233a/#1a2536）是旧主题
-# 遗留，与注册表早已漂移，而它相对对比度判据零新增覆盖（族内色对当前 stops
-# 的对比度全部 <1.3:1），两处判据还各有一套报错文案，删繁就简保留这一条。
+# 文字填充色的唯一判据是对页底（主题渐变各档 stop）的对比度：按最坏一档算，
+# <3:1 即瞎字。不另养"背景色族"字面量。
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CJK = re.compile(r"[\u3400-\u9fff]")
@@ -217,18 +198,12 @@ def _largest_empty_band(bands, page_h):
 def _resolve_layout(layout, w, h, aspect):
     """把 `--layout auto` 解成 (档位, 画幅, 推断失败的话)。
 
-    混用目录（槽位图和整页画布同放一个 `images/`）此前必须跑两遍，而且每一遍
-    都会把另一类文件判成"比例不符"的 **error**——那不是图错了，是档位选错了。
-    比例在这一档里够用：槽位两画幅都是 4:3，整页画布竖屏 0.75 / 横屏 1.778，
-    四类互不重叠。
+    四类比例互不重叠（槽位 4:3；整页画布竖屏 0.75 / 横屏 1.778）。
 
-    - 整页画布先判：它的比例随画幅变，命中即**连画幅一起定下来**。`--aspect`
-      写反时不该拿另一档的框去量这张图（1080×1440 被当成横屏画布，折算字号
-      与安全边距全错）。
-    - 槽位保留 `--aspect` 给的画幅：两画幅的槽位框都是 4:3（980×735 与
-      1067×800，比例差 0.03%），比例分辨不出，画幅是作者自己声明的事。
-    - 都命中不了：不猜。报一条点名比例的 error，并按槽位继续查其余项——
-      少报一条比例 error 比"推断不出就整体跳过"划算。
+    - 整页画布先判：命中即**连画幅一起定下来**——`--aspect` 写反时不能拿另一档
+      的框去量（1080×1440 当横屏画布折算字号与安全边距全错）。
+    - 槽位保留 `--aspect` 给的画幅：两画幅槽位框都是 4:3，比例分辨不出。
+    - 都命中不了：不猜，报一条点名比例的 error 并按槽位继续查其余项。
     """
     if layout != "auto" or not w or not h:
         return layout, aspect, ""
@@ -260,9 +235,8 @@ DOT_MAX_R = 4.0
 def _pt_list(points):
     """points 属性 → [(x, y), ...]；空/畸形返回 None。
 
-    解析走净化的 `svg_points`：读不出的 token 必须让整条 points 判废，不能丢掉
-    再按奇偶配对（丢值后个数仍可能是偶数，配对从错的那一个起全部错位——量出一
-    个谁也没画过的盒子且不报错）。
+    走净化的 `svg_points`：读不出的 token 必须让整条 points 判废——丢掉再按奇偶
+    配对会从错位处开始全错，量出一个谁也没画过的盒子且不报错。
     """
     vals = svg_points(points)
     if not vals:
@@ -401,14 +375,11 @@ def _check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol):
 
 
 def check_file(path, layout, aspect, theme, resolved=None, draft=False):
-    """查一个 SVG；`resolved` 给一个 dict 时，把 `--layout auto` 实际用的
-    (档位, 画幅) 写进去——调用方要把"我按哪一档查的"打给人看，不然 auto 的
-    判定是一次没人复核的猜测。
+    """查一个 SVG；`resolved` 给 dict 时写入 `--layout auto` 实际用的 (档位, 画幅)，
+    调用方要把"按哪一档查的"打给人看。
 
-    `draft` 是草稿档：探索期画的东西比例/颜色/端点都还没定稿，把三条"只有
-    定稿才有资格判死"的判据松开——槽位比例与槽位对比度的 error 降成 warn、
-    端点悬空静音、满幅底板提示合并成一条。安全类（外链/脚本/事件）与画布
-    档的比例/越界照旧 error：那些在草稿里也站不住，松了反而把人往坑里带。
+    `draft` 松开四条只有定稿才有资格判死的判据：槽位比例与槽位对比度 error 降
+    warn、端点悬空静音、满幅底板提示合并。安全类与画布档的比例/越界照旧 error。
     """
     errors, warns = [], []
     fb_counts = {"slot": 0, "canvas": 0}   # 满幅底板元素计数：draft 档合并成一条提示

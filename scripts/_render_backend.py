@@ -122,16 +122,13 @@ def _resolve_npx_shim(shim_path):
 def _cmdline_for_batch(exe, args):
     """给 .cmd/.bat 手工拼一条 cmd.exe /c 命令行（字符串形式）。
 
-    不能返回 [cmd.exe, /c] + args 列表：cmd 会把整条命令行**再解析一遍**，
-    而 list2cmdline 只给含空格的参数加引号——不含空格却含 `&`/`|` 的路径
-    （`-o "x&y"` 目录名）会被拆成第二条命令，实测可注入。
-    双引号内的 cmd 元字符是字面量，因此每个参数都包引号、再整体包一层
-    外层引号（cmd /c 的既定规则：引号数 >2 时剥掉首尾引号再执行）。
-    Popen 收到字符串时按原样写命令行、不再二次转义，正好绕开 list2cmdline。
-    残留面：%% 展开在 cmd 引号内仍会发生——这只影响路径里恰好含现有环境变量
-    名的写法，不构成命令拆分注入。含双引号的参数不被本函数支持（`""` 的
-    转义语义在 cmd 与 MSVCRT 之间不一致）：NTFS 本就禁止文件名含 `"`，
-    本函数只用于传路径，无需处理该形态。
+    **不能返回列表**：cmd 会把整条命令行再解析一遍，而 list2cmdline 只给含空格的
+    参数加引号——像 `x&y` 这种不含空格却含 cmd 元字符的路径会被拆成第二条命令。
+    所以每个参数都包引号、再整体包一层外层引号（cmd /c 剥首尾引号的既定规则），
+    Popen 收到字符串时按原样写命令行、不再二次转义。
+
+    残留面：引号内的 `%%` 仍会展开（只影响路径恰好含环境变量名），不构成命令
+    拆分注入；含双引号的参数不支持（NTFS 本就禁止文件名含 `"`，本函数只传路径）。
     """
     def q(a):
         return '"' + str(a).replace('"', '""') + '"'
@@ -172,28 +169,17 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
                          command: List[str],
                          low_memory: Optional[bool] = None,
                          allow_best_effort: bool = False) -> List[str]:
-    """拼一条 `hyperframes render`：本技能恒出 mp4，不传 --format（默认即 mp4）。
+    """拼一条 `hyperframes render`。恒出 mp4，不传 `--format`。
 
-    官方 --format 另有 webm / mov（带 alpha）与 png-sequence（RGBA 帧序列），
-    但每卡自带 .bg/.grid 两层不透明底——只换容器不产生透明底，要叠轨得先撤掉
-    那两层（见 SKILL.md 第 4 步）。
+    两个旗标有默认值，别去掉：
 
-    默认传 `--no-best-effort`：CLI 的 --best-effort **默认 true**，语义是"媒体缺失
-    或抓帧未就绪也照样出片，只给一条 capture-readiness warning"。本技能红线是
-    "音频缺失直接失败，不生成无声成片"——上游校验拦的是"manifest 里的音频文件在
-    不在"，拦不住"文件在、但 Chrome 侧没就绪"这一种，而那一种正是无声成片的
-    来源。交给渲染器宽容，等于把红线留在最后一道没兑现。
-
-    ``allow_best_effort`` 是那条红线的显式逃生口（run.py 的 --allow-best-effort，
-    默认关）：调试某段媒体时想先看整片节奏，否则只能绕开 run.py 手跑 CLI，
-    连 HTML 重新生成与成片时长对账一起丢掉。开了之后出的片子可能是无声/缺帧，
-    调用方必须把它记进报告。
-
-    ``low_memory`` 三态（None = 不提这个旗标，交给 CLI 按总内存自判）：
-    CLI 的 --help 写明低内存档会把 **worker 钉成 1**、走 screenshot capture、
-    跳过自动 worker 校准。所以 `True` 与 `--workers N>1` 同时出现时，那个 N
-    会被 CLI 自己吃掉——拼命令这里不替它改（改了就看不见用户原本要什么），
-    冲突由 run.py 在渲染前出声。
+    - **默认 `--no-best-effort`**：CLI 的 `--best-effort` 默认**开**，语义是"媒体
+      缺失也出片、只给一条 warning"。它拦不住"文件在但 Chrome 侧没就绪"，而那正是
+      无声成片的来源。`allow_best_effort`（run.py 的 `--allow-best-effort`）是显式
+      逃生口，开了之后调用方必须把"可能无声/缺帧"记进报告。
+    - **`low_memory` 三态**：`None` = 不提旗标，交给 CLI 按总内存自判；`True`/`False`
+      显式传。低内存档会把 worker 钉成 1，与 `--workers N>1` 冲突时由 CLI 吃掉 N，
+      拼命令这里不替它改（冲突由 run.py 在渲染前出声）。
     """
     base = list(command)
     cmd = base + ["render"]

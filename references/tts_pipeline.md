@@ -1,6 +1,6 @@
 # 第 2 步 · TTS：管线参数、预置音色与 manifest 字段
 
-主流程与示例命令见 SKILL.md 第 2 步。完整参数以 `python scripts/pipeline.py --help` 为准。
+命令见 SKILL.md 第 2 步；参数以 `python scripts/pipeline.py --help` 为准。
 
 ## pipeline.py 参数
 
@@ -22,7 +22,7 @@
 
 **补录**：静音占位句带 `.failed` marker，`--resume` 会一直复用同一份静音。补录 = 删该句 `sentences/` 下的 `.wav`（连同 `.sha`/`.spd`/`.failed`），重跑 `--resume` 自动重合成；成功后 marker 自动清理。
 
-**拼接产物与时间轴对账**：`combined.wav` 总时长应等于"逐句时长之和 + 句间静音"；实测短过 250ms（与下游"末句不得超出 total_duration + 250ms"同档）直接报错退出——兜住 WAV 头部声明长度、实际只写一半的静默截断。触发就删 `combined.wav` 重跑。
+**拼接产物与时间轴对账**：`combined.wav` 总时长应等于"逐句时长之和 + 句间静音"，实测短过 250ms 直接报错退出（兜住 WAV 头声明长度、实际只写一半的截断）。触发就删 `combined.wav` 重跑。
 
 ## 预置音色表
 
@@ -89,15 +89,15 @@ manifest 由 pipeline 自动产出，手写少见；确需手写/裁剪时按此
 | `onset` | 音频块开头到**真正开口**的秒数 | `≥ 0` |
 | `voiced` | 实际发声长度（首尾静默之外的部分，含句中换气停顿） | `> 0`，且 `onset + voiced ≤ duration` |
 
-量法：`ffmpeg silencedetect=noise=-35dB:d=0.05`（`scripts/_speech.py`），边界对齐到它的 20ms 扫描网格。50ms 是最短静音：低于它的不算停顿（齿音、爆破间隙不当停顿），句尾换气（通常 >100ms）算停顿。阈值取 −35dB 是因为实测 −30/−35/−40/−45 检出完全一致，它不是"最对"的值，是对两侧都不敏感的值。
+量法：`ffmpeg silencedetect=noise=-35dB:d=0.05`（`scripts/_speech.py`），边界对齐到它的 20ms 扫描网格。50ms 是最短静音——齿音/爆破间隙（<40ms）不算停顿，句尾换气（>100ms）算。−35dB 是实测 −30/−35/−40/−45 检出完全一致的中间值。
 
 它们被谁读：
 
-- **字幕换句**：cue 起点 = `start_time + onset`，字幕在人开口那一刻才换（以前音频块一开始就换，观众读到的字幕比听到的话早半拍，页末那句还会在没人说话时亮着）。
+- **字幕换句**：cue 起点 = `start_time + onset`，人在开口那一刻才换字幕（否则字幕比话早半拍，页末句在没人说话时还亮着）。
 - **词级强调（卡拉OK）**：进度分母 = `voiced`，念完那一刻正好 100%（`references/rendering.md`「动画」）。
 
-几条边界，都是契约层直接报错（不是 warn）：只写一个、`onset + voiced > duration`、给 `synth_failed` 的静音兜底句写 `voiced`。这几种状态下游读出来都是"说半句的句子"，而产物看起来完全正常。
+三条边界都是契约层直接报错（不是 warn）：只写一个、`onset + voiced > duration`、给 `synth_failed` 的静音兜底句写 `voiced`——读出来都是"说半句"，而产物看起来正常。
 
-量不出来（整句静音、非 WAV）就不写这对字段，下游退回按文件长度计时（旧行为）；**不记 degraded**——它只影响精度，不改变产物内容，不值得让正式渲染被 `--allow-degraded` 闸门拦下。
+量不出来（整句静音、非 WAV）就不写这对字段，下游退回按文件长度计时；**不记 degraded**——只影响精度，不值得让正式渲染被 `--allow-degraded` 拦下。
 
 手改 `start_time`/`duration` 时把这两个字段一起删掉或改对，否则会撞上面的边界。

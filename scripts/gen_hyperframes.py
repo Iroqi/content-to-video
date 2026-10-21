@@ -310,26 +310,19 @@ def video_span_verdict(seg_dur, vdur, media_start):
 def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
     """校验 images.json 引用的媒体文件存在且可解码。
 
-    检测项（依赖缺失时优雅降级，只降强度不改行为）：
-    - 存在性：所有类型（含 svg）；
-    - 图片/视频可解码：ffmpeg 全解码探测（能同时发现 moov 缺失、头部
-      损坏与尾部截断——下载中断的典型形态），并解析视频时长，比段落
-      长时打"渲染只显示前段"提示（信息级，不阻断）；svg 是文本格式，
-      ffmpeg 打不开，存在性校验已足够，跳过。ffmpeg 是渲染必需依赖，
-      无需再引入 Pillow。
-    - **像素够不够铺满**：栅格图读文件头、视频读 ffmpeg 的流信息，拿固有
-      尺寸跟它要被 `cover` 铺进的那个框比——放大超过阈值就打一条 `[warn]`
-      点名哪一段、素材多大、要放大几倍。这是此前零报错的一类静默退化：
-      糊掉的那一帧在生成期、在 `hyperframes check` 里、在渲染日志里都不
-      存在，只有成片看得见。判据与阈值在 `_media_size`。svg 不验（矢量）。
-    - **比例贴不贴合槽位**：同一次比对里看 cover 会裁掉多少——超过阈值打一条
-      `[warn]`，说明是裁边不是留黑边、裁掉约多少、去哪换档位或自己裁。
-      与上一条各管一件事（糊不糊 / 构图丢多少），同样只提示不拦。
+    检测项（缺 ffmpeg 时优雅降级，只降强度不改行为）：
 
-    返回 (missing, corrupt)：missing=[(sid, media_path)]、
-    corrupt=[(sid, media_path, reason)]；相对 src 按 out_dir 解析，
-    seg_durs=None 时跳过时长提示、seg_boxes=None 时跳过尺寸提示。
-    是否 fail-fast 由调用方决定（尺寸这一项只提示，永远不拦）。
+    - **存在性**（所有类型，含 svg）。
+    - **可解码**：ffmpeg 全解码探测，能同时发现 moov 缺失、头部损坏与尾部截断
+      （下载中断的典型形态）；同时解析视频时长，比段落长时提示"渲染只显示前段"。
+      svg 是文本、ffmpeg 打不开， 存在性 已足够。
+    - **像素够不够铺满**：拿固有尺寸跟它要被 `cover` 铺进的框比，放大超阈值打
+      `[warn]`（点名段、素材尺寸、放大几倍）。糊掉的那一帧在生成期、在 check 里、
+      在渲染日志里都不存在，只有成片看得见。阈值在 `_media_size`，svg 不验。
+    - **比例贴不贴合槽位**：同一次比对里看 cover 会裁掉多少，超阈值打 `[warn]`。
+
+    返回 `(missing, corrupt)`，相对 src 按 out_dir 解析；`seg_durs`/`seg_boxes`
+    为 None 时跳过对应提示。尺寸与比例只提示，永不拦。
     """
     missing_imgs = []
     corrupt_imgs = []
@@ -473,30 +466,17 @@ def _svg_intrinsic_size(path):
 
 
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h, draft=False):
-    """槽位版式配图里 SVG 的比例失配，返回 (错误列表, 告警列表)。
+    """槽位版式配图里 SVG 的根节点比例失配，返回 (错误列表, 告警列表)。
 
-    告警列表与 `canvas_layout_errors` 同形：根标签的 width/height 与 viewBox 比例
-    不一致时出声（此前 check_svg 报、这里一声不吭——同一张图两道门两个答案）。
+    判据与 `canvas_layout_errors` 同形（根标签 width/height 与 viewBox 不一致就叫），
+    只是对账尺寸不同：画布版对画幅，槽位版对槽位框（980×735），免得同一张图两道门
+    两个答案。
 
-    为什么槽位版式也要查：槽位框是 4:3、画幅是 3:4，SVG 塞进去走 cover。
-    比例对不上时 cover 会**切掉边**去填满框——图里画在边缘上的文字就跟着消失，
-    而作者拿到的 HTML 里它还在。这与画布版式那条同源（都问"图内的字会不会被
-    cover 吃掉"），只是槽位版的判据尺寸不同：画布版式对画幅（1080×1440），
-    槽位版对槽位框（980×735）。
+    代价是**裁边**不是撑破画幅：SVG 塞进 4:3 槽位走 cover，比例对不上就切边，画在边缘
+    的字跟着消失，而作者拿到的 HTML 里它还在。`hyperframes check` 只报
+    container_overflow，读者看不出该改根节点还是改内容，所以在这里拦并给出槽位尺寸。
 
-    实测的四例（1080×1440 整页画布 / 490×368 小图 / 800×800 方图 / 1600×600
-    横图铺进 980×735 框）说明失配的代价是**裁边**不是"撑破画幅"——槽位框本身
-    有框高限制，撑不破；所以别拿"画面溢出"当这里的症状说，那是错的诊断。
-
-    `hyperframes check` 对这类失配只报 container_overflow（元素超出裁切容器），
-    读者看不出该改根节点尺寸还是改内容；所以按文件在这里拦，并直接给出该画
-    幅的槽位尺寸。
-
-    栅格图（照片/视频）不查比例：那张图里没有"画在里面的字"，比例失配只是
-    取景裁边，ImageGen 素材那条路本来就是靠 cover 取景的（见 imagery.md）。
-
-    草稿档（draft=True）下降为 warn：槽位是 cover 取景，失配的代价只是边缘字
-    被裁，探索期画个大概比例不该被拦；定稿生成（draft=False）才判死。
+    栅格图不查：照片里没有"画在里面的字"，比例失配只是取景裁边。`draft=True` 降为 warn。
     """
     errs, warns = [], []
     for seg in segments:
@@ -736,20 +716,16 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
     """整页画布（段落 layout: "canvas"）的配图体检，返回 (错误, 警告) 两组说明。
 
     四件事只有这里查得到（画布版式不生成标题层与句子流层，画面全靠那张图）：
-    - 有配图：没图就只剩一条进度条空帧——error。
-    - SVG 与当前画幅**等比**：比例一错，cover 就要切边去填满框，画在图边缘的
-      字（画布版式的标题/kicker、槽位版式的边注）随之消失。实测把 3:4 的画布
-      塞进 16:9 段落，标题与 kicker 直接消失，而 hyperframes check 依旧
-      0 error、Contrast 全过——门禁看不见 SVG 里的字，只能在这里按文件拦。
-      槽位版式的同类失配走 slot_svg_ratio_errors（那边对的是槽位框尺寸）。
-    - SVG 的**缩放档**：等比不等于能读。按 2560×1440 画的 16:9 塞进 1920 画幅，
-      比例对、整张图却被缩到 0.75，图内 26px 折算后只剩 19.5px——低于
-      `references/canvas.md`「文字与尺寸」的 26px 下限就是读不出来，
-      这条也只有在这里量得到。
-    - 文案下落：这一段的 N 句旁白不会出现在画面上，图内的 `<text>` 数量是唯一
-      能对上的账——warn，因为"把要点画进图里"本来就没有机械判据。
-    照片/视频不验比例与字号（它们没有"画在里面的字"，cover 裁边是正常取景），
-    但整段无字是后果，照样给一条 warn 让人知情。
+
+    - **有配图**（error）：没图就只剩一条进度条空帧。
+    - **SVG 与当前画幅等比**：比例一错 cover 就切边，画在边缘的字（标题、kicker）
+      随之消失，而 `hyperframes check` 依旧 0 error。槽位版同类失配走
+      `slot_svg_ratio_errors`（对的是槽位框尺寸）。
+    - **缩放档**：等比不等于能读。2560×1440 的图塞进 1920 画幅要缩到 0.75，图内
+      26px 折算只剩 19.5px，跌破 `canvas.md`「文字与尺寸」的下限。
+    - **文案下落**（warn）：这一段旁白不会上画面，图内 `<text>` 数量是唯一能对上的账。
+
+    照片/视频不验比例与字号，但整段无字照样给一条 warn。
     """
     errs, warns = [], []
     for seg in segments:
@@ -1105,27 +1081,23 @@ def beat_report_lines(images, segments, dflt_dur):
 def director_prepare(images, segments, out_dir):
     """SVG「导演」编排的生成期体检 + 净化内联，返回 (错误, 警告)。
 
-    写了 director 的条目才走这条路：读盘 → 净化（_svg_sanitize 去掉 script/on*/
-    外链/SMIL/墙钟动画，root 改成 cover 语义）→ 回填 entry["inline_svg"]，渲染端
-    据此把 SVG 内联成活 DOM，GSAP 才能逐帧驱动图内命名元素（见 html_renderer
-    ._director_timeline_lines）。五件事只有这里查得到：
+    只处理写了 `director` 的条目：读盘 → 净化（`_svg_sanitize` 去掉 script/on*/外链/
+    SMIL/墙钟动画，root 改成 cover 语义）→ 回填 `entry["inline_svg"]`，渲染端据此内联
+    成活 DOM 交给 GSAP 逐帧驱动。下面几件事只有这里查得到：
 
-    - at 越界：写了 steps[i].at 时，其整数部分必须 < 该段旁白句数（0 基句序）——越界会让
-      渲染端 raise，这里提前按段落点名。用 at_time（段落绝对秒）的步骤没有句序可锚，跳过此检。
-    - target 落空：steps[i].target 指的 id 必须在 SVG 里真实存在。落空不是报错
-      而是**静默无动画**（选择器匹配不到任何元素），成片看着"没动"却全程零提示，
-      所以按文件拦成 error。
-    - 运镜裁切：`#cam` 里的内容被 scale/平移推到画幅**静止位之外**（见 _cam_crop），warn。
-    - 节拍出窗：每一步的落点按 _timeline.beat_positions 解析成绝对秒，落在本页可见窗口
-      之外（早于本段旁白 / 晚于下一段起点）warn——那是"这一拍根本不演"，`at_time` 过期
-      最常见；起点在窗内、终点越过下一段起点的也 warn（那一拍被切在半路，终态从没出现过）。
-      逐拍踩在哪句可以用 `--beat-report` 打表看。
-    - 净化说明：删掉了哪些不安全/墙钟构造，按 warn 让人知情（决定性的代价写在明面）。
-    - 跨段延续（stage:"keep"）：写完上面这些，再按 manifest 段序走第二遍，把上一页
-      演完的画面烘焙成下一页的内联副本（见 _stage_carry_pass）。那一遍还要替接续页补做
-      运镜自查——第一遍按盘上原图算的投影对接续页是假话（原图里没有上一页推近的几何）。
+    - **at 越界**：`steps[i].at` 的整数部分必须 < 该段句数（0 基），越界渲染端会 raise。
+      用 `at_time` 的步骤没有句序可锚，跳过。
+    - **target 落空**（error）：target 的 id 必须在 SVG 里真实存在——落空不报错，只是
+      选择器匹配不到、**静默无动画**，成片看着没动却零提示。
+    - **运镜裁切**（warn）：`#cam` 内容被推到画幅静止位之外（`_cam_crop`）。
+    - **节拍出窗**（warn）：落点早于本段旁白、晚于下一段起点，或起点在窗内而终点越界
+      （被切在半路，终态没出现）。逐拍明细用 `--beat-report`。
+    - **净化说明**：删掉了哪些构造，按 warn 告知。
 
-    非 SVG 挂 director 已由 _images_schema 在契约层拒掉，这里不重复。
+    最后按段序走第二遍烘焙 `stage:"keep"` 接续页（`_stage_carry_pass`），并替它补做
+    运镜自查——第一遍按盘上原图算的投影对接续页不成立。
+
+    非 SVG 挂 director 已由 `_images_schema` 在契约层拒掉，这里不重复。
     """
     errs, warns = [], []
     seg_by_id = {seg["id"]: seg for seg in segments}

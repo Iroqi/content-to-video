@@ -112,18 +112,14 @@ def _print_report_summary():
 def _run_step(fn, argv, step_name):
     """进程内直调子脚本入口 fn(argv)，退出语义与旧子进程调用一致。
 
-    子脚本自己 parse_args——参数校验只有那一份，run.py 不再复制；
-    失败以 SystemExit 传回：非 0 记失败步骤、落制作报告、以同码退出。
-    sys.exit("消息") 这种字符串码在子进程里由解释器代打并归一为 1，
-    进程内没人代打，这里补打。
+    子脚本自己 parse_args（参数校验只那一份）；失败以 SystemExit 传回：非 0 记失败
+    步骤、落制作报告、以同码退出。`sys.exit("消息")` 的字符串码在子进程里由解释器
+    代打并归一为 1，进程内没人代打，这里补打。
 
-    ValueError / OSError 一并接住：子脚本的入口只保证"错就 sys.exit"，但
-    `read_json_file` / 写盘 / 子进程拉起这些路径抛的是 ValueError 与 OSError——
-    漏掉它们时一次普通的"文件路径写错"会变成裸栈退出，且**不落制作报告**
-    （报告只在下面的失败分支里写），于是"这次跑到哪一步、哪一步挂的"这条唯一
-    的排查线索也没了。接住后按退出码 1 走同一条失败路径。
-    KeyboardInterrupt / SystemExit 之外的 BaseException（Ctrl-C）不接：
-    用户主动中断不该被当成步骤失败写进报告。
+    **ValueError / OSError 也必须接住**：入口只保证"错就 sys.exit"，但读 JSON、写盘、
+    拉起子进程抛的是这两种——漏接时一次"路径写错"会变成裸栈退出且**不落报告**，
+    而报告是"跑到哪一步、哪一步挂的"唯一线索。KeyboardInterrupt 不接（主动中断不算
+    步骤失败）。
     """
     print(f"\n>>> {step_name} [in-process]: {' '.join(argv)}", flush=True)
     t0 = time.monotonic()
@@ -178,19 +174,15 @@ def _load_manifest_or_exit(manifest_path):
 
 
 def _image_coverage(manifest_path, images_json):
-    """返回 (tm, all_sids, missing_keys, missing_files)：已校验的 manifest 对象
-    （主流程的降级检测直接复用，同一份文件不在一次 run 里 load+全量校验两遍），
-    manifest 中需要配图的段落 sid 全集，其中 images.json 还没有映射键的（missing_keys），以及
-    有键但媒体文件不可用的（missing_files：不在盘上，或软链接/绝对路径越出项目目录）。
+    """返回 (tm, all_sids, missing_keys, missing_files)。
 
-    两类必须分开：missing_keys 只是"图还没画完"，--until html 可以警告放行；
-    missing_files 是"映射指向坏路径"，gen_hyperframes 无论跑到哪一步都会
-    fail-fast——把它混进"只警告"里等于承诺一个根本兑现不了的继续（实测
-    先打印"继续生成 HTML"、下一步整体 exit 1）。
+    `tm` 是已校验的 manifest（主流程的降级检测直接复用，不在一次 run 里 load 两遍）；
+    `all_sids` 是需要配图的段落全集（`_segments.needs_image`：内容段一律需要；
+    opening/closing 默认是纯文字 agenda 卡不配图，换成 `*_layout:"canvas"` 后计入）。
 
-    口径收口在 _segments.needs_image：内容段一律需要配图；开屏/结尾默认是纯文字
-    agenda 卡（章节罗列/要点总结），两画幅都不配图，但那一页换成整页画布
-    （opening_layout / closing_layout: "canvas"）后，配图就是它唯一的画面，同样计入。
+    **两类缺图必须分开**：`missing_keys` 是"图还没画完"，`--until html` 警告放行；
+    `missing_files` 是"映射指向坏路径"，`gen_hyperframes` 哪一步都会 fail-fast——
+    混进"只警告"等于承诺一个兑现不了的继续。
     """
     # 走 _load_manifest_or_exit：正式流程对坏 manifest 的报错同源。
     manifest = _load_manifest_or_exit(manifest_path)

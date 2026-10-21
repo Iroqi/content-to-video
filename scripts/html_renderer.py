@@ -467,6 +467,10 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _focus_future = float(_focus["future"])
     _focus_past = float(_focus["past"])
     _focus_ratio = float(_focus["ratio"])
+    # 尺寸那一档（离焦的第二个维度，见 runtime.js 的 verseFocusScale）：它只决定
+    # "远处的行缩多少"，封在第几档是结构常数（运行时与亮度的 cap 并列写死），
+    # 这里只搬观感常量。
+    _focus_scale = float(_focus["scale"])
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -520,7 +524,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{_sl["relay"]};
-  --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};"""
+  --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区

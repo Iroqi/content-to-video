@@ -120,8 +120,18 @@ const verseVedOrigin = (L) => {
     const rg = document.createRange();
     rg.setStart(node, 0);
     rg.setEnd(node, 1);
-    const dx = rg.getBoundingClientRect().left - L.el.getBoundingClientRect().left;
-    if (isFinite(dx) && dx > 0.5) L.vedDx = Math.round(dx * 10) / 10;
+    const rEl = L.el.getBoundingClientRect();
+    const dx = rg.getBoundingClientRect().left - rEl.left;
+    // 行此刻多半正被焦点/接力的 scale 缩着，而 getBoundingClientRect 给的是
+    // **变换后**的几何。要的是布局值：覆盖层是行的子元素、与行同一个 scale，
+    // 两边同比例缩放，按布局值写才对得上。变换后宽 ÷ 布局宽 = 当前 scale，
+    // 除回去即可——纯派生量，不新增状态（缓存被字体就绪清掉时照样算得出）。
+    // 不除的后果：对话段首句的说话人标签段（~60px）被少算 6%，覆盖层整体左移
+    // 3~4px，在 40px 字号上是看得见的横向重影。
+    const w = L.el.offsetWidth;
+    const s = (w && rEl.width) ? rEl.width / w : 1;
+    const d0 = isFinite(dx) ? dx / s : 0;
+    if (d0 > 0.5) L.vedDx = Math.round(d0 * 10) / 10;
   }
   if (L.ved) L.ved.style.setProperty("--ctv-ved-dx", L.vedDx + "px");
   return L;
@@ -371,6 +381,26 @@ const cueSpan = () => (cues.length ? cues[cues.length - 1].t + Math.max(cues[cue
 //   过去侧整条提前一档：d=−1→0.45、d=−2→0.327、d≤−3→0.237。
 // 两侧在 0.45 / 0.327 处无缝拼接——"念过的比没念的同距更暗一档"是曲线错位一档
 // 的自然结果，不用特判。封在第三档：再远的行基本已滚出窗口。
+//
+// ── 第二个维度：尺寸 ────────────────────────────────────────────────────
+// 前沿歌词 UI（Apple Music 逐行、Apple Music Like Lyrics 的 spring 动画）让层级
+// 同时落在**三个**属性上：透明度、缩放、位置。这里只有一维，于是"远"只被表达成
+// "暗"——同一档里第 2 行和第 4 行完全一样远。补上尺寸：远处的行不只更暗，也更小。
+//
+// 为什么必须是 transform 而不是 font-size：改字号会**重排**——折行点变、offsetTop
+// 变（滚动锚点跟着漂，首句/尾句会抖）、覆盖层那份复制文本折到别的位置去，重影
+// 随之而来（那正是覆盖层走过的弯路）。transform 不进布局：offsetTop、
+// clientWidth、scrollHeight 全是原值，滚动公式与逐字命中测试一个字节都不用改。
+//
+// 两个维度用**同一条几何曲线**（每远一档乘一次 ratio），但各自的 ratio 与封顶不
+// 同，因为失效边界不同：
+//   · 亮度可以一直暗下去——暗到看不见就是"退场"本来的意思，所以封在第三档
+//     （0.237 仍可见，只是不再有信息）；
+//   · 尺寸不能一直缩下去——缩到读不出来就不是"退场"，是把字幕毁了。横屏字幕
+//     33px 是最小的字号，最深那一档是过去侧的 0.94³=0.8306 → 27.4px，仍在可读
+//     区（技能的可读下限是 26px）；再多封一档（0.94⁴）到 25.8px 就破线了。
+//     所以**尺寸封在第二档**。
+// 这条不对称是设计，不是遗漏：曲线的形状同源，深度由各自的物理下限决定。
 let focusRows = null;
 const focusTable = () => {
   if (focusRows) return focusRows;
@@ -378,11 +408,20 @@ const focusTable = () => {
   const fRaw = parseFloat(cs.getPropertyValue("--ctv-focus-future"));
   const pRaw = parseFloat(cs.getPropertyValue("--ctv-focus-past"));
   const rRaw = parseFloat(cs.getPropertyValue("--ctv-focus-ratio"));
+  const sRaw = parseFloat(cs.getPropertyValue("--ctv-focus-scale"));
   const fut = isFinite(fRaw) && fRaw > 0 && fRaw <= 1 ? fRaw : 0.62;
   const past = isFinite(pRaw) && pRaw > 0 && pRaw <= fut ? pRaw : 0.45;
   const r = isFinite(rRaw) && rRaw > 0 && rRaw < 1 ? rRaw : past / fut;
-  const row = (a) => [1, a, a * r, a * r * r];
-  focusRows = {fut: row(fut), past: row(past)};
+  const s = isFinite(sRaw) && sRaw > 0 && sRaw <= 1 ? sRaw : 0.94;
+  // 一条曲线的展开：[1, a, a·q, …]，长度 = 封顶档 + 1。尺寸那条错位一档的起点是
+  // s·s（= 未来侧的第二档），与亮度用 past/fut 的错位同一种写法。
+  const row = (a, q, n) => {
+    const out = [1];
+    for (let i = 0; i < n; i++) out.push(a * Math.pow(q, i));
+    return out;
+  };
+  focusRows = {fut: row(fut, r, 3), past: row(past, r, 3),
+               sfut: row(s, s, 2), spast: row(s * s, s, 2)};
   return focusRows;
 };
 // 返回要写上行内联的 --ctv-line-op；当前行（d=0）返回 ""＝撤内联，交还 CSS 的
@@ -392,6 +431,13 @@ const verseFocusOp = (d) => {
   const T = focusTable();
   const row = d < 0 ? T.past : T.fut;
   return row[Math.min(Math.abs(d), 3)].toFixed(3);
+};
+// 尺寸那一档，写法与上面同源；四位小数是留给 0.8836 这种两档相乘的值。
+const verseFocusScale = (d) => {
+  if (d === 0) return "";
+  const T = focusTable();
+  const row = d < 0 ? T.spast : T.sfut;
+  return row[Math.min(Math.abs(d), 2)].toFixed(4);
 };
 const verseApply = (si) => {
   cueSi = si;
@@ -414,6 +460,10 @@ const verseApply = (si) => {
       const op = act ? verseFocusOp(di - si) : "";
       if (op === "") L.el.style.removeProperty("--ctv-line-op");
       else L.el.style.setProperty("--ctv-line-op", op);
+      // 尺寸维度同一口径：换句时才变，所以同样只在 verseApply 里写。
+      const sc = act ? verseFocusScale(di - si) : "";
+      if (sc === "") L.el.style.removeProperty("--ctv-line-scale");
+      else L.el.style.setProperty("--ctv-line-scale", sc);
     }
     if (!act) continue;
     // 两画幅里不滚动的那一侧 clip 比窗口矮，整体不滚
@@ -435,8 +485,10 @@ const verseApply = (si) => {
 //      暗（实测）。**缓存可以清，状态必须能从 t 重推**。
 //   2. **"这行上的内联值是不是我写的"看行本身**（getPropertyValue 非空），不另记
 //      布尔——那个布尔躺同一张被清的表里，丢了同样留下孤儿内联值。
-//   3. **只动 opacity，不碰 transform**：滚动由 .verse-clip 独占；行上再写
-//      transform 会与滚动叠加成错位。
+//   3. **位移仍归 .verse-clip 独占**：它的 translateY 按 offsetTop 算落位，行上
+//      再叠 translate 会把行推离锚点。**scale 不受这条限制**——它不进布局，
+//      offsetTop 还是原值，锚点读到的仍是未缩放的位置（尺寸维度能加进来正是
+//      因为这个，见 focusTable 旁那条注释）。
 //   4. **只给当前句所在 verse 的"当前行与未来行"**：past 行有自己的档位，掺进
 //      接力会让"念过"和"刚到"两种暗法撞在一起；别的 verse（被盖住的页）整表
 //      不参与——以前靠"relayT 只在有活跃行的 verse 上赋值"间接达成，状态删掉后
@@ -456,16 +508,24 @@ const verseRelay = (c, t, t0, si) => {
   if (!isFinite(t0)) return;
   const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
   const mine = c.lines.some((L) => parseInt(L.el.getAttribute("data-i"), 10) === si);
+  // 尺寸接力的起点 = **未来档**的尺寸（d=1 那一档），不是亮度那个 0.35。
+  // 两个维度共用同一个 p、同一时刻到位——"焦点"不能在途中分裂成"先长大、后变亮"
+  // 两个动作。但起点不同是刻意的：亮度从 0.35 起是"从更深处浮出"的换句信号，
+  // 尺寸照着 0.35 起会把新句先缩成一小团再撑开，读成形变而不是入场。
+  const s0 = focusTable().sfut[1];
   for (const L of c.lines) {
     const past = L.el.classList.contains("past");
     const on = mine && (p < 1) && !past;
     if (!on) {
       if (L.el.style.getPropertyValue("--ctv-relay") !== "")
         L.el.style.removeProperty("--ctv-relay");
+      if (L.el.style.getPropertyValue("--ctv-relay-scale") !== "")
+        L.el.style.removeProperty("--ctv-relay-scale");
       continue;
     }
     // 起点 0.35 ≈ past 档（0.45）之下一点，落位瞬间"几乎还没亮"，然后追上 1
     L.el.style.setProperty("--ctv-relay", (0.35 + 0.65 * p).toFixed(3));
+    L.el.style.setProperty("--ctv-relay-scale", (s0 + (1 - s0) * p).toFixed(4));
   }
 };
 const verseTick = (t) => {

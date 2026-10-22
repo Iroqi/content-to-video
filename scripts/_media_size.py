@@ -95,6 +95,12 @@ def _jpeg_size(buf):
             pos += 1
             continue
         marker = buf[pos + 1]
+        if marker == 0xFF:
+            # 填充字节：JPEG 允许一个标记前挂任意多个 FF。当成"带长度的段"去跳
+            # 会拿填充字节后的数据当段长，一步迈到十万八千里外，整张合法的图
+            # 被判成"读不出"。
+            pos += 1
+            continue
         if marker in (0xD8, 0xD9, 0x01) or 0xD0 <= marker <= 0xD7:
             pos += 2          # 无长度字段的独立标记
             continue
@@ -215,11 +221,9 @@ def cover_crop_fraction(box, size):
     if not box or not size:
         return None
     if min(box[0], box[1], size[0], size[1]) <= 0:
-        return None
+        return None   # 任一边为 0/负 → 没有可比的比例（(0,0) 这种哨兵值也是）
     r_w = float(box[0]) / float(size[0])
     r_h = float(box[1]) / float(size[1])
-    if r_w <= 0 or r_h <= 0:
-        return None
     return 1.0 - min(r_w, r_h) / max(r_w, r_h)
 
 

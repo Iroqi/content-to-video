@@ -88,6 +88,14 @@ _CAM_POSE_KEYS = frozenset({"scale", "x", "y", "svgOrigin", "transformOrigin"})
 # 校验同一份（_script_utils.NUMERIC_ONLY）。
 # count 的终值是一行文本，只有这些元素搬得动（写在 <rect> 上就是作者放错了 target）。
 _TEXT_TAGS = frozenset({"text", "tspan", "textPath"})
+# 相对写法（"+=0.5"）在元素全身读不到基值时按 **CSS 规范初值**起算的属性：
+# GSAP 读的是计算值，而计算值在任何样式都读不到时就是 initial value——opacity /
+# *-opacity / stroke-width 的初值都是 1，不是 0。少了这张表，"+=0.5" 打在 virgin
+# 元素上会按 0 起算烘焙出 0.5，运行期 1+0.5 被 CSSOM 钳到 1，接续页页界静默跳变
+# （正是本模块要消灭的那类阶跃；autoAlpha 分支的 1.0 兜底同源）。
+# 只收导演档里真会出现相对写法的几个；其余属性初值为 0，按 0 起算本就正确。
+_CSS_INITIAL_NONZERO = {"opacity": 1.0, "fill-opacity": 1.0,
+                        "stroke-opacity": 1.0, "stroke-width": 1.0}
 
 
 def _kebab(prop):
@@ -133,6 +141,11 @@ def _set_style(el, prop, value):
         cur = _css_num(styles.get(key))
         if cur is None:
             cur = _css_num(el.get(key))
+        if cur is None:
+            # 全身读不到基值：按 CSS 规范初值起算（GSAP 读计算值，见
+            # _CSS_INITIAL_NONZERO）。resolve_num 的 None 兜底是按 0 起算，
+            # 对初值非 0 的属性会把"+=0.5"烘焙成 0.5、运行期却是 1.5 钳到 1。
+            cur = _CSS_INITIAL_NONZERO.get(key)
         resolved = resolve_num(value, cur)
         styles[key] = _fmt(resolved if resolved is not None else value)
     el.set("style", ";".join(f"{k}:{v}" for k, v in styles.items()))

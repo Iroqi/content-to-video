@@ -178,8 +178,9 @@ class RootSizeSingleSource(unittest.TestCase):
             with open(p, "w", encoding="utf-8") as f:
                 f.write('<svg xmlns="%s" width="800" height="600" '
                         'viewBox="0 0 400 600"></svg>' % NS)
-            w, h, note = GH._svg_intrinsic_size(p)
+            w, h, note, vb_w, vb_h = GH._svg_intrinsic_size(p)
             self.assertEqual((w, h), (800.0, 600.0))
+            self.assertEqual((vb_w, vb_h), (400.0, 600.0))
             self.assertTrue(note and "不一致" in note, note)
             errs, warns = GH.slot_svg_ratio_errors(
                 {"seg1": {"src": "b.svg"}}, [{"id": "seg1"}], d, 980, 735)
@@ -264,6 +265,36 @@ class MediaVerdictSingleSource(unittest.TestCase):
             self.assertEqual(d, os.path.dirname(next(iter(names))))
             # 后缀要保住（ffmpeg 按它推断容器格式）
             self.assertTrue(SU.unique_tmp(d, ".a.", ".wav").endswith(".wav"))
+
+    def test_unique_tmp_inherits_the_umask_not_mkstemps_0600(self):
+        """中转文件 os.replace 成成品后，成品不能带着 mkstemp 的 0600。
+
+        修复前 index.html / timing_manifest / wav 一律 0600：换台机器、换个
+        用户读产物就撞权限（HTML 要被浏览器读、wav 要被别的账号下的 ffmpeg 读）。
+        mkstemp 之后按 0o666 & ~umask 补位——与 open() 新建文件同一个答案。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            old = os.umask(0o022)
+            try:
+                tmp = SU.unique_tmp(d, ".p.", ".tmp")
+            finally:
+                os.umask(old)
+            self.assertEqual(0o644, os.stat(tmp).st_mode & 0o777)
+
+    def test_deeply_nested_json_is_a_valueerror_not_a_bare_recursionerror(self):
+        """十万层嵌套的 JSON：json.load 抛 RecursionError，不是 ValueError 子类。
+
+        修复前 read_json_file 只转 OSError/UnicodeDecodeError/JSONDecodeError，
+        病态嵌套直接裸栈——而调用方（三个 schema 的入口）全是按 ValueError 接的，
+        接不住的就是一段解释器栈而不是"这份 JSON 坏了"。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "deep.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("[" * 100000 + "]" * 100000)
+            with self.assertRaises(ValueError) as cm:
+                SU.read_json_file(p)
+            self.assertIn("嵌套", str(cm.exception))
 
 
 class OnScreenTextContractShared(unittest.TestCase):

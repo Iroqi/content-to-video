@@ -385,3 +385,155 @@ class FullBleedBackdrop(unittest.TestCase):
         for d in ("M0 0 L", "M0 0 Hx", "garbage"):
             with self.subTest(d=d):
                 self.assertFalse(_backdrop('<path d="%s"/>' % d))
+
+
+class TagCaseAndSlashEquivalence(unittest.TestCase):
+    """两条浏览器同款口径：标签名大小写不敏感、`\\` 在 URL 里就是 `/`。
+
+    ElementTree 是 XML 解析器、保留标签名原始大小写，而浏览器 HTML tokenizer
+    把标签名统一转小写——`<SCRIPT>` 在小写集合眼里不存在、进了成片 HTML 就是
+    script 元素（同源活 DOM，直接执行）。反斜杠同理：WHATWG URL 解析对特殊
+    scheme 把 `\\` 视作 `/`，`href="/\\evil.com"` 在浏览器眼里就是 `//evil.com`。
+    两条都实测绕过（净化层零 note、浏览器执行/请求），判定层必须先归一。
+    """
+
+    def _sanitize(self, markup):
+        return S.sanitize_svg_for_inline(markup)
+
+    def test_uppercase_script_and_foreignobject_are_dropped(self):
+        """`<SCRIPT>` / `<FOREIGNOBJECT>`（任意大小写）都必须删：浏览器认小写。"""
+        for body in ('<script>alert(1)</script>',
+                     '<SCRIPT>alert(1)</SCRIPT>',
+                     '<ScRiPt>alert(1)</ScRiPt>',
+                     '<foreignObject><iframe src="https://evil.com/x.html"/></foreignObject>',
+                     '<FOREIGNOBJECT><iframe src="https://evil.com/x.html"/></FOREIGNOBJECT>'):
+            with self.subTest(body=body):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}">{body}<rect width="10" height="10"/></svg>')
+                low = out.lower()
+                self.assertNotIn("script", low, body)
+                self.assertNotIn("foreignobject", low, body)
+                self.assertNotIn("evil.com", out, body)
+                self.assertTrue(any("已删除" in n for n in notes), (body, notes))
+
+    def test_uppercase_smil_is_dropped(self):
+        """`<ANIMATE>`（任意大小写）是墙钟动画，逐帧 seek 下不可复现。"""
+        for body in ('<animate attributeName="opacity" to="0" dur="1s"/>',
+                     '<ANIMATE attributeName="opacity" to="0" dur="1s"/>',
+                     '<animateTransform attributeName="transform" dur="2s"/>'):
+            with self.subTest(body=body):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}">{body}<rect width="10" height="10"/></svg>')
+                self.assertNotIn("animate", out.lower(), body)
+                self.assertTrue(any("SMIL" in n for n in notes), (body, notes))
+
+    def test_uppercase_style_still_gets_css_cleaned(self):
+        """`<STYLE>` 也要过 CSS 净化：浏览器 tokenizer 转小写后它就是 style 元素。"""
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}">'
+            '<STYLE>@import url("https://evil.com/x.css"); .a{fill:red}</STYLE></svg>')
+        self.assertNotIn("evil.com", out)
+        self.assertNotIn("@import", out)
+        self.assertIn(".a{fill:red}", out)
+
+    def test_uppercase_rect_full_bleed_is_detected(self):
+        """`<RECT>` 铺满 viewBox 也是满幅底板：大小写不敏感。
+
+        判据函数 is_full_bleed_backdrop 由 check_svg 自查与 gen_hyperframes 生成期
+        门禁消费（净化路径上满幅提示也走它），这里直接喂元素。
+        """
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(
+            f'<svg xmlns="{S.SVG_NS}" viewBox="0 0 980 735">'
+            '<RECT width="980" height="735" fill="#123"/></svg>')
+        el = next(e for e in root.iter() if e is not root)
+        self.assertTrue(S.is_full_bleed_backdrop(el, 980, 735))
+
+    def test_href_with_backslash_is_external(self):
+        """`/\\evil.com` 在浏览器眼里就是 `//evil.com`（协议相对 URL）。
+
+        href 是 XML 属性值、不过 CSS 转义，反斜杠原样进 DOM——浏览器 URL 解析
+        对特殊 scheme 把 `\\` 当 `/`。判定层不归一就整类漏过（实测零 note）。
+        """
+        for raw in (r"/\evil.com", r"/\/evil.com", r"\\evil.com"):
+            with self.subTest(raw=raw):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}"><a href="{raw}">x</a></svg>')
+                self.assertNotIn("evil.com", out, raw)
+                self.assertTrue(any("href" in n for n in notes), (raw, notes))
+
+    def test_href_relative_backslash_path_is_kept(self):
+        """相对路径里的 `\\`（Windows 写法）归一后仍不是外链，放行。"""
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><a href="images\\foo.png">x</a></svg>')
+        self.assertIn("images", out)
+        self.assertEqual(notes, [])
+
+    def test_url_with_backslash_is_neutralized(self):
+        """url() 的反斜杠混写：CSS 转义还原后 WHATWG 把 `\\` 当 `/`。
+
+        真实绕过形态的源码是**双反斜杠**：CSS 里单个 `\\` 会被转义还原吃掉
+        （`\\e` 还是十六进制转义），浏览器与净化层看见的都是还原后的值——
+        `url(/\\\\evil.com)` 还原成 `url(/\\evil.com)`，即协议相对 URL。
+        """
+        bs = chr(92)
+        for raw in (f"/{bs}{bs}evil.com/x.png",       # 还原后 /\evil.com
+                    f"/{bs}{bs}/{bs}{bs}evil.com/x.png",  # 还原后 /\/evil.com
+                    f"{bs}{bs}evil.com/x.png",        # 还原后 \evil.com
+                    f"/{bs}{bs}{bs}evil.com/x.png"):  # 还原后 /\\evil.com
+            with self.subTest(raw=raw):
+                for where, markup in (
+                    ("<style> 文本",
+                     f'<svg xmlns="{S.SVG_NS}"><style>.a{{fill:url({raw})}}</style></svg>'),
+                    ("style 属性",
+                     f'<svg xmlns="{S.SVG_NS}"><rect style="fill:url({raw})"/></svg>'),
+                    ("呈现属性",
+                     f'<svg xmlns="{S.SVG_NS}"><rect fill="url({raw})"/></svg>'),
+                ):
+                    with self.subTest(where=where):
+                        out, notes = self._sanitize(markup)
+                        self.assertNotIn("evil.com", out, (raw, where))
+                        self.assertIn("url(about:blank)", out, (raw, where))
+
+    def test_url_any_scheme_is_neutralized(self):
+        """任意 scheme 的 url() 都中和：ftp:/blob: 同样发起外部请求。"""
+        for raw in ("ftp://evil.com/x.png", "blob:https://evil.com/x",
+                    "file:///etc/passwd", "data:text/html,<script>alert(1)</script>"):
+            with self.subTest(raw=raw):
+                out = _clean(f".a{{fill:url({raw})}}")
+                self.assertNotIn("evil.com", out, raw)
+                self.assertIn("url(about:blank)", out, raw)
+
+    def test_url_root_relative_single_slash_is_kept(self):
+        """`url(/foo.png)` 是根相对路径（不是协议相对）：现行为放行，不随本次收紧误伤。"""
+        out = _clean(".a{fill:url(/foo.png)}")
+        self.assertIn("/foo.png", out)
+        notes = []
+        S._clean_style_text(".a{fill:url(/foo.png)}", notes)
+        self.assertEqual(notes, [])
+
+
+class KeyframesInStringLiterals(unittest.TestCase):
+    """@keyframes 的删除只经由 at-rule 整块删；字符串字面量里的字样不许被剖掉。
+
+    证伪：_clean_style_text 在 at-rule 删除后再跑一遍 _strip_keyframes，此时
+    串外的 @keyframes 已删干净，唯一命中的是串内字样——括号配平把串内容剖掉，
+    `content:"@keyframes k{from{opacity:0}}"` 被改成 `content:""`（实测），
+    作者的字面量平白受损，还打一条误导的净化 note。
+    """
+
+    def test_keyframes_at_rule_block_note_names_the_real_reason(self):
+        """at-rule note 说清 @keyframes 被删是因为墙钟定义，不是"外部资源"。"""
+        notes = []
+        out = S._clean_style_text("@keyframes spin{from{opacity:0}} .a{fill:red}", notes)
+        self.assertNotIn("keyframes", out.lower())
+        self.assertIn(".a{fill:red}", out)
+        self.assertTrue(any("墙钟" in n for n in notes), notes)
+
+    def test_keyframes_inside_string_literal_is_untouched(self):
+        """字符串字面量里的 @keyframes 字样是作者的内容，不是规则。"""
+        css = '.a{content:"@keyframes k{from{opacity:0}}"}'
+        notes = []
+        out = S._clean_style_text(css, notes)
+        self.assertEqual(out, css)
+        self.assertEqual(notes, [])

@@ -1,7 +1,7 @@
 """多个脚本共用的进程与落盘基础设施，只依赖标准库。
 
 - 落盘：`write_json_atomic` / `write_text_atomic`（唯一中转名 → fsync → os.replace）、
-  `sha256_file`；读取：`read_json_file`（三种读不出来统一成带路径的 ValueError）。
+  `sha256_file`；读取：`read_json_file`（四种读不出来统一成带路径的 ValueError）。
 - 进程与路径：`setup_stdio`（Windows 重定向强制 UTF-8）、`guard_not_in_skill_dir`、
   `is_inside`、`SKILL_DIR`。
 - 文件清理：`remove_if_exists`（尽力删，删不掉也不吭声）。
@@ -82,6 +82,17 @@ def unique_tmp(directory, prefix, suffix=".tmp"):
     """
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=suffix)
     os.close(fd)
+    # mkstemp 一律按 0600 建（防同机其他用户嗅探半截产物），但中转文件随后要
+    # os.replace 成成品——成品于是也带着 0600：换台机器/换个用户读产物就撞权限
+    # （index.html 要被浏览器读、wav 要被别的账号下的 ffmpeg 读）。按 umask 补成
+    # open() 本该给的位（0o666 & ~umask）。取不到 umask（Windows 没有这个概念，
+    # chmod 在那儿只读只读位）就保持 0600——不修也好过把权限放得太宽。
+    try:
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
+    except (AttributeError, OSError):
+        pass
     return tmp
 
 
@@ -130,10 +141,14 @@ def sha256_file(path):
 
 
 def read_json_file(path):
-    """读一份用户/上游写出的 JSON 文件，把三种读不出来统一成带路径的 ValueError。
+    """读一份用户/上游写出的 JSON 文件，把四种读不出来统一成带路径的 ValueError。
 
     OSError 不是 ValueError 子类：不转的话调用方的 ``except ValueError`` 接不住，
     路径打错就抛裸栈——而路径打错是最常见的用户输入错误。
+
+    RecursionError 也不是 ValueError 子类：`json.load` 解析十万层嵌套的数组/
+    对象时抛的是它（C 扫描器的栈深保护），不转同样是一裸栈——而"嵌套病态"
+    多半是上游生成器出了错，用户需要的是"这份 JSON 坏了"而不是一段解释器栈。
 
     utf-8-sig：Windows 记事本 / PowerShell `Set-Content -Encoding UTF8` 存出来
     的合法 JSON 带 BOM，纯 utf-8 解码会让 json 抛 "Unexpected UTF-8 BOM"，把一份
@@ -151,6 +166,10 @@ def read_json_file(path):
             "Windows 记事本/PowerShell 保存时选 UTF-8（不带 BOM 也行）") from e
     except json.JSONDecodeError as e:
         raise ValueError(f"{path} 不是合法 JSON: {e}") from e
+    except RecursionError as e:
+        raise ValueError(
+            f"{path} 的 JSON 嵌套层数超出解析器栈深（{e}）——正常稿件不会有这种"
+            "结构，多半是生成它的脚本出了错；请人工检查或重新生成") from e
     return data
 
 

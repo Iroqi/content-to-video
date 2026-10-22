@@ -401,6 +401,83 @@ class SvgChecker(unittest.TestCase):
             '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff" data-free-ends="1"/></svg>'))
         self.assertFalse(any("端点悬空" in w for w in warns), warns)
 
+    # ── 本轮帕累托修复的证伪 ──────────────────────────────
+
+    def test_line_ending_on_filled_path_edge_passes(self):
+        """证伪：填充态 path 的轮廓也是合法落点，此前只收 stroke_on 的 path。
+
+        线接进色块边缘正是 craft 规则说的"结束在某处"；旧代码把填充 path 排除在
+        segs 外，这条线被误报"端点悬空"——误报训练人忽略 warn，比漏报更贵。
+        """
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="200" y2="500" stroke="#fff"/>'
+            '<path d="M200 500 L400 500 L400 600 Z" fill="#123456"/></svg>'))
+        self.assertFalse(any("端点悬空" in w for w in warns), warns)
+
+    def test_dangling_warn_reports_both_endpoints(self):
+        """证伪：两端都悬空时只报 ends[0]，第二个坐标要修完重跑才看得见。"""
+        _, warns = self.run_check(GOOD.replace(
+            "</svg>",
+            '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff"/></svg>'))
+        w = next(w for w in warns if "端点悬空：" in w)
+        self.assertIn("(100, 500)", w)
+        self.assertIn("(400, 500)", w)
+
+    def test_commented_out_animation_is_not_a_wallclock(self):
+        """证伪：注释里藏的 `; animation:` 字样被误报成墙钟动画。
+
+        净化层先剥注释再判（_clean_style_text），注释里的假声明根本不进成片；
+        自查拿原始文本搜则命中——作者画一张静态图也吃一条假 warn，且会去改一个
+        已经被删掉的东西。误报训练人忽略 warn，比漏报更贵。
+        """
+        svg = GOOD.replace(
+            'sans-serif}</style>',
+            'sans-serif;/*; animation: x 1s */}</style>')
+        _, warns = self.run_check(svg)
+        self.assertFalse(any("墙钟" in w for w in warns), warns)
+
+    def test_animation_hidden_behind_a_comment_gap_is_caught(self):
+        """证伪（反方向）：`color:red;/*c*/animation:…` 逃过裸文本判定。
+
+        注释隔在 `;` 与声明之间时，lookbehind  adjacency 断了；净化层剥掉注释后
+        这条 animation 声明**会被删掉**（成片里静默变化），自查却报"通过"——
+        报错与净化各说一套。两条必须同源：与净化器共用同一套预处理。
+        """
+        svg = GOOD.replace(
+            "<text ", '<rect width="4" height="4" '
+            'style="color:red;/*c*/animation:spin 1s"/><text ')
+        _, warns = self.run_check(svg)
+        self.assertTrue(any("墙钟" in w for w in warns), warns)
+
+    def test_css_escaped_animation_is_a_wallclock(self):
+        """证伪：`\\61 nimation`（CSS 转义的 animation）逃过裸文本判定——
+        净化层还原转义后删得掉，自查却报"通过"，报错与净化各说一套。"""
+        svg = GOOD.replace(
+            "<text ", '<rect width="4" height="4" style="\\61 nimation: spin 1s'
+            ' linear infinite"/><text ')
+        _, warns = self.run_check(svg)
+        self.assertTrue(any("墙钟" in w for w in warns), warns)
+
+    def test_scale_uses_viewbox_width_not_px_width(self):
+        """证伪：scale = cw/w 拿固有宽度当分母，缩放写法下折算字号少算一半。
+
+        width="1960" viewBox="0 0 980"：36px 字号折成槽位的 eff 应是 36×(980/980)=36
+        （slot 宽 980），旧代码按 1960 折算成 18——"两画幅缩放后读不出来"的 warn
+        该在 24px 以下才响，18px 却会被误判成达标（漏 warn）。
+        """
+        body = ('<text x="40" y="300" font-size="30" fill="#dbe6f5">小字</text>'
+                '</svg>')
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="1960" '
+               'height="1470" viewBox="0 0 980 735">'
+               '<style>text{font-family:"Microsoft YaHei",sans-serif}</style>'
+               '<text x="40" y="100" font-size="36" fill="#dbe6f5">反向传播'
+               '</text>' + body)
+        # slot portrait 宽 980、viewBox 宽 980：30px 折后仍是 30px（>24 下限，
+        # 不该有字号 warn）；旧代码折成 15px，会误报"折算后最小字号约 15px"。
+        _, warns = self.run_check(svg)
+        self.assertFalse(any("折算后最小字号" in w for w in warns), warns)
+
 
 class CanvasDensity(unittest.TestCase):
     """整页画布的"整条横向空带"warn：画布页没有模板兜构图，暂停是空页就得说。"""
@@ -511,13 +588,23 @@ class SvgIntrinsicSize(unittest.TestCase):
         return gen_hyperframes._svg_intrinsic_size(self.path)
 
     def test_px_suffix_accepted_like_check_svg(self):
-        self.assertEqual(self.size('width="980px" height="735px"'), (980.0, 735.0, ""))
+        self.assertEqual(self.size('width="980px" height="735px"'),
+                         (980.0, 735.0, "", 980.0, 735.0))
 
     def test_other_unit_and_prefixed_attr_not_misread(self):
         self.assertIsNone(self.size('width="50%" height="50%"'))
         # min-width 不该被当成 width（check_svg 用 root.get("width") 天然不会）
         self.assertEqual(self.size('min-width="7px" width="980" height="735"'),
-                         (980.0, 735.0, ""))
+                         (980.0, 735.0, "", 980.0, 735.0))
+
+    def test_viewbox_size_comes_back_alongside_the_intrinsic_one(self):
+        """第 4/5 个返回值是坐标系尺寸：缩放写法下它与固有尺寸是两码事。
+
+        字号/坐标写在 viewBox 那一套里，折算分母必须是它（拿固有宽度折算会少算
+        一半）；没有 viewBox 时退固有尺寸——两者本就合一。
+        """
+        self.assertEqual(self.size('width="2160" height="2880" viewBox="0 0 1080 1440"'),
+                         (2160.0, 2880.0, "", 1080.0, 1440.0))
 
     def test_comment_injection_cannot_forge_a_size(self):
         """注释里放一句 `<svg width="10" height="10">`：读文件头的正则版实测
@@ -529,7 +616,7 @@ class SvgIntrinsicSize(unittest.TestCase):
                     '<svg xmlns="http://www.w3.org/2000/svg" width="1080" '
                     'height="1440" viewBox="0 0 1080 1440"></svg>')
         self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
-                         (1080.0, 1440.0, ""))
+                         (1080.0, 1440.0, "", 1080.0, 1440.0))
 
     def test_root_beyond_the_head_slice_is_not_a_false_negative(self):
         """根标签落在头 8192 字节之外（大注释/前置处理指令）：读头版实测返
@@ -539,7 +626,7 @@ class SvgIntrinsicSize(unittest.TestCase):
                     '<svg xmlns="http://www.w3.org/2000/svg" width="980" '
                     'height="735"></svg>')
         self.assertEqual(gen_hyperframes._svg_intrinsic_size(self.path),
-                         (980.0, 735.0, ""))
+                         (980.0, 735.0, "", 980.0, 735.0))
 
 
 class SvgTextMetrics(unittest.TestCase):

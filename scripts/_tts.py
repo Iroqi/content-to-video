@@ -76,13 +76,15 @@ class MimoTtsClient:
         """发起一次合成请求，返回 WAV 字节。timeout 是 socket 级读超时。"""
         body = json.dumps({"model": model, "messages": messages,
                            "audio": audio_params}).encode("utf-8")
-        req = urllib.request.Request(
-            self.url, data=body, method="POST",
-            headers={"Authorization": f"Bearer {self.api_key}",
-                     "Content-Type": "application/json"})
         try:
+            req = urllib.request.Request(
+                self.url, data=body, method="POST",
+                headers={"Authorization": f"Bearer {self.api_key}",
+                         "Content-Type": "application/json"})
+            # Request() 构造与 urlopen 都可能对畸形 URL 抛 ValueError
+            # （`unknown url type`）：构造阶段就抛，所以两者必须在同一段 try 里。
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+                raw_body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             # 响应体单独兜一层：连接已在断的边缘时 `e.read()` 自己会抛（超时/
             # ConnectionReset），直接写在 raise 里会把 `e.code` 一起吞掉——
@@ -94,8 +96,20 @@ class MimoTtsClient:
                 detail = "（响应体读不出来）"
             raise TtsHttpError(e.code, detail) from None
         except ValueError as e:
-            # 200 但 body 不是 JSON（网关返回了 HTML 错误页之类）：
-            # 端点配错，重试同一次请求不会变好，按确定性失败处理。
+            # urlopen 自己抛的 ValueError（典型是 `unknown url type`——base-url
+            # 根本不是个 URL）。这与"200 但 body 不是 JSON"是两回事：请求根本
+            # 没发出去。端点配错是确定性失败（重试 3 次还是那个 URL），必须收敛
+            # 成 BadAudioResponseError——以裸 ValueError 的身份会被
+            # is_non_retryable 放行，每句白跑三轮重试。
+            raise BadAudioResponseError(
+                f"TTS 请求地址不合法（{e}）——检查 --base-url 的写法"
+                "（应是 http(s)://… 的完整地址）") from None
+        # JSON 解析留在 urlopen 的 try **之外**：urlopen 的 ValueError 上面已接住，
+        # 这里只剩响应的解析。200 但 body 不是 JSON（网关返回 HTML 错误页之类）
+        # 也是端点配错：重试同一次请求不会变好，按确定性失败处理。
+        try:
+            payload = json.loads(raw_body)
+        except ValueError as e:
             raise BadAudioResponseError(
                 f"TTS 响应不是合法 JSON（{e}）——检查 --base-url 是否指向 "
                 "OpenAI 兼容的 chat/completions 端点") from None

@@ -172,28 +172,48 @@ def _sentence_entry(index, text, path, duration, ffmpeg_path):
 _SIDECAR_SUFFIXES = (".orig.wav", ".spd", ".spd.*.tmp.wav", ".failed")
 
 
+def _sidecar_paths(out_path, suffixes):
+    """out_path 的全部伴生文件路径（含隔离出的 `.stale` 变体）。
+
+    清理失败改名隔离的那条路径（见 _clear_stale_sidecars）产出 `<名>.stale`：
+    隔离即终点，没有任何 glob 再扫它——只进不出，永久留在输出目录。所以每个
+    片段除了本体还要并上 `<片段>.stale`：锁释放后的下一轮把残渣收走。
+    """
+    for suffix in suffixes:
+        base = glob.escape(out_path) + suffix
+        yield from glob.glob(base)
+        yield from glob.glob(base + ".stale")
+
+
 def _clear_stale_sidecars(out_path):
     """新合成前清掉上一轮残留的变速/兜底 sidecar。
 
     返回是否清干净（或本来没有残留）。删不掉（Windows 下被占用）就先改名加
     `.stale` 隔离；改名也失败才返回 False，调用方必须据此跳过变速——残留的旧
     .orig.wav 会顶掉新音频（改稿后不带 --resume 重跑即触发，成片念旧稿配新字幕）。
+    `.stale` 残渣本身不参与变速/续跑判读（那些只认精确名），扫到就顺手删，
+    删不掉也隔离过一轮了，不再改名也不再计失败。
     """
     ok = True
-    for suffix in _SIDECAR_SUFFIXES:
-        for p in glob.glob(glob.escape(out_path) + suffix):
+    for p in _sidecar_paths(out_path, _SIDECAR_SUFFIXES):
+        if p.endswith(".stale"):
             try:
                 os.remove(p)
             except OSError:
-                try:
-                    os.replace(p, p + ".stale")
-                    print(f"    [sidecar] {os.path.basename(p)} 被占用无法删除，"
-                          f"已改名隔离为 {os.path.basename(p)}.stale",
-                          file=sys.stderr, flush=True)
-                except OSError:
-                    ok = False
-                    print(f"    [sidecar][warn] {os.path.basename(p)} 删除与改名"
-                          f"隔离均失败（文件被占用？）", file=sys.stderr, flush=True)
+                pass
+            continue
+        try:
+            os.remove(p)
+        except OSError:
+            try:
+                os.replace(p, p + ".stale")
+                print(f"    [sidecar] {os.path.basename(p)} 被占用无法删除，"
+                      f"已改名隔离为 {os.path.basename(p)}.stale",
+                      file=sys.stderr, flush=True)
+            except OSError:
+                ok = False
+                print(f"    [sidecar][warn] {os.path.basename(p)} 删除与改名"
+                      f"隔离均失败（文件被占用？）", file=sys.stderr, flush=True)
     return ok
 
 
@@ -394,13 +414,13 @@ def _drop_stale_cache(out_path):
     """
     # "" = wav 本体；.sha 只在这里清（新合成路径上 .sha 由合成成功后重写，
     # 不需要提前隔离，见 _clear_stale_sidecars 的调用注释）。
-    # 同样走 glob：中转名带随机串（见 _SIDECAR_SUFFIXES 的注释）。
-    for suffix in ("", ".sha") + _SIDECAR_SUFFIXES:
-        for p in glob.glob(glob.escape(out_path) + suffix):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+    # 同样走 glob：中转名带随机串（见 _SIDECAR_SUFFIXES 的注释）；隔离出的
+    # .stale 残渣也在这里一并收走（_sidecar_paths 的第二个 glob）。
+    for p in _sidecar_paths(out_path, ("", ".sha") + _SIDECAR_SUFFIXES):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 
@@ -759,12 +779,15 @@ def _group_segments(seg_config, manifest_sentences, degraded):
         degraded[D.SEGMENTS_DROPPED] = list(dropped)
         # 静默剔除会让"我写了 8 段、成片只有 6 段"变成无解的困惑；
         # 报出被剔除的 sid 与原因，让失败可归因。
-        print(f"\n[warn] {len(dropped)} 个段落没有任何可用音频，"
+        # 归因必须跟控制流一致：这里剔除的是 **index 区间内一句都没有**的段
+        # （区间空了 manifest 装不下），不是 TTS 失败——TTS 失败走的是
+        # synth_failed 静音占位（--on-fail silence）或提前退出（abort），
+        # 句子仍在表里。文案原先写着"TTS 连续失败"，指向一条不存在的路径。
+        print(f"\n[warn] {len(dropped)} 个段落的句子区间内没有任何句子，"
               f"已从 manifest 剔除：{', '.join(dropped)}\n"
-              f"       常见原因是这几段 TTS 连续失败且 --on-fail abort"
-              f"（默认）——检查一下上面这些句子的 [fail] 日志，修掉后"
-              f"重跑即可自动补回；--on-fail silence 会生成静音占位、"
-              f"不会触发剔除。", file=sys.stderr, flush=True)
+              f"       这通常是分段落盘的结果与句子索引对不上（段落 start/end "
+              f"区间为空）；请检查上面的分段日志，修掉后重跑即可自动补回。",
+              file=sys.stderr, flush=True)
     return grouped
 
 
@@ -1031,7 +1054,16 @@ def main(argv=None):
             # 后文件已回到原速，推定值才变成事实，届时才准传。
             reapply_prev = decision.prev_speed
             if decision.restore_first:
-                if apply_speed(ffmpeg_path, out_path, 1.0):
+                try:
+                    _restore_ok = apply_speed(ffmpeg_path, out_path, 1.0)
+                except Exception as e:
+                    # 与主合成路径同一口径（见 synthesize_one 的 speed-skip）：
+                    # ffmpeg 缺失/写盘失败这类 OSError 不能让整轮 resume 裸栈
+                    # 中断，降级成"还原失败"，下面按无 marker 的自愈路径走。
+                    _restore_ok = False
+                    print(f"  [{label}][warn] .orig.wav 还原原速异常"
+                          f"（{type(e).__name__}: {e}）", file=sys.stderr)
+                if _restore_ok:
                     restored = True
                     print(f"  [{label}] 无可用 .spd marker，已从 "
                           f".orig.wav 还原到原速，重新对齐语速", flush=True)
@@ -1048,8 +1080,18 @@ def main(argv=None):
                           file=sys.stderr)
             _replayed = restored
             if decision.action == "reapply":
-                if apply_speed(ffmpeg_path, out_path, decision.apply_speed_to,
-                               prev_speed=reapply_prev):
+                try:
+                    _reapplied = apply_speed(ffmpeg_path, out_path,
+                                             decision.apply_speed_to,
+                                             prev_speed=reapply_prev)
+                except Exception as e:
+                    # 与主合成路径同一口径：异常也降级成"保持当前语速"，
+                    # 不让整轮 resume 裸栈中断。
+                    _reapplied = False
+                    print(f"  [{label}][warn] atempo 重施加异常"
+                          f"（{type(e).__name__}: {e}）；audio kept at "
+                          f"previous speed", file=sys.stderr)
+                if _reapplied:
                     # 只有真的施加了变速才算"重处理过"：apply_speed_to=1.0 时
                     # apply_speed 是还原/空操作（连 ffmpeg 都没起），标签必须
                     # 跟"这一句本次到底动没动过音频文件"对齐（见下方 _tag）。

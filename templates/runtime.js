@@ -654,7 +654,17 @@ const buildCueTrack = () => {
     ts.push(Math.round(c.t * 1e4) / 1e4);
     ts.push(Math.round((c.t + Math.max(c.d, 0.01)) * 1e4) / 1e4);
   }
-  const uniq = ts.filter((x, i, a) => isFinite(x) && x >= 0 && a.indexOf(x) === i).sort((a, b) => a - b);
+  // 去重走 Set：filter 里 a.indexOf(x) 是 O(n²)——12fps × 20s 就有 240 个
+  // 时间点，长片（几分钟级）上是几万² 次比较，主线程上听得见卡顿。
+  const seen = new Set();
+  const uniq = [];
+  for (const x of ts) {
+    if (isFinite(x) && x >= 0 && !seen.has(x)) {
+      seen.add(x);
+      uniq.push(x);
+    }
+  }
+  uniq.sort((a, b) => a - b);
   const clock = gsap.timeline({paused: true});
   for (const t of uniq) clock.to({}, {duration: 0}, t);
   tl.add(clock, 0);

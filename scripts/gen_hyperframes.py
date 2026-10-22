@@ -15,7 +15,7 @@ import sys
 import tempfile
 import urllib.request
 import xml.etree.ElementTree as ET
-from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import escape
 
 
 # GSAP 是 HTML composition 生成阶段唯一必需的本地运行资产。
@@ -441,11 +441,17 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
 
 
 def _svg_intrinsic_size(path):
-    """从 SVG 根标签取 (固有宽, 固有高, 说明)；判据走 `_svg_sanitize.root_px_size`
-    ——与 `check_svg` 的自查同一份函数，不是"同一份注释"。读不出/解析失败返回
-    None（调用方按"没法验"报错，不静默放行）。说明串非空是 width/height 与
-    viewBox 比例不一致，由调用方出声：此前这一份只取尺寸不校比例，同一张图
-    check_svg 报不一致、这里一声不吭。
+    """从 SVG 根标签取 (固有宽, 固有高, 说明, 坐标系宽, 坐标系高)；判据走
+    `_svg_sanitize.root_px_size` / `root_viewbox_size`——与 `check_svg` 的自查
+    同一份函数，不是"同一份注释"。读不出/解析失败返回 None（调用方按"没法验"
+    报错，不静默放行）。说明串非空是 width/height 与 viewBox 比例不一致，由
+    调用方出声：此前这一份只取尺寸不校比例，同一张图 check_svg 报不一致、这里
+    一声不吭。
+
+    第 4/5 个返回值是 **坐标系尺寸**（viewBox，没有 viewBox 时退固有尺寸）：
+    字号/坐标写在 viewBox 这一套里，折算分母必须是它——拿固有宽度折算，缩放
+    写法（width="2160" viewBox="0 0 1080 1440"）下折算字号会少算一半，
+    check_svg 的 scale 同一口径（两道门必须给同一个答案）。
 
     按 ElementTree 解析而不是读文件头正则：注释里放一句 `<svg width="10" …>`
     曾让正则版把 10×10 当成固有尺寸（实测），比例校验于是对着一个假尺寸开灯；
@@ -462,7 +468,8 @@ def _svg_intrinsic_size(path):
     w, h, note = root_px_size(root)
     if not w or not h:
         return None        # 读不出 = 没法验，调用方报错而不是拿 None 去判比例
-    return w, h, note
+    vb_w, vb_h = root_viewbox_size(root)
+    return w, h, note, (vb_w or w), (vb_h or h)
 
 
 def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h, draft=False):
@@ -494,7 +501,7 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h, draft=False):
             errs.append(f"段落 '{sid}' 的配图 {src} 读不出固有尺寸：根标签要有"
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
-        sw, sh, note = size
+        sw, sh, note, _vb_w, _vb_h = size
         if note:
             warns.append(f"段落 '{sid}' 的配图 {src} {note}——内容按 "
                          f"preserveAspectRatio 在这一框里留白或拉伸，成片里画在"
@@ -680,6 +687,20 @@ def _canvas_placeholder_svg(title, canvas_w, canvas_h):
         f'</svg>\n')
 
 
+def _canvas_sids_missing_src(missing_imgs, images, seg_by_id):
+    """草稿档占位只认 **src 缺失**的画布段。
+
+    `missing_imgs` 里混着两类条目：src 文件不在、poster 封面文件不在（后者
+    只有 video 条目会有）。poster 缺失与"这张图还没画"不是一回事——真 src 还在
+    盘上；占位照写会把整份映射（src/poster/type）连同真图一起覆盖掉，草稿预览
+    反而丢了作者已经画完的东西。按"缺失的文件是否正是该段的 src"来分。
+    """
+    return {sid for sid, rel in missing_imgs
+            if sid in seg_by_id
+            and seg_layout(seg_by_id[sid]) == "canvas"
+            and (images.get(sid) or {}).get("src") == rel}
+
+
 def materialize_missing_canvas_placeholders(images, segments, out_dir,
                                             canvas_w, canvas_h,
                                             missing_sids=None):
@@ -755,7 +776,7 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
             errs.append(f"段落 '{sid}' 的画布 {src} 读不出固有尺寸：根标签要有"
                         f"纯数字的 width/height（% 不算）或 viewBox，否则没法验比例")
             continue
-        sw, sh, note = size
+        sw, sh, note, vb_w, vb_h = size
         if note:
             warns.append(f"段落 '{sid}' 的画布 {src} {note}——与 slot 版式同一份"
                          f"判据（_svg_sanitize.root_px_size），两道门必须给同一个"
@@ -768,7 +789,10 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
             continue
         # 等比之后才算缩放：成片把 SVG 按 canvas_w/sw 放大或缩小，图内每个
         # 字号都乘这个系数。只有缩小的方向会跌破可读下限。
-        scale = canvas_w / sw
+        # 分母是 **坐标系宽**（viewBox）：字号写在 viewBox 这一套里，缩放写法
+        # （width="2160" viewBox="0 0 1080 1440"）下拿固有宽度当分母会把折算
+        # 字号少算一半——该拦的小字号静默放行。与 check_svg 的 scale 同一口径。
+        scale = canvas_w / (vb_w or sw)
         min_px, n_text = _svg_text_metrics(path)
         if min_px is not None and min_px * scale < MIN_READABLE_FONT_PX:
             _fs_msg = (f"段落 '{sid}' 的画布 {src} 是 {sw:g}×{sh:g}，铺进 "
@@ -1599,12 +1623,18 @@ def main(argv=None):
                     # 缺 src 换成占位（与"还没画"同等待遇），槽位段留空位让预览
                     # 如实显示；损坏文件只点名。占位/空位/裂图都是"草稿"的一部分，
                     # 报告里留痕，定稿生成（不带 --draft）仍是上面那道 fail-fast。
+                    # 只把 **src 缺失**的画布段交给占位：missing_imgs 里混着
+                    # poster 缺失的条目（封面文件不在，video 条目才有 poster）。
+                    # 那不是"这张图还没画"——真 src 还在盘上；占位照写会把整份
+                    # 映射（src/poster/type）连同真图一起覆盖掉，草稿预览反而
+                    # 丢了作者已经画完的东西，正式渲染前还要再补一次。
+                    # （判据提成 _canvas_sids_missing_src：一行集合推导分不开
+                    # 这两类缺失，而它们的处置正相反。）
                     _cw, _ch = get_canvas(args.aspect)
                     _filled = set(materialize_missing_canvas_placeholders(
                         images, manifest["segments"], out_dir, _cw, _ch,
-                        missing_sids={sid for sid, _ in missing_imgs
-                                      if sid in _seg_by_id
-                                      and seg_layout(_seg_by_id[sid]) == "canvas"}))
+                        missing_sids=_canvas_sids_missing_src(
+                            missing_imgs, images, _seg_by_id)))
                     for sid, rel in missing_imgs:
                         if sid in _filled:
                             print(f"[warn] 段落 '{sid}' 的画布配图 {rel} 文件缺失：草稿档已换占位 "

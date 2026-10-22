@@ -4,6 +4,10 @@
     沿色温弧分配给各内容段（arc_accent_indices）
   - "_DEFAULT_ACCENT"：默认段落强调色
   - "_ARC_CYCLE"：情绪弧循环，沿色板下标序列走一圈（arc_accent_indices）
+  - "_ARC_PEAK"：弧上峰值档位（arc_accent_indices 保证段数再少也走到）
+  - "arc_accent"：弧上位 → 实际颜色（整档原色、中间混色，与 CSS color-mix 同构）
+  - 颜色数学（纯函数）：hex 解析 / 色名表 / WCAG 亮度对比度 / 混色 /
+    ensure_text_contrast（accent 文字色的对比度保底）
 
 为什么色板要带"顺序"，而不是 8 支互相等价的色：色板原先是一个无序集合，
 按段序轮询 = 每段随机发一支，于是第一期片子开场是黄、第二段是蓝、第三段是
@@ -14,6 +18,7 @@
 """
 import copy
 import functools
+import math
 import re
 # ── 主题注册表──
 # 单一主题 dark。accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
@@ -101,8 +106,12 @@ def arc_accent_indices(count):
     "在弧上第 i 档与第 i+1 档之间"：
 
         3 段 → 0, 1.5, 3（冷 → 中间色 → 峰值黄）
-        4 段 → 0, 2, 2.67, 4（走到橙）
-        6 段 → 0, 2, 3, 4, 5, 7（走满整条弧）
+        4 段 → 0, 1, 2, 3（冷 → 青 → 橙 → 峰值黄）
+        6 段 → 0, 1, 2, 3, 4, 5（正好步步落在 _ARC_CYCLE 上，取到的都是原色；
+              色板下标即 _ARC_CYCLE 本身：0, 2, 3, 4, 5, 7）
+
+    （这些数是**弧上位**——`_ARC_CYCLE` 的下标，不是色板下标；`arc_accent()`
+    才把它们换成颜色：整档取原色、中间混两支近邻色。）
 
     弧尾按 `min(count, 弧长)` 与"至少走到峰值"两条取大：段数少时也要看得见
     峰值，段数多时整条弧压进 count 段。
@@ -144,6 +153,48 @@ def arc_accent(pos, palette=None):
     b = _hex_rgb_bytes(hi)
     return "#" + "".join(
         "%02x" % int(round(a[i] + (b[i] - a[i]) * frac)) for i in range(3))
+
+
+def _point_seg_distance(p, a, b):
+    """RGB 空间里点 p 到线段 ab 的距离（弧是这里的折线段）。"""
+    ab = [b[i] - a[i] for i in range(3)]
+    ap = [p[i] - a[i] for i in range(3)]
+    ab2 = sum(v * v for v in ab)
+    if ab2 <= 0:
+        return math.sqrt(sum(v * v for v in ap))
+    t = sum(ap[i] * ab[i] for i in range(3)) / ab2
+    t = max(0.0, min(1.0, t))
+    return math.sqrt(sum((ap[i] - t * ab[i]) ** 2 for i in range(3)))
+
+
+def on_arc(color):
+    """颜色是否落在 accent 色温弧上：色板成员，或相邻两支之间的弧上混色。
+
+    `arc_accent` 的中间档产出的是 `_ARC_CYCLE` 相邻两支按通道线性插值的混色
+    （3 段时的 `#a6c497` 就是冷蓝与青中间的色）。消费侧要分辨"照抄本段
+    accent"与"另挑一支"时用这条判据：混色**在弧上**，不是脱弧——把它判成
+    "脱出全片色温走向"是冤枉的（`references/canvas.md` 要求画布 spec 照抄
+    本段 accent，作者每次生成都吃一条假 hint，训练人忽略提示）。
+
+    判据用点到折线段的距离而不是逐通道解 t：混色后每通道 round 到整数，
+    delta 小的通道上 t 的误差能被放大成假阴性；距离容差 1.5 吸收末位舍入
+    （最坏 sqrt(3×0.5²)≈0.87）。读不出 hex 返回 True——颜色合法性归契约层
+    （is_safe_css_color）管，这里不添 second opinion。
+    """
+    c = css_color_to_hex(color)
+    if c is None:
+        return True
+    if c in _ACCENT_PALETTE:
+        return True
+    rgb = _hex_rgb_bytes(c)
+    if rgb is None:
+        return True
+    for lo, hi in zip(_ARC_CYCLE, _ARC_CYCLE[1:]):
+        a = _hex_rgb_bytes(_ACCENT_PALETTE[lo])
+        b = _hex_rgb_bytes(_ACCENT_PALETTE[hi])
+        if _point_seg_distance(rgb, a, b) <= 1.5:
+            return True
+    return False
 
 
 # ── 颜色数学 ────

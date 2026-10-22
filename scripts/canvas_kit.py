@@ -47,8 +47,8 @@ from _svg_sanitize import FULL_BLEED_FRAC, _covers_viewbox  # noqa: E402  满幅
 from _template import (get_canvas, get_image_box, load_template,  # noqa: E402
                        normalize_aspect, put_override)
 from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
-                    ensure_text_contrast, get_accent_palette,
-                    get_default_accent, get_theme_colors, mix, theme_bg_stops)
+                    ensure_text_contrast, get_default_accent,
+                    get_theme_colors, mix, on_arc, theme_bg_stops)
 from _validate import _reject_unknown_keys, _validate_accent  # noqa: E402
 from _validate import _validate_finite_number  # noqa: E402
 
@@ -912,19 +912,20 @@ _EMITTERS = {"panel": _emit_panel, "polyline": _emit_polyline, "bars": _emit_bar
              "circle": _emit_circle, "text": _emit_text, "rule": _emit_rule}
 
 
-def _context(spec, nodes=None):
-    """发射器共用的取值上下文（模板尺寸 + 取色表），顺带把这段 SVG 的 body 攒起来。
+def _context(spec):
+    """发射器共用的取值上下文（模板尺寸 + 取色表）。
 
-    `nodes` 由调用方给一个空列表时，`note=True` 把它变成一段 SVG 注释；不给就丢掉。
-    render_svg 正文与 --epilog 的示例（要真的出图验证过才敢印）因此共用**同一个**
-    渲染管线，不必让第二处再写一遍"元素循环 + 起始态 + 注释"。
+    曾有一个 `nodes` 参数：调用方给空列表时把 `ctx["note"]` 变成 SVG 注释收集器，
+    为的是让 render_svg 正文与 --epilog 示例共用同一条渲染管线。后来注释改由
+    `_emit_axis` 以 (node, note) 返回值直接交出（`_emit_body` 消费），
+    `ctx["note"]` 再没有读过它的地方——两个调用点也都不传 nodes。删掉参数与键，
+    别让第二套"攒注释"的机制留在上下文里装忙。
     """
     w, h = get_canvas(spec["aspect"])
     return {"canvas": (w, h), "aspect": spec["aspect"], "theme": spec["theme"],
             "tiers": TIERS[spec["aspect"]], "line_w": LINE_W[spec["aspect"]],
             "panel_r": PANEL_R[spec["aspect"]],
-            "pal": _palette(spec["theme"], spec["accent"]),
-            "note": nodes.append if nodes is not None else lambda _line: None}
+            "pal": _palette(spec["theme"], spec["accent"])}
 
 
 def _emit_body(spec, ctx):
@@ -1080,7 +1081,15 @@ def _line_visibility_notes(spec, ctx):
             notes.append("{} 档用的 {} 对 {} 页底只有 {:.1f}:1：线/图形压进成片后可能读不出来，"
                          "换更亮（或更暗）一档".format(key, pal[key], spec["theme"], ratio))
     accent = spec["accent"]
-    if accent != get_default_accent() and accent not in get_accent_palette():
+    # "在弧上"判据（_theme.on_arc）：色板成员，或 build_from_structured 沿弧
+    # 分配的**混色**（段数多于色板档位时 arc_accent 的中间档）。canvas.md 要求
+    # 画布 spec 照抄本段 accent——照抄过来的混色不是"另挑一支"，旧代码按
+    # `accent not in get_accent_palette()` 判，每次生成都吃一条冤枉 hint。
+    # 默认强调色（opening/closing 用的品牌色）按设计不在弧上，显式豁免；
+    # 颜色先归一化再比：spec 里的大写 hex 写法与色板的小写 hex 是同一支。
+    _norm = css_color_to_hex(accent)
+    if (not on_arc(accent)
+            and _norm != css_color_to_hex(get_default_accent())):
         notes.append("accent {} 既不在本技能 accent 色板、也不是默认强调色——色板沿一条"
                      "色温弧分配给各段（开场偏冷、中段最暖、收束回冷），另挑一支会让"
                      "这一页脱出全片的色温走向".format(accent))

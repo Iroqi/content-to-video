@@ -118,6 +118,51 @@ class CanvasGeometry(unittest.TestCase):
         self.assertEqual(notes, [])
         self.assertIn('id="curve"', markup)
 
+    def test_context_carries_no_note_collector(self):
+        """取值上下文里不留第二套"攒 SVG 注释"的机制。
+
+        曾有个 `nodes` 参数把 `ctx["note"]` 变成注释收集器，后来注释改由
+        `_emit_axis` 以 (node, note) 返回值交出——`ctx["note"]` 再无读取点
+        （调用方也不传 nodes），键留着就是一份没人消费的隐式契约。
+        """
+        spec = K.validate_spec(spec_for("portrait"))
+        self.assertNotIn("note", K._context(spec))
+
+
+class LineVisibilityNotes(unittest.TestCase):
+    """_line_visibility_notes 的"脱弧"判据：照抄本段 accent（含沿弧混色）不误报，另挑一支仍报。"""
+
+    def off_arc_notes(self, accent):
+        spec = {"aspect": "portrait", "theme": "dark", "accent": accent,
+                "elements": [{"kind": "text", "id": "t", "x": 10, "y": 10,
+                              "tier": "title", "content": "标题"}]}
+        validated = K.validate_spec(spec)
+        return [n for n in K._line_visibility_notes(validated, K._context(validated))
+                if "脱出全片" in n]
+
+    def test_arc_mixed_accent_is_not_reported_off_arc(self):
+        """段数多于色板档位时，arc_accent 的中间档是沿弧两支的混色——照抄它不是"另挑一支"。
+
+        references/canvas.md 要求画布 spec 照抄本段 accent，旧代码按
+        `accent not in get_accent_palette()` 判，每次生成都吃一条冤枉 hint
+        （hint 训练人忽略提示，比漏报更贵）。
+        """
+        for mixed in ("#a6c497", "#4dcee5", "#c4bf7e", "#ffc64e", "#faaf65", "#f06087"):
+            with self.subTest(accent=mixed):
+                self.assertEqual(self.off_arc_notes(mixed), [])
+
+    def test_genuinely_off_arc_accent_still_hints(self):
+        """判据放松的是"弧上混色"，不是"随便挑"——真脱弧的颜色照旧出声。"""
+        self.assertTrue(self.off_arc_notes("#123456"))
+
+    def test_default_accent_written_uppercase_is_not_reported(self):
+        """默认强调色按设计不在弧上（显式豁免）；写成大写 hex 与色板小写是同一支。"""
+        validated = K.validate_spec(spec_for("portrait"))
+        raw = dict(validated, accent="#2DD4BF")
+        notes = [n for n in K._line_visibility_notes(raw, K._context(validated))
+                 if "脱出全片" in n]
+        self.assertEqual(notes, [])
+
 
 class Gate(unittest.TestCase):
     def setUp(self):

@@ -217,6 +217,12 @@ def validate_segments_source(data):
         has_dialogue = isinstance(dialogue, list) and len(dialogue) > 0
         if seg.get("text") is not None and not isinstance(seg.get("text"), str):
             raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）的 'text' 必须是字符串")
+        # 纯空白 text 单独存在时报的是"缺 text 或 dialogue"（has_text 为假），
+        # 配上 dialogue 却整字段被静默忽略——同一输入两种答案，"写了等于没写"。
+        # 非 None 的 text 就必须有内容：空白是笔误，不是"这一版不要独白"的表达。
+        if isinstance(seg.get("text"), str) and not seg.get("text").strip():
+            raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）的 'text' 是纯空白"
+                             "——要么给独白正文，要么删掉这个字段改用 'dialogue'")
         has_text = isinstance(seg.get("text"), str) and bool(seg.get("text").strip())
         if not has_text and not has_dialogue:
             raise ValueError(f"segments[{i}]（title={seg.get('title')!r}）"

@@ -282,11 +282,20 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 补偿变速必须以当前文件为源（它就是最新状态）；常规路径优先用原速备份
     src = wav_path if compensate else (
         orig_path if os.path.exists(orig_path) and orig_path != wav_path else wav_path)
-    result = _run_ff([
-        ffmpeg_path, "-y", "-i", src,
-        "-filter:a", filt,
-        "-ar", "24000", "-ac", "1", tmp
-    ], 60)
+    try:
+        result = _run_ff([
+            ffmpeg_path, "-y", "-i", src,
+            "-filter:a", filt,
+            "-ar", "24000", "-ac", "1", tmp
+        ], 60)
+    except OSError as e:
+        # _run_ff 只兜超时；ffmpeg 半路没了/权限坏了这类 OSError 原样上抛时，
+        # 上面 mkstemp 建的空 tmp 会留在盘上（sidecar 清理按 glob 扫得到，但
+        # 那是下一次跑同一句才发生；本次运行里它就是残渣）。清掉再按失败返回，
+        # 与 atempo 非零退出同一口径（保留原速，调用方已各自收敛）。
+        remove_if_exists(tmp)
+        print(f"  [speed-skip] atempo 起不来（{e}）：{wav_path}", file=sys.stderr)
+        return False
     if result is None:
         # 超时 = 拿不到 returncode，tmp 可能留残骸；统一转成 False 走失败清理
         remove_if_exists(tmp)
@@ -309,7 +318,12 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     if result.returncode == 0:
         # returncode=0 却没有可用产物（0 字节/仅 44 字节头）：ffmpeg 被信号
         # 打断或磁盘写满时的形态。当成失败，绝不让空文件顶掉原音频。
+        # 这里必须 own 掉清理与收尾：往下走会再补一条 "atempo failed"——
+        # returncode 明明是 0，一次失败打两条 warn，第二条的 stderr 还常常
+        # 是空的，读日志的人会以为有两个独立故障。
+        remove_if_exists(tmp)
         print("  [speed-skip] atempo 产物为空，未替换原音频", file=sys.stderr)
+        return False
     # atempo 失败时及时清掉半写的 tmp（多次失败堆积会留磁盘残渣）
     remove_if_exists(tmp)
     print(f"  [speed-skip] atempo failed: {result.stderr[-200:]}",

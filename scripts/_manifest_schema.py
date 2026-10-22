@@ -129,7 +129,13 @@ def validate_timing_manifest(data):
     # schema_version 缺席会留一条逃逸口——手写 manifest 少写它就能绕开 status
     # 校验，把降级产物伪装成正常成片交给下游（降级显式化是硬规则）。
     schema_version = data.get("schema_version")
-    if schema_version != 2:
+    # 只认**整数** 2：`2.0 != 2` 为 False，JSON 里的 2.0（浮点写法）会悄悄放行。
+    # 版本号是给人与 diff 看的声明，2 与 2.0 在 JSON/YAML 之间来回转换时会互相
+    # 变体；口径收严成"int 2"一种答案（bool 是 int 的子类，True==1 不在这里但
+    # 显式拒掉，免得将来改判据时被 `True != 2` 之外的路径混过去）。
+    if (isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != 2):
         raise ValueError("timing_manifest.json 必须声明 schema_version: 2"
                          f"（实际: {schema_version!r}）——缺字段说明它出自更早版本的"
                          " pipeline 或手写时漏写，重跑 pipeline.py 生成新 manifest")

@@ -155,6 +155,34 @@ class RetryVerdict(unittest.TestCase):
         self.assertFalse(T.is_non_retryable(ConnectionResetError("boom")))
         self.assertFalse(T.is_non_retryable(ValueError("no status")))
 
+    def test_malformed_url_is_not_misreported_as_bad_json(self):
+        """证伪：urlopen 对畸形 base-url 自己抛 ValueError（`unknown url type`）。
+
+        旧的 except ValueError 把 urlopen 与 json.loads 圈在同一段 try 里，于是
+        "URL 根本没发出去"被报成"TTS 响应不是合法 JSON"——病因与药方全指错；
+        且裸 ValueError 被判可重试，每句白跑三轮。URL 配错是确定性失败。
+        """
+        def boom(req, timeout=None):
+            raise ValueError("unknown url type: 'not-a-url'")
+
+        with mock.patch.object(T.urllib.request, "urlopen", boom):
+            with self.assertRaises(T.BadAudioResponseError) as cm:
+                T.MimoTtsClient("k", "not-a-url").synthesize(
+                    "你好", "v", "", "m", 1)
+        self.assertIn("base-url", str(cm.exception))
+        self.assertTrue(T.is_non_retryable(cm.exception))
+
+    def test_http_200_html_body_is_still_bad_json(self):
+        """200 但 body 是 HTML（网关错误页）：仍是确定性失败，且归因不变。"""
+        with mock.patch.object(T.urllib.request, "urlopen",
+                               lambda req, timeout=None: FakeResponse(
+                                   b"<html>502 Bad Gateway</html>")):
+            with self.assertRaises(T.BadAudioResponseError) as cm:
+                T.MimoTtsClient("k", "https://x.example/v1").synthesize(
+                    "你好", "v", "", "m", 1)
+        self.assertIn("不是合法 JSON", str(cm.exception))
+        self.assertTrue(T.is_non_retryable(cm.exception))
+
 
 class SynthSentenceThroughProtocol(unittest.TestCase):
     """synth_sentence 只传领域参数给 client.synthesize，落盘/重试/失败清理归管线。"""

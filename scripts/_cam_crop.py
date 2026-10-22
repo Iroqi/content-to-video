@@ -44,7 +44,8 @@ import re
 import xml.etree.ElementTree as ET
 
 from _path_morph import x_span, y_span
-from _svg_sanitize import (_local, _parse_num,  # noqa: E402  剥命名空间 + SVG 数字只有这一份实现
+from _svg_sanitize import (FULL_BLEED_FRAC,  # noqa: E402  满幅阈值唯一真源（canvas_kit 同一份）
+                           _local, _parse_num,  # noqa: E402  剥命名空间 + SVG 数字只有这一份实现
                            root_viewbox_size, svg_points)
 from _timeline import beat_cycles, ends_at_start
 from _template import svg_text_band
@@ -235,7 +236,10 @@ def _walk(cam, vb_w, vb_h):
         if box is None:
             continue
         w, h = box[1] - box[0], box[3] - box[2]
-        if w >= vb_w * 0.98 and h >= vb_h * 0.98:
+        # 满幅底板阈值走 _svg_sanitize.FULL_BLEED_FRAC（唯一真源）：这里曾硬编码
+        # 0.98，与 _covers_viewbox 的阈值分两家——改一处不改另一处时，同一张图
+        # 在净化层算"铺满"、在取景投影里算"该溢出"，两道门给两个答案。
+        if w >= vb_w * FULL_BLEED_FRAC and h >= vb_h * FULL_BLEED_FRAC:
             continue                          # 满幅底板本来就该溢出
         x0 = box[0] * sx + tx
         x1 = box[1] * sx + tx

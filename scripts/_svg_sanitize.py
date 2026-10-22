@@ -30,9 +30,13 @@ ET.register_namespace("", SVG_NS)
 ET.register_namespace("xlink", XLINK_NS)
 
 # 一律删掉的元素（内联后会执行脚本或嵌入不可控 HTML）。
-_DROP_TAGS = {"script", "foreignObject"}
+# **标签名一律小写**：ElementTree 是 XML 解析器、保留原始大小写，而浏览器 HTML
+# tokenizer 把标签名统一转小写——`<SCRIPT>` 在净化层的小写集合眼里不存在、进了
+# 成片 HTML 就是 script 元素（同源活 DOM，直接执行）。判定层必须先折成小写再比，
+# 合法 SVG 标签本就小写（foreignObject 是唯一驼峰，折后仍命中）。
+_DROP_TAGS = {"script", "foreignobject"}
 # 墙钟动画元素：逐帧 seek 下不可复现，director 模式剥掉，运动交给时间线补间。
-_WALLCLOCK_TAGS = {"animate", "animateTransform", "animateMotion", "set"}
+_WALLCLOCK_TAGS = {"animate", "animatetransform", "animatemotion", "set"}
 # CSS 里驱动墙钟动画的属性名（在 <style> 文本与 inline style 上都清）。
 # 值的终止同时认 `;` 和 `}`：`.a{animation:x}` 结尾没有分号，吃到 `;` 会把闭合 `}`
 # 之后下一条规则一起吞掉。
@@ -44,7 +48,12 @@ _WALLCLOCK_CSS = re.compile(
 # 外链 / 脚本 URL：@import、url(http…)、href 里的 javascript:。url() 里一并拦
 # file:/data:（以 file:// 打开 HTML 时可达本机磁盘）。
 # 必须吃到收尾 `)`：只吃 scheme 那一截会留下半截坏语法。
-_EXT_URL = re.compile(r"url\(\s*['\"]?\s*(?:https?:|//|file:|data:)[^)]*\)?", re.I)
+# scheme 备选认**任意** scheme 而不只 https?：ftp:/blob:/chrome: 同样发起外部
+# 请求；`\\`（CSS 转义还原后剩下的单反斜杠）与 `//`、`/\`、`\/` 一并认——
+# WHATWG URL 解析对特殊 scheme 把 `\` 当 `/`，`url(/\evil.com/x.png)` 在浏览器
+# 眼里就是协议相对 URL（`\` 与 `/` 混写同理），只认 `//` 会整类漏过。
+_EXT_URL = re.compile(
+    r"url\(\s*['\"]?\s*(?:[a-z][a-z0-9+.-]*:|\\|[/\\]{2,})[^)]*\)?", re.I)
 # CSS 转义序列（CSS Syntax §4.3.7）：`\XXXXXX`（1~6 位十六进制，后可跟一个空白被
 # 吃掉）、`\<其它字符>`、以及 `\`+换行（续行，整体抹掉）。浏览器解析 CSS 值与
 # URL 之前做的就是这一步还原——净化层不先还原，`\75rl(…)`、`\61nimation:`、
@@ -69,9 +78,6 @@ _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # chrome:/javascript: 等一律不收——内联 SVG 是同源活节点，且产物 HTML 常以
 # file:// 打开，file: 引用会触及本机磁盘）。内部片段 "#id" 与相对路径除外。
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
-# @keyframes 规则（含厂商前缀）的起始标记：剥定义用的，见 _strip_keyframes。
-# 前缀组 [a-z]* 可为零字符，纯 @keyframes 也要命中（@-webkit-keyframes 靠 -? 接上）。
-_KEYFRAMES_AT = re.compile(r"@-?[a-z]*-?keyframes\b", re.I)
 
 
 def _local(tag):
@@ -114,7 +120,11 @@ def _is_external_href(value):
     # 落成这些字符，scheme 正则不过它们），再撕掉首尾的 C0 控制与空格
     # （`\x01javascript:` 同理）。不按这条口径看，判定层看不见浏览器看见的
     # 那个 URL。
+    # 反斜杠归一成 `/`：WHATWG 解析器对特殊 scheme 把 `\` 视作 `/`，
+    # `href="/\evil.com"` 在浏览器眼里就是 `//evil.com`（协议相对 URL）。
+    # 相对路径里的 `\`（Windows 写法）归一后仍不是 scheme/`//`，不受影响。
     v = re.sub(r"[\t\n\r]", "", value or "").lower()
+    v = v.replace("\\", "/")
     v = re.sub(r"^[\x00-\x20]+", "", v)
     v = re.sub(r"[\x00-\x20]+$", "", v)
     if not v or v.startswith("#"):
@@ -312,7 +322,9 @@ def is_full_bleed_backdrop(el, vb_w, vb_h):
     """
     if not vb_w or not vb_h:
         return False
-    tag = _local(el.tag)
+    # 折小写再比：`<RECT>` 在浏览器眼里就是 rect（HTML tokenizer 转小写），
+    # 大小写敏感会把满幅底板整类放过去。
+    tag = _local(el.tag).lower()
     if tag == "rect":
         covers = _rect_backdrop(el, vb_w, vb_h)
     elif tag == "polygon":
@@ -378,48 +390,6 @@ def _viewbox_size(root):
         return None, None
 
 
-def _strip_keyframes(css):
-    """剥掉 @keyframes（含厂商前缀）规则体：墙钟动画的定义本身。
-
-    只删声明会把规则体留在 `<style>` 里，"墙钟动画已剥净"就不成立。括号配平扫到
-    深度 0（每个 keyframe 选择器各带一层 {}）；未闭合的残缺规则原样保留，净化不
-    越权去修。
-
-    存在性判定走 `_KEYFRAMES_AT`，别写 "@keyframes" 子串：子串认不出厂商前缀
-    （`@-webkit-keyframes` 会整块留下）。
-    """
-    m0 = _KEYFRAMES_AT.search(css)
-    if not m0:
-        return css
-    out = []
-    i, n = 0, len(css)
-    while i < n:
-        m = _KEYFRAMES_AT.search(css, i)
-        if not m:
-            out.append(css[i:])
-            break
-        out.append(css[i:m.start()])
-        j, depth = m.start(), 0
-        while j < n:
-            ch = css[j]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    j += 1
-                    break
-            j += 1
-        if depth != 0:
-            # 没配平到 0 = 残缺规则。按上面那条口径保留剩余文本：硬删会把
-            # @keyframes 之后**所有**合法规则一起吞掉（实测注释里提一句就把
-            # 下一条规则吃掉），净化不越权替作者修坏 CSS。
-            out.append(css[m.start():])
-            break
-        i = j
-    return "".join(out)
-
-
 def _outside_strings(pattern, css, fn):
     """对 css 里每个字符串字面量**之外**的片段执行 fn（串原样保留）。"""
     parts, last = [], 0
@@ -474,9 +444,15 @@ def _drop_at_rules(css, notes):
             depth += {"{": 1, "}": -1}.get(css[j], 0)
             j += 1
         if depth == 0:
-            why = ("（作者漏了分号，按 CSS 语法它已吞进下一条规则）"
-                   if "\n" in m.group(0) else "（成片里要么无意义，要么是外部资源）")
-            notes.append(f"<style> 里的 {_at_key(m.group(0))} 整块已删除{why}")
+            key = _at_key(m.group(0))
+            if "keyframes" in key:
+                # @keyframes 的真实删除原因是墙钟动画定义，不是"外部资源"——
+                # note 说错原因会把作者引去删一条不存在的外链。
+                why = "（墙钟动画的定义；要动请用 director 补间）"
+            else:
+                why = ("（作者漏了分号，按 CSS 语法它已吞进下一条规则）"
+                       if "\n" in m.group(0) else "（成片里要么无意义，要么是外部资源）")
+            notes.append(f"<style> 里的 {key} 整块已删除{why}")
             i = j
         else:
             # 括号没配平 = 作者写坏了 CSS：只删块头，剩余文本原样保留。
@@ -487,20 +463,20 @@ def _drop_at_rules(css, notes):
 
 
 def _clean_style_text(css, notes):
-    """从 <style> 文本里剥掉墙钟动画（声明 + @keyframes 定义）、外链 url()/@import
-    与其余整块 at-rule。
+    """从 <style> 文本里剥掉墙钟动画声明、外链 url()/@import 与其余整块 at-rule。
 
-    顺序：剥注释 → 还原 CSS 转义 → at-rule（整块删，自带串识别）→ @keyframes →
-    其余四条按"串外片段"处理。前两步与浏览器解析 CSS 的前置处理同序，否则
+    顺序：剥注释 → 还原 CSS 转义 → at-rule（整块删，自带串识别）→ 其余两条按
+    "串外片段"处理。前两步与浏览器解析 CSS 的前置处理同序，否则
     `\\75rl(https://…)`、`\\61nimation:x` 在正则眼里不存在、在浏览器眼里成立。
+
+    @keyframes 的定义体由上一步的 at-rule 整块删除覆盖（含厂商前缀与残缺
+    括号两种形态），这里不再单独扫一遍：那样只会命中字符串字面量里的
+    "@keyframes" 字样，而 _strip_keyframes 的括号配平会把串内容剖掉——
+    `content:"@keyframes k{…}"` 被改成 `content:""`，作者的字面量平白受损。
     """
     if not css:
         return css
     out = _drop_at_rules(_css_unescape(_CSS_COMMENT.sub("", css)), notes)
-    if _KEYFRAMES_AT.search(out):
-        out = _strip_keyframes(out)
-        notes.append("<style> 里的 @keyframes 规则已剥离"
-                     "（墙钟动画的定义；要动请用 director 补间）")
 
     def strip(s):
         if _EXT_URL.search(s):
@@ -567,9 +543,11 @@ def sanitize_svg_for_inline(raw):
 
     # 结构化改写：删除危险元素与墙钟动画元素，清属性。用父指针表原地删，
     # 避免边遍历边改树。
+    # 标签名先折小写：_DROP_TAGS/_WALLCLOCK_TAGS 与下面的 style 判定都按小写
+    # 集合比（浏览器 HTML tokenizer 同款口径，见那两个集合的注释）。
     parent = {c: p for p in root.iter() for c in p}
     for el in list(root.iter()):
-        tag = _local(el.tag)
+        tag = _local(el.tag).lower()
         if tag in _DROP_TAGS:
             p = parent.get(el)
             if p is not None:

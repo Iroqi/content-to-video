@@ -467,10 +467,9 @@ const verseApply = (si) => {
       if (sc === "") L.el.style.removeProperty("--ctv-line-scale");
       else L.el.style.setProperty("--ctv-line-scale", sc);
     }
-    if (!act) continue;
-    // 两画幅里不滚动的那一侧 clip 比窗口矮，整体不滚
-    c.clip.style.transform = "translateY(" + (c.clipH <= c.winH ? 0
-      : Math.max(c.winH - c.clipH, Math.min(0, __CTV_VERSE_CLIP__ - act.top))) + "px)";
+    // 位移**不在这里写**：换句那一刻只写一次的话，滚动是硬跳（实测一帧从 0
+    // 跳到 −70px），而同一次换句的亮度与尺寸都在 0.32s 里柔和到位——三个维度
+    // 里只有位置这一维是硬的。滚动改由 verseScroll 每帧插值（见下）。
   }
 };
 // 换句接力：新句落位的那一小段行程里淡入，而不是"啪"地到位。
@@ -505,6 +504,56 @@ const RELAY_SECONDS = parseFloat(
 const _cueStart = (si) => {
   for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
   return NaN;
+};
+// ── 焦点层级的第三个维度：位置（滚动）─────────────────────────────────
+//
+// 前沿歌词 UI（Apple Music 逐行歌词、AMLL 的 LyricPlayer）的 spring 同时管
+// **垂直位置、缩放、透明度**三个属性——行不是"啪地换掉"的，是被推着上去的。
+// 此前本仓库只做了两维（亮度、尺寸），滚动那一维是硬跳：换句那一帧 clip 的
+// translateY 直接写死到新落位（实测 0 → −70px 一帧到位），而同一次换句的亮度
+// 与尺寸都在一个接力窗口里柔和到位——三个维度里只有位置这一维是硬的。
+//
+// 三条纪律（与 verseRelay 同源，逐帧渲染逼出来的）：
+//   1. **时间 t 的纯函数**：插值进度只由 (t − 本句 cue 起点) 算，不记"上一帧
+//      滚到哪"，乱序 seek 幂等。起点由 verseTick 传进来（当前 cue 的 t）。
+//   2. **不新增任何缓存字段**：起点与终点都由**静态布局值**重推（行的 offsetTop、
+//      窗口高、clip 高）——缓存被字体就绪清掉后照样算得出。
+//   3. **位移仍归 .verse-clip 独占**：行上只允许 scale，行上再叠位移会把行推离
+//      锚点（同 focusTable 旁那条注释）。
+//
+// 曲线取钉固 GSAP 自己的档（默认 sine.out：减速停稳、不过冲，落点精确回到布局
+// 值），不在运行时另抄一份公式：抄了就得靠测试盯两份相等，而 GSAP 若哪天不认
+// 这个档名会**静默**回落到缺省缓动——那正是"演的不是你写的"那条无声退化。
+//
+// 档名本身也**不在这里写死**：真源是模板 subtitle.scroll.ease，生成期校验后经
+// --ctv-scroll-ease 注入（与 --ctv-relay-s 同一口径）。下面的兜底值必须与模板
+// 同值——两边不同步＝改了一处、成片里演的是另一条曲线，且没有任何报错。
+const SCROLL_EASE_NAME = (getComputedStyle(document.documentElement)
+  .getPropertyValue("--ctv-scroll-ease") || "").trim() || "sine.out";
+const SCROLL_EASE = gsap.parseEase(SCROLL_EASE_NAME);
+if (typeof SCROLL_EASE !== "function")
+  throw new Error("GSAP 不认 " + SCROLL_EASE_NAME + "：滚动曲线会静默退化成缺省缓动");
+// 某一行落在窗口里时，clip 该有的 translateY。装得下（clip 比窗口矮）就整体不滚。
+const verseClipY = (c, L) => (c.clipH <= c.winH ? 0
+  : Math.max(c.winH - c.clipH, Math.min(0, __CTV_VERSE_CLIP__ - L.top)));
+// 滚动插值：from = 同段上一句的落位，to = 当前句的落位，p 与亮度/尺寸共用同一个
+// 接力窗口——三个维度同一时刻到位，"焦点"不能在途中分裂成"先滚、再亮"两个动作。
+const verseScroll = (c, t, t0, si) => {
+  if (!isFinite(t0)) return;
+  let act = null, prev = null, prevDi = -Infinity;
+  for (const L of c.lines) {
+    const di = parseInt(L.el.getAttribute("data-i"), 10);
+    if (di === si) { act = L; continue; }
+    // 同段里的前一句 = 落位的出发点（段内句子 index 连续，取小于当前句的最大者）
+    if (di < si && di > prevDi) { prev = L; prevDi = di; }
+  }
+  if (!act) return;              // 这一段没有当前句：它的落位保持不动
+  const to = verseClipY(c, act);
+  // 本段第一句：没有"上一句"可推，落位就是终点（不制造一段无来由的位移）。
+  const from = prev ? verseClipY(c, prev) : to;
+  const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
+  const y = from + (to - from) * SCROLL_EASE(p);
+  c.clip.style.transform = "translateY(" + y.toFixed(2) + "px)";
 };
 const verseRelay = (c, t, t0, si) => {
   if (!isFinite(t0)) return;
@@ -545,6 +594,7 @@ const verseTick = (t) => {
       const c = verseCacheOf(v);
       verseEmUpdate(c, cueSi, 1e9);
       verseRelay(c, 1e9, tailT0, cueSi);
+      verseScroll(c, 1e9, tailT0, cueSi);
     }
     return;
   }
@@ -555,6 +605,7 @@ const verseTick = (t) => {
     const c = verseCacheOf(v);
     verseEmUpdate(c, cueSi, t);
     verseRelay(c, t, curT0, curSi);
+    verseScroll(c, t, curT0, curSi);
   }
 };
 const verseSync = (t, t2) => {

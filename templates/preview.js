@@ -38,13 +38,17 @@
   var vp = document.querySelector('meta[name="viewport"]');
   if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1');
 
-  // 字幕淡入淡出/滚动补间只属于人工预览：成片是逐帧 seek 出来的，任何按
-  // 墙上时钟走的 CSS 过渡都会让"抓取到的那一帧"落后于时间线时刻（详见
-  // composition.css 的 verse 块注释）。这里——即只有预览分支会执行的位置——
-  // 把过渡补回来，浏览器里看仍然是平滑的。
+  // 淡入淡出补间只属于人工预览：成片是逐帧 seek 出来的，任何按墙上时钟走的
+  // CSS 过渡都会让"抓取到的那一帧"落后于时间线时刻（详见 composition.css 的
+  // verse 块注释）。这里——即只有预览分支会执行的位置——把过渡补回来，浏览器
+  // 里看仍然是平滑的。
+  //
+  // **但 `.verse-clip` 的 transform 不补**：字幕滚动现在由 runtime.js 的
+  // verseScroll 逐帧插值（与亮度、尺寸共用同一个接力窗口），预览和成片同源。
+  // 再叠一条 CSS 过渡，等于同一段位移被两个时钟驱动——CSS 过渡会拖尾到上一
+  // 帧的目标值，看起来"慢半拍"，而逐帧抓帧只会读到半路值。
   var smooth = document.createElement('style');
-  smooth.textContent = '.verse-clip{transition:transform .45s cubic-bezier(.4,0,.2,1)}'
-      + '.verse-line{transition:opacity .3s,color .3s}';
+  smooth.textContent = '.verse-line{transition:opacity .3s,color .3s}';
   document.head.appendChild(smooth);
 
   var CTRL_H = 52;

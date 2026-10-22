@@ -246,6 +246,13 @@ FACTS = [
         [("references/rendering.md", r"613px")],
         "横屏左文字栏宽度；rendering.md「画面结构」手写同数",
     ),
+    (
+        "subtitle-scroll-ease",
+        ("json", "scripts/_template.py", "subtitle.scroll.ease"), "sine.out",
+        [("references/rendering.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],
+        "字幕滚动的缓动档：作者改了它，成片里滚动的手感就换了——"
+        "文档必须跟着说清当前是哪一档",
+    ),
     # ── 画布三档字号（竖屏/横屏各锁一组，label 档=刻度线长的分母）──
     (
         "canvas-tier-title-v",

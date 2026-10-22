@@ -394,6 +394,9 @@ _TEMPLATE_JSON = r'''
       "past": 0.45,
       "ratio": 0.726,
       "scale": 0.94
+    },
+    "scroll": {
+      "ease": "sine.out"
     }
   },
   "canvasAmbience": {

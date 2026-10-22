@@ -246,6 +246,31 @@ def _check_family_args(family, args, spec, where):
                     f"true，写别的串成片与预览会对不上。{EASE_HELP}")
 
 
+# 会**越界**的族：曲线在到达 1 之前先冲过 1（back 的过冲量、elastic 的振幅）
+# 或冲过之后回弹（bounce 的尾段上下折返）。位移类动画里这是致命的——落位是
+# 一个精确值（按 offsetTop 算出来的 translateY），冲过意味着内容先越出落位
+# 再回来，位移越大越明显。实测过冲量：back.out(1.7) 峰值 1.0998、
+# elastic.out(1,0.5) 峰值 1.2044。
+OVERSHOOT_FAMILIES = frozenset({"back", "elastic", "bounce"})
+
+
+def reject_overshoot(spec, where):
+    """位移类动画不许用过冲族：冲过落位再回来＝内容先甩出去再收回。
+
+    与 `validate_ease` 分开：那一层判的是"GSAP 认不认这个档名"（通用），
+    这一层判的是"这条曲线**适合**这条动画"（按用途挑）。同一个 `back.out(1.7)`
+    用在标题入场是好手感，用在字幕滚动落位是穿帮。
+    """
+    parts = split_ease(spec)
+    if parts is None or parts[0] not in OVERSHOOT_FAMILIES:
+        return spec
+    raise ValueError(
+        f"{where} {spec!r} 是过冲族（{parts[0]}）：位移类动画的落位是一个精确值，"
+        f"过冲会先冲出落位再回来（实测 back.out(1.7) 峰值 1.0998、"
+        f"elastic.out(1,0.5) 峰值 1.2044）。换一条不过冲的档，"
+        f"如 sine.out / power2.out / expo.out。")
+
+
 def validate_ease(spec, where):
     """契约层校验：档名不在目录里就 fail-fast，绝不留成"成片里悄悄换成别的缓动"。
 

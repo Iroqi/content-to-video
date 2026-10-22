@@ -168,7 +168,11 @@ body{font-family:var(--ctv-font-family)}
    opacity 0.62（该是 1）、颜色还是主题色而非 accent，6 条 CSSTransition
    全部 `playState:running, currentTime:0`。表现就是句子流不跟着滚动、
    高亮不上色——而且 bleed 多少取决于抓取每帧花多久，同一条稿件两次渲染
-   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。 */
+   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。
+   注意**滚动位移也不在这里补**：`.verse-clip` 的 translateY 由 runtime.js 的
+   verseScroll 每帧插值（焦点层级的第三维，见 runtime.js 里的长注释），
+   预览与成片同源；preview.js 因此**不再**给 .verse-clip 加 transform 过渡
+   （同一段位移被两个时钟驱动，预览会拖尾、逐帧抓帧会读到半路值）。 */
 .verse-clip{position:relative;padding:var(--ctv-verse-clip) 0}
 /* 句子流的**暗垫**：竖屏句子流钉在页底，正压在氛围光最亮的一带，网格线在字
    后面读起来像托着一层灰底。垫层从透明渐变到 90% 页面底色，边缘看不见，只把
@@ -205,7 +209,10 @@ body{font-family:var(--ctv-font-family)}
    之所以**只写 scale 不写 translate**：滚动归 .verse-clip 独占（它的 translateY
    按 offsetTop 算落位），行上再叠位移会让行偏离锚点；scale 不改布局盒，锚点照旧。
    transform-origin 锚**左缘**：字幕是左对齐的，绕中心缩放会让行的左边界在换句时
-   左右抖——那道左缘是句子流里唯一不动的视觉基准线，不能让它动。 */
+   左右抖——那道左缘是句子流里唯一不动的视觉基准线，不能让它动。
+   滚动这一维（垂直位置）由 runtime.js 的 verseScroll 插值，落在 .verse-clip 的
+   translateY 上，与这里的亮度、尺寸共用同一个接力窗口：三个维度同一时刻到位，
+   "焦点"不能在途中分裂成"先滚、再亮"两个动作。 */
 .verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚

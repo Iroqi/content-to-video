@@ -26,6 +26,8 @@ from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
 from _segments import (is_content_sid, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
+from _ease import validate_ease as ease_validate
+from _ease import reject_overshoot as ease_reject_overshoot
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _stage_carry import infer_stage_keep
@@ -484,6 +486,16 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
                 f"[template] {_focus_aspect} 字幕最深焦点档 "
                 f"{_focus_font * _focus_scale ** 3:.1f}px 小于可读下限 "
                 f"{MIN_READABLE_FONT_PX}px")
+    # 字幕滚动的缓动档（焦点层级的第三个维度：位置）。真源在模板
+    # subtitle.scroll.ease，运行时经 --ctv-scroll-ease 读回（同 --ctv-relay-s
+    # 的口径：真源在模板、生成期校验、运行时兜底同值）。
+    #
+    # 这里有两道闸：认不出来的档名（validate_ease）会让 GSAP **静默**回落成缺省
+    # 缓动——成片里演的不是你写的那条曲线；过冲族（back/elastic/bounce）则会
+    # 冲出落位再回来，而滚动落位是按 offsetTop 算出来的精确值。
+    _scroll_ease = str(tpl["subtitle"]["scroll"]["ease"]).strip()
+    ease_validate(_scroll_ease, "[template] subtitle.scroll.ease")
+    ease_reject_overshoot(_scroll_ease, "[template] subtitle.scroll.ease")
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -537,6 +549,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{_sl["relay"]};
+  --ctv-scroll-ease:{_scroll_ease};
   --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。

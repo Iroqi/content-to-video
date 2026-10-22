@@ -188,7 +188,6 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
 # 未登记 warning 仍会点名，避免 CLI 升级后新增检查被默认吞掉。
 # ⚠ 升级 CLI 后这张表要跟着 `hyperframes check <项目> --json` 的实际输出复核；
 # 与 references/rendering.md「官方校验命令」那张噪声表由 tests/check_docs.py 对账。
-GATE_STAGES = ("lint", "runtime", "layout", "motion", "contrast", "craft")
 GATE_NOISE_CODES = {
     # lint：本模板结构决定必然出现，不是待修问题
     "composition_file_too_large": "HTML 体量随稿子规模走",
@@ -214,7 +213,7 @@ GATE_FINDING_CODES = frozenset(GATE_NOISE_CODES) | GATE_STRICT_CODES
 
 
 def build_check_command(project, command=None):
-    """拼一条 `hyperframes check --json`（lint + runtime + layout + motion + contrast）。"""
+    """拼一条 `hyperframes check --json`（lint + 浏览器各阶段，一个门禁）。"""
     base = list(command) if command else hyperframes_command(project)
     return resolve_command(base + ["check", project, "--json"])
 
@@ -223,19 +222,27 @@ def check_verdict(report, known_codes=GATE_FINDING_CODES):
     """`hyperframes check --json` 的输出 → [(严重度, code, 说明)]，只留该当真的条目。
 
     判读口径：
+    - **阶段按结构认，不按名字认**：凡顶层带 `findings` 列表的块都判读
+      （v0.8.185 是 lint/runtime/layout/motion/contrast/craft；hdr、snapshots、
+      saved、_meta 不带 findings，自然排除）。按名字认会让 CLI 新增的阶段整段
+      失明——那正是本模块承诺要挡的"新增检查被默认吞掉"。
     - **error 一律当真**；`ok: false` 但拿不到 error 也当真（不能报通过）。
     - warning：已登记的 noise 放过，**集合外的新 code 当真**——CLI 加了新检查。
-    - **Lint 有 error ⇒ browser 五阶段整个没跑**（CLI 的 shouldBlockRender），
+    - **Lint 有 error ⇒ browser 各阶段整个没跑**（CLI 的 shouldBlockRender），
       那些 0 是"没量"不是"通过"。此时显式点一条，别让人误读成全绿。
     """
     if not isinstance(report, dict) or "ok" not in report:
         return [("error", "check_output", "check --json 的输出读不懂（不是 JSON 对象）")]
     findings = []
-    for stage in GATE_STAGES:
-        body = report.get(stage)
+    for body in report.values():
         if not isinstance(body, dict):
             continue
-        for f in body.get("findings") or []:
+        stage = body.get("findings")
+        if not isinstance(stage, list):
+            continue
+        for f in stage:
+            if not isinstance(f, dict):
+                continue
             sev = str(f.get("severity", "")).lower()
             code = f.get("code") or "?"
             msg = f.get("message") or ""

@@ -11,6 +11,10 @@ from unittest import mock
 import _helpers as H  # noqa: F401
 import _render_backend as RB
 
+# v0.8.185 `check --json` 实测的六个阶段名。只用来**构造**假报告——判读那一侧
+# 按结构认阶段（带 findings 的顶层块），不认名字，所以这张表不必跟着判读改。
+V0185_STAGES = ("lint", "runtime", "layout", "motion", "contrast", "craft")
+
 
 class Commands(unittest.TestCase):
     def test_build_render_command_shape(self):
@@ -316,7 +320,7 @@ class OfficialGate(unittest.TestCase):
 
     def _report(self, **stages):
         body = {"ok": True, "browserSkipped": False}
-        for name in RB.GATE_STAGES:
+        for name in V0185_STAGES:
             body[name] = {"ok": True, "errorCount": 0, "warningCount": 0, "findings": []}
         for name, findings in stages.items():
             errs = sum(1 for f in findings if f["severity"] == "error")
@@ -362,6 +366,26 @@ class OfficialGate(unittest.TestCase):
         self.assertEqual([c for _, c, _ in RB.check_verdict(rep)],
                          ["unregistered:craft_new_rule"])
 
+    def test_stage_unknown_to_us_is_not_dropped(self):
+        """CLI 升级后多出来的**整个阶段**必须照样判读。
+
+        阶段若按名字认，新阶段会整段失明——它里面的 error 一条都不报，check
+        照样显示全绿。那比"新 code 被当噪声放过"更彻底，是门禁自己失效。
+        """
+        rep = self._report(audio=[{"code": "clip_media_fit", "severity": "error",
+                                   "message": "x"}])
+        self.assertEqual([(s, c) for s, c, _ in RB.check_verdict(rep)],
+                         [("error", "clip_media_fit")])
+
+    def test_blocks_without_findings_are_not_stages(self):
+        """hdr / snapshots / saved / _meta 都是顶层 dict，但不带 findings。"""
+        rep = self._report()
+        rep["hdr"] = {"autoPromotion": None, "inspection": "available"}
+        rep["snapshots"] = {"enabled": False, "files": [], "times": []}
+        rep["saved"] = {"id": "x", "report": "/tmp/x.json"}
+        rep["_meta"] = {"version": "0.8.185"}
+        self.assertEqual(RB.check_verdict(rep), [])
+
     def test_lint_error_means_browser_stages_did_not_run(self):
         """Lint 有 error 时 browser 五阶段被整段跳过：那些 0 不是"通过"。"""
         rep = self._report(lint=[{"code": "external_script", "severity": "error"}])
@@ -400,7 +424,7 @@ class CheckOutputParsing(unittest.TestCase):
 
     def test_run_check_end_to_end_with_noisy_stdout(self):
         report = {"ok": True, "browserSkipped": False}
-        for name in RB.GATE_STAGES:
+        for name in V0185_STAGES:
             report[name] = {"ok": True, "errorCount": 0, "warningCount": 0,
                             "findings": []}
         raw = (b"[cli] resolving spec\n"

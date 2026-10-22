@@ -88,8 +88,6 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。
 
-要一版**能叠在别的素材上**的成片：容器换 `npx hyperframes render --format webm|mov`（官方原生带 alpha，`png-sequence` 出 RGBA 帧序列）。但每卡自带 `.bg`/`.grid` 两层不透明底，**只换容器不出透明**——先撤掉那两层再渲。
-
 ## 常用参数
 
 参数只认一处真源：`python scripts/run.py --help`（取值、默认值、用途都在那里）。这里只留两条 `--help` 看不出来的：
@@ -102,7 +100,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告——**整页画布除外**，那一页缺图连预览 HTML 都生成不出来，一律 exit 2。想在图没画完之前先看编排，用 `--until html --placeholder-missing`（占位 SVG 顶一张；只配 `--until html`，带它渲染在入口报错，`--draft` 会自动带上）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（该位置空着或占位，报告留痕）；`--until images` 只看覆盖率、不拦。
 
-字段集封闭（三份 JSON 的未知键即报错）只留一个草稿位：`_` 开头的键不生效、不进任何产物，但放行并打 `[notice]`——给"写下来还没定"的备选文案用。真字段一个都不以 `_` 开头，草稿位不会掩盖拼写错误。
+字段集封闭（三份 JSON 的未知键即报错）只留一个草稿位：`_` 开头的键不生效、不进任何产物，但放行并打 `[notice]`——给"写下来还没定"的备选文案用。
 
 渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）。短于容差拦下交付，长于容差与量不到只 `[warn]`。机制、三档处置与补救路径见 `rendering.md`「正式渲染」。
 

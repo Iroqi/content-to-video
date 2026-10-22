@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _helpers as H  # noqa: N999  把 scripts/ 放进 sys.path
 
@@ -266,12 +267,16 @@ class MediaVerdictSingleSource(unittest.TestCase):
             # 后缀要保住（ffmpeg 按它推断容器格式）
             self.assertTrue(SU.unique_tmp(d, ".a.", ".wav").endswith(".wav"))
 
+    @unittest.skipIf(os.name == "nt",
+                     "umask 是 POSIX 语义：Windows 的 st_mode 恒合成 0o666（可写）、"
+                     "os.chmod 也只读只读位，没有 0o666 & ~umask 可断言")
     def test_unique_tmp_inherits_the_umask_not_mkstemps_0600(self):
         """中转文件 os.replace 成成品后，成品不能带着 mkstemp 的 0600。
 
         修复前 index.html / timing_manifest / wav 一律 0600：换台机器、换个
         用户读产物就撞权限（HTML 要被浏览器读、wav 要被别的账号下的 ffmpeg 读）。
         mkstemp 之后按 0o666 & ~umask 补位——与 open() 新建文件同一个答案。
+        Windows 没有这个语义（见 skip 理由），契约在那里无从断言。
         """
         with tempfile.TemporaryDirectory() as d:
             old = os.umask(0o022)
@@ -287,13 +292,27 @@ class MediaVerdictSingleSource(unittest.TestCase):
         修复前 read_json_file 只转 OSError/UnicodeDecodeError/JSONDecodeError，
         病态嵌套直接裸栈——而调用方（三个 schema 的入口）全是按 ValueError 接的，
         接不住的就是一段解释器栈而不是"这份 JSON 坏了"。
+
+        向量分两路：真实深嵌套在 3.13 及以前真的触发 RecursionError 路径（那时
+        这条向量同时是证伪）；3.14 起 json 的 C 扫描器改成迭代式，同样输入直接
+        解析成功——触发不了就用 mock 把 RecursionError 直接灌进 json.load，
+        钉住的是转换契约本身（该except 在 3.9–3.13 的 CI 矩阵上是活路径）。
         """
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "deep.json")
             with open(p, "w", encoding="utf-8") as f:
                 f.write("[" * 100000 + "]" * 100000)
-            with self.assertRaises(ValueError) as cm:
+            try:
                 SU.read_json_file(p)
+            except ValueError:
+                return                 # 真触发了 RecursionError 且已被转成人话
+            # 解析器放行了这份输入（3.14 起 C 扫描器迭代式）：没有真路径可走，
+            # 用 mock 把 RecursionError 直接灌进 json.load，钉住转换契约本身。
+            with mock.patch.object(SU.json, "load",
+                                   side_effect=RecursionError("maximum recursion "
+                                                              "depth exceeded")):
+                with self.assertRaises(ValueError) as cm:
+                    SU.read_json_file(p)
             self.assertIn("嵌套", str(cm.exception))
 
 

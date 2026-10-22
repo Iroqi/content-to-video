@@ -411,10 +411,15 @@ const focusTable = () => {
   const pRaw = parseFloat(cs.getPropertyValue("--ctv-focus-past"));
   const rRaw = parseFloat(cs.getPropertyValue("--ctv-focus-ratio"));
   const sRaw = parseFloat(cs.getPropertyValue("--ctv-focus-scale"));
+  const bRaw = parseFloat(cs.getPropertyValue("--ctv-focus-blur"));
   const fut = isFinite(fRaw) && fRaw > 0 && fRaw <= 1 ? fRaw : 0.62;
   const past = isFinite(pRaw) && pRaw > 0 && pRaw <= fut ? pRaw : 0.45;
   const r = isFinite(rRaw) && rRaw > 0 && rRaw < 1 ? rRaw : past / fut;
   const s = isFinite(sRaw) && sRaw > 0 && sRaw <= 1 ? sRaw : 0.94;
+  // 景深是**加法**不是乘法：每远一档多 blur 个 em（高斯半径按离焦距离线性增长，
+  // 这才是景深的样子；照抄 ratio 那一档的乘法会得到"越远越不虚"，方向是反的）。
+  // 0 = 关掉这一维（老产物没有这个变量时回退 0.02，与模板同值，由测试钉住）。
+  const b = isFinite(bRaw) && bRaw >= 0 ? bRaw : 0.02;
   // 一条曲线的展开：[1, a, a·q, …]，长度 = 封顶档 + 1。尺寸那条错位一档的起点是
   // s·s（= 未来侧的第二档），与亮度用 past/fut 的错位同一种写法。
   const row = (a, q, n) => {
@@ -423,7 +428,7 @@ const focusTable = () => {
     return out;
   };
   focusRows = {fut: row(fut, r, 3), past: row(past, r, 3),
-               sfut: row(s, s, 2), spast: row(s * s, s, 2)};
+               sfut: row(s, s, 2), spast: row(s * s, s, 2), blur: b};
   return focusRows;
 };
 // 返回要写上行内联的 --ctv-line-op；当前行（d=0）返回 ""＝撤内联，交还 CSS 的
@@ -440,6 +445,53 @@ const verseFocusScale = (d) => {
   const T = focusTable();
   const row = d < 0 ? T.spast : T.sfut;
   return row[Math.min(Math.abs(d), 2)].toFixed(4);
+};
+// ── 第四个维度：景深（模糊）───────────────────────────────────────────────
+// 前沿歌词 UI（AMLL 的 setEnableBlur、Jellyfin 那支“梯度模糊”）让离焦的行不只是
+// 更暗更小，还**更虚**。这是"远"这个字在光学里的本义：前三维合起来表达的是强弱
+// （暗 / 小 / 被推走），只有模糊表达的是"不在焦平面上"——观众判断"哪一行是现在"
+// 靠的是锐度，锐度差比亮度差更早被眼睛抓到。
+//
+// 两个与前面几维不同的地方，都是有理由的：
+//   · **加法而不是乘法**：每远一档多 blur 个 em。照抄 ratio 那种"每档乘一次"会
+//     得到"越远越不虚"（0.02 → 0.0145 → 0.0105），方向是反的；景深随离焦距离
+//     线性增长。
+//   · **单位是 em**：相对该行自己的字号，于是竖屏 40px 与横屏 33px 各自按自己的
+//     字号缩放，模板里只存一个数。
+// 封顶**两档**（与尺寸同档数、比亮度少一档）：档数不是拍的，是生成期那条糊掉线
+// 推出来的（floor(FOCUS_BLUR_MAX_EM ÷ blur)，见 _template.FOCUS_BLUR_MAX_EM），
+// 所以这里写成常量、由测试钉住——改模板的 blur 不会被这里的档数悄悄放行到越线。
+// 过去侧与亮度/尺寸同一种错位（提前一档），于是 d=−1 就已经是封顶值：念过的行
+// 一律最虚。
+const FOCUS_BLUR_RANK_CAP = 2;
+const verseFocusBlur = (d) => {
+  if (d === 0) return 0;
+  const b = focusTable().blur;
+  if (!(b > 0)) return 0;              // 关掉景深：撤滤镜
+  return b * Math.min(Math.abs(d) + (d < 0 ? 1 : 0), FOCUS_BLUR_RANK_CAP);
+};
+// 滤镜的开关与取值都在这一处合成，**不交给 CSS 的 max()**：那句只能写成
+// `blur(max(var(--ctv-line-blur,0em),var(--ctv-relay-blur,0em)))`，而 blur(0em)
+// 也是 filter——实测它把字形换成另一套栅格化（同一句 40px 白字：边缘拉普拉斯和
+// 925410 → 994512、单像素最大差 80；对照 transform:scale(1) 与 none 逐像素相同）。
+// 离焦行本来就要虚，无所谓；当前行是画面上最该锐利的那一句，为一个 0 半径的滤镜
+// 把它的字形换一遍是纯视觉漂移，成片里看不出是谁干的。
+//
+// 地板（0.01em ≈ 40px 字幕的 0.4px）管的是另一件事：接力的末段模糊量一路收到 0，
+// 最后一帧会同时发生"模糊归零 + 撤滤镜"——那次栅格化切换不再被任何模糊盖住。收
+// 到地板就撤，切换被残存的 0.4px 模糊盖住。
+const FOCUS_BLUR_MIN_EM = 0.01;
+const verseBlurSet = (L, b) => {
+  if (!(b > FOCUS_BLUR_MIN_EM)) {
+    if (L.el.style.getPropertyValue("--ctv-line-filter") !== "")
+      L.el.style.removeProperty("--ctv-line-filter");
+    return;
+  }
+  // 值不变就不写：这一位每帧都会被 verseRelay 重新算一遍，稳态时（接力结束后）
+  // 不该每帧都触发一次样式重算。与上面几个 relay 变量同一条守卫写法。
+  const v = "blur(" + b.toFixed(4) + "em)";
+  if (L.el.style.getPropertyValue("--ctv-line-filter") !== v)
+    L.el.style.setProperty("--ctv-line-filter", v);
 };
 const verseApply = (si) => {
   cueSi = si;
@@ -466,6 +518,9 @@ const verseApply = (si) => {
       const sc = act ? verseFocusScale(di - si) : "";
       if (sc === "") L.el.style.removeProperty("--ctv-line-scale");
       else L.el.style.setProperty("--ctv-line-scale", sc);
+      // 景深维度同一口径：换句时才变，所以同样只在 verseApply 里写（接力的那一
+      // 份由 verseRelay 每帧补，两边取大者——合成在 verseBlurSet 里）。
+      verseBlurSet(L, act ? verseFocusBlur(di - si) : 0);
     }
     // 位移**不在这里写**：换句那一刻只写一次的话，滚动是硬跳（实测一帧从 0
     // 跳到 −70px），而同一次换句的亮度与尺寸都在 0.32s 里柔和到位——三个维度
@@ -563,10 +618,19 @@ const verseRelay = (c, t, t0, si) => {
   // 两个维度共用同一个 p、同一时刻到位——"焦点"不能在途中分裂成"先长大、后变亮"
   // 两个动作。但起点不同是刻意的：亮度从 0.35 起是"从更深处浮出"的换句信号，
   // 尺寸照着 0.35 起会把新句先缩成一小团再撑开，读成形变而不是入场。
+  // 景深同一口径、方向相反：从未来档的模糊量（b）**收回**到 0——新句是"从虚到
+  // 实"地落到焦平面上，与亮度、尺寸共用同一个 p、同一时刻到位。
   const s0 = focusTable().sfut[1];
+  const b0 = focusTable().blur;
   for (const L of c.lines) {
+    const di = parseInt(L.el.getAttribute("data-i"), 10);
     const past = L.el.classList.contains("past");
     const on = mine && (p < 1) && !past;
+    // 景深：焦点档（换句才变，verseApply 已经写过一遍）与接力档取大者。合成必须
+    // 在**这一处**一起算——`!on` 分支若跟着把滤镜整条撤掉，会把离焦行本来的模糊
+    // 一起擦掉（接力的结束不等于"这一行不需要模糊了"）。
+    verseBlurSet(L, Math.max(mine ? verseFocusBlur(di - si) : 0,
+                             on ? b0 * (1 - p) : 0));
     if (!on) {
       if (L.el.style.getPropertyValue("--ctv-relay") !== "")
         L.el.style.removeProperty("--ctv-relay");

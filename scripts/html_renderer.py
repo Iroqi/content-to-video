@@ -19,8 +19,8 @@ from _theme import (
     get_theme_colors, get_default_accent, mix, normalize_accent,
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
 )
-from _template import (MIN_READABLE_FONT_PX, load_template, get_canvas,
-                       get_image_box, normalize_aspect, seg_card_pad_x)
+from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
+                       get_canvas, get_image_box, normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME)
 from _segments import (is_content_sid, seg_layout)
@@ -460,7 +460,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # 句尾收束时长：这里先落 0（= 不演，CSS 规则自动失效），generate_html 的
     # 卡片循环里拿到全片 cue 之后再覆写成真值（那边才有句子表）。
     _settle_now = 0.0
-    # 句子流的焦点衰减（runtime.js 的 verseFocusOp 按离焦距离查表）。三个数都是
+    # 句子流的焦点衰减（runtime.js 的 verseFocusOp 按离焦距离查表）。五个值都是
     # **观感常量**，真源在模板 subtitle.focus：future/past 是"未念/已念"两档的
     # 既有值（composition.css 里的同名兜底字面量与这里必须一致），ratio 是衰减
     # 比——0.45 ≈ 0.62 × 0.726，"已念"本来就是"未念"沿同一条曲线多走的一步，
@@ -470,14 +470,27 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _focus_past = float(_focus["past"])
     _focus_ratio = float(_focus["ratio"])
     _focus_scale = float(_focus["scale"])
+    _focus_blur = float(_focus["blur"])
     for _name, _value, _valid in (
         ("future", _focus_future, 0 < _focus_future <= 1),
         ("past", _focus_past, 0 < _focus_past <= _focus_future),
         ("ratio", _focus_ratio, 0 < _focus_ratio < 1),
         ("scale", _focus_scale, 0 < _focus_scale <= 1),
+        # 0 = 关掉景深（只剩亮度/尺寸/位置三维），是这条链路上唯一的"不要它"的写法
+        ("blur", _focus_blur, 0 <= _focus_blur),
     ):
         if not _valid:
             raise ValueError(f"[template] subtitle.focus.{_name} 的值 {_value!r} 越界")
+    # 景深的封顶档是**两档**（与尺寸同档数、比亮度少一档），所以最深模糊 = 2 × blur。
+    # 它必须停在糊掉线之内：模糊一旦越过笔画宽度，离焦的行就不是"远"而是"毁了"。
+    # 判据与可读下限同源（那边量字号、这边量高斯半径），两边都由生成期拦、不靠
+    # 作者记得改。
+    if 2 * _focus_blur > FOCUS_BLUR_MAX_EM:
+        raise ValueError(
+            f"[template] subtitle.focus.blur 的值 {_focus_blur!r} 在封顶档（2 档）会糊到 "
+            f"{2 * _focus_blur:.3f}em，越过糊掉线 {FOCUS_BLUR_MAX_EM}em——每远一档的模糊量"
+            f"调小（≤ {FOCUS_BLUR_MAX_EM / 2:.3f}），或改 FOCUS_BLUR_MAX_EM（那条线是"
+            f"「离焦的行还认不认得出字」）")
     # 过去侧最深档是 scale³；两种画幅都必须守住统一可读下限。
     for _focus_aspect in ("vertical", "landscape"):
         _focus_font = float(tpl["layout"][_focus_aspect]["subtitle"]["fontSize"])
@@ -550,7 +563,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{_sl["relay"]};
   --ctv-scroll-ease:{_scroll_ease};
-  --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};"""
+  --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};--ctv-focus-blur:{num_fmt(_focus_blur)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。
         # 这是个 overflow:hidden 的绝对定位盒，画布与句子流都不为它让位（竖屏三区

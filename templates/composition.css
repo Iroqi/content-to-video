@@ -212,8 +212,21 @@ body{font-family:var(--ctv-font-family)}
    左右抖——那道左缘是句子流里唯一不动的视觉基准线，不能让它动。
    滚动这一维（垂直位置）由 runtime.js 的 verseScroll 插值，落在 .verse-clip 的
    translateY 上，与这里的亮度、尺寸共用同一个接力窗口：三个维度同一时刻到位，
-   "焦点"不能在途中分裂成"先滚、再亮"两个动作。 */
-.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+   “焦点”不能在途中分裂成“先滚、再亮”两个动作。
+   ── 第四个维度：景深（模糊）──────────────────────────────────────────
+   前沿歌词 UI（AMLL 的 setEnableBlur、Jellyfin 那支“梯度模糊”）让离焦的行不只
+   更暗更小，还**更虚**：景深是“远”这个字在光学里的本义——前三维合起来表达的是
+   强弱，只有模糊表达的是“不在焦平面上”。每远一档加 subtitle.focus.blur（单位
+   em，相对**该行自己的字号**，所以两画幅按各自字号自动缩放，不用存第二份）。
+   模糊同样**不改布局盒**，滚动锚点、offsetTop、逐字命中测试一个字节都不用动
+   （与尺寸那一维同一条理由）。
+   滤镜挂在**运行时合成出来的整条 filter 值**上（`--ctv-line-filter`），不在 CSS
+   里做 max() 合成——因为 `blur(0em)` 也是 filter：实测它把字形换成另一套栅格化
+   （同一句 40px 白字，边缘拉普拉斯和 925410 → 994512、单像素最大差 80）。离焦行
+   本来就要虚，无所谓；**当前行**是画面上最该锐利的那一句，为一个 0 半径的滤镜
+   把它整句字形换一遍是纯视觉漂移，而成片里看不出是谁干的。所以“不需要模糊”必须
+   是 `filter:none`（var 缺省即 none），合成改在 runtime.js 的 verseBlurSet 里做。 */
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */

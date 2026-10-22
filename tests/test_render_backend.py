@@ -1,6 +1,7 @@
 """渲染后端：命令解析 + 进程管理 + 成片时长探测。用假进程（python -c）验证，不需要 Node / Chrome / ffmpeg。"""
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -371,3 +372,109 @@ class OfficialGate(unittest.TestCase):
     def test_unreadable_output_is_an_error(self):
         self.assertEqual(RB.check_verdict(None)[0][0], "error")
         self.assertEqual(RB.check_verdict({"whatever": 1})[0][0], "error")
+
+
+class CheckOutputParsing(unittest.TestCase):
+    """`check --json` 的 stdout 里抠报告：进度行在前在后都不能坏判读。"""
+
+    def test_report_with_trailing_progress_line_is_not_lost(self):
+        """证伪：报告后面夹一行进度输出时，loads 整段抛异常 → 假 check_output error。
+
+        假的"输出读不懂"会让人去查根本不存在的渲染问题，而真报告明明是全绿。
+        """
+        raw = ('[hyperframes] lint done\n{"ok": true, "lint": {"findings": []}}\n'
+               "[hyperframes] all stages done\n")
+        self.assertEqual(RB._first_json_object(raw), {"ok": True, "lint": {"findings": []}})
+
+    def test_progress_line_with_braces_does_not_fake_the_report(self):
+        """进度行自己也可能带花括号：从第一个 { 硬解析会读到半截对象。"""
+        raw = 'starting {module}\n{"ok": false}\ntail\n'
+        self.assertEqual(RB._first_json_object(raw), {"ok": False})
+
+    def test_no_json_at_all_returns_none(self):
+        self.assertIsNone(RB._first_json_object("no braces here\n"))
+        self.assertIsNone(RB._first_json_object(""))
+
+    def test_non_object_json_is_skipped(self):
+        self.assertIsNone(RB._first_json_object('"just a string"\n[1,2]\n'))
+
+    def test_run_check_end_to_end_with_noisy_stdout(self):
+        report = {"ok": True, "browserSkipped": False}
+        for name in RB.GATE_STAGES:
+            report[name] = {"ok": True, "errorCount": 0, "warningCount": 0,
+                            "findings": []}
+        raw = (b"[cli] resolving spec\n"
+               + json.dumps(report).encode()
+               + b"\n[cli] done\n")
+        with mock.patch.object(RB.subprocess, "run",
+                               lambda *a, **k: mock.Mock(stdout=raw, stderr=b"")), \
+             mock.patch.object(RB, "build_check_command",
+                               lambda p, command=None: _py("pass")):
+            findings, _sec = RB.run_check("proj")
+        self.assertEqual(findings, [])
+
+
+class SnapshotCommandAssembly(unittest.TestCase):
+    """取帧命令：子命令参数必须在 resolve **之后**仍进得了命令行。"""
+
+    def _run_snapshot(self, args, tmp, returncode=0):
+        out_dir = os.path.join(tmp, "frames")
+        with mock.patch.object(RB.subprocess, "run",
+                               lambda *a, **k: mock.Mock(
+                                   returncode=returncode, stdout=b"", stderr=b"")), \
+             mock.patch.object(RB, "_newest_mtime", lambda d: 1e18):
+            return RB.snapshot_frames("proj", "out.mp4", [0.0, 3.5], out_dir,
+                                      command=args)
+
+    def test_snapshot_params_are_attached_after_the_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _snap, why = self._run_snapshot([sys.executable, "hf"], tmp)
+            self.assertEqual(why, "")
+
+    @unittest.skipIf(os.name == "nt", "模拟 Windows 分支，真 Windows 上走真路径")
+    def test_windows_batch_wrap_keeps_snapshot_args_inside_the_body(self):
+        """证伪：先 resolve 再拼参数时，--against/--at 落在 cmd.exe 自己的 argv 里。
+
+        Windows 上 npx 解析成 npx.cmd，resolve_command 把整条命令包进
+        `cmd /c "…"` 字符串。参数拼在字符串**后面**就进了 /c 命令体之外——
+        取帧按默认值跑，contact-sheet 里的帧全不对。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            run = mock.Mock(return_value=mock.Mock(returncode=0, stdout=b"",
+                                                   stderr=b""))
+            with mock.patch.object(RB.os, "name", "nt"), \
+                 mock.patch.object(RB.shutil, "which",
+                                   lambda n: r"C:\fake\npx.cmd" if n == "npx" else None), \
+                 mock.patch.object(RB.subprocess, "run", run), \
+                 mock.patch.object(RB, "_newest_mtime", lambda d: 1e18):
+                _snap, why = RB.snapshot_frames(
+                    "proj", "out.mp4", [0.0, 3.5],
+                    os.path.join(tmp, "frames"),
+                    command=["npx", "--yes", "hyperframes@0.8.185"])
+            self.assertEqual(why, "")
+            # Popen 收到的是一条 cmd /c 字符串：snapshot 子命令与全部参数都必须在
+            # /c 的命令体里，而不是字符串尾部的额外 argv。
+            self.assertIsInstance(run.call_args[0][0], str)
+            line = run.call_args[0][0]
+            self.assertIn("/c", line)
+            for token in ('"snapshot"', '"proj"', '"--against"', '"out.mp4"',
+                          '"--at"', '"0,3.5"', '"--no-end"'):
+                self.assertIn(token, line)
+            # 字符串收尾于命令体引号：后面不再拖任何参数
+            self.assertTrue(line.endswith('"'))
+
+
+class ProcessTreeCleanup(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX 分支：taskkill 路径在 Windows 上")
+    def test_already_gone_process_is_not_a_failure(self):
+        """证伪：超时判定与子进程退出之间的竞态里 getpgid 抛 ProcessLookupError。
+
+        进程已经没了却打印"进程组清理失败、渲染子进程可能残留"——一次吓人的假
+        警报，真正的残留反而混在里面没人信。
+        """
+        err = io.StringIO()
+        with mock.patch.object(RB.os, "getpgid",
+                               side_effect=ProcessLookupError("no such process")), \
+             contextlib.redirect_stderr(err):
+            RB._try_kill_process_tree(mock.Mock(pid=123))
+        self.assertEqual(err.getvalue(), "")

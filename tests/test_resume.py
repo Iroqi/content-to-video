@@ -1,4 +1,5 @@
 """缓存状态机 resolve_resume_state：纯函数，逐条钉住"缺证明就当没缓存"的判定表。"""
+import contextlib
 import io
 import json
 import os
@@ -249,6 +250,98 @@ class RandomizedSpeedTmpIsStillCleanedUp(unittest.TestCase):
                 f.write(b"RIFF")
             P._clear_stale_sidecars(out_path)
             self.assertTrue(os.path.exists(out_path))
+
+    def test_isolated_stale_sidecars_are_swept_too(self):
+        """删除被占用时改名隔离出的 `.stale` 残渣，锁释放后的下一轮要收走。
+
+        修复前隔离即终点：`_SIDECAR_SUFFIXES` 与 `_drop_stale_cache` 的 glob
+        都匹配不到 `.stale` 后缀，残渣只进不出、永久留在输出目录。注意隔离名是
+        `<片段>.stale`（`s001.wav.orig.wav.stale`），glob 必须并上每个片段的
+        变体而不是单加一个 `.stale` 条目。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            out_path = os.path.join(td, "s001.wav")
+            stale = [out_path + s + ".stale"
+                     for s in (".orig.wav", ".spd", ".failed")]
+            for p in stale:
+                open(p, "wb").close()
+            # 新合成路径的清理
+            self.assertTrue(P._clear_stale_sidecars(out_path))
+            for p in stale:
+                self.assertFalse(os.path.exists(p), f".stale 残渣没被扫掉: {p}")
+            # 缓存失效路径的清空（_drop_stale_cache）同样要收
+            for p in stale:
+                open(p, "wb").close()
+            P._drop_stale_cache(out_path)
+            for p in stale:
+                self.assertFalse(os.path.exists(p),
+                                 f"_drop_stale_cache 没扫 .stale: {p}")
+
+
+@unittest.skipUnless(_have_ffmpeg(), "需要 ffmpeg 执行 atempo")
+class ResumeSpeedExceptionDoesNotCrash(unittest.TestCase):
+    """resume 的语速重施加抛异常（ffmpeg 没了/盘满）时必须降级，不能裸栈中断。
+
+    主合成路径早在 synthesize_one 里把 apply_speed 的异常收敛成 speed-skip；
+    resume 分支原先裸调——同一台机器上换了个语速重跑，ffmpeg 一出问题整轮
+    resume 带着栈trace 死掉，而主路径同样的失败只是保留原速。
+    """
+
+    SPEED = 1.5
+
+    def _run(self, out, src_path, client, resume, speed, apply_speed=None):
+        argv = ["pipeline.py", "--source", src_path, "-o", out,
+                "--api-key", "test-key", "--base-url", "https://x.example/v1",
+                "--speed", str(speed), "--workers", "1"]
+        if resume:
+            argv.append("--resume")
+        patches = [mock.patch.object(P.sys, "argv", argv),
+                   mock.patch.object(P, "MimoTtsClient", return_value=client),
+                   mock.patch.object(P.time, "sleep")]
+        if apply_speed is not None:
+            patches.append(mock.patch.object(P, "apply_speed", apply_speed))
+        with patches[0], patches[1], patches[2]:
+            if apply_speed is not None:
+                with patches[3]:
+                    P.main()
+            else:
+                P.main()
+
+    def test_reapply_exception_keeps_previous_speed_audio(self):
+        with tempfile.TemporaryDirectory() as td:
+            src_path = os.path.join(td, "src.json")
+            with open(src_path, "w", encoding="utf-8") as f:
+                json.dump({"segments": [{"id": "seg-a", "title": "x",
+                                         "text": "只有一句话。"}]}, f,
+                          ensure_ascii=False)
+            out = os.path.join(td, "out")
+            client = _FakeClient()
+            # 首跑 1.5x：落下 .orig.wav + .spd=1.5
+            self._run(out, src_path, client, resume=False, speed=self.SPEED)
+            wav = os.path.join(out, "sentences", "s001.wav")
+            with open(wav, "rb") as f:
+                before = f.read()
+
+            # 二跑 --resume 请求 2.0x：reapply 分支的 apply_speed 抛 OSError
+            def boom(*a, **k):
+                raise OSError("ffmpeg 不见了（模拟）")
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self._run(out, src_path, client, resume=True, speed=2.0,
+                          apply_speed=boom)
+            # 1. 不崩：main() 正常返回（旧代码在这里裸栈中断）
+            # 2. 出声：异常点名，不是静默保持
+            self.assertIn("atempo", err.getvalue())
+            # 3. 音频保持 1.5x 原样（≈0.33s），没有半截产物
+            self.assertAlmostEqual(_tiny_wav_dur(wav), 0.33, delta=0.05)
+            # 4. 没重烧 TTS
+            self.assertEqual(len(client.calls), 1)
+            # 5. marker 仍是事实值 1.5（文件在 1.5x，marker 不许说谎）
+            with open(wav + ".spd", encoding="utf-8") as f:
+                self.assertEqual(f.read(), str(TL.speed_marker_value(self.SPEED)))
+            with open(wav, "rb") as f:
+                self.assertEqual(before, f.read())
 
 
 if __name__ == "__main__":

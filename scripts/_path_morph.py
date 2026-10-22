@@ -140,6 +140,15 @@ def _axis_span(d, index):
     for letter, nums in parse_path(d, "path d"):
         up = letter.upper()
         rel = letter.islower()
+        if up == "Z":
+            # Z 不带坐标：parse_path 放行了带多余参数的 Z（浏览器按忽略处理），
+            # 若照常进 arity 循环，`range(0, len(nums), 0 or 1)` 会切出空参数组，
+            # `g[-2]` 抛裸 IndexError——实测 `d="M100 200 L300 200 Z 400 400"`
+            # 让 check_svg / _svg_sanitize / _cam_crop 三道门禁一起裸崩，
+            # 违背本模块"畸形输入一律 ValueError/按未知处理"的承诺。
+            # 与 _walk 同口径：参数忽略，只把光标送回本子路径起点。
+            cx, cy = sx, sy
+            continue
         arity = _ARITY[up]
         for i in range(0, len(nums), arity or 1):
             g = nums[i:i + arity]
@@ -158,8 +167,6 @@ def _axis_span(d, index):
                     cx, cy = dx, dy
             if up == "M" and i == 0:
                 sx, sy = cx, cy         # 子路径起点只认首个坐标对；后续隐式 L 对不重置
-        if up == "Z":
-            cx, cy = sx, sy          # 闭合把光标送回本子路径起点
     return (min(pts), max(pts)) if pts else None
 
 

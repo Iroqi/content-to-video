@@ -259,6 +259,28 @@ _POLL_INTERVAL_SECONDS = 2.0
 _STABLE_SIZE_CHECKS = 2
 
 
+def _first_json_object(raw):
+    """stdout 里第一个能解析成 dict 的 JSON 对象；没有则 None（判读按 fail-closed）。
+
+    不能只 `json.loads(raw[raw.find("{"):])`：CLI 的进度行可能跟在报告**后面**，
+    loads 遇到尾巴整段抛异常，一份完好的报告被判成"输出读不懂"——一次假的
+    check_output error 会让人去查根本不存在的渲染问题。raw_decode 在对象收尾
+    处即停，尾巴不影响；进度行自己也可能含花括号，所以从每个 { 候选位逐个试。
+    """
+    dec = json.JSONDecoder()
+    idx = raw.find("{")
+    while idx >= 0:
+        try:
+            obj, _end = dec.raw_decode(raw, idx)
+        except ValueError:
+            idx = raw.find("{", idx + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        idx = raw.find("{", idx + 1)
+    return None
+
+
 def run_check(project, command=None, timeout=1800):
     """跑官方门禁 `hyperframes check --json`，返回 (该当真的 findings, 秒数)。
 
@@ -272,12 +294,8 @@ def run_check(project, command=None, timeout=1800):
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(f"官方门禁跑不起来（{type(e).__name__}: {e}）")
     raw = (r.stdout or b"").decode("utf-8", "replace")
-    # --json 把整份报告打到 stdout，前后可能夹着 CLI 的进度行：从第一个 { 起解析。
-    start = raw.find("{")
-    try:
-        report = json.loads(raw[start:]) if start >= 0 else None
-    except ValueError:
-        report = None
+    # --json 把整份报告打到 stdout，前后可能夹着 CLI 的进度行。
+    report = _first_json_object(raw)
     return check_verdict(report), time.time() - t0
 
 
@@ -321,6 +339,8 @@ def _try_kill_process_tree(proc):
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         proc.wait(timeout=5)
+    except ProcessLookupError:
+        return      # 进程已经没了（超时判定与子进程退出之间的竞态）：无可清理
     except Exception:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -574,12 +594,16 @@ def snapshot_frames(project, video_path, times, out_dir, command=None):
     失败一律返回 (None, 人话)，由调用方决定只 warn。
     """
     cmd = list(command) if command else hyperframes_command(project)
-    cmd = resolve_command(cmd) if isinstance(cmd, list) else cmd
-    base = [cmd] if isinstance(cmd, str) else list(cmd)
-    args = base + ["snapshot", project, "-o", out_dir,
-                   "--against", video_path,
-                   "--at", ",".join(f"{t:g}" for t in times),
-                   "--no-end"]
+    # 先拼全参数、**再** resolve：Windows 上 resolve_command 命中 .cmd 时会把整条
+    # 命令包进 `cmd /c "…"` 字符串（_cmdline_for_batch）。先 resolve 再往后面接
+    # 子命令参数，那些参数就落在 cmd.exe 自己的 argv 里、进不了 /c 的命令体——
+    # 症状是 snapshot 的 --against/--at 整批丢失，取帧按默认值跑。顺序只能是
+    # "拼完再解析"（build_check_command 一直是这个顺序，这里原先不是）。
+    args = cmd + ["snapshot", project, "-o", out_dir,
+                  "--against", video_path,
+                  "--at", ",".join(f"{t:g}" for t in times),
+                  "--no-end"]
+    args = resolve_command(args)
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
     try:

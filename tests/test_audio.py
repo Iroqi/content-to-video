@@ -1,10 +1,13 @@
 """concat_audio 的两条路径：同格式走标准库串接（ffmpeg_path=None 传进来就不能被用到），
 混采样率/混声道先经 ffmpeg 归一再串接。"""
+import contextlib
+import io
 import os
 import shutil
 import tempfile
 import unittest
 import wave
+from unittest import mock
 
 import _helpers as H  # noqa: F401
 from _audio import concat_audio
@@ -113,6 +116,44 @@ class MixedSampleRates(unittest.TestCase):
         self.assertFalse(concat_audio("ffmpeg", [a, b], 0.2, out))
         self.assertFalse(os.path.exists(out),
                          "归一失败却留下了 combined.wav——会被当成有效成片缓存")
+
+
+class ApplySpeedFailurePaths(unittest.TestCase):
+    """atempo 失败路径的收尾：tmp 不许留残渣，一次失败不许打两条 warn。"""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.wav = os.path.join(self.dir.name, "s001.wav")
+        _mk(self.wav, 24000, 1, 12000)
+
+    def _tmps(self):
+        return [n for n in os.listdir(self.dir.name) if ".spd." in n]
+
+    def test_ffmpeg_oserror_cleans_tmp_and_degrades(self):
+        """证伪：ffmpeg 半路没了时 _run_ff 原样上抛 OSError，mkstemp 建的空
+        tmp 留在盘上——本次运行里就是残渣，且 apply_speed 的"失败返回 False"
+        契约被裸抛破坏（resume 分支旧代码直接炸栈）。"""
+        import _audio as A
+        with mock.patch.object(A, "_run_ff", side_effect=OSError("ffmpeg 不见了")):
+            self.assertFalse(A.apply_speed("ffmpeg", self.wav, 1.5))
+        self.assertEqual(self._tmps(), [], "OSError 路径留下 tmp 残渣")
+
+    def test_zero_frame_product_warns_once_and_cleans_tmp(self):
+        """证伪：returncode=0 但产物 0 帧时，旧代码往下多走一条
+        "atempo failed"——一次失败两条 warn，第二条的 stderr 还常常是空的。"""
+        import _audio as A
+        import io
+        import contextlib
+        with mock.patch.object(A, "_run_ff",
+                               return_value=mock.Mock(returncode=0, stderr=b"")):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertFalse(A.apply_speed("ffmpeg", self.wav, 1.5))
+        warns = [l for l in err.getvalue().splitlines() if "speed-skip" in l]
+        self.assertEqual(len(warns), 1, f"一次失败打了 {len(warns)} 条 warn")
+        self.assertIn("产物为空", warns[0])
+        self.assertEqual(self._tmps(), [], "0 帧产物路径留下 tmp 残渣")
 
 
 if __name__ == "__main__":

@@ -152,5 +152,29 @@ class Segments(unittest.TestCase):
             P.path_segments(None)
 
 
+class AxisSpans(unittest.TestCase):
+    """x_span / y_span：轴投影（check_svg 空带、_cam_crop 出画、满幅快筛都读它）。"""
+
+    def test_z_with_stray_args_does_not_crash(self):
+        """Z 带多余参数（浏览器按忽略处理）不能让轴投影抛裸 IndexError。
+
+        证伪：`_axis_span` 照常进 arity 循环时，`range(0, len(nums), 0 or 1)`
+        切出空参数组，`g[-2]` 抛 IndexError——实测
+        `d="M100 200 L300 200 Z 400 400"` 让 check_svg.check_file、
+        `_svg_sanitize._path_backdrop`、`_cam_crop._box` 三道门禁一起裸崩
+        （后两者的 `except ValueError` 接不住 IndexError）。
+        """
+        # 不崩即为通过；Z 后的杂散参数被忽略（与浏览器同口径）
+        self.assertEqual(P.x_span("M100 200 L300 200 Z 400 400"), (100.0, 300.0))
+        self.assertEqual(P.y_span("M100 200 L300 200 Z 400 400"), (200.0, 200.0))
+        self.assertEqual(P.x_span("M0 0 Z 1 2 3"), (0.0, 0.0))
+        self.assertEqual(P.x_span("M0 0 L5 5 z 9"), (0.0, 5.0))
+
+    def test_cursor_resets_to_subpath_start_on_z(self):
+        """Z 之后光标回本子路径起点：`M0 0 L10 0 Z l20 0` 的相对段从 (0,0) 起。"""
+        self.assertEqual(P.x_span("M0 0 L10 0 Z l20 0"), (0.0, 20.0))
+        self.assertEqual(P.x_span("M0 0 L10 0 Z L20 0"), (0.0, 20.0))
+
+
 if __name__ == "__main__":
     unittest.main()

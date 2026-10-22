@@ -141,5 +141,47 @@ class EpilogWarnsAboutSlotLayout(unittest.TestCase):
         self.assertIn("canvas", epilog)
 
 
+class CanvasScaleUsesViewbox(unittest.TestCase):
+    """画布字号折算的分母是 **viewBox 宽**，不是固有宽度。
+
+    缩放写法（width="2160" viewBox="0 0 1080 1440"）下图内 font-size 写在
+    viewBox 这一套里：拿固有宽度当分母，折算字号少算一半——一张本来读得清的
+    图被误判"低于 24px 下限"。与 check_svg 的 scale 同一口径（两道门必须给
+    同一个答案）。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.canvas = get_canvas("portrait")   # (1080, 1440)
+
+    def _write_scaled(self, fs):
+        name = "images/seg1.svg"
+        path = os.path.join(self.dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="2160" '
+                    'height="2880" viewBox="0 0 1080 1440">'
+                    f'<text x="40" y="100" font-size="{fs}" fill="#fff">营收</text>'
+                    '</svg>')
+        return name
+
+    def test_readable_font_in_scaled_form_is_not_misjudged(self):
+        """证伪：30px（viewBox 系）折成画幅是 30px，旧代码按 2160 折算成 15px，
+        一张达标图吃一条"低于 24px 下限"的假 error。"""
+        segs = [_seg("seg1", layout="canvas")]
+        images = {"seg1": {"src": self._write_scaled(30)}}
+        errs, _warns = G.canvas_layout_errors(images, segs, self.dir,
+                                              *self.canvas)
+        self.assertEqual([e for e in errs if "折算" in e or "下限" in e], [])
+
+    def test_genuinely_small_font_is_still_caught(self):
+        """修复不能把门禁一起修没：viewBox 系里 20px 折成画幅仍是 20px < 24。"""
+        segs = [_seg("seg1", layout="canvas")]
+        images = {"seg1": {"src": self._write_scaled(20)}}
+        errs, _warns = G.canvas_layout_errors(images, segs, self.dir,
+                                              *self.canvas)
+        self.assertTrue(any("下限" in e for e in errs), errs)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,13 @@ def validate_relative_project_path(src, where):
         raise ValueError(f"{where} 禁止使用绝对路径：{src!r}")
     depth = 0
     for part in (p for p in norm.split("/") if p not in ("", ".")):
-        if part == "..":
+        # Win32 路径规范化会剥掉每个组件的**尾部点与空格**：`.. `、`...`、
+        # `.... ` 在 Windows 上都被解析成 `..`（Linux 下它们是普通目录名，
+        # 所以只在 Windows 上逃得掉、本测试全绿会掩盖它）。按 Windows 口径归一
+        # 后再比：合法文件名（`v1.` 归一为 `v1`）不受影响。
+        if part.rstrip(" .") == ".." or (
+                part.rstrip(" .") == "" and len(part) >= 2
+                and set(part) <= {".", " "}):
             depth -= 1
             if depth < 0:
                 raise ValueError(f"{where} 越过项目根目录：{src!r}")

@@ -366,9 +366,12 @@ def _check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol):
                 rooted = True
                 break
         if not rooted:
-            ex, ey = st["ends"][0]
+            # 走到这里意味着**每个**端点都没根住（rooted 是"任一根住即放过"）。
+            # 只报 ends[0] 会把第二个悬空端点的坐标藏起来：作者照着第一个修完，
+            # 重跑才看见第二个——同一处悬空非要跑两轮。两个坐标一起给。
+            pts = "、".join(f"({ex:g}, {ey:g})" for ex, ey in st["ends"])
             warns.append(
-                f"{st['desc']} 的端点悬空：({ex:g}, {ey:g}) 距最近的笔画/圆点/"
+                f"{st['desc']} 的端点悬空：{pts} 距最近的笔画/圆点/"
                 f"文字 > {tol:g}px——按 craft 的“线要结束在某处”，把端点接到"
                 f"另一条线、圆点或文字上（有意悬空的装饰线可加 data-free-ends 声明）")
     return warns
@@ -400,6 +403,12 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         return ["根节点不是 <svg>"], []
 
     # ── 根节点几何 ──
+    # 图元坐标/字号都写在 viewBox 这一套里，不是固有像素尺寸：width="800" height="600"
+    # viewBox="0 0 400 300" 时差一个倍数，拿 800×600 去判"铺没铺满 / 越没越界"会
+    # 把铺满整幅的底板 rect 判成只占一半。与 gen_hyperframes 共用 root_viewbox_size。
+    # 先算出来：下面的 scale（字号/坐标的折算分母）也必须是 viewBox 宽，不能是
+    # 固有宽度——拿 800 当分母会把 eff 字号与安全边距全部少算一半。
+    vb_w, vb_h = root_viewbox_size(root)
     w, h, note = root_px_size(root)
     if note:
         warns.append(note)
@@ -433,7 +442,11 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             else:
                 errors.append(f"比例 {w:g}×{h:g}（{w / h:.3f}）与目标 {label} 不等比；"
                               f"cover 会裁掉贴边内容，请改根节点尺寸后重排，别缩内容凑比例")
-        scale = cw / w
+        # scale 把 viewBox 系的字号/坐标折算成槽位像素，分母必须是 **viewBox 宽**：
+        # 缩放写法（width="800" viewBox="0 0 400 300"）下拿固有宽度当分母，折算
+        # 字号、安全边距全部少算一半——该 warn 的不 warn（小字号读不出来），该拦
+        # 的边距也不拦。没有 viewBox 时 root_viewbox_size 已退回固有尺寸，两者合一。
+        scale = cw / (vb_w or w)
 
     # ── 遍历元素 ──
     text_nodes = 0
@@ -462,10 +475,6 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             cur = parent.get(cur)
         return False
 
-    # 图元坐标/字号都写在 viewBox 这一套里，不是固有像素尺寸：width="800" height="600"
-    # viewBox="0 0 400 300" 时差一个倍数，拿 800×600 去判"铺没铺满 / 越没越界"会
-    # 把铺满整幅的底板 rect 判成只占一半。与 gen_hyperframes 共用 root_viewbox_size。
-    vb_w, vb_h = root_viewbox_size(root)
     strokes = []      # 待查端点悬空的线条：{desc, ends, owner}
     segs = []         # 落点目标：线段（line / polyline / polygon / rect 边 / path），带归属元素
     dots = []         # 落点目标：终端圆点（r ≤ DOT_MAX_R）
@@ -502,18 +511,23 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             _cleaned = _css_unescape(_CSS_COMMENT.sub("", el.text))
             if re.search(r"@import", _cleaned, re.I) or _EXT_URL.search(_cleaned):
                 errors.append("<style> 里有 @import 或外链 url()")
+            # 墙钟判定**借用净化器那条正则**（不另写一份），且与净化器共用同一套
+            # 预处理（_clean_style_text：先剥注释、还原 CSS 转义再判）：
+            # · 另写正则的代价是口径漂移——净化剥掉的东西与 check 报的东西必须
+            #   是同一类。旧写法是裸的 \b(animation|transition)\b，`.animation-card`
+            #   这种类名、`--animation-duration` 这种自定义属性都会被误判成墙钟，
+            #   作者画一张静态图也要吃一条假 warn（误报训练人忽略 warn，比漏报更贵）。
+            # · 拿原始文本直接搜则把注释掉的 `/* animation: … */` 误报（净化层剥了
+            #   注释、根本不删它），又看不见 `\61 nimation: …` 这种转义写法（净化层
+            #   还原后删掉、自查却报"通过"）——报错与净化各说一套。
+            if _CSS_WALLCLOCK.search(_cleaned):
+                has_wallclock = True
         if el.get("style"):
             _cleaned = _css_unescape(_CSS_COMMENT.sub("", el.get("style")))
             if _EXT_URL.search(_cleaned):
                 errors.append(f"<{tag}> 的 style 里有外链 url()")
-        # 墙钟动画的 CSS 判定**借用净化器那条正则**，不在我这里另写一份
-        # （口径漂移的代价是真问题：净化剥掉的东西与 check 报的东西必须是同一
-        # 类）。旧写法是裸的 \b(animation|transition)\b，`.animation-card` 这种
-        # 类名、以及 `--animation-duration` 这种自定义属性都会被误判成墙钟动画，
-        # 作者画一张静态图也要吃一条假 warn——误报训练人忽略 warn，比漏报更贵。
-        if (tag == "style" and el.text and _CSS_WALLCLOCK.search(el.text)) \
-                or (el.get("style") and _CSS_WALLCLOCK.search(el.get("style"))):
-            has_wallclock = True
+            if _CSS_WALLCLOCK.search(_cleaned):
+                has_wallclock = True
 
         if tag == "text":
             text_nodes += 1
@@ -681,7 +695,12 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                         discs.append((cx, cy, rr))
                     else:
                         rings.append((cx, cy, rr))
-            elif tag == "path" and stroke_on:
+            elif tag == "path" and (fill_on or stroke_on):
+                # 与 rect/polygon 同一口径：**填充态**的 path 也要进 segs——它的
+                # 轮廓是别的线条合法的落点（"线结束在色块边缘"正是 craft 规则说的
+                # "结束在某处"）。此前只收 stroke_on，一条接进填充 path 边缘的线
+                # 会被误报"端点悬空"。但 strokes（自己的端点受检）仍只收 stroke：
+                # 填充区域不是"画到一半的线"，没有端点可言。
                 # 畸形 d：与 _shape_bounds / _ink_band 同一口径（上面各自的
                 # except ValueError），跳过这条 path 的端点落点素材——把悬空
                 # 判定建立在读不懂的几何上只会造噪声。此前这里没有守卫，
@@ -689,7 +708,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                 try:
                     segs.extend((s[0], s[1], s[2], s[3], el)
                                 for s in path_segments(el.get("d") or ""))
-                    if el.get("data-free-ends") is None:
+                    if stroke_on and el.get("data-free-ends") is None:
                         ends = path_endpoints(el.get("d") or "")
                         if ends:
                             strokes.append({"desc": f"<path>（起 {ends[0][0]:g},{ends[0][1]:g}）",

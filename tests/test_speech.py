@@ -229,6 +229,17 @@ class CueAndVerseUseOnset(unittest.TestCase):
         self.assertIn("t:1.00", js)
         self.assertIn("t:3.40", js)
 
+    def test_verse_line_t1_follows_next_sentence_onset(self):
+        """verse 行的 data-t1 与 cue 的 d 同一口径：下一句开口时刻（start+onset）。
+
+        证伪：t1 原先只取下一句 start_time，下一句 onset=0.3 时行的读到区间比
+        字幕切换早 0.3s 收——末字高亮先于字幕翻页半拍，两个消费方各算一遍的
+        老毛病在静态行这边复现。
+        """
+        seg = {"sentences": self._sents()}
+        out = html_renderer._verse_html(seg, "s1", "")
+        self.assertIn('data-t0="0.00" data-t1="2.70"', out)
+
 
 class RenderedHtmlCarriesSpan(unittest.TestCase):
     """端到端：manifest 带 onset/voiced 时，渲染出的行必须带上对应的属性。"""

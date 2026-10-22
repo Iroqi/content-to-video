@@ -82,8 +82,15 @@ def duration_tolerance(expected):
 
 
 def estimate_sentence_seconds(sentence, chars_per_sec, speed):
-    """单句预计时长（秒）：字数 / 语速 / 倍速。"""
-    return len(sentence) / chars_per_sec / max(speed, 0.01)
+    """单句预计时长（秒）：字数 / 语速 / 倍速。
+
+    `speed > 0` 由 `validate_speed` 在入口保证（pipeline 的 --speed、source 的
+    段级 speed、atempo 的入口守卫共用那一份），所以这里就是朴素的公式、不再
+    另设下限：原先的 `max(speed, 0.01)` 会把 0<speed<0.01 的合法值悄悄放大成
+    0.01 再当除数（估算时长缩水到百分之一），公式与口径从此对不上。防除零该
+    由入口守卫负责——在两处各守一遍，守的数值还会漂（这里 0.01、那里 >0）。
+    """
+    return len(sentence) / chars_per_sec / speed
 
 
 # ── 导演节拍 → 时间轴位置──────────────────────────────────────────

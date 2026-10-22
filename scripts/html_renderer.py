@@ -894,10 +894,13 @@ def _verse_html(seg, sid, ac_text_attr):
                          f' data-layout-allow-overlap'
                          f' data-layout-allow-occlusion>{esc(_who)}</span>')
         _prev_who = _who
-        # 行上的读到区间：终点取**下一句起点**（与 cue 的 d 同一口径），否则末字高亮
-        # 会比字幕切换晚半拍。
+        # 行上的读到区间：终点取**下一句开口那一刻**（与 _subtitle_cue_spans 的
+        # _speak_on 同一口径：start_time + onset），否则末字高亮会比字幕切换晚半拍。
+        # 两边必须同源：verse 行的 data-t0/data-t1 与运行时 cue 的 t/d 若各算一遍，
+        # 症状是行内高亮与字幕切换对不齐（行还差半拍才翻）。
         _t0 = round(float(_s2["start_time"]), 2)
-        _t1 = (round(float(_sents[_k + 1]["start_time"]), 2)
+        _t1 = (round(float(_sents[_k + 1]["start_time"])
+                     + max(0.0, float(_sents[_k + 1].get("onset") or 0.0)), 2)
                if _k + 1 < len(_sents)
                else round(float(_s2["start_time"]) + float(_s2["duration"]), 2))
         # 进度分母是**发声长度**而不是 t1−t0，否则长句最后一个词先亮完、再干等几百
@@ -2317,6 +2320,6 @@ def generate_html(manifest, audio_src, images=None,
 if __name__ == "__main__":
     # 与 build_from_structured 同一条守卫：本模块是库（CLI 编排在 run.py / pipeline.py），
     # 直接运行会静默 exit 0 且不产出任何文件——"没报错"会被误读成"成功了"。
-    import sys as _sys
-    _sys.exit("[error] html_renderer.py 是库模块，不能直接运行。"
-              "成片渲染的入口是 scripts/run.py。")
+    # sys 在模块顶部已导入，不再局部重复导入。
+    sys.exit("[error] html_renderer.py 是库模块，不能直接运行。"
+             "成片渲染的入口是 scripts/run.py。")

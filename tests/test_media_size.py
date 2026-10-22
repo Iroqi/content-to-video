@@ -71,6 +71,18 @@ class RasterHeaderParsing(unittest.TestCase):
         data = _jpeg(640, 480).replace(b"\xff\xc0", b"\xff\xc2")
         self.assertEqual(self._size(data, ".jpg"), (640, 480))
 
+    def test_jpeg_with_fill_bytes(self):
+        """标记前的 0xFF 填充字节（规范允许一个标记前挂任意多个）不是段长。
+
+        修复前把填充字节后的两个字节当段长读，一步迈出缓冲区，一张合法的图被
+        判成"读不出"——而"读不出"在这条校验链里是静默放行（不报也不猜）。
+        直接测解析单元：走 raster_size 会被 Pillow 主路径掩盖（它认得填充字节）。
+        """
+        import _media_size as M
+        base = _jpeg(1920, 1080)
+        self.assertEqual(M._jpeg_size(b"\xff\xd8" + b"\xff\xff\xff" + base[2:]),
+                         (1920, 1080))
+
     def test_gif(self):
         self.assertEqual(self._size(_gif(320, 240), ".gif"), (320, 240))
 

@@ -182,6 +182,24 @@ class SettleElementState(unittest.TestCase):
         out, _ = _bake([{"target": "#plate", "to": {"autoAlpha": "+=0.5"}}], markup=svg)
         self.assertIn("visibility:visible", _find(out, "plate").get("style"))
 
+    def test_relative_css_value_on_virgin_element_uses_css_initial_value(self):
+        """virgin 元素（全身读不到基值）按 **CSS 规范初值**起算，不是 0。
+
+        证伪：opacity 的 CSS 初值是 1。原先 resolve_num 的 None 兜底按 0 起算，
+        于是 virgin 元素上 `opacity:"+=0.5"` 烘焙出 0.5，而运行期浏览器按计算值
+        1+0.5 演到 1.5 被 CSSOM 钳到 1——接续页从"比上一段更暗的半透明"静默跳成
+        "完全不透明"，正是本模块要消灭的页界阶跃。
+        """
+        svg = ('<svg xmlns="%s" viewBox="0 0 1080 1440">'
+               '<rect id="plate" x="60" y="300" width="960" height="500"/>'
+               "</svg>") % NS
+        out, _ = _bake([{"target": "#plate", "to": {"opacity": "+=0.5"}}], markup=svg)
+        self.assertIn("opacity:1.5", _find(out, "plate").get("style"))
+        # 初值为 0 的属性（fill-opacity 之外的 fill 等）不在表里，仍按 0 起算。
+        out, _ = _bake([{"target": "#plate", "to": {"fill-opacity": "+=0.5"}}],
+                       markup=svg)
+        self.assertIn("fill-opacity:1.5", _find(out, "plate").get("style"))
+
 
 class FoldCamera(unittest.TestCase):
     def test_resting_pose_becomes_one_static_layer(self):

@@ -106,6 +106,19 @@ class SourceValidation(unittest.TestCase):
         s["segments"][0]["dialogue"] = [{"speaker": "a", "text": "你好。"}]
         bad(SRC.validate_segments_source, s)
 
+    def test_whitespace_text_with_dialogue_is_not_silently_ignored(self):
+        """纯空白 text 单独存在时报"缺正文"，配上 dialogue 却整字段被静默忽略。
+
+        修复前 `text: "  "` + 合法 dialogue 能过校验（has_text 为假、dialogue
+        兜底）——同一输入两种答案，"写了等于没写"：作者以为在写独白，其实走的是
+        对话分支，那句空白永远到不了配音。
+        """
+        s = H.sample_source()
+        s["speakers"] = {"host": {"voice_id": "茉莉"}}
+        s["segments"][0]["text"] = "   "
+        s["segments"][0]["dialogue"] = [{"speaker": "host", "text": "你好。"}]
+        bad(SRC.validate_segments_source, s, contains="纯空白")
+
     def test_dialogue_needs_declared_speakers(self):
         s = H.sample_source()
         s["segments"][0].pop("text")
@@ -316,6 +329,19 @@ class ManifestValidation(unittest.TestCase):
         m["schema_version"] = 3
         bad(MAN.validate_timing_manifest, m)
 
+    def test_schema_version_must_be_the_integer_two(self):
+        """`2.0 != 2` 为 False：浮点写法的版本号修复前会悄悄放行。
+
+        版本号是给人与 diff 看的声明，2 与 2.0 在 JSON/YAML 来回转换时互相变体；
+        口径收严成"int 2"一种答案，手写成 2.0 时得到的是人话报错而不是放行。
+        """
+        m = H.make_manifest()
+        m["schema_version"] = 2.0
+        bad(MAN.validate_timing_manifest, m, contains="schema_version")
+        # 字符串 "2" 同样拒（!= 比较下它本来就被拒，这里钉住不放松）
+        m["schema_version"] = "2"
+        bad(MAN.validate_timing_manifest, m, contains="schema_version")
+
 
 class ImagesJson(unittest.TestCase):
     def test_relative_paths_ok(self):
@@ -324,6 +350,19 @@ class ImagesJson(unittest.TestCase):
     def test_path_escape_rejected(self):
         for evil in ("../x.png", "/etc/passwd", "images/../../x.png", "C:\\x.png", "http://x/y.png"):
             bad(IMG.validate_images_json, {"seg-a": {"src": evil}})
+
+    def test_windows_dot_variants_escape_rejected(self):
+        """Win32 剥掉每个组件的尾部点与空格：`.. `、`...`、`.... ` 在 Windows 上
+        都是 `..`（Linux 下它们是普通目录名，所以这个洞只在 Windows 逃得掉）。
+        契约层按 Windows 口径归一后再判深度，合法名（`v1.` → `v1`）不受影响。
+        """
+        for evil in (".. ", "...", ".... ", "images/.../../x.png",
+                     "images/.. /../x.png", "images/..\\..\\x.png"):
+            bad(IMG.validate_images_json, {"seg-a": {"src": evil}},
+                contains="越过项目根目录")
+        # 只是以点结尾的合法文件名、以及平衡穿越（归一后仍在项目内）照旧放行
+        IMG.validate_images_json({"seg-a": {"src": "images/v1./a.png"}})
+        IMG.validate_images_json({"seg-a": {"src": "images/.../x.png"}})
 
     def test_bare_string_rejected(self):
         bad(IMG.validate_images_json, {"seg-a": "images/a.png"})

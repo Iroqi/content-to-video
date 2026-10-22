@@ -106,5 +106,48 @@ class PlaceholderFillsOnlyMissingCanvas(unittest.TestCase):
         self.assertIn("&amp;", raw)
 
 
+class DraftPlaceholderOnlyForMissingSrc(unittest.TestCase):
+    """草稿档占位只认 **src 缺失**：poster 缺失不换占位（真图还在盘上）。
+
+    missing_imgs 里混着 poster 缺失的条目（封面文件不在，video 条目才有）。
+    旧代码把整个 sid 集合交给占位：poster 缺失的画布段其整份映射
+    （src/poster/type）被占位覆盖——草稿预览丢了作者已经画完的图。
+    """
+
+    def test_poster_missing_does_not_trigger_placeholder(self):
+        seg = _seg("seg1")
+        images = {"seg1": {"src": "images/real.mp4", "type": "video",
+                           "poster": "images/nope.png"}}
+        missing = [("seg1", "images/nope.png")]        # 缺的是 poster，不是 src
+        sids = G._canvas_sids_missing_src(missing, images, {"seg1": seg})
+        self.assertEqual(sids, set())
+        # 交给占位函数也不该动它（missing_sids 为空 = 非草稿路径的红线）
+        filled = G.materialize_missing_canvas_placeholders(
+            images, [seg], self._dir(), 1080, 1440, missing_sids=sids)
+        self.assertEqual(filled, [])
+        self.assertEqual(images["seg1"]["src"], "images/real.mp4")
+        self.assertEqual(images["seg1"]["type"], "video")
+
+    def test_src_missing_still_triggers_placeholder(self):
+        seg = _seg("seg1")
+        images = {"seg1": {"src": "images/nope.svg", "type": "image"}}
+        missing = [("seg1", "images/nope.svg")]
+        sids = G._canvas_sids_missing_src(missing, images, {"seg1": seg})
+        self.assertEqual(sids, {"seg1"})
+
+    def test_slot_segment_missing_src_is_excluded(self):
+        seg = _seg("seg1", layout=None)
+        images = {"seg1": {"src": "images/nope.svg"}}
+        sids = G._canvas_sids_missing_src(
+            [("seg1", "images/nope.svg")], images, {"seg1": seg})
+        self.assertEqual(sids, set())
+
+    def _dir(self):
+        if not hasattr(self, "_tmp"):
+            self._tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(self._tmp.cleanup)
+        return self._tmp.name
+
+
 if __name__ == "__main__":
     unittest.main()

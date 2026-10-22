@@ -157,6 +157,20 @@ FACTS = [
         "离焦的第二个维度（尺寸）每远一档的缩放比；封两档是守住 26px 可读下限，"
         "改大改小都会动到「远处的行还读不读得出来」",
     ),
+    (
+        "focus-blur",
+        ("json", "scripts/_template.py", "subtitle.focus.blur"), 0.02,
+        [("references/rendering.md", r"subtitle\.focus\.blur.{0,12}默认\s*`0\.02`")],
+        "离焦的第四个维度（景深）每远一档加多少模糊（em）；最深档 = 2 × 它，"
+        "改大改小都会动到「远处的行还认不认得出字」",
+    ),
+    (
+        "focus-blur-max",
+        ("const", "scripts/_template.py", "FOCUS_BLUR_MAX_EM"), 0.05,
+        [("references/rendering.md", r"FOCUS_BLUR_MAX_EM`（`0\.05em")],
+        "景深的糊掉线（em）：封顶档的模糊半径不得越过它，半径逼近笔画宽度"
+        "（≈0.07em）时相邻笔画并成一片",
+    ),
     # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
     (
         "default-speed",

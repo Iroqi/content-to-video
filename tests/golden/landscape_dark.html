@@ -446,6 +446,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-ved-settle:0.00s;
   --ctv-relay-s:0.32;
   --ctv-scroll-ease:sine.out;
+  --ctv-relay-from:0.35;
   --ctv-focus-future:0.62;--ctv-focus-past:0.45;--ctv-focus-ratio:0.726;--ctv-focus-scale:0.94;--ctv-focus-blur:0.02;
   --ctv-l-margin:96px;
   --ctv-l-text-w:613px;--ctv-l-text-gap:56px;
@@ -578,6 +579,9 @@ const cues = [
 // 字体就绪后恒定，首帧测量一次即可；transform 赋绝对值幂等，乱序 seek
 // 重复执行结果一致（seek-safe）。
 const verses = Array.from(document.querySelectorAll(".verse"));
+// 行的全局句序（= data-i）：档位距离 d 与"上一句"都由它推，定义在最早处是为了
+// 让下面所有消费者都在它**之后**——const 有 TDZ，定义晚于调用点会静默炸掉。
+const _idx = (L) => parseInt(L.el.getAttribute("data-i"), 10);
 const verseCache = new Map();
 const verseEmCache = new Map();
 // 覆盖层的"每个字该在哪儿"缓存：按行元素记，内容是逐字命中 span 的链表。
@@ -988,21 +992,27 @@ const focusTable = () => {
                sfut: row(s, s, 2), spast: row(s * s, s, 2), blur: b};
   return focusRows;
 };
-// 返回要写上行内联的 --ctv-line-op；当前行（d=0）返回 ""＝撤内联，交还 CSS 的
-// active 档。行距 d 只在换句那一刻变，所以只在 verseApply（换句才跑）里写。
-const verseFocusOp = (d) => {
-  if (d === 0) return "";
+// 档位有**两种取法**，缺一个就会把"换档"演成"跳档"：
+//   · `focusOp(d)` —— 数值（d=0 → 1）。给换句窗口**插值**用：一行要从"上一句
+//     那档"走到"这一句那档"，两端都得是数。
+//   · `verseFocusOp(d)` —— 行内联写法（d=0 → ""＝撤内联，交还 CSS 的 active 档）。
+//     给窗口结束后的**稳态**用。
+// 以前只有后者，于是"上一句退场"只能把 0.45 一次性写死（实测一帧 1 → .45）。
+const focusOp = (d) => {
+  if (d === 0) return 1;
   const T = focusTable();
   const row = d < 0 ? T.past : T.fut;
-  return row[Math.min(Math.abs(d), 3)].toFixed(3);
+  return row[Math.min(Math.abs(d), 3)];
 };
-// 尺寸那一档，写法与上面同源；四位小数是留给 0.8836 这种两档相乘的值。
-const verseFocusScale = (d) => {
-  if (d === 0) return "";
+const verseFocusOp = (d) => (d === 0 ? "" : focusOp(d).toFixed(3));
+const focusScale = (d) => {
+  if (d === 0) return 1;
   const T = focusTable();
   const row = d < 0 ? T.spast : T.sfut;
-  return row[Math.min(Math.abs(d), 2)].toFixed(4);
+  return row[Math.min(Math.abs(d), 2)];
 };
+// 尺寸那一档，写法与上面同源；四位小数是留给 0.8836 这种两档相乘的值。
+const verseFocusScale = (d) => (d === 0 ? "" : focusScale(d).toFixed(4));
 // ── 第四个维度：景深（模糊）───────────────────────────────────────────────
 // 前沿歌词 UI（AMLL 的 setEnableBlur、Jellyfin 那支“梯度模糊”）让离焦的行不只是
 // 更暗更小，还**更虚**。这是"远"这个字在光学里的本义：前三维合起来表达的是强弱
@@ -1021,7 +1031,7 @@ const verseFocusScale = (d) => {
 // 过去侧与亮度/尺寸同一种错位（提前一档），于是 d=−1 就已经是封顶值：念过的行
 // 一律最虚。
 const FOCUS_BLUR_RANK_CAP = 2;
-const verseFocusBlur = (d) => {
+const focusBlur = (d) => {
   if (d === 0) return 0;
   const b = focusTable().blur;
   if (!(b > 0)) return 0;              // 关掉景深：撤滤镜
@@ -1077,11 +1087,14 @@ const verseApply = (si) => {
       else L.el.style.setProperty("--ctv-line-scale", sc);
       // 景深维度同一口径：换句时才变，所以同样只在 verseApply 里写（接力的那一
       // 份由 verseRelay 每帧补，两边取大者——合成在 verseBlurSet 里）。
-      verseBlurSet(L, act ? verseFocusBlur(di - si) : 0);
+      verseBlurSet(L, act ? focusBlur(di - si) : 0);
     }
     // 位移**不在这里写**：换句那一刻只写一次的话，滚动是硬跳（实测一帧从 0
     // 跳到 −70px），而同一次换句的亮度与尺寸都在 0.32s 里柔和到位——三个维度
     // 里只有位置这一维是硬的。滚动改由 verseScroll 每帧插值（见下）。
+    // 这里写的三档是**稳态目标值**：窗口内由 verseRelay 逐帧覆盖成插值中途的值，
+    // 窗口结束（p≥1）relay 写回同一个数，别页（无活跃句）撤内联交还 CSS 档位。
+    // 三者同一个数来源（focusTable），只有一处真源。
   }
 };
 // 换句接力：新句落位的那一小段行程里淡入，而不是"啪"地到位。
@@ -1102,17 +1115,25 @@ const verseApply = (si) => {
 //      再叠 translate 会把行推离锚点。**scale 不受这条限制**——它不进布局，
 //      offsetTop 还是原值，锚点读到的仍是未缩放的位置（尺寸维度能加进来正是
 //      因为这个，见 focusTable 旁那条注释）。
-//   4. **只给当前句所在 verse 的"当前行与未来行"**：past 行有自己的档位，掺进
-//      接力会让"念过"和"刚到"两种暗法撞在一起；别的 verse（被盖住的页）整表
-//      不参与——以前靠"relayT 只在有活跃行的 verse 上赋值"间接达成，状态删掉后
-//      这层保护改成显式判 di === si 是否在本 verse 里。
-//   5. **结束后清掉内联值**：让 CSS / 焦点衰减的档位重新接管，否则内联
+//   4. **入场浮出只给当前行**：它读的是"焦点换了地方"这个事件，只有新成为焦点的
+//      那一行配得上；其余行走的是「档位插值」（见下第五维），从上一句那档柔和走到
+//      这一句那档。以前这枚淡入是**所有非 past 行共用**一枚的，于是离焦距离根本
+//      没变的行也要跟着从 RELAY_FROM 浮起——每次换句整墙字幕闪一下（实测
+//      .45 → .35 → .45）。别的 verse（被盖住的页）整表不参与，显式判 mine。
+//   5. **结束后清掉浮出那两枚内联值**：让焦点档位重新接管，否则内联
 //      opacity 会永久压住 active 的 1.0。
 // 换句接力的入场时长（秒）：真源是模板 layout.<画幅>.subtitle.relay，生成期写成
 // :root 的 --ctv-relay-s。这里不抄数字——抄了就得靠测试盯两份相等，而生成期的
 // 收束留白也是从同一个变量算的（两边不同步＝收束和接力叠着演）。
 const RELAY_SECONDS = parseFloat(
   getComputedStyle(document.documentElement).getPropertyValue("--ctv-relay-s")) || 0.32;
+// 入场浮出的起点（**只叠给当前行**，理由见 verseRelay 的长注释）：新成为焦点的
+// 那一行从这一档长到 1。真源是模板 `subtitle.relay.from`，生成期经
+// --ctv-relay-from 注入（与 --ctv-relay-s / --ctv-scroll-ease 同一口径），
+// 下面的兜底值必须与模板同值——两边不同步＝改了一处、成片里演的是另一条曲线。
+const _relayRaw = parseFloat(getComputedStyle(document.documentElement)
+  .getPropertyValue("--ctv-relay-from"));
+const RELAY_FROM = isFinite(_relayRaw) ? Math.min(Math.max(_relayRaw, 0), 0.99) : 0.35;
 const _cueStart = (si) => {
   for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
   return NaN;
@@ -1145,6 +1166,17 @@ const SCROLL_EASE_NAME = (getComputedStyle(document.documentElement)
 const SCROLL_EASE = gsap.parseEase(SCROLL_EASE_NAME);
 if (typeof SCROLL_EASE !== "function")
   throw new Error("GSAP 不认 " + SCROLL_EASE_NAME + "：滚动曲线会静默退化成缺省缓动");
+// 同段里"上一句"的行（段内句子 index 连续，取小于当前句的最大者）。
+// 没有上一句时（段首第一句）返回 null：那时没有"推"的出发点，落位就是终点，
+// 不制造一段无来由的位移——滚动与档位插值共用这一条口径。
+const versePrev = (c, si) => {
+  let best = null, bestDi = -Infinity;
+  for (const L of c.lines) {
+    const di = _idx(L);
+    if (di < si && di > bestDi) { best = L; bestDi = di; }
+  }
+  return best;
+};
 // 某一行落在窗口里时，clip 该有的 translateY。装得下（clip 比窗口矮）就整体不滚。
 const verseClipY = (c, L) => (c.clipH <= c.winH ? 0
   : Math.max(c.winH - c.clipH, Math.min(0, 40 - L.top)));
@@ -1152,52 +1184,94 @@ const verseClipY = (c, L) => (c.clipH <= c.winH ? 0
 // 接力窗口——三个维度同一时刻到位，"焦点"不能在途中分裂成"先滚、再亮"两个动作。
 const verseScroll = (c, t, t0, si) => {
   if (!isFinite(t0)) return;
-  let act = null, prev = null, prevDi = -Infinity;
-  for (const L of c.lines) {
-    const di = parseInt(L.el.getAttribute("data-i"), 10);
-    if (di === si) { act = L; continue; }
-    // 同段里的前一句 = 落位的出发点（段内句子 index 连续，取小于当前句的最大者）
-    if (di < si && di > prevDi) { prev = L; prevDi = di; }
-  }
+  let act = null;
+  for (const L of c.lines) if (_idx(L) === si) { act = L; break; }
   if (!act) return;              // 这一段没有当前句：它的落位保持不动
   const to = verseClipY(c, act);
   // 本段第一句：没有"上一句"可推，落位就是终点（不制造一段无来由的位移）。
+  const prev = versePrev(c, si);
   const from = prev ? verseClipY(c, prev) : to;
   const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
   const y = from + (to - from) * SCROLL_EASE(p);
   c.clip.style.transform = "translateY(" + y.toFixed(2) + "px)";
 };
+// ── 焦点层级的第五维：时间（换档过程）─────────────────────────────────
+// 前四维（亮度 / 尺寸 / 位置 / 景深）都只是**档位表**：离焦距离 d → 一个静态值。
+// 但"档位何时生效"此前只做了一半：换句窗口内**所有非 past 行共用一枚**从
+// RELAY_FROM 起的全局淡入系数，而变成 past 的行由 verseApply 一次性写死。于是
+// 每次换句真正的运动只有"新当前行浮出"这一个，其余行是**不动**或**闪一下**：
+//   · 刚变成 past 的那行：一帧内 opacity 1 → .45、scale 1 → .8836、filter
+//     none → blur(1.6px)（实测 t=4.78 → 4.80）——退场是硬的；
+//   · 只是往前挪一档的行（d: 2→1）：.45 → **.35** → .452 → .62，中间比两端
+//     都暗——被全局淡入的起点压下去再涨回来；
+//   · 离焦距离**根本没变**的行：.45 → **.35** → .45——纯闪烁，它本来该一动不动。
+//
+// 前沿歌词 UI（Apple Music 逐行歌词、AMLL 的 LyricPlayer、Spotify 同步歌词）里所有
+// 行共享同一套 spring 物理：换句是整块歌词各行**同时**柔和挪位——新行上浮放大变亮、
+// 旧行继续上浮缩小褪色、更远的行同步递降，没有一行跳档，也没有一行会先暗下去再
+// 亮回来。d 不是"档位号"，而是**连续场里的一个坐标**。
+//
+// 所以这里把档位表升级成连续场：换句窗口内每一行都从「上一句时的档」插值到
+// 「这一句时的档」，用与滚动同一条曲线、同一个 p、同一个窗口——三个维度同一时刻
+// 到位，"焦点"不能在途中分裂成"先挪档、再入场"两个动作。
+// 内联变量的写与撤走同一对，不留"该撤没撤"的孤儿值——字体就绪清缓存那次就翻过
+// 车：行上留着上一份缓存时代写下的内联值，再也没人摘。
+const verseVarSet = (L, key, s) => {
+  if (L.el.style.getPropertyValue(key) !== s) L.el.style.setProperty(key, s);
+};
+const verseVarClear = (L, key) => {
+  if (L.el.style.getPropertyValue(key) !== "") L.el.style.removeProperty(key);
+};
+// 精度与 verseApply 写的稳态档位保持一致（op 三位、scale 四位）：窗口最后一帧与
+// 稳态值若差 0.0001，就会白触发一次样式重算。
+const verseOpSet = (L, v) => verseVarSet(L, "--ctv-line-op", v.toFixed(3));
+const verseScaleSet = (L, v) => verseVarSet(L, "--ctv-line-scale", v.toFixed(4));
+// 入场浮出的两枚是**逐帧插值**、窗口结束必须撤的；档位那两枚窗口结束后仍要留在
+// 行上（= 稳态值），所以两组分开清。
+const verseRelayClear = (L) => {
+  verseVarClear(L, "--ctv-relay");
+  verseVarClear(L, "--ctv-relay-scale");
+};
+const verseInlineClear = (L) => {
+  verseVarClear(L, "--ctv-line-op");
+  verseVarClear(L, "--ctv-line-scale");
+  verseRelayClear(L);
+  verseBlurSet(L, 0);
+};
 const verseRelay = (c, t, t0, si) => {
   if (!isFinite(t0)) return;
+  const mine = c.lines.some((L) => _idx(L) === si);
   const p = Math.max(0, Math.min(1, (t - t0) / RELAY_SECONDS));
-  const mine = c.lines.some((L) => parseInt(L.el.getAttribute("data-i"), 10) === si);
-  // 尺寸接力的起点 = **未来档**的尺寸（d=1 那一档），不是亮度那个 0.35。
-  // 两个维度共用同一个 p、同一时刻到位——"焦点"不能在途中分裂成"先长大、后变亮"
-  // 两个动作。但起点不同是刻意的：亮度从 0.35 起是"从更深处浮出"的换句信号，
-  // 尺寸照着 0.35 起会把新句先缩成一小团再撑开，读成形变而不是入场。
-  // 景深同一口径、方向相反：从未来档的模糊量（b）**收回**到 0——新句是"从虚到
-  // 实"地落到焦平面上，与亮度、尺寸共用同一个 p、同一时刻到位。
-  const s0 = focusTable().sfut[1];
+  const e = p >= 1 ? 1 : SCROLL_EASE(p);
+  // 本段第一句没有 prev：除当前行的入场浮出外，所有行的档位都不动。
+  const prev = mine ? versePrev(c, si) : null;
+  const s0 = focusScale(1);
   const b0 = focusTable().blur;
   for (const L of c.lines) {
-    const di = parseInt(L.el.getAttribute("data-i"), 10);
-    const past = L.el.classList.contains("past");
-    const on = mine && (p < 1) && !past;
-    // 景深：焦点档（换句才变，verseApply 已经写过一遍）与接力档取大者。合成必须
-    // 在**这一处**一起算——`!on` 分支若跟着把滤镜整条撤掉，会把离焦行本来的模糊
-    // 一起擦掉（接力的结束不等于"这一行不需要模糊了"）。
-    verseBlurSet(L, Math.max(mine ? verseFocusBlur(di - si) : 0,
-                             on ? b0 * (1 - p) : 0));
-    if (!on) {
-      if (L.el.style.getPropertyValue("--ctv-relay") !== "")
-        L.el.style.removeProperty("--ctv-relay");
-      if (L.el.style.getPropertyValue("--ctv-relay-scale") !== "")
-        L.el.style.removeProperty("--ctv-relay-scale");
-      continue;
+    const di = _idx(L);
+    if (!mine) { verseInlineClear(L); continue; }
+    const dNew = di - si;
+    const dOld = prev ? di - _idx(prev) : dNew;
+    // 这一行**这一帧**的三档：窗口内从 dOld 走到 dNew，窗口外就等于 dNew
+    // （= 稳态档位，与 verseApply 写死的同一个数）。
+    const at = (f) => f(dOld) + (f(dNew) - f(dOld)) * e;
+    verseOpSet(L, at(focusOp));
+    verseScaleSet(L, at(focusScale));
+    // 景深取大者：档位插值（离焦行一路变虚）与当前行的入场（从虚到实收回 0）
+    // 合成在**这一处**一起算——另一分支若跟着把滤镜整条撤掉，会把离焦行本来的
+    // 模糊一起擦掉（入场结束不等于"这一行不需要模糊了"）。
+    const float = di === si && p < 1;
+    verseBlurSet(L, Math.max(at(focusBlur), float ? b0 * (1 - e) : 0));
+    // 入场浮出**只叠给当前行**：它读的是"焦点换了地方"这个事件；其余行只是挪
+    // 一档，跟着一起从 RELAY_FROM 浮起会让整墙字幕每次换句都闪一下（实测
+    // .45 → .35 → .45）。
+    if (float) {
+      L.el.style.setProperty("--ctv-relay",
+        (RELAY_FROM + (1 - RELAY_FROM) * e).toFixed(3));
+      L.el.style.setProperty("--ctv-relay-scale", (s0 + (1 - s0) * e).toFixed(4));
+    } else {
+      verseRelayClear(L);
     }
-    // 起点 0.35 ≈ past 档（0.45）之下一点，落位瞬间"几乎还没亮"，然后追上 1
-    L.el.style.setProperty("--ctv-relay", (0.35 + 0.65 * p).toFixed(3));
-    L.el.style.setProperty("--ctv-relay-scale", (s0 + (1 - s0) * p).toFixed(4));
   }
 };
 const verseTick = (t) => {

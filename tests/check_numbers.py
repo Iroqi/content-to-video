@@ -267,6 +267,14 @@ FACTS = [
         "字幕滚动的缓动档：作者改了它，成片里滚动的手感就换了——"
         "文档必须跟着说清当前是哪一档",
     ),
+    (
+        "subtitle-relay-from",
+        ("json", "scripts/_template.py", "subtitle.relay.from"), 0.35,
+        [("references/rendering.md",
+          r"模板 `subtitle\.relay\.from`，默认 `0\.35`")],
+        "入场浮出的起点：只叠给当前行。作者调它等于调换句那一下的强弱，"
+        "文档必须跟着说清当前是哪一档",
+    ),
     # ── 画布三档字号（竖屏/横屏各锁一组，label 档=刻度线长的分母）──
     (
         "canvas-tier-title-v",

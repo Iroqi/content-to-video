@@ -150,13 +150,15 @@ class RuntimeContract(unittest.TestCase):
 
     def test_apply_and_relay_both_go_through_one_composer(self):
         """焦点档（换句才变）与接力档（每帧）取大者，合成只有 verseBlurSet 一处。"""
-        self.assertIn("verseBlurSet(L, act ? verseFocusBlur(di - si) : 0)", RUNTIME)
-        self.assertRegex(RUNTIME, r"verseBlurSet\(L, Math\.max\(\s*mine \? verseFocusBlur\(di - si\) : 0,\s*on \? b0 \* \(1 - p\) : 0\)\)")
+        self.assertIn("verseBlurSet(L, act ? focusBlur(di - si) : 0)", RUNTIME)
+        self.assertRegex(
+            RUNTIME,
+            r"verseBlurSet\(L, Math\.max\(at\(focusBlur\), float \? b0 \* \(1 - e\) : 0\)\)")
 
     def test_relay_starts_from_the_future_step(self):
         """接力从未来档的模糊量收到 0：与亮度/尺寸共用同一个 p，同一时刻到位。"""
         self.assertIn("const b0 = focusTable().blur;", RUNTIME)
-        self.assertIn("on ? b0 * (1 - p) : 0", RUNTIME)
+        self.assertIn("float ? b0 * (1 - e) : 0", RUNTIME)
 
     def test_no_new_cache_field(self):
         """不新增缓存字段：模糊量由 (d, 模板) 重推，缓存被字体就绪清掉后照样算得出。"""

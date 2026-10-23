@@ -88,8 +88,9 @@ class RuntimeContract(unittest.TestCase):
         """接力不得在缓存对象上存任何状态：relayT / relaySet 都是这次事故的名字。"""
         self.assertNotIn(".relayT", RUNTIME)  # 注释里的教训提名字可以，代码里不许再有
         self.assertNotIn("relaySet", RUNTIME)
-        # 内联值的归属看行本身，不另记布尔
-        self.assertIn('getPropertyValue("--ctv-relay")', RUNTIME)
+        # 内联值的归属看行本身，不另记布尔（写与撤都走 verseVarSet / verseVarClear）
+        self.assertIn("getPropertyValue(key) !== s", RUNTIME)
+        self.assertIn('getPropertyValue(key) !== ""', RUNTIME)
 
     def test_relay_start_comes_from_the_cue(self):
         """接力起点 = 当前 cue 的 t，由 verseTick 逐帧传入，不从缓存读。"""
@@ -98,7 +99,7 @@ class RuntimeContract(unittest.TestCase):
 
     def test_relay_is_gated_to_the_active_verse(self):
         """删掉 relayT 之后，"只扫活跃句所在 verse"改成显式判断，不许丢。"""
-        self.assertIn(".some((L) => parseInt(L.el.getAttribute(\"data-i\"), 10) === si)", RUNTIME)
+        self.assertIn("c.lines.some((L) => _idx(L) === si)", RUNTIME)
 
     def test_ved_clear_has_no_early_return(self):
         """verseEmClear 不得因 lastK === -1 早退：缓存重建后行上可能还挂着

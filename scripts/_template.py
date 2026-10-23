@@ -407,6 +407,9 @@ _TEMPLATE_JSON = r'''
     },
     "scroll": {
       "ease": "sine.out"
+    },
+    "relay": {
+      "from": 0.35
     }
   },
   "canvasAmbience": {

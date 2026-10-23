@@ -509,6 +509,15 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _scroll_ease = str(tpl["subtitle"]["scroll"]["ease"]).strip()
     ease_validate(_scroll_ease, "[template] subtitle.scroll.ease")
     ease_reject_overshoot(_scroll_ease, "[template] subtitle.scroll.ease")
+    # 入场浮出的起点（焦点换档的第五维：时间，见 runtime.js 的 verseRelay）。
+    # 它**只作用于当前行**——其余行走的是"档位插值"（从上一句那档柔和走到这一句那
+    # 档），不该跟着一起从低处浮起，否则每次换句整墙字幕都会闪一下。
+    # 上界卡在 1 之下：写成 1 等于"当前行不浮出"，而这一段存在的全部理由就是读出
+    # "焦点换了地方"。
+    _relay_from = float(tpl["subtitle"]["relay"]["from"])
+    if not 0.0 <= _relay_from < 1.0:
+        raise ValueError(f"[template] subtitle.relay.from 的值 {_relay_from!r} 越界"
+                         f"（应落在 [0, 1)）")
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
     # 字体排印
@@ -563,6 +572,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{_sl["relay"]};
   --ctv-scroll-ease:{_scroll_ease};
+  --ctv-relay-from:{num_fmt(_relay_from)};
   --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};--ctv-focus-blur:{num_fmt(_focus_blur)};"""
     if aspect == "vertical":
         # 标题区定高 = 该盒必须装下的东西：maxLines 行标题 + tagline 一行。

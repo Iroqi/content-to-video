@@ -139,14 +139,14 @@ class RuntimeContract(unittest.TestCase):
     def test_relay_carries_a_scale_component(self):
         """接力期尺寸与亮度共用同一个 p：两个维度必须同一时刻到位。"""
         self.assertIn('setProperty("--ctv-relay-scale"', RUNTIME)
-        self.assertIn('removeProperty("--ctv-relay-scale")', RUNTIME)
+        self.assertIn('verseVarClear(L, "--ctv-relay-scale")', RUNTIME)
 
     def test_relay_scale_starts_from_the_future_step(self):
-        """尺寸接力的起点是未来档（sfut[1]），不是亮度那个 0.35。
+        """尺寸接力的起点是未来档（focusScale(1)），不是亮度那个 RELAY_FROM。
 
-        照抄 0.35 会把新句先缩成一小团再撑开，读成形变而不是入场。
+        照抄那个浮出起点会把新句先缩成一小团再撑开，读成形变而不是入场。
         """
-        self.assertIn("focusTable().sfut[1]", RUNTIME)
+        self.assertIn("const s0 = focusScale(1);", RUNTIME)
 
     def test_ved_origin_undoes_the_scale(self):
         """--ctv-ved-dx 要的是布局值，必须除回当前 scale（否则对话段首句重影）。

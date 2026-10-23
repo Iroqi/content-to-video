@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """缓动档：钉固的 GSAP core 里到底注册了哪些 ease，以及生成期采样用的同族曲线。
 
-**为什么这个模块存在**：`ease` 是被拼进 GSAP 补间变量的字符串，认不出来的档 GSAP 不报错
-（它退回缺省缓动），作者以为演的是"弹一下落定"，成片里是"平稳落定"。整页画布越排越多，
-这种无声退化就是"动画看着不对但说不清哪儿不对"的主要来源。所以这里放两样东西：一份**档名
-目录**（契约层按它 fail-fast）和一条**采样曲线**（morph 的中间态由生成期定义，因为 GSAP
-不会对 `tl.set` 再缓动）。两者必须同源——目录放行而采样器不认的档，morph 会静默变线性。
+两样东西必须同源，否则"目录放行、采样器不认"的档会让 morph 静默变线性：
 
-**目录怎么来的**：不是照 GSAP 文档抄的，是拿技能实际钉固的那一份 `gsap.min.js`
-（`gen_hyperframes.GSAP_SHA256`）在 Node 里逐个 `gsap.parseEase(name)` 试出来的。
-所以 `rough` / `slow` / `stepped` 这些**不在目录里**：它们属于 EasePack 之类的插件文件，
-core dist 里没有，写了就是无声退化。换 GSAP 版本时重跑一次对拍，别凭记忆改这张表。
+- **档名目录**：契约层按它 fail-fast。认不出的档 GSAP 不报错、直接退回缺省缓动
+  （作者以为演的是"弹一下落定"，成片里是"平稳落定"）。
+- **采样曲线**：morph 的中间态由生成期定义——GSAP 不会对 `tl.set` 再缓动。
+
+目录是对着技能实际钉固的那份 `gsap.min.js`（`gen_hyperframes.GSAP_SHA256`）在 Node
+里逐个 `gsap.parseEase(name)` 试出来的，不是照文档抄的。所以 `rough` / `slow` /
+`stepped` 这类 EasePack 插件档**不在目录里**，写了就是无声退化。换 GSAP 版本要重跑
+一次对拍，别凭记忆改这张表。
 """
 import math
 import re

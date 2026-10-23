@@ -62,10 +62,21 @@ from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa:
 # 画布与槽位尺寸从这里读 _template，不手抄数值：生成期判"素材够不够大"走的是
 # 同一对函数（`gen_hyperframes` 的 `_seg_boxes`），另开一份下标会让"建议尺寸"和
 # "实际拦截"分家。
-CANVAS = {"portrait": get_canvas("portrait"), "landscape": get_canvas("landscape")}
-# 槽位尺寸**按画幅**取（竖屏 980×735、横屏 1067×800）：只读一份会把横屏
-# 字号系统性低估 8.2%，26px 被算成 24px 误报。
-SLOT = {"portrait": get_image_box("portrait"), "landscape": get_image_box("landscape")}
+def canvas_sizes():
+    """整页画布尺寸 {画幅: (w, h)}。
+
+    和 safe_margins 同一条理由，必须是函数：canvas_kit 的 --set 与自查发生在
+    同一进程，import 期定死会变成"按新尺寸出图、按旧尺寸过门禁"。
+    """
+    return {"portrait": get_canvas("portrait"), "landscape": get_canvas("landscape")}
+
+
+def slot_sizes():
+    """槽位尺寸**按画幅**取（竖屏 980×735、横屏 1067×800）。
+
+    只读一份会把横屏字号系统性低估 8.2%，26px 被算成 24px 误报。
+    """
+    return {"portrait": get_image_box("portrait"), "landscape": get_image_box("landscape")}
 
 
 def _margin_pair():
@@ -91,7 +102,18 @@ def safe_margins():
 # <3:1 即瞎字。不另养"背景色族"字面量。
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
-_CJK = re.compile(r"[\u3400-\u9fff]")
+# 等宽字符区间（CJK 汉字 + 中文标点 + 假名 + 全角）：落在这个区间外的一律按
+# 0.55em 算。只写汉字区间会把「，。」和假名算成半角，中文句子的估算宽度系统性
+# 偏小——偏小是危险方向：端点落在文字上的判断会漏报"松散端点"。
+_WIDE = re.compile(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uff00-\uffef]")
+
+
+def est_text_width(content, px):
+    """图内文字的估算宽度（px）：等宽字符 1em、拉丁 0.55em 的粗估。
+
+    只用于端点落点判断（多算只会少报 warn，安全方向）；越界判定刻意不用它。
+    """
+    return px * sum(1.0 if _WIDE.search(ch) else 0.55 for ch in content)
 
 
 def _prop(el, name):
@@ -208,14 +230,16 @@ def _resolve_layout(layout, w, h, aspect):
     if layout != "auto" or not w or not h:
         return layout, aspect, ""
     r = w / h
-    for a in sorted(CANVAS):
-        cw, ch = CANVAS[a]
+    canvas = canvas_sizes()
+    slot = slot_sizes()
+    for a in sorted(canvas):
+        cw, ch = canvas[a]
         if same_aspect(w, h, (cw, ch)):
             return "canvas", a, ""
-    for a in sorted(SLOT):
-        if same_aspect(w, h, SLOT[a]):
+    for a in sorted(slot):
+        if same_aspect(w, h, slot[a]):
             return "slot", aspect, ""
-    _known = " / ".join(f"{a} {CANVAS[a][0] / CANVAS[a][1]:.3f}" for a in sorted(CANVAS))
+    _known = " / ".join(f"{a} {canvas[a][0] / canvas[a][1]:.3f}" for a in sorted(canvas))
     return "slot", aspect, (
         f"比例 {w:g}×{h:g}（{r:.3f}）既不是槽位的 4:3，也不是任何画幅的整页画布"
         f"（{_known}）——`--layout auto` 推断不出该按哪一档查，已按槽位继续查其余项。"
@@ -422,13 +446,13 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         if _infer_err:
             errors.append(_infer_err)
         if layout == "canvas":
-            cw, ch_ = CANVAS[aspect]
+            cw, ch_ = canvas_sizes()[aspect]
             label = f"{cw}×{ch_}（{aspect} 整页画布）"
         else:
             # 槽位框随画幅变（竖屏 980×735 / 横屏 1067×800，都是 4:3）。
             # 折算字号与建议尺寸都必须按当前画幅算——拿竖屏的 980 去折横屏的
             # 1067，26px 会被误判成 24px（假 warn），建议尺寸也永远是竖屏那一档。
-            cw, ch_ = SLOT[aspect]
+            cw, ch_ = slot_sizes()[aspect]
             label = f"4:3（{aspect} 槽位版式，建议 {cw}×{ch_}）"
         # 推断失败时不再叠一条"比例不等比"——同一件事说两遍，且第二遍的说法
         # （目标 4:3）会让人以为是槽位图画错了，其实是谁都不知道它该按哪档查。
@@ -532,7 +556,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         if tag == "text":
             text_nodes += 1
             content = "".join(el.itertext())
-            if _CJK.search(content):
+            if _WIDE.search(content):
                 has_cjk = True
 
             # 字号
@@ -587,7 +611,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                 if xv is not None:
                     anchor = inherited(el, "text-anchor") or "start"
                     m = safe_margins()[aspect]
-                    cw = CANVAS[aspect][0]
+                    cw = canvas_sizes()[aspect][0]
                     px_x = xv * scale
                     if anchor == "start" and px_x < m:
                         warns.append(f"文字 {content.strip()[:12]!r} 起点 x≈{px_x:.0f}px 进了左安全边距（{m}px）")
@@ -606,9 +630,9 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                 tx = _parse_num(el.get("x"))
                 if px is not None and tx is not None:
                     anchor = inherited(el, "text-anchor") or "start"
-                    # 文字宽按"CJK≈1em、拉丁≈0.55em"粗估——只用于端点落点（多算
-                    # 只会少报 warn，安全方向）；越界判定刻意不用它（会误报）。
-                    est_w = px * sum(1.0 if _CJK.search(ch) else 0.55 for ch in content)
+                    # 文字宽按"等宽字符≈1em、拉丁≈0.55em"粗估——只用于端点落点
+                    # （多算只会少报 warn，安全方向）；越界判定刻意不用它（会误报）。
+                    est_w = est_text_width(content, px)
                     ty0, ty1 = svg_text_band(ty, px)
                     if anchor == "end":
                         boxes.append((tx - est_w, ty0, tx, ty1))
@@ -799,7 +823,7 @@ def main():
                     help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；"
                          "auto = 按每个文件自身的比例推断（混用目录一次跑完，"
                          "整页画布还会连画幅一起定下来）")
-    ap.add_argument("--aspect", choices=list(CANVAS), default="portrait",
+    ap.add_argument("--aspect", choices=list(canvas_sizes()), default="portrait",
                     help="画幅（默认 portrait）。显式 --layout 时按它取框；"
                          "--layout auto 下整页画布的比例能定画幅，会覆盖它")
     ap.add_argument("--draft", action="store_true",

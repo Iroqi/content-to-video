@@ -87,6 +87,22 @@ def _leaves(obj, prefix):
         yield prefix, obj
 
 
+def _scalar_kind(value):
+    """标量的粗类：数字 / 布尔 / 字符串。
+
+    int 与 float 归同一类（`0` 和 `0.35` 都是"数字"，写 `0` 不该被判成类型不符）；
+    bool 单列——它在 Python 里是 int 的子类，但塞进数字位会让 float(True) 静默
+    变成 1.0。
+    """
+    if isinstance(value, bool):
+        return "布尔"
+    if isinstance(value, (int, float)):
+        return "数字"
+    if isinstance(value, str):
+        return "字符串"
+    return type(value).__name__
+
+
 def put_override(assignment):
     """把一条 `a.b.c=值` 记进覆写层。路径必须是模板里现成的叶子，值必须是 JSON 标量。
 
@@ -126,10 +142,21 @@ def put_override(assignment):
     except ValueError:
         raise ValueError(f"--set {path}={raw} 的值读不出来——照 JSON 写："
                          f"数字 0.8、布尔 true/false、字符串要带引号 \"…\"")
+    old = leaves[path]
     if isinstance(value, (dict, list)) or value is None:
         raise ValueError(f"--set {path}={raw} 只能改标量（数字/布尔/字符串）——"
                          f"整块替换是改模板，请直接改 scripts/_template.py 的 "
                          f"_TEMPLATE_JSON")
+    # 类型换了也是"以为改了其实没改"：bool 塞进数字位（`relay=true`）时
+    # float(True) 会静默变成 1.0，写进 CSS 的却是 `True` —— 运行期 parseFloat 读
+    # 不出来、回落兜底，成片里演的是第三个值。
+    # int/float 互通（`0` 与 `0.35` 是同一类），bool 单列：JSON 里它是 int 的子类，
+    # 但语义上是另一回事。
+    if _scalar_kind(value) != _scalar_kind(old):
+        raise ValueError(
+            f"--set {path}={raw} 的类型对不上：模板里是 {_scalar_kind(old)}，"
+            f"给的是 {_scalar_kind(value)}（照 JSON 写：数字 0.8、布尔 true、"
+            f"字符串要带引号 \"…\"）")
     _OVERRIDES[path] = value
 
 

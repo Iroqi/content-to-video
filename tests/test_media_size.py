@@ -86,6 +86,27 @@ class RasterHeaderParsing(unittest.TestCase):
     def test_gif(self):
         self.assertEqual(self._size(_gif(320, 240), ".gif"), (320, 240))
 
+    def test_truncated_headers_return_none_instead_of_raising(self):
+        """截断的头必须返回 None，不能抛。
+
+        契约是"读不出尺寸 → None"（调用方按"没法验"处理）。struct.unpack_from
+        越界抛的是 struct.error，那会掀掉整个生成步骤——降级变成了崩溃。
+        走解析单元：raster_size 的 Pillow 主路径会先把它接住，掩盖这条。
+        """
+        import _media_size as M
+        for parse, buf in (
+            (M._png_size, b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0d" + b"IHDR"
+             + struct.pack(">I", 980)),           # 20 字节：只有宽度，没有高度
+            (M._gif_size, b"GIF89a\xd4\x03"),     # 8 字节：只有宽度
+        ):
+            self.assertIsNone(parse(buf))
+        # 没人接住的那道兜底：解析单元自己抛了，raster_size 仍只返回 None
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad.png")
+            with open(p, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0d" + b"IHDR")
+            self.assertIsNone(raster_size(p))
+
     def test_webp(self):
         self.assertEqual(self._size(_webp_vp8x(1024, 768), ".webp"), (1024, 768))
 

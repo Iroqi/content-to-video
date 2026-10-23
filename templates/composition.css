@@ -226,12 +226,14 @@ body{font-family:var(--ctv-font-family)}
    本来就要虚，无所谓；**当前行**是画面上最该锐利的那一句，为一个 0 半径的滤镜
    把它整句字形换一遍是纯视觉漂移，而成片里看不出是谁干的。所以“不需要模糊”必须
    是 `filter:none`（var 缺省即 none），合成改在 runtime.js 的 verseBlurSet 里做。 */
-.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,.62),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,var(--ctv-focus-future,.62)),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
 .verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
-.verse-line.past{--ctv-line-op:.45}
+/* 两档兜底都先问生成期注入的 --ctv-focus-*（真源 _template.subtitle.focus），
+   最后那个字面量只在"变量全缺"时兜——不再抄第二份模板值。 */
+.verse-line.past{--ctv-line-op:var(--ctv-focus-past,.45)}
 /* 词级强调（karaoke，运行时见 runtime.js 的 verseEmUpdate）──────────────────
    当前句已经"念到哪儿"，用一层**真实元素**的覆盖物画出来。
    为什么要覆盖物、不直接把正文切成两段 span：切成两个含文字的叶子，Layout 门禁

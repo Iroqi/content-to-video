@@ -391,6 +391,14 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _sl = tpl_layout["subtitle"]
     # 字幕字号是唯一被消费的 subtitle 参数（两画幅各读各的 subtitle 块）
     css_sub_font = f'{_sl["fontSize"]}px'
+    # 换句接力的入场时长（秒）：生成期算收束留白要扣它，运行期做接力补间要读它
+    # （--ctv-relay-s）。真源是模板 layout.<画幅>.subtitle.relay，这里就把它钉成
+    # float——--set 能塞进 true（float(True)==1.0 静默生效）这类非数字，运行时
+    # parseFloat 又读不出，两头各跑一个数。
+    _relay_s = float(_sl["relay"])
+    if not 0.0 <= _relay_s <= 3.0:
+        raise ValueError(f"[template] {aspect} subtitle.relay 的值 {_relay_s!r} 越界"
+                         f"（应落在 [0, 3]；0 = 不接力）")
 
     # ── 分画幅几何派生 ──────────────────────────────────────────────
     # 数值互不共用。竖屏独有的定位键只存在于 vertical 块——横屏是弹性列，
@@ -570,7 +578,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
   --ctv-ved-settle:{_settle_now:.2f}s;
-  --ctv-relay-s:{_sl["relay"]};
+  --ctv-relay-s:{num_fmt(_relay_s)};
   --ctv-scroll-ease:{_scroll_ease};
   --ctv-relay-from:{num_fmt(_relay_from)};
   --ctv-focus-future:{num_fmt(_focus_future)};--ctv-focus-past:{num_fmt(_focus_past)};--ctv-focus-ratio:{num_fmt(_focus_ratio)};--ctv-focus-scale:{num_fmt(_focus_scale)};--ctv-focus-blur:{num_fmt(_focus_blur)};"""
@@ -612,10 +620,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-l-title-lh:{_tl["lineHeight"]};
   --ctv-l-img-w:{int(_il["width"])}px;--ctv-l-img-h:{_l_img_h}px;
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
-    # 换句接力的入场时长（秒）：生成期算收束留白要扣它，运行期做接力补间要读它。
-    # 两处读同一个值、真源是模板 layout.<画幅>.subtitle.relay —— 抄成两份常量时
-    # 改一格要改三处，只靠测试盯相等。
-    rc.relay_s = float(_sl["relay"])
+    rc.relay_s = _relay_s
     rc.root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
     return rc
 

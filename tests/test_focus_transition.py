@@ -83,6 +83,40 @@ class TemplateContract(unittest.TestCase):
                     _render()
 
 
+class RelaySecondsContract(unittest.TestCase):
+    """接力窗口 `--ctv-relay-s`：生成端与运行端读同一个数，0 是合法取值。"""
+
+    def _relay_s(self):
+        return float(T.load_template()["layout"]["vertical"]["subtitle"]["relay"])
+
+    def test_renderer_injects_a_number_the_runtime_can_parse(self):
+        """写进 CSS 的必须是 parseFloat 读得出的字面量。
+
+        bool 走 float() 会变成 1.0，直接拼进 CSS 却是 `True`——运行期读不出来、
+        回落兜底，两端各跑一个数。
+        """
+        html = _render()
+        self.assertRegex(html, r"--ctv-relay-s:[0-9.]+;")
+        self.assertNotIn("--ctv-relay-s:True", html)
+
+    def test_zero_reaches_the_var(self):
+        """relay=0（不接力）不能被 `||` 兜底吃成默认值。"""
+        with T.override_layer(["layout.vertical.subtitle.relay=0"]):
+            html = _render()
+        self.assertIn("--ctv-relay-s:0;", html)
+
+    def test_out_of_range_is_rejected(self):
+        for value in (-0.01, 3.5):
+            with self.subTest(value=value), T.override_layer(
+                    [f"layout.vertical.subtitle.relay={value}"]):
+                with self.assertRaisesRegex(ValueError, r"越界"):
+                    _render()
+
+    def test_runtime_uses_is_finite_not_or(self):
+        self.assertIn("isFinite(_relaySecRaw)", RUNTIME)
+        self.assertNotIn(")) || 0.32;", RUNTIME)
+
+
 class RankContract(unittest.TestCase):
     """档位必须有**数值**取法，插值才有两端。"""
 

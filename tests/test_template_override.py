@@ -43,6 +43,21 @@ class OverrideContract(unittest.TestCase):
             T.put_override("typography.titleWeight=bold")
         self.assertIn("JSON", str(cm.exception))
 
+    def test_scalar_kind_must_match_the_template_leaf(self):
+        """类型换掉同样是"以为改了其实没改"。
+
+        bool 塞进数字位最隐蔽：`float(True)` 静默变成 1.0，而写进 CSS 的是
+        `True` —— 运行期 parseFloat 读不出来、回落兜底，成片里演的是第三个值。
+        """
+        self.assertEqual(T._scalar_kind(0), T._scalar_kind(0.35))  # int/float 互通
+        self.assertNotEqual(T._scalar_kind(True), T._scalar_kind(1))
+        with self.assertRaises(ValueError) as cm:
+            T.put_override("subtitle.relay.from=true")
+        self.assertIn("类型对不上", str(cm.exception))
+        with self.assertRaises(ValueError):
+            T.put_override('typography.titleWeight="600"')  # 字符串进数字位
+        T.put_override("subtitle.relay.from=0")  # 数字写 0 是合法的
+
     def test_layer_is_scoped(self):
         with T.override_layer(["animation.director.duration=0.7"]):
             self.assertEqual(T.load_template()["animation"]["director"]["duration"], 0.7)

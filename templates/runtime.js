@@ -567,8 +567,11 @@ const verseApply = (si) => {
 // 换句接力的入场时长（秒）：真源是模板 layout.<画幅>.subtitle.relay，生成期写成
 // :root 的 --ctv-relay-s。这里不抄数字——抄了就得靠测试盯两份相等，而生成期的
 // 收束留白也是从同一个变量算的（两边不同步＝收束和接力叠着演）。
-const RELAY_SECONDS = parseFloat(
-  getComputedStyle(document.documentElement).getPropertyValue("--ctv-relay-s")) || 0.32;
+const _relaySecRaw = parseFloat(
+  getComputedStyle(document.documentElement).getPropertyValue("--ctv-relay-s"));
+// 用 isFinite 而不是 ||：relay=0 是合法取值（换句不接力），`||` 会把它吃成 0.32，
+// 生成端按 0 算留白、运行端按 0.32 演，两端对不上。
+const RELAY_SECONDS = isFinite(_relaySecRaw) ? Math.max(_relaySecRaw, 0) : 0.32;
 // 入场浮出的起点（**只叠给当前行**，理由见 verseRelay 的长注释）：新成为焦点的
 // 那一行从这一档长到 1。真源是模板 `subtitle.relay.from`，生成期经
 // --ctv-relay-from 注入（与 --ctv-relay-s / --ctv-scroll-ease 同一口径），
@@ -688,7 +691,6 @@ const verseRelay = (c, t, t0, si) => {
   // 本段第一句没有 prev：除当前行的入场浮出外，所有行的档位都不动。
   const prev = mine ? versePrev(c, si) : null;
   const s0 = focusScale(1);
-  const b0 = focusTable().blur;
   for (const L of c.lines) {
     const di = _idx(L);
     if (!mine) { verseInlineClear(L); continue; }
@@ -703,7 +705,10 @@ const verseRelay = (c, t, t0, si) => {
     // 合成在**这一处**一起算——另一分支若跟着把滤镜整条撤掉，会把离焦行本来的
     // 模糊一起擦掉（入场结束不等于"这一行不需要模糊了"）。
     const float = di === si && p < 1;
-    verseBlurSet(L, Math.max(at(focusBlur), float ? b0 * (1 - e) : 0));
+    // 模糊整条交给 at(focusBlur)：dNew=0 时 focusBlur(0)=0，而上一档
+    // focusBlur(dOld) ≥ b0，插值出来的值恒 ≥ 旧的 b0*(1-e) —— 再 max 一次是
+    // 档位写死时代的合成式残留，恒不起作用。
+    verseBlurSet(L, at(focusBlur));
     // 入场浮出**只叠给当前行**：它读的是"焦点换了地方"这个事件；其余行只是挪
     // 一档，跟着一起从 RELAY_FROM 浮起会让整墙字幕每次换句都闪一下（实测
     // .45 → .35 → .45）。

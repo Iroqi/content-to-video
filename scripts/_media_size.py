@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 """媒体像素尺寸：问 Pillow 要，没有 Pillow 就退回读文件头（不解码）。
 
-存在的理由是一条**此前无人拦的静默退化**：配图一律 `cover` 铺满画布（见
-`references/imagery.md`「统一使用同一个内容画布」），`cover` 只保证填满，
-不保证够清楚——一张 800×600 的照片塞进横屏 1067×800 的槽位要放大 1.33 倍，
-成片里那一段就是糊的，而生成期、`hyperframes check`、渲染日志**全都一声不吭**
-（门禁查的是"图在不在、能不能解码"，不是"够不够大"）。
+配图一律 `cover` 铺满画布，而 `cover` 只保证填满、不保证够清楚——生成期、
+`hyperframes check`、渲染日志全都查不到"够不够大"。本模块补这两问：
 
-所以这里补上尺寸那一问：拿素材的固有像素尺寸跟它要被铺进去的那个框比，算出
-`cover` 到底要放大几倍，超过阈值就出声。判据与阈值收口在本模块，别在调用点
-再写一份 `max(w0/w1, w0/h1)`——两处各算一遍就会一个报警一个不报。
+1. **放大几倍**：素材固有像素尺寸比它要铺进去的框，算出 `cover` 的倍率，超阈值出声。
+2. **裁掉多少**：cover 裁的是比例不一致的部分（不是 contain 留黑边），
+   ImageGen 三档里没有 4:3，按竖屏比例出图铺进 4:3 槽会裁掉一半画面。
 
-**第二问是比例**：cover 同时会**裁掉**比例不一致的部分（不是 contain 留黑边），
-而 ImageGen 只有 1024×1024 / 1024×1536 / 1536×1024 三档、没有 4:3 档——按竖屏
-比例出图铺进 4:3 槽会被裁掉一半画面。裁切占比与分辨率无关，和放大倍率是两条
-独立的判据（`cover_crop_fraction` / `aspect_note`），各响各的。
+两条判据互相独立（放大倍率 × 裁切占比），各响各的。**判据与阈值只收在本模块**，
+别在调用点再写一份 `max(w0/w1, w0/h1)`——两处各算一遍会一个报警一个不报。
 
-**矢量不验**：SVG 缩放不失真，它另有比例与字号两道门禁（见
-`gen_hyperframes.canvas_layout_errors`），这里一律跳过。
+**矢量不验**：SVG 缩放不失真，另有比例与字号两道门禁
+（`gen_hyperframes.canvas_layout_errors`）。
 
-**为什么引 Pillow**：手写头解析只认得 PNG/JPEG/WebP/GIF 四种，而"读不出"在本
-模块等于**静默放行**——AVIF/HEIC/JPEG XL/TIFF/JXL 这类素材（浏览器与 ffmpeg
-都认，作者也会用）会绕过全部三道判据，正是这个模块存在的理由。Pillow 一条
-`Image.open` 覆盖它全部，几百种格式、EXIF 旋转也替我们处理。它读惰性头
-（`size` 不解码像素），一次验证几十张的耗时可以忽略。没有 Pillow 时退回手写
-头解析（四种常见格式仍被兜住），保证"装不上依赖"不是"整段失效"。
+**Pillow 是主路径**：手写头解析只认 PNG/JPEG/WebP/GIF 四种，而"读不出"在这里
+等于静默放行——AVIF/HEIC/JPEG XL/TIFF 会绕过全部判据。Pillow 一条 `Image.open`
+覆盖全部格式、顺带处理 EXIF 旋转，读惰性头不解码像素。没有 Pillow 才退回头解析。
 """
 import struct
 
@@ -66,14 +58,16 @@ def _le16(buf, off):
 
 def _png_size(buf):
     """PNG：IHDR 块里两个大端 u32（宽在前）。"""
-    if buf[:8] != b"\x89PNG\r\n\x1a\n" or buf[12:16] != b"IHDR":
+    # 24 = 8 签名 + 4 长度 + 4 "IHDR" + 8 宽高。截断文件走到这里 unpack_from
+    # 会抛 struct.error，而调用方契约是"读不出返回 None"（崩溃不是降级）。
+    if len(buf) < 24 or buf[:8] != b"\x89PNG\r\n\x1a\n" or buf[12:16] != b"IHDR":
         return None
     return _be32(buf, 16), _be32(buf, 20)
 
 
 def _gif_size(buf):
     """GIF：逻辑屏描述符里两个小端 u16（宽在前）。"""
-    if buf[:6] not in (b"GIF87a", b"GIF89a"):
+    if len(buf) < 10 or buf[:6] not in (b"GIF87a", b"GIF89a"):
         return None
     return _le16(buf, 6), _le16(buf, 8)
 
@@ -169,7 +163,12 @@ def raster_size(path):
     if not buf:
         return None
     for parse in _PARSERS:
-        got = parse(buf)
+        # 任何一个头解析抛异常都按"这一个格式读不出"处理，而不是让整步崩掉：
+        # 契约是"读不出返回 None"，畸形/截断的素材不该掀掉生成。
+        try:
+            got = parse(buf)
+        except Exception:  # noqa: BLE001
+            continue
         if got and got[0] > 0 and got[1] > 0:
             return int(got[0]), int(got[1])
     return None

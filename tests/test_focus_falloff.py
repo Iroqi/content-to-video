@@ -19,6 +19,7 @@ import _template as T
 
 REPO = pathlib.Path(H.SKILL_DIR)
 RUNTIME = (REPO / "templates" / "runtime.js").read_text(encoding="utf-8")
+CSS = (REPO / "templates" / "composition.css").read_text(encoding="utf-8")
 
 
 def _render():
@@ -75,6 +76,18 @@ class RuntimeContract(unittest.TestCase):
         f = T.load_template()["subtitle"]["focus"]
         self.assertIn(f"fRaw : {f['future']}", RUNTIME)
         self.assertIn(f"pRaw : {f['past']}", RUNTIME)
+
+    def test_css_fallback_reads_the_injected_vars_not_a_second_copy(self):
+        """CSS 那两档兜底必须先问生成期注入的 --ctv-focus-*。
+
+        写死 0.62 / 0.45 等于把模板值抄了第二份：改模板时 CSS 那份不动，而
+        运行时没接管时（removeProperty 之后）生效的正是它——改了一处、画面是
+        另一条曲线，且没有任何机器盯得住（check_numbers 只扫 scripts/ 与文档）。
+        """
+        self.assertIn("var(--ctv-line-op,var(--ctv-focus-future", CSS)
+        self.assertIn("--ctv-line-op:var(--ctv-focus-past", CSS)
+        # 只允许"变量全缺时的最后兜底"这一种字面量：不再有裸的第二份模板值
+        self.assertNotRegex(CSS, r"var\(--ctv-line-op,\.\d+\)")
 
     def test_focus_writes_inline_var_in_verse_apply(self):
         self.assertIn('setProperty("--ctv-line-op"', RUNTIME)

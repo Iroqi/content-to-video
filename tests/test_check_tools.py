@@ -324,6 +324,24 @@ class SvgChecker(unittest.TestCase):
                 _, warns = self.run_check(svg)
                 self.assertTrue(any("端点悬空" in w for w in warns), warns)
 
+    def test_cjk_punctuation_counts_as_full_width_in_text_boxes(self):
+        """字宽粗估要把中文标点算成等宽。
+
+        只认汉字区间（U+3400–U+9FFF）时「，。」「」和假名按 0.55em 算，中文句子的
+        估算宽度系统性**偏小**——偏小是危险方向：端点落在文字上的判断会漏报。
+        """
+        # 15 字里 2 个是标点。旧区间把它们按 0.55em 算：13×1.0 + 2×0.55 = 14.1em
+        # （507.6px）；按等宽算是 15em（540px）。差出来的 32px 足以让落在句末的
+        # 端点掉出文字盒——端点悬空误报。
+        line = "梯度下降，一步一步走到最低点。"
+        self.assertEqual(check_svg.est_text_width(line, 36), 15 * 36)
+        self.assertLess(check_svg.est_text_width(line, 36) - 36 * 2 * 0.45,  # 旧算法
+                        check_svg.est_text_width(line, 36))
+        for ch in ("，", "。", "、", "！", "（", "）", "あ", "ア", "　"):
+            self.assertTrue(check_svg._WIDE.search(ch), ch)
+        for ch in ("a", "1", ".", " "):
+            self.assertFalse(check_svg._WIDE.search(ch), ch)
+
     def test_line_ending_on_another_stroke_passes(self):
         # 一条线接到另一条线的端点上，两头都根住了
         _, warns = self.run_check(GOOD.replace(

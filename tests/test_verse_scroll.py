@@ -57,8 +57,11 @@ class RuntimeContract(unittest.TestCase):
 
     def test_relay_window_is_shared(self):
         """滚动与亮度、尺寸共用同一个接力窗口——三个维度必须同一时刻到位。"""
-        self.assertIn("const RELAY_SECONDS = parseFloat(", RUNTIME)
+        self.assertIn("const _relaySecRaw = parseFloat(", RUNTIME)
         self.assertIn('/ RELAY_SECONDS)', RUNTIME)
+        # relay=0 是合法取值（不接力），不许用 `||` 兜底——那会把 0 吃成 0.32，
+        # 生成端按 0 算留白、运行端按 0.32 演。
+        self.assertNotIn(")) || 0.32;", RUNTIME)
 
     def test_landing_is_derived_from_layout(self):
         """落位由静态布局值算出：offsetTop → translateY，缓存被清也能算。"""

@@ -70,9 +70,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`。动笔前先读「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」五节——画错了没有任何报错（管线与 `hyperframes check` 都看不见图里画得对不对）；整页画布再加「整页画布的密度与层次」。要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」（跨段接续在其中）。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的完整档位组合见同一份文档）。
-
-几条最容易漏的规格：**像素要够铺满它那一页的框**（`cover` 只保证填满、不保证清楚，不够大的素材在成片里是糊的，生成期按段 warn）；**比例贴不贴，入库前定**——渲染端 `cover` 是裁边、不是 contain 留黑边，两个画幅的图槽都是 4:3 横版，ImageGen 三档尺寸里选最接近的 `1536×1024`（方图裁 25%、竖图裁一半，生成期按段 warn 裁切），自己裁成 4:3 保住主体再入库；**生图逐张看右下角**（水印因模型而异、没有通用开关），盖了就在裁比例的同一步裁掉；**只有 SVG 的导演档能"演"**——固定画面交给 ImageGen。
+- **画 SVG**：`references/canvas.md`。动笔前先读它开头点名的那几节——**画错了没有任何报错**，管线与 `hyperframes check` 都看不见图里画得对不对；要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的档位组合见同一份文档）。
 
 ### 4. 生成 HTML、预览、检查、渲染
 
@@ -84,7 +82,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 用浏览器打开 `hf-project/index.html` 预览：默认停在首帧，点播放后时间线与音频一起走。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致、agenda 有没有行被截掉。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号、配图不够大/比例不贴合、视频不够这一段长）都要回头处理。
 
-**`hyperframes check` 已接进 `run.py`**：不给 `--until` 时渲染前自动跑一次，有 error 直接停下、不进渲染；要单独验收版式就用 `--until check`。已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG——**是取帧工具，不是门禁**，按症状定位走同文件「画面翻车速查表」。
+**`hyperframes check` 已接进 `run.py`**：不给 `--until` 时渲染前自动跑一次，有 error 直接停下、不进渲染；要单独验收版式就用 `--until check`。已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」——**Lint 有 error 时 browser 五阶段整个不跑，全 0 项不是通过、是失明**。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG（**是取帧工具，不是门禁**），按症状定位走同文件「画面翻车速查表」。
 
 迭代节奏：改文案、换配图、调结构一律 `--until html`，人工预览确认后再跑完整渲染（固定开销与实测耗时见 `rendering.md`「性能参数」）。
 
@@ -94,11 +92,11 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 - `--workers` 同名不同义：`run.py` 的是**渲染抓帧**并行度，`pipeline.py` 的是 **TTS 并发**数。
 - `--until html` 是迭代档（出 HTML 即停、人工预览），`--until check` 停在官方门禁之后，`--until render`（默认）才出成片。
-- 四个调试旗标都不进交付：`--placeholder-missing` 与 `--allow-ease` 只配 `--until html`（带它们跑渲染在入口 exit 2）；`--allow-best-effort` 放行缺媒体/未就绪的抓帧（成片可能无声或缺帧，报告留痕）。**`--draft` 是这些逃生口的总开关**：一次放行占位 / ease / 缺 src 降级 / 槽位比例·对比度与画布字号降 warn / 渲染 best-effort，差异由 `production_report` 的 `draft` 标记与 skipped 清单点名。探索期一条 `--draft` 随便跑，定稿去掉它；安全类与画布档判据在 draft 下照旧拦截。`check_svg.py` 同样吃 `--draft`（槽位比例/对比度降 warn、端点悬空静音、满幅底板提示合并）。
+- **调试旗标一律不进交付，`--draft` 是它们的总开关**：一次放行占位 / ease / 缺 src 降级 / 槽位比例·对比度与画布字号降 warn / 渲染 best-effort。`--until html` 之外带它们跑渲染在入口 exit 2；安全类与画布档判据在 draft 下照旧拦截。差异由 `production_report` 的 `draft` 标记与 skipped 清单点名。`check_svg.py` 同样吃 `--draft`。
 
 探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.director.duration=0.8`，键是 `scripts/_template.py` 的叶子路径），`--drift off|subtle|boring` 给全片静态图选一个运镜档（逐段微调在 images.json 的 `drift` 字段）。两者都只在本次进程生效，定稿的取值写回模板。
 
-缺图处理：段落在 images.json 里没有映射键时，只在真要渲染时拦截（exit 2），`--until html` 只警告——**整页画布除外**，那一页缺图连预览 HTML 都生成不出来，一律 exit 2。想在图没画完之前先看编排，用 `--until html --placeholder-missing`（占位 SVG 顶一张；只配 `--until html`，带它渲染在入口报错，`--draft` 会自动带上）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（该位置空着或占位，报告留痕）；`--until images` 只看覆盖率、不拦。
+缺图处理：段落在 images.json 里没有映射键时只在真要渲染时拦（exit 2），`--until html` 只警告——**整页画布除外**，那一页缺图连预览 HTML 都出不来，一律 exit 2。想在图没画完之前先看编排用 `--until html --placeholder-missing`（占位 SVG 顶一张）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（报告留痕）；`--until images` 只看覆盖率、不拦。
 
 字段集封闭（三份 JSON 的未知键即报错）只留一个草稿位：`_` 开头的键不生效、不进任何产物，但放行并打 `[notice]`——给"写下来还没定"的备选文案用。
 

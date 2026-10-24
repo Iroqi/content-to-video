@@ -145,10 +145,20 @@ class CrossModuleKeysSingleSource(unittest.TestCase):
         `gen_hyperframes` 走 `get_canvas` / `get_image_box`——两套取值口，键名还是
         "portrait" 与 "vertical" 两种叫法。模板挪键时一边跟着变、一边不动。"""
         for a in ("portrait", "landscape"):
-            self.assertEqual(CS.CANVAS[a], T.get_canvas(a))
-            self.assertEqual(CS.SLOT[a], T.get_image_box(a))
+            self.assertEqual(CS.canvas_sizes()[a], T.get_canvas(a))
+            self.assertEqual(CS.slot_sizes()[a], T.get_image_box(a))
         self.assertNotIn('["canvas"]', inspect.getsource(CS),
                          "check_svg 不得自己下标取 canvas，走 get_canvas")
+        # 且必须是**函数**不是模块常量：canvas_kit 的 --set 与自查同进程，
+        # import 期定死会变成"按新尺寸出图、按旧尺寸过门禁"。
+        src = inspect.getsource(CS)
+        self.assertIn("def canvas_sizes()", src)
+        self.assertIn("def slot_sizes()", src)
+        self.assertNotRegex(src, r"^(CANVAS|SLOT)\s*=",
+                            "CANVAS/SLOT 回到模块常量了：--set 覆盖后门禁不会跟着变")
+        with T.override_layer(["canvas.vertical.width=2000"]):
+            self.assertEqual(CS.canvas_sizes()["portrait"][0], 2000,
+                             "--set 改了画布宽度，门禁还按旧值查＝自证清白")
 
     def test_safe_margin_shares_the_renderer_padding_parse(self):
         """修复前：`check_svg._safe_margins` 自己 `.split()` 解 padding 简写，

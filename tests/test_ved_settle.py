@@ -129,11 +129,11 @@ class RuntimeContract(unittest.TestCase):
         self.assertIn("const verseEmSettle", src)
         self.assertIn("verse-ved-settled", src)
 
-    def test_settle_check_precedes_early_return(self):
-        """收束判据必须写在 `k === L.lastK` 提前返回**之前**。
+    def test_settle_check_precedes_the_cross_gate(self):
+        """收束判据必须写在"跨格才刷"那道门（`k !== L.lastK`）**之前**。
 
-        k 是取整后的字序号，最后不足半个字的行程里 k 已经停在 n 不动；提前返回会把
-        判据整个跳过，收束永远不触发且没有任何报错（踩过）。
+        k 是取整后的字序号，最后不足一个字的行程里 k 已经停在 n 不动；门一关，这条
+        判据就被整个跳过，收束永远不触发且没有任何报错（踩过）。
         """
         src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
         body = src.split("const verseEmUpdate = ", 1)[1].split("\n};", 1)[0]

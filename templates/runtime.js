@@ -252,14 +252,57 @@ const verseVedApply = (L, k) => {
     spans[j].style.opacity = off[j] ? verseVedLit : verseVedDim;
   }
 };
-const verseEmAt = (el, p) => {
+// ── 读取头：**亚字精度** ────────────────────────────────────────────────
+// 句内进度 p 是**连续量**，但此前只用它的整数部分：k 取到整字之后，一个字要等这一格
+// 走完才整字数——portrait 40px 字号下一个 CJK 字约 40px 宽，句内匀速约 0.15~0.2s 一
+// 格，于是 30fps 下**四到六帧一动不动、第七帧平移 39.4px**（实测 portrait golden 逐
+// 帧读覆盖层的逐字 alpha）。更致命的是正在念的那个字 alpha 恒为 1：边缘只有"还没翻"
+// 和"翻过去了"两种状态，从来没有"正在翻开"。
+//
+// 前沿歌词 UI（AMLL 的逐字模式、Apple Music 的词级同步）的高亮边缘都是**连续的**：
+// 前者按词级时间戳、后者按词的发声区间推进，两者都没有"取整到整字"这一步。本仓库的
+// TTS 只有句级时间戳，"句内匀速"确实是唯一可用的假设——但**匀速推不出取整**：把 p
+// floor 成整数是自己加的一层量化器，不是时间戳缺失的推论。留着它，等于把句内这条
+// 连续量里最容易拿到的那一段信息白白扔掉。
+//
+// 所以把 floor 这一层拿掉：整数部分 k 照旧决定"哪些字已经念完"（O(n) 的全量刷仍只在
+// 跨格那一帧），多出来的零头 f 全部落在**正在念的那一个字**上——覆盖层的 alpha 从 1
+// 收到 1−f。于是每帧边缘都在走，读取头不再有驻点。插值在**实测字宽**（xs）上进行，
+// 不假设等宽：中英混排、标点、折行都仍由 xs 说了算。
+const verseHeadAt = (el, p) => {
   const c = verseEmClip(el);
-  if (!c.n) return 0;
-  if (!c.xs) return Math.round(p * c.n);
+  if (!c.n) return {k: 0, f: 1};
+  // 没有实测字宽就没有可插值的度量：零头按 0 处理（这一格仍整格压着，与改动前逐
+  // 字节一致）。不敢猜"已经念了一半"——猜过了就是把还没念的字先亮出来。
+  if (!c.xs) return {k: Math.round(p * c.n), f: 0};
   const x = p * c.total;
   let k = 0;
   while (k < c.n && c.xs[k + 1] <= x) k++;
-  return k;
+  if (k >= c.n) return {k: c.n, f: 1};
+  // 折行处那一格被累计最大值压成零宽（见 verseEmClip）：它没有零头可分，整格亮。
+  const w = c.xs[k + 1] - c.xs[k];
+  if (!(w > 0)) return {k: k, f: 1};
+  return {k: k, f: Math.max(0, Math.min(1, (x - c.xs[k]) / w))};
+};
+// 亚字那一位：**只重写正在念的那一个字**——它是全句唯一每帧都变的格子，其余字在
+// 跨格那一帧已被 verseVedApply 写成终值、到这句念完前都不再动。
+// alpha = 1 − f：f=0 时这一格仍整格压着（= verseVedDim），f=1 时整格让出（=
+// verseVedLit），中间的位置就是"笔锋正跋在这一格上"。三位小数精度足够了——一个
+// 40px 的字分成 1000 档是 0.04px，远低于栅格能分辨的量。
+const verseEdgeSet = (L, k, f) => {
+  const spans = L.vedSpans || [];
+  if (!spans.length) return;
+  const map = verseVedMap(L);
+  if (k >= map.length) return;                   // 整句已念完：没有"正在念"的字
+  const j = map[k];
+  // 正文第 k 个字没在覆盖层里落到格子（换行吞掉的空白、测不着的盒）：它的可见像素
+  // 由相邻那格承担（与 verseVedApply 同一条口径）。
+  if (!(j >= 0) || j >= spans.length) return;
+  const sp = spans[j];
+  // 值不变就不写，与 runtime 里其它逐帧变量同一条守卫写法：整数部分的那些字在稳态
+  // 时若跟着每帧重写一遍，白触发一次样式重算——这一位是唯一每帧必写的，别扩散到全句。
+  const v = f >= 1 ? verseVedLit : (1 - f).toFixed(3);
+  if (sp.style.opacity !== v) sp.style.opacity = v;
 };
 // ── 已念段的画法：**正文不动 + 绝对定位的一层覆盖物** ─────────────────────
 // 拆成「已念 span + 未念 span」也能染色，但会把一句拆成两个含文字的叶子，而
@@ -290,18 +333,23 @@ const verseEmUpdate = (c, si, t) => {
       && isFinite(L.t0) && isFinite(L.t1) && L.t1 > L.t0;
     if (!on) { verseEmClear(L); continue; }
     // 念到句尾那一刻做一次收束（见 verseEmSettle）。判据是**时间**、且必须写在
-    // 下面那个 `k === L.lastK` 提前返回**之前**：k 是取整后的字序号，最后不足半个字
-    // 的行程里 k 已经停在 n 不动，提前返回会把这条判据整个跳过——收束永远不触发，
-    // 且没有任何报错（踩过）。settle 自身幂等，每帧判一次代价为零。
+    // 下面那道"跨格才刷"的门**之前**：k 是取整后的字序号，最后不足一个字的行程里
+    // k 已经停在 n 不动，门一关这条判据就被整个跳过——收束永远不触发，且没有任何
+    // 报错（踩过）。settle 自身幂等，每帧判一次代价为零。
     if (t >= verseEmEnd(L) - 1e-6) verseEmSettle(L);
     const p = Math.max(0, Math.min(1, (t - L.t0) / (verseEmEnd(L) - L.t0)));
-    const k = verseEmAt(el, p);
-    if (k === L.lastK) continue;
-    L.lastK = k;
-    // 先上屏（display:block 之后才有盒子可测），再对原点、再逐字上 alpha。
-    el.classList.add("verse-ved-on");
-    verseVedOrigin(L);
-    verseVedApply(L, k);
+    const h = verseHeadAt(el, p);
+    const k = h.k;
+    // 整数部分照旧"跨格才刷"：O(n) 的全量覆盖只发生在换格的那一帧。
+    // 亚字那一位**不进这道门**——它本来就是每帧都变的那一位，关进门里就退回按字跳格。
+    if (k !== L.lastK) {
+      L.lastK = k;
+      // 先上屏（display:block 之后才有盒子可测），再对原点、再逐字上 alpha。
+      el.classList.add("verse-ved-on");
+      verseVedOrigin(L);
+      verseVedApply(L, k);
+    }
+    verseEdgeSet(L, k, h.f);
   }
 };
 // ── 念完之后的收束（settle）：把整句的 accent 交还给"下一句" ──────────────

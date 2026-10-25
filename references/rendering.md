@@ -48,10 +48,9 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
   结构：正文是**一个裸文本节点**，行尾一个空的 `.verse-em` 挂点 + 一层 `.verse-ved` 覆盖物。覆盖物生成期写进**整句原文**（`data-text`）、与正文共用同一套行盒与字体声明，所以逐字重合；运行时只把已念字的 alpha 归 0，未念字保持**实色**盖住 accent。三条不能碰：正文不能包 span（含文字的叶子会被 Layout 逐字报 `text_occluded`）；覆盖物不能只写 `slice(k)`（折行点前移＝重影）；不能用半透明压暗（整句本身就是 accent，浅色盖不住）。
 
   **念完之后的收束（settle）**：一句念完时整句仍是全亮 accent，与下一句刚亮的第一个字**同色同重**——画面上有两个焦点。句尾把整句逐字交还给"已过去"那一档，焦点让给下一句。**逐字错峰**而不是整句一起压暗（后者在 0.3s 内同时变灰＝闪烁）：第 i 个字延迟 `i × (时长 ÷ 字数)`。
-  时长只有一个数 `--ctv-ved-settle`，生成期按「本句念完 → 下一次换句」的留白算出（`_ved_settle_seconds`），扣掉换句接力 0.32s，封顶 0.6s、地板 0.08s，按 0.05s 网格**向下**取整。留白为 0（首尾相接的稿件、无 `voiced` 的老 manifest）→ 变量写 0、CSS 规则整条失效；页末句后面跟转场，同样不演。运行时只读这一个数。
-- **读取头的亚字精度**：句内进度 `p` 是**连续量**，一度只用了它的整数部分——一个字要等这一格走完才整字数。portrait 40px 字幕下一个 CJK 字约 40px 宽、句内匀速 0.15~0.2s 一格，30fps 下就是**四到六帧不动、第七帧平移 39.4px**（实测 golden 第 2 句逐帧读覆盖层的逐字 alpha：edge `0 / 0 / 0 / 0 / **39.4** / 39.6 / 39.9 / 40 / **80**`，理论位移是全句宽 ÷ 时长 ÷ 帧率 = 8.9px/帧；正在念的那个字 alpha **恒为 1**，从没有中间值）。
-  前沿歌词 UI（AMLL 的逐字模式、Apple Music 的词级同步）的边缘都是**连续的**：前者按词级时间戳、后者按词的发声区间推进，都没有"取整到整字"这一步。本仓库的 TTS 只有句级时间戳，"句内匀速"确是唯一可用的假设——但**匀速推不出取整**，那层 `floor` 是自己加上去的量化器。
-  所以拿掉它：整数 `k` 照旧决定"哪些字已念完"（`O(n)` 全量刷仍只在跨格那一帧），零头 `f` 落在**正在念的那一个字**上——覆盖层 alpha 从 1 收到 `1−f`。改动后同一组帧 Δedge 逐帧 `8.4 / 8.6 / 8.8 / 8.9 / 9.1 / 9.1 / 9.0 / 8.9`，正在念的那个字 alpha `0.778 / 0.555 / 0.333 / 0.111`。
+  时长只有一个数 `--ctv-ved-settle`，生成期按「本句念完 → 下一次换句」的留白算出（`_ved_settle_seconds`），扣掉换句接力 0.32s，封顶 0.6s、地板 0.1s，按 0.05s 网格**向下**取整。留白为 0（首尾相接的稿件、无 `voiced` 的老 manifest）→ 变量写 0、CSS 规则整条失效；页末句后面跟转场，同样不演。运行时只读这一个数。
+- **读取头的亚字精度**：句内进度 `p` 是**连续量**，不是"亮到第几个字"。整数 `k` 决定哪些字已念完（`O(n)` 全量刷仍只在跨格那一帧），零头 `f` 落在**正在念的那一个字**上——覆盖层 alpha 从 1 收到 `1−f`。
+  症状：只读整数部分时，正在念的那个字 alpha **恒为 1、从没有中间值**，30fps 下表现为"四到六帧不动、第七帧平移一整个字宽"。
   - **插值在实测字宽 `xs` 上做，不假设等宽**（标点、折行、中英混排都仍由 `xs` 说了算）；折行处那一格被累计最大值压成零宽时没有零头可分（整格亮），拿它当分母会得到 NaN；连字宽都测不到就按 `f=0`，不许猜零头。
   - **这一位每帧重写**，且必须写在"跨格才刷"那道门**之外**（关进门里就退回按字跳格）；整句念完没有"正在念"的字，不去写越界的那一格。alpha 有了中间档，**逐字进度仍旧不许挂 `transition`**。
 - **焦点衰减（focus falloff）**：句子流**亮度**按「离当前句多远」衰减（`d` 为句序差，未来侧正、过去侧负）：未来 `d=1→0.62`、`d=2→0.45`、`d≥3→0.327`；过去整条提前一档 `d=-1→0.45`、`d=-2→0.327`、`d≤-3→0.237`。曲线真源在模板 `subtitle.focus`（future 0.62 / past 0.45 / ratio 0.726），经 `--ctv-focus-*` 注入，`--set subtitle.focus.*` 可临时改；运行时展开成查表、|d| 封顶第三档。`composition.css` 里的 0.62 / 0.45 只是运行时未接管时的兜底。
@@ -184,9 +183,9 @@ npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chro
 
 `check` = lint + browser 五阶段（Runtime / Layout / Motion / Contrast / Craft），**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
 
-**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_FINDING_CODES` 之外的新 code 当真，Lint 有 error 时额外点一条 `browser_stages_skipped`。阶段按结构认（顶层带 `findings` 的块都判读），CLI 新增阶段不用改这张表。
+**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_NOISE_CODES`（预期噪声）之外的新 code 当真——`GATE_STRICT_CODES` 里的码即使只以 warning 出现也照样点名，Lint 有 error 时额外点一条 `browser_stages_skipped`。阶段按结构认（顶层带 `findings` 的块都判读），CLI 新增阶段不用改这张表。
 
-本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_FINDING_CODES` 与下面这张噪声表一起复核。
+本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_NOISE_CODES` 与下面这张噪声表一起复核。
 
 - 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
 - **Lint 有 error ⇒ browser 五阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast/Craft 显示 0 项不是通过，是失明**。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。

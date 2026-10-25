@@ -338,9 +338,16 @@ class SvgChecker(unittest.TestCase):
         self.assertLess(check_svg.est_text_width(line, 36) - 36 * 2 * 0.45,  # 旧算法
                         check_svg.est_text_width(line, 36))
         for ch in ("，", "。", "、", "！", "（", "）", "あ", "ア", "　"):
-            self.assertTrue(check_svg._WIDE.search(ch), ch)
+            self.assertTrue(check_svg._is_wide(ch), ch)
         for ch in ("a", "1", ".", " "):
-            self.assertFalse(check_svg._WIDE.search(ch), ch)
+            self.assertFalse(check_svg._is_wide(ch), ch)
+
+    def test_east_asian_width_covers_hangul_and_cjk_ext(self):
+        """手写汉字区间漏掉的码位，标准库要认得（少估宽度是危险方向）。"""
+        for ch in ("한", "글", "\U00020000", "豈"):   # 韩文音节 / CJK 扩展 B / 兼容表意文字
+            self.assertTrue(check_svg._is_wide(ch), ch)
+        # 半角假名是真半角：旧区间把它算成全角（多估，反方向）
+        self.assertFalse(check_svg._is_wide("ｱ"))
 
     def test_line_ending_on_another_stroke_passes(self):
         # 一条线接到另一条线的端点上，两头都根住了

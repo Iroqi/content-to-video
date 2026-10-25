@@ -46,14 +46,15 @@ import math
 import os
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 
-from _path_morph import path_endpoints, path_segments, x_span, y_span
+from _path_morph import path_endpoints, path_segments, y_span
 from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
                            _css_unescape, _is_external_href,   # 外链/墙钟判据与净化器同一份
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
-                           is_full_bleed_backdrop, svg_points,
-                           root_px_size, root_viewbox_size)  # noqa: E402  与 gen_hyperframes 共用 root_px_size
+                           is_full_bleed_backdrop, parse_svg_strict, svg_points,
+                           root_px_size, root_viewbox_size, shape_bbox)  # noqa: E402  与 _cam_crop 同一份包围盒
 from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学与 hex 归一化不在这里重抄
                     theme_bg_stops, DEFAULT_THEME)
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
@@ -105,7 +106,14 @@ _HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 # 等宽字符区间（CJK 汉字 + 中文标点 + 假名 + 全角）：落在这个区间外的一律按
 # 0.55em 算。只写汉字区间会把「，。」和假名算成半角，中文句子的估算宽度系统性
 # 偏小——偏小是危险方向：端点落在文字上的判断会漏报"松散端点"。
-_WIDE = re.compile(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uff00-\uffef]")
+def _is_wide(ch):
+    """这个字符在等宽字体里占不占两格。
+
+    判据交给标准库的 East Asian Width，不手写码位区间：手写的汉字区间会漏掉
+    韩文音节（U+AC00–D7A3）、CJK 扩展 B（U+20000+）、兼容表意文字，又把半角
+    假名（U+FF61–FF9F）算成全角——漏掉的那部分是**少估**宽度，正是这里要防的方向。
+    """
+    return unicodedata.east_asian_width(ch) in ("W", "F")
 
 
 def est_text_width(content, px):
@@ -113,7 +121,7 @@ def est_text_width(content, px):
 
     只用于端点落点判断（多算只会少报 warn，安全方向）；越界判定刻意不用它。
     """
-    return px * sum(1.0 if _WIDE.search(ch) else 0.55 for ch in content)
+    return px * sum(1.0 if _is_wide(ch) else 0.55 for ch in content)
 
 
 def _prop(el, name):
@@ -271,49 +279,11 @@ def _pt_list(points):
 def _shape_bounds(el, tag):
     """精确几何元素在画布坐标下的 (x0, y0, x1, y1)；读不出返回 None。
 
-    path 用 x_span/y_span（含曲线控制点，宁可高估——越界是 error，低估会漏报）。
+    包围盒只此一份（`_svg_sanitize.shape_bbox`，与 `_cam_crop` 的取景共用），
+    这里只把 (x0,x1,y0,y1) 换成调用点习惯的顺序。
     """
-    def num(name):
-        return _parse_num(el.get(name))
-
-    if tag == "rect":
-        x, y, w, h = num("x") or 0.0, num("y") or 0.0, num("width"), num("height")
-        if w is None or h is None:
-            return None
-        return (x, y, x + w, y + h)
-    if tag == "circle":
-        cx, cy, r = num("cx"), num("cy"), num("r")
-        if None in (cx, cy, r):
-            return None
-        return (cx - r, cy - r, cx + r, cy + r)
-    if tag == "ellipse":
-        cx, cy, rx, ry = num("cx"), num("cy"), num("rx"), num("ry")
-        if None in (cx, cy, rx, ry):
-            return None
-        return (cx - rx, cy - ry, cx + rx, cy + ry)
-    if tag == "line":
-        x1, y1, x2, y2 = num("x1"), num("y1"), num("x2"), num("y2")
-        if None in (x1, y1, x2, y2):
-            return None
-        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-    if tag in ("polygon", "polyline"):
-        pts = _pt_list(el.get("points"))
-        if not pts:
-            return None
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        return (min(xs), min(ys), max(xs), max(ys))
-    if tag == "path":
-        d = el.get("d") or ""
-        try:
-            xs = x_span(d)
-            ys = y_span(d)
-        except ValueError:
-            return None
-        if xs is None or ys is None:
-            return None
-        return (xs[0], ys[0], xs[1], ys[1])
-    return None
+    box = shape_bbox(el, tag)
+    return None if box is None else (box[0], box[2], box[1], box[3])
 
 
 def _text_oob(el, inherited, vb_w, vb_h):
@@ -416,13 +386,11 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
     except (OSError, UnicodeDecodeError) as e:
         return [f"读不了文件: {e}"], []
 
-    # 先拦实体声明再解析，避免实体膨胀；图库素材极少带 DOCTYPE
-    if re.search(r"<!DOCTYPE|<!ENTITY", raw, re.I):
-        return ["含 DOCTYPE/ENTITY 声明，拒绝解析（实体膨胀风险）；请删掉这些声明"], []
+    # 先拦实体声明再解析，避免实体膨胀；图库素材极少带实体声明
     try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as e:
-        return [f"XML 解析失败: {e}"], []
+        root = parse_svg_strict(raw)
+    except ValueError as e:
+        return [str(e)], []
     if _local(root.tag) != "svg":
         return ["根节点不是 <svg>"], []
 
@@ -556,7 +524,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         if tag == "text":
             text_nodes += 1
             content = "".join(el.itertext())
-            if _WIDE.search(content):
+            if any(_is_wide(ch) for ch in content):
                 has_cjk = True
 
             # 字号

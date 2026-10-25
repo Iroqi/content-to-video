@@ -94,8 +94,12 @@ _TEXT_TAGS = frozenset({"text", "tspan", "textPath"})
 # 元素上会按 0 起算烘焙出 0.5，运行期 1+0.5 被 CSSOM 钳到 1，接续页页界静默跳变
 # （正是本模块要消灭的那类阶跃；autoAlpha 分支的 1.0 兜底同源）。
 # 只收导演档里真会出现相对写法的几个；其余属性初值为 0，按 0 起算本就正确。
+# 这张表是**按属性名**开列的，所以漏一个名字 = 那个属性的相对写法按 0 起算、烘出
+# 一个错值且一声不响（stop-opacity 的初值是 1，"+=0.5" 会烘出 0.5）。
 _CSS_INITIAL_NONZERO = {"opacity": 1.0, "fill-opacity": 1.0,
-                        "stroke-opacity": 1.0, "stroke-width": 1.0}
+                        "stroke-opacity": 1.0, "stop-opacity": 1.0,
+                        "flood-opacity": 1.0, "stroke-width": 1.0,
+                        "stroke-miterlimit": 4.0}
 
 
 def _kebab(prop):

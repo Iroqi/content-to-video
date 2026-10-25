@@ -130,7 +130,9 @@ def _extra_family(spec):
     if not _ALLOW_EXTRA["on"]:
         return None
     parts = split_ease(spec)
-    if parts is not None and parts[0] not in EASE_FAMILIES and parts[0] != "none":
+    # 不再多判 `parts[0] != "none"`：`none` 本就在 EASE_FAMILIES 里，前半截为真时
+    # 它恒为真——一条永远不起作用的条件，只会让读的人以为 none 被特殊对待了。
+    if parts is not None and parts[0] not in EASE_FAMILIES:
         return parts[0]
     return None
 

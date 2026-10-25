@@ -97,6 +97,13 @@ def _run_silencedetect(ffmpeg, path, timeout=120):
                              encoding="utf-8", errors="replace", timeout=timeout)
     except (subprocess.TimeoutExpired, OSError):
         return None
+    # 必须看 returncode：ffmpeg 起不来 / 文件打不开（无 ffmpeg、坏 WAV、权限）时
+    # 它照样退出并往 stderr 写一版错误，而 stderr 里一个 silence_* 都没有。
+    # 只看"有没有 stderr"会把**测量失败**当成"整段都在说话"——voiced_span 拿到
+    # lead=tail=0，回报 (0.0, 文件全长)，连"量不出来"那句 warn 都不打，与真正的
+    # 成功测量完全不可分辨。
+    if got.returncode != 0:
+        return None
     return got.stderr
 
 

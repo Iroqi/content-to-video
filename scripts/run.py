@@ -134,7 +134,10 @@ def _run_step(fn, argv, step_name):
         else:
             code = 1
             print(str(e.code), file=sys.stderr, flush=True)
-    except (ValueError, OSError) as e:
+    # 只接 ValueError/OSError 时 TypeError / KeyError / RuntimeError 会裸栈穿透，
+    # 而且**不落 production_report**——正是这段 docstring 要防的形态（"跑到哪一步"
+    # 没留痕，重试只能从头）。KeyboardInterrupt / SystemExit 是 BaseException，捕不到。
+    except Exception as e:
         code = 1
         print(f"[run] {step_name} 异常终止（{type(e).__name__}）：{e}",
               file=sys.stderr, flush=True)

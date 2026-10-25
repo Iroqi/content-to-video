@@ -201,15 +201,16 @@ GATE_NOISE_CODES = {
     "css_transition_used": "模板兜底 CSS 的过渡，运行时由 GSAP 接管",
     "gsap_timeline_set_initial_hide": "开场前显式藏层，避免首帧闪一下",
 }
-# 必须当真的码（其余集合外的码也一样当真）：列在这里是为了让"哪些是静默过错"
-# 有据可查，别让下一个人把它们当噪声一起放过。
+# 必须当真的码：即使只以 warning 出现也要点名（集合外的新 code 同样当真）。
+# 它们**不在**下面的放行集合里——放行的只有 GATE_NOISE_CODES。
 GATE_STRICT_CODES = frozenset({
     "clip_media_fit", "missing_asset", "runtime_error", "clipped_text",
     "content_overlap", "font_family_without_font_face", "non_deterministic_math",
     "external_script", "missing_composition_duration", "missing_locator",
     "low_contrast",
 })
-GATE_FINDING_CODES = frozenset(GATE_NOISE_CODES) | GATE_STRICT_CODES
+# 放行集合（= 预期噪声）。只有这里的 warning 静默；严格码与未登记码都出声。
+GATE_NOISE = frozenset(GATE_NOISE_CODES)
 
 
 def build_check_command(project, command=None):
@@ -218,7 +219,7 @@ def build_check_command(project, command=None):
     return resolve_command(base + ["check", project, "--json"])
 
 
-def check_verdict(report, known_codes=GATE_FINDING_CODES):
+def check_verdict(report, known_codes=GATE_NOISE):
     """`hyperframes check --json` 的输出 → [(严重度, code, 说明)]，只留该当真的条目。
 
     判读口径：
@@ -227,7 +228,10 @@ def check_verdict(report, known_codes=GATE_FINDING_CODES):
       saved、_meta 不带 findings，自然排除）。按名字认会让 CLI 新增的阶段整段
       失明——那正是本模块承诺要挡的"新增检查被默认吞掉"。
     - **error 一律当真**；`ok: false` 但拿不到 error 也当真（不能报通过）。
-    - warning：已登记的 noise 放过，**集合外的新 code 当真**——CLI 加了新检查。
+    - warning：只有**已登记的噪声**放过。集合外的新 code 当真（CLI 加了新检查）；
+      `GATE_STRICT_CODES` 里的码即使登记过也照旧点名——它们以 warning 出现时
+      同样是真的（`clip_media_fit` = 音频短于 data-duration、`clipped_text` =
+      文本被自己裁掉），混进放行集合就整条静默。
     - **Lint 有 error ⇒ browser 各阶段整个没跑**（CLI 的 shouldBlockRender），
       那些 0 是"没量"不是"通过"。此时显式点一条，别让人误读成全绿。
     """
@@ -248,8 +252,12 @@ def check_verdict(report, known_codes=GATE_FINDING_CODES):
             msg = f.get("message") or ""
             if sev == "error":
                 findings.append(("error", code, msg))
-            elif sev == "warning" and code not in known_codes:
-                findings.append(("warning", "unregistered:" + code, msg))
+            elif sev == "warning":
+                if code in GATE_STRICT_CODES:
+                    # 已登记但必须当真：按原码点名，不加 unregistered: 前缀
+                    findings.append(("warning", code, msg))
+                elif code not in known_codes:
+                    findings.append(("warning", "unregistered:" + code, msg))
     if not report.get("ok") and not any(s == "error" for s, _, _ in findings):
         findings.append(("error", "check_not_ok", "check 返回 ok=false，但没有可定位的 error"))
     if (report.get("lint") or {}).get("errorCount") and report.get("browserSkipped"):

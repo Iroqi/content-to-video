@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+from xml.parsers import expat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _path_morph import (path_last_subpath_start, path_segments, x_span,
@@ -23,6 +24,10 @@ from _template import same_aspect  # noqa: E402  等比判据（含容差）只�
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
+
+# 实体声明的拒答文案（净化器与 check_svg 同一份口径）。
+_ENTITY_DECL_MSG = ("含 DOCTYPE/ENTITY 声明，拒绝内联（实体膨胀风险）；"
+                    "请删掉这些声明，或改用 <img> 载入")
 
 # 序列化时保留默认命名空间与 xlink 前缀，否则 ET 会给每个标签套 ns0: 前缀，
 # 浏览器照样认，但产物难读、也和作者手写的 SVG 对不上。
@@ -336,6 +341,58 @@ def is_full_bleed_backdrop(el, vb_w, vb_h):
     return bool(covers) and not _fill_hidden(el)
 
 
+def shape_bbox(el, tag):
+    """图元在**自身坐标系**里的占位盒 (x0, x1, y0, y1)；读不出返回 None。
+
+    `check_svg`（端点落点 / 越界 / 空带）与 `_cam_crop`（运镜取景）共用这一份。
+    两处各写一套 rect/circle/ellipse/… 的包围盒时，"同一张图在两道门里占不同
+    大小的盒子"只能靠注释同步——而注释不会在有人改了一侧之后报错。
+
+    `text` / `image` 不在这里：它们要字号与锚点，口径由各调用方自己补（见
+    `_cam_crop._box`）。
+    """
+    def num(name):
+        return _parse_num(el.get(name))
+
+    if tag == "rect":
+        x, y, w, h = num("x"), num("y"), num("width"), num("height")
+        if w is None or h is None:
+            return None
+        x, y = x or 0.0, y or 0.0
+        return (x, x + w, y, y + h)
+    if tag == "circle":
+        cx, cy, r = num("cx"), num("cy"), num("r")
+        if None in (cx, cy, r):
+            return None
+        return (cx - r, cx + r, cy - r, cy + r)
+    if tag == "ellipse":
+        cx, cy, rx, ry = num("cx"), num("cy"), num("rx"), num("ry")
+        if None in (cx, cy, rx, ry):
+            return None
+        return (cx - rx, cx + rx, cy - ry, cy + ry)
+    if tag == "line":
+        x1, y1, x2, y2 = num("x1"), num("y1"), num("x2"), num("y2")
+        if None in (x1, y1, x2, y2):
+            return None
+        return (min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2))
+    if tag in ("polygon", "polyline"):
+        pts = svg_points(el.get("points"))
+        if not pts:
+            return None
+        xs, ys = pts[0::2], pts[1::2]
+        return (min(xs), max(xs), min(ys), max(ys))
+    if tag == "path":
+        # path 用 x_span/y_span（含曲线控制点，宁可高估——越界是 error，低估会漏报）
+        try:
+            xs, ys = x_span(el.get("d") or ""), y_span(el.get("d") or "")
+        except ValueError:                     # 畸形 d：没法算，按未知处理
+            return None
+        if not xs or not ys:
+            return None
+        return (xs[0], xs[1], ys[0], ys[1])
+    return None
+
+
 # ── 根标签的两套尺寸（真源只此一份）─────────────────────────────────
 # SVG 根标签上有**两个不是一回事**的尺寸，混用就是"两道门给两个答案"：
 #   ① 固有像素尺寸（width/height，没有时退回 viewBox）——浏览器按它定这张图的
@@ -514,6 +571,30 @@ def _clean_style_attr(el, notes):
             del el.attrib["style"]
 
 
+def parse_svg_strict(raw):
+    """解析 SVG 文本 → root Element；含实体声明或不是良构 XML 时抛 ValueError。
+
+    实体膨胀发生在**解析期**，事后改写救不回来，所以必须在建树之前拦。
+    不用 `re.search(r"<!DOCTYPE|<!ENTITY", raw)` 扫全文：注释、`<desc>` 文本、
+    属性值里的同名串一律命中——实测 `<!-- <!DOCTYPE svg> -->` 会把一份干净的
+    SVG 判成"拒绝内联"，而它根本没声明实体。改用 expat 的 `EntityDeclHandler`：
+    只在**真的**出现实体声明时回调，零误报；顺带把良构性也验了（外部 DTD
+    expat 默认不取，无 XXE 面）。
+    """
+    def _reject(*_args):
+        raise ValueError(_ENTITY_DECL_MSG)
+
+    probe = expat.ParserCreate()
+    probe.EntityDeclHandler = _reject
+    try:
+        probe.Parse(raw, True)
+    except ValueError:
+        raise
+    except expat.ExpatError as e:
+        raise ValueError(f"SVG XML 解析失败，拒绝内联: {e}")
+    return ET.fromstring(raw)
+
+
 def sanitize_svg_for_inline(raw):
     """把 SVG 源文本净化成可内联的活 DOM 串。
 
@@ -529,13 +610,7 @@ def sanitize_svg_for_inline(raw):
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("SVG 内容为空")
     # 必须在解析前拦：ENTITY 膨胀在解析阶段就发生，事后改写救不回来。
-    if re.search(r"<!DOCTYPE|<!ENTITY", raw, re.I):
-        raise ValueError("含 DOCTYPE/ENTITY 声明，拒绝内联（实体膨胀风险）；"
-                         "请删掉这些声明，或改用 <img> 载入")
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as e:
-        raise ValueError(f"SVG XML 解析失败，拒绝内联: {e}")
+    root = parse_svg_strict(raw)
     if _local(root.tag) != "svg":
         raise ValueError("根节点不是 <svg>，拒绝内联")
 

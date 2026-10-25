@@ -21,6 +21,11 @@ from _script_utils import remove_if_exists, unique_tmp  # noqa: E402  失败清�
 # 还写着一个不存在的文件名。
 COMBINED_AUDIO_NAME = "combined.wav"
 
+# 静音兜底、变速产物、无语音句时的串接目标格式，三处同一个数：分片各写一份
+# 字面量时改一处 = 另两条路按旧采样率出声（音调偏移 + 时长与 manifest 错位，
+# 且没有任何报错信号）。语音句本身保持 TTS 原生格式，不套这个常量。
+DEFAULT_SAMPLE_RATE = 24000
+
 
 def _run_ff(args, timeout):
     """ffmpeg 子进程统一入口：捕获输出、超时返回 None。
@@ -138,7 +143,7 @@ def generate_silence(ffmpeg_path, duration, out_path):
     固定 24k 单声道：与语音句格式不同的稿件（如原生 44.1k）会在 concat 前
     由 _normalize_wav 统一重采样成多数派，静音不例外。
     """
-    sample_rate = 24000
+    sample_rate = DEFAULT_SAMPLE_RATE
     # lavfi 卡死 30s（_run_ff 超时返回 None）的 ffmpeg 写不出比 Python wave
     # 更好的静音——超时与失败一并落 wave 兜底。
     result = _run_ff([
@@ -286,7 +291,7 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
         result = _run_ff([
             ffmpeg_path, "-y", "-i", src,
             "-filter:a", filt,
-            "-ar", "24000", "-ac", "1", tmp
+            "-ar", str(DEFAULT_SAMPLE_RATE), "-ac", "1", tmp
         ], 60)
     except OSError as e:
         # _run_ff 只兜超时；ffmpeg 半路没了/权限坏了这类 OSError 原样上抛时，
@@ -337,21 +342,22 @@ def _wav_has_frames(path):
     ffmpeg 的 WAV muxer 默认往文件里写 LIST/INFO 元数据块（encoder tag，
     约 30+ 字节），实测 0 帧文件就有 ~78 字节：仅头无数据的坏产物会穿过
     ">44" 被判成成功，混进 concat 后整条时间轴悄悄前移。改读 wave 头的
-    真实帧数；wave 读不出（扩展头/非 WAV）时退回尺寸判据——所有调用点
-    都显式 `-c:a pcm_s16le`，正常产物必然可读。
+    真实帧数。
+
+    wave 读不出（截断 / 扩展头 / 打不开）一律按"无帧"：**不能再退回尺寸判据**——
+    那条判据就是本函数被发明来取代的，退回它等于在"最读不出的那份产物"上
+    重新启用它。三个调用点都显式 `-c:a pcm_s16le` 或走 wave 模块写盘，
+    产物必然是可解析的 WAV；读不出就是坏产物，报出来好过混进去。
     """
     if not os.path.exists(path):
         return False
     try:
         with wave.open(path, "rb") as w:
             return w.getnframes() > 0
-    except Exception:
-        try:
-            return os.path.getsize(path) > 44
-        except OSError:
-            # 判帧窗口内文件被并发删除：按"无帧"处理，绝不让 OSError
-            # 冒到调用点把"检查产物"变成整条管线的 traceback。
-            return False
+    except (wave.Error, EOFError, OSError, ValueError):
+        # 判帧窗口内文件被并发删除、头部截断、非 WAV：都按"无帧"处理，绝不让
+        # 异常冒到调用点把"检查产物"变成整条管线的 traceback。
+        return False
 
 
 def _wav_format(audio_path):
@@ -413,7 +419,7 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
             key = (fmt[0], fmt[1], 2)
             counts[key] = counts.get(key, 0) + 1
     target_fmt = (max(counts.items(), key=lambda kv: kv[1])[0]
-                  if counts else (24000, 1, 2))
+                  if counts else (DEFAULT_SAMPLE_RATE, 1, 2))
 
     expanded = []
     # 归一化出来的句子副本（归一化中途失败也要收走）

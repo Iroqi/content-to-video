@@ -84,14 +84,14 @@ def unique_tmp(directory, prefix, suffix=".tmp"):
     os.close(fd)
     # mkstemp 一律按 0600 建（防同机其他用户嗅探半截产物），但中转文件随后要
     # os.replace 成成品——成品于是也带着 0600：换台机器/换个用户读产物就撞权限
-    # （index.html 要被浏览器读、wav 要被别的账号下的 ffmpeg 读）。按 umask 补成
-    # open() 本该给的位（0o666 & ~umask）。取不到 umask（Windows 没有这个概念，
-    # chmod 在那儿只读只读位）就保持 0600——不修也好过把权限放得太宽。
+    # （index.html 要被浏览器读、wav 要被别的账号下的 ffmpeg 读）。补成 0644。
+    #
+    # 不按 umask 折算（0o666 & ~umask）：读 umask 必须先 `os.umask(0)` 再写回，
+    # 而那是**进程级**全局量——调用方在线程池里跑（pipeline 的 TTS 并发），
+    # 两个线程重叠期间落盘的中转会拿到 0777，权限约定静默失效。
     try:
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp, 0o666 & ~umask)
-    except (AttributeError, OSError):
+        os.chmod(tmp, 0o644)
+    except OSError:
         pass
     return tmp
 

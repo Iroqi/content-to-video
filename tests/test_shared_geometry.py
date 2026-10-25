@@ -274,15 +274,23 @@ class PointsParsingSingleSource(unittest.TestCase):
 
     def test_points_read_the_same_in_every_door(self):
         """同一个 points 在自查与运镜投影、满幅判据里必须量出同一组点。"""
+
+        def _poly(points):
+            return ET.fromstring(f'<polygon xmlns="{NS}" points="{points}"/>')
+
         pts = "0,0 200,0 200,100 0,100"
         want = [(0.0, 0.0), (200.0, 0.0), (200.0, 100.0), (0.0, 100.0)]
         self.assertEqual(CS._pt_list(pts), want)
-        self.assertEqual(CC._split_pairs(pts), want)
+        # 运镜那道门现在走同一份包围盒（`_svg_sanitize.shape_bbox`），
+        # 不再自己配一次点——同一组点只在共享那份里读出来。
+        self.assertEqual(_svg_sanitize.shape_bbox(_poly(pts), "polygon"),
+                         (0.0, 200.0, 0.0, 100.0))
         # 指数写法：修复前 _parse_num 认不出 1e2（丢值错位），_cam_crop._num 认得出
         exp = "0,0 1e2,1e2 200,100 0,100"
         want_exp = [(0.0, 0.0), (100.0, 100.0), (200.0, 100.0), (0.0, 100.0)]
         self.assertEqual(CS._pt_list(exp), want_exp)
-        self.assertEqual(CC._split_pairs(exp), want_exp)
+        self.assertEqual(_svg_sanitize.shape_bbox(_poly(exp), "polygon"),
+                         (0.0, 200.0, 0.0, 100.0))
 
     def test_unreadable_transform_argument_is_not_silently_dropped(self):
         """`translate(10, abc)` 必须判废，不能丢成 `translate(10)`。

@@ -984,7 +984,9 @@ def main(argv=None):
                 sentence_speeds[si] = seg_speed
         seg_voice_id = seg.get("voice_id")
         seg_voice_style = seg.get("voice_style")
-        if seg_voice_id or seg_voice_style:
+        # `is not None` 不是 `or`：空串是"这一段显式不要风格"的合法取值
+        # （_tts 用它决定是否预填风格提示语），按真假判会静默退回全局 --voice-style。
+        if seg_voice_id is not None or seg_voice_style is not None:
             for si in range(start_idx, end_idx):
                 sentence_voices[si] = (
                     seg_voice_id or args.voice_id,
@@ -1002,7 +1004,7 @@ def main(argv=None):
             # 名"，_source_schema 保证 speaker 非空，所以这里必然拿到非空标签。
             t_label = turn["label"]
             for si in range(t_start, t_end):
-                if t_voice_id or t_voice_style:
+                if t_voice_id is not None or t_voice_style is not None:
                     base_id, base_style = sentence_voices.get(
                         si, (args.voice_id, args.voice_style))
                     sentence_voices[si] = (

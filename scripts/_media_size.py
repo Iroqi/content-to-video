@@ -82,7 +82,9 @@ def _jpeg_size(buf):
         return None
     pos = 2
     n = len(buf)
-    while pos + 9 < n:
+    # `<= n` 不是 `< n`：SOF 要读到 buf[pos+8]，差一个字节就会把正好落在
+    # 读块末端的 SOF 判成"读不出"——而"读不出"在这模块里等于静默放行。
+    while pos + 9 <= n:
         if buf[pos] != 0xFF:
             # 不是段边界：扫到下一个 0xFF（熵编码数据段里不会有 FF 后跟 0x00
             # 以外的序列，靠这个吃掉它们）

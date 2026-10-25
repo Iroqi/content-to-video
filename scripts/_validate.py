@@ -95,7 +95,9 @@ def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where} 必须是数值（实际: {value!r}）")
-    if not math.isfinite(float(value)):
+    # 到这里类型已经是数字，剩下的只有 NaN/±Inf 一种可能——判据走
+    # `is_finite_number`（三份契约共用那一个谓词），不再抄第二份 isfinite。
+    if not is_finite_number(value):
         raise ValueError(f"{where} 必须是有限数值（实际: {value!r}）")
     if nonnegative and float(value) < 0:
         raise ValueError(f"{where} 必须大于等于 0（实际: {value!r}）")

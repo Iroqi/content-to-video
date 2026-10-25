@@ -43,10 +43,9 @@ director steps，所以它没有判据；唯一同时握着 SVG 原文和运镜�
 import re
 import xml.etree.ElementTree as ET
 
-from _path_morph import x_span, y_span
 from _svg_sanitize import (FULL_BLEED_FRAC,  # noqa: E402  满幅阈值唯一真源（canvas_kit 同一份）
                            _local, _parse_num,  # noqa: E402  剥命名空间 + SVG 数字只有这一份实现
-                           root_viewbox_size, svg_points)
+                           root_viewbox_size, shape_bbox)
 from _timeline import beat_cycles, ends_at_start
 from _template import svg_text_band
 
@@ -91,16 +90,6 @@ def resolve_num(value, current=None):
     return _parse_num(value)
 
 
-def _split_pairs(text):
-    """polyline/polygon 的 points 串 → [(x, y), ...]。
-
-    解析走净化的 `svg_points`（与 check_svg / 满幅判据同一份）：读不出的 token
-    整条判废，不能丢了再配对——那会量出一个没人画过的盒子。
-    """
-    nums = svg_points(text)
-    return list(zip(nums[0::2], nums[1::2])) if nums else []
-
-
 def decompose_transform(el):
     """元素的 translate/scale 分解 → (tx, ty, sx, sy)；读不懂的返回 None。
 
@@ -142,47 +131,11 @@ def decompose_transform(el):
 
 def _box(el, tag):
     """元素自身坐标系里的占位盒 (x0, x1, y0, y1)；读不出返回 None。"""
-    def num(name):
-        return _parse_num(el.get(name))
-
-    if tag == "rect":
-        x, y, w, h = num("x"), num("y"), num("width"), num("height")
-        if w is None or h is None:
-            return None
-        x, y = x or 0.0, y or 0.0
-        return (x, x + w, y, y + h)
-    if tag == "circle":
-        cx, cy, r = num("cx"), num("cy"), num("r")
-        if None in (cx, cy, r):
-            return None
-        return (cx - r, cx + r, cy - r, cy + r)
-    if tag == "ellipse":
-        cx, cy, rx, ry = num("cx"), num("cy"), num("rx"), num("ry")
-        if None in (cx, cy, rx, ry):
-            return None
-        return (cx - rx, cx + rx, cy - ry, cy + ry)
-    if tag == "line":
-        x1, y1, x2, y2 = num("x1"), num("y1"), num("x2"), num("y2")
-        if None in (x1, y1, x2, y2):
-            return None
-        return (min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2))
-    if tag in ("polyline", "polygon"):
-        pairs = _split_pairs(el.get("points"))
-        if not pairs:
-            return None
-        xs = [p[0] for p in pairs]
-        ys = [p[1] for p in pairs]
-        return (min(xs), max(xs), min(ys), max(ys))
-    if tag == "path":
-        try:
-            sx, sy = x_span(el.get("d") or ""), y_span(el.get("d") or "")
-        except ValueError:          # 畸形 d：没法算，按未知处理
-            return None
-        if not sx or not sy:
-            return None
-        return (sx[0], sx[1], sy[0], sy[1])
+    # 形状类（rect/circle/ellipse/line/polygon/polyline/path）走共享那份包围盒
+    # （_svg_sanitize.shape_bbox，与 check_svg 的空带/越界同一份）；text / image
+    # 要字号与锚点，口径只在运镜这边用，留在下面。
     if tag == "text":
-        x, y = num("x"), num("y")
+        x, y = _parse_num(el.get("x")), _parse_num(el.get("y"))
         if y is None:
             return None
         # 竖向占位走 _template.svg_text_band（与 check_svg 的空带/越界同一口径）。
@@ -190,13 +143,14 @@ def _box(el, tag):
         # 运镜自查里比在密度自查里矮 9px，"推镜把底栏推出画幅"就没人报。
         y0, y1 = svg_text_band(y, _parse_num(el.get("font-size")))
         # 横向只拿锚点当点：宽度要布局引擎，硬编一个只会在"竖向切边"之外多造误报。
-        return (x if x is not None else 0.0, x if x is not None else 0.0, y0, y1)
+        x = x if x is not None else 0.0
+        return (x, x, y0, y1)
     if tag == "image":
-        x, y, w, h = num("x"), num("y"), num("width"), num("height")
+        x, y, w, h = (_parse_num(el.get(k)) for k in ("x", "y", "width", "height"))
         if None in (x, y, w, h):
             return None
         return (x, x + w, y, y + h)
-    return None
+    return shape_bbox(el, tag)
 
 
 def _label(el, tag):

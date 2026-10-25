@@ -206,8 +206,8 @@ body{font-family:var(--ctv-font-family)}
    就是"没在接力"的常态值。opacity 用 min() 取两者较小者：active 行的 1.0 与
    接力值取小 = 接力值；非活动行与接力值取小 = 更暗的那个，两种状态
    都不会被对方意外覆盖。
-   0.62 / 0.45 是运行时未接管时的**兜底**；真源在 _template.py 的
-   subtitle.focus（经 --ctv-focus-* 注入），改值两边必须一起改。 */
+   0.62 / 0.45 两份字面量只是"变量全缺"时的最后一层兜底（见下面 `.verse-line.past`）；
+   真源在 _template.py 的 subtitle.focus（经 --ctv-focus-* 注入），改模板即可。 */
 /* 离焦的**第二个维度**是尺寸：远处的行不只更暗，也更小（前沿歌词 UI 的排版层级，
    见 runtime.js 的 verseFocusScale）。它必须走 transform 而不是改 font-size——
    改字号会重排：折行点变、offsetTop 变（滚动锚点漂移）、覆盖层那份复制文本折到

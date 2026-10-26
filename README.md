@@ -21,16 +21,7 @@
 - Python 3.9+（脚本只依赖标准库）
 - **Pillow**（可选，建议装 `pip install pillow`）：用来判"配图够不够大、会被裁掉多少"。装不上时退回内置头解析，只认 PNG/JPEG/WebP/GIF，其余格式（AVIF/HEIC/TIFF…）会跳过这两道告警。
 
-## 深入文档
 
-| 文件 | 服务哪一步 |
-| --- | --- |
-|[SKILL.md](SKILL.md) | 工作流与红线，开头有路由表。深度参考在 `references/`|
-| [writing.md](references/writing.md) | 第 1 步：字段规范、哪些段值得交给 canvas、内容类型写法 |
-| [tts_pipeline.md](references/tts_pipeline.md) | 第 2 步：配音参数、音色表、manifest 字段 |
-| [imagery.md](references/imagery.md) | 第 3 步选形式：ImageGen / SVG / `images.json` 落盘 |
-| [canvas.md](references/canvas.md) | 第 3 步 SVG：画 + 演（几何、对比度、导演档、跨段） |
-| [rendering.md](references/rendering.md) | 第 4 步：预览、渲染、官方门禁、画面翻车速查表 |
 
 ## 授权
 

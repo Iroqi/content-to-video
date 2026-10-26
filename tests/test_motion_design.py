@@ -15,6 +15,7 @@
 """
 import contextlib
 import io
+import os
 import unittest
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
@@ -23,6 +24,11 @@ import _template as T
 from html_renderer import generate_html
 
 FPS = 30
+# 模板样式表的真实路径。必须走 os.path 拼绝对路径：Windows 上
+# `"D:/a/x/scripts/_template.py" + "/../templates/…"` 会被当成字面量目录名
+# （`_template.py` 被当作一个**文件夹**），`..` 不参与归一，open 直接 ENOENT。
+TEMPLATE_CSS = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(T.__file__))), "templates", "composition.css")
 # 30fps 下"这一帧的位移看得出吗"的分界：4px 约为画面上一条 1px 描边的 4 倍，
 # 也是本仓库标题最小可读字号（26px）的 1/6 字身。低于它，位移会被读成抗锯齿变化。
 MIN_FIRST_FRAME_PX = 4.0
@@ -141,7 +147,7 @@ class CssTransformLeak(unittest.TestCase):
     def setUp(self):
         from _css_guard import css_transform_leaks
         self.leaks = css_transform_leaks
-        self.css = (T.__file__.rsplit("/", 1)[0] + "/../templates/composition.css")
+        self.css = TEMPLATE_CSS
         with open(self.css, encoding="utf-8") as f:
             self.css = f.read()
         src = H.sample_source()

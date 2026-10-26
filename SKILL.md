@@ -7,6 +7,34 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 
 把信源整理成结构化稿件，生成逐句时间轴与语音，补齐画布素材，生成 Hyperframes HTML，浏览器预览确认后渲染 MP4。
 
+## 最小可跑路径（先跑通，再看规则）
+
+一份最小稿件 + 一条命令就能出 HTML；"核心规则"是约束，不是入场券。
+
+```json
+{"title": "本期标题", "opening": "一句开场白，说清主题和为什么值得看。",
+ "segments": [
+   {"id": "seg1", "title": "第一个要点", "tagline": "背景",
+    "text": "第一句。第二句。", "takeaway": "带走这一句"},
+   {"id": "seg2", "title": "第二个要点", "tagline": "进展",
+    "text": "第一句。第二句。", "takeaway": "带走这一句"}],
+ "closing": "回顾主线，一句收束。", "cta": "关注我们"}
+```
+```bash
+export MIMO_API_KEY=...   # 第 2 步硬闸门；无 Node/Chrome 时 --until html 仍可出预览
+python scripts/run.py --source segments_source.json -o audio_output --until html
+# 打开 hf-project/index.html 预览；确认后去掉 --until html 才是出片
+```
+
+只有 `title` 与 `text` 是硬要求；省 `takeaway` 回退标题，省 `tagline` 兜底"补充阅读"，省 `opening`/`closing` 就没有那两页。这一段**不涉及** `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（模板自带）。预览满意再补：配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏与配色（`rendering.md`「动画」）。**报错先查下表，别把整份文档读完再动手**：
+
+| 症状 | 去哪 |
+| --- | --- |
+| 契约报错（字段名/取值/上墙字数） | `references/writing.md`「字段规范」 |
+| 缺图 / 图糊 / 被裁 / 生图崩字 | `references/imagery.md` |
+| 画面空、不动、换了页但没东西 | `references/rendering.md`「画面翻车速查表」 |
+| 渲染起不来、`check` 报 error | `references/motion.md`「官方校验命令」 |
+
 ## 这份文档怎么用
 
 按此刻这一步去读 `references/` 里那一份：
@@ -39,7 +67,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | 依赖 | 用途 | 缺了会怎样 |
 | --- | --- | --- |
 | Python 3.9+（脚本只依赖标准库） | 全部脚本 | — |
-| Pillow（可选，建议装） | 配图尺寸与比例校验（`_media_size`） | 退回内置头解析：只认 PNG/JPEG/WebP/GIF，AVIF/HEIC/TIFF 等静默跳过"像素够不够/被裁多少"两道告警 |
+| Pillow（可选，建议装） | 配图尺寸与比例校验（`_media_size`） | 退回内置头解析，只认 PNG/JPEG/WebP/GIF，其余格式跳过"够不够大/被裁多少"两道告警 |
 | **`MIMO_API_KEY`（必需）** | TTS（仅支持 MiMo） | 第 2 步失败（全部句子命中 `--resume` 缓存也要先有 key）；仅 `--dry-run` 不需要 |
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 2 步失败；配图探测降级为仅查存在性 |
 | **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |
@@ -100,11 +128,9 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.director.duration=0.8`，键是 `scripts/_template.py` 的叶子路径），`--drift off|subtle|boring` 给全片静态图选一个运镜档（逐段微调在 images.json 的 `drift` 字段）。两者都只在本次进程生效，定稿的取值写回模板。
 
-缺图处理：段落在 images.json 里没有映射键时只在真要渲染时拦（exit 2），`--until html` 只警告——**满幅版式（`layout:"canvas"` / `layout:"plate"`）除外**，那两页缺图连预览 HTML 都出不来，一律 exit 2。想在图没画完之前先看编排用 `--until html --placeholder-missing`（占位 SVG 顶一张）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（报告留痕）；`--until images` 只看覆盖率、不拦。
+缺图处理：段落在 images.json 里没有映射键时只在真要渲染时拦（exit 2），`--until html` 只警告——**满幅版式（`layout:"canvas"` / `layout:"plate"`）除外**，那两页缺图连预览 HTML 都出不来，一律 exit 2。想在图没画完之前先看编排用 `--until html --placeholder-missing`（占位 SVG 顶一张）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（报告留痕）；`--until images` 只看覆盖率、不拦。**没有生图能力**（连 SVG 也画不出）时加 `--slot-no-image`：槽位段缺图不再留空图槽，改由句子流铺满内容区，日志 `[notice]` 点名哪几段降级（见 `imagery.md`「无图降级档」）。
 
-字段集封闭（三份 JSON 的未知键即报错）只留一个草稿位：`_` 开头的键不生效、不进任何产物，但放行并打 `[notice]`——给"写下来还没定"的备选文案用。
-
-渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）。短于容差拦下交付，长于容差与量不到只 `[warn]`。机制、三档处置与补救路径见 `rendering.md`「正式渲染」。
+字段集封闭（三份 JSON 的未知键即报错）只留一个草稿位：`_` 开头的键不生效、不进任何产物，但放行并打 `[notice]`——给"写下来还没定"的备选文案用。渲染之后还有一道**成片时长闸**（exit 4）：`run.py` 量一次成片实际时长与 manifest 的 `total_duration` 对账（容差 `max(1s, 2%)`）；短于容差拦下交付，长于容差与量不到只 `[warn]`（机制与补救见 `rendering.md`「正式渲染」）。
 
 ## 输出契约
 

@@ -115,6 +115,20 @@ npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chro
 - `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
 - 渲染前用 `npx -y hyperframes@0.8.185 doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
 - **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`doctor` 不支持 `--strict`，要 warning 也阻断的是 `check --strict`。
+
+### Craft 阶段：三条"模板自己会犯"的 warning
+
+`craft` 阶段不属于上面那张噪声表，也不在 `GATE_NOISE_CODES` 里——它报的每一条都是**成片质量**问题，与"这页结构对不对"无关。当前模板会稳定触发其中三类，**它们不是噪声，是待办**：
+
+| code | 它到底在说 | 模板为什么会有 | 怎么消 |
+|---|---|---|---|
+| `first_frame_empty` | 第 0 帧只有背景。**第 0 帧就是社交平台的分享封面**——观众在信息流里先看到它 | 开屏页的标题/光斑/agenda 行都从 `y`/`opacity` 的零态进场，`t=0` 那一刻什么都还没落定 | 开屏页写 `opening_layout: "canvas"` 出一张静态海报；或给开屏标题一条 `from` 起点非零的编排（苹果开场的 `filter:blur` 就是从"可见的虚焦"起，不是从空气里长出来） |
+| `line_unread` | 某句字幕在画面上停留的时间**低于可读下限**（约 `0.5s + 0.3s × 词数`，片尾最后一句另要 ≥ 2s） | 句子时长来自 TTS 音频，**短句配长片**时它就那么短；模板只负责把它照实渲染 | 回到写稿：把短句并进相邻句、给这段加内容，或**拆段**让每段句子数变少而单句变长（`writing.md`「一句多长」） |
+| `text_below_floor` | 某处正文渲染后小于 28px（短边的 2.6%，手机上的可读下限） | **模板自身**：agenda 行的时长标记 `.ag-dur` 在模板里是 26px（竖屏）/24px（横屏） | 改模板 `agenda.durSize`（`scripts/_template.py`）到 ≥28；或那处字确实只是装饰时打 `data-layout-ignore` |
+
+三者的共同点：**`check` 不会因为它们失败**（都是 warning、不进退出码），但成片确实有毛病。判读顺序是"先看 `run.py` 有没有把它们当未登记码点名"——`GATE_NOISE_CODES` 之外的 code 会被以 `unregistered:<code>` 报出来，这三条都在其列，所以默认就会出声。**别把它们登记进 `GATE_NOISE_CODES` 来消停**：那等于承认"封面是黑的、字幕读不完"可以接受。
+
+`line_unread` 的实测口径（竖屏 3 句稿）：一句 10 个词的旁白停 1.97s，下限 2.63s——差 0.66s 就是观众来不及读完的那 0.66s。片子总长由内容决定时，唯一的解是**让每句都更长**，不是让引擎跑慢点。
 - 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes@0.8.185 preview --background`。
 
 ## 快慢、停顿、缓动按内容定

@@ -459,4 +459,35 @@ body{font-family:var(--ctv-font-family)}
    不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
 [data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
 
+/* ── 无图档（--slot-no-image）：槽位段没有图时的排版 ─────────────────
+   这一档只解决一件事：图槽撤掉之后，原本被它占住的那块不能留成空白。
+   几何（句子流窗口高、底距）已经由 renderer 按模板算好注入 --ctv-verse-h /
+   --ctv-v-verse-bottom，CSS 这边**不重算任何尺寸**——它只负责把
+   "没有 .seg-image 这个子元素"这个事实接住：
+
+   竖屏：.verse 原本钉底（bottom + 定高），窗口一变高它仍从**底部往上长**，
+   而句子流的内容是"从窗口顶部往下排、超出才滚动"的——只改高度会把字幕
+   留在窗口顶、下面空出一大片（实测过）。所以这一档把它改成 top/bottom
+   同时写（绝对定位下两条并存 = 拉伸），内容才落在内容区上沿。
+
+   为什么**不**垂直居中：居中是"把一句话摆在整页正中"的海报逻辑，而槽位版式
+   的读法是"标题带下面跟着念"。一个两句的段居中后会落在页面腰线、上下各留
+   一大片空，比原版的图槽留白更像排版事故（实测帧确认过）。这一档沿用正常
+   档的读法——句子从标题带下方起排，只是把原本属于图槽的那块也给了句子流。
+
+   横屏：图槽在右栏，左栏本来就跟内容走；撤掉图槽后右半边空着，这是这一档
+   的既定代价（作者选的是"没有图也要出片"，不是"假装有图"）。
+
+   选择器按 `[data-aspect] .seg-card.text-only` 写（0,2,0），与
+   `[data-aspect] .seg-image` 同级；本档根本不会生成 .seg-image，没有需要
+   压过的对手，因此不用 !important——全表唯一的 importance 仍留给 agenda
+   的句子流豁免（理由见该处注释）。 */
+[data-aspect="vertical"] .seg-card.text-only .verse{top:var(--ctv-v-img-top);bottom:var(--ctv-v-verse-bottom);height:auto;display:flex;flex-direction:column;justify-content:flex-start;left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left)}
+/* flex 子项默认按内容高排、且不横向撑满：.verse-clip 是那个可滚窗口，
+   得让它占满 box 才量得到正确的 roll 范围。 */
+[data-aspect="vertical"] .seg-card.text-only .verse>.verse-clip{width:100%}
+/* 无图档里句子流上方的暗垫不再需要（它原本是为了压住图槽底边的氛围光）。
+   保留反而会在一块空白上多出一道横向渐隐，读成"这里本该有张图"。 */
+[data-aspect="vertical"] .seg-card.text-only .verse::before{content:none}
+
 __CTV_ROOT_VARS__

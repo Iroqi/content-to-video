@@ -395,8 +395,49 @@ SETTLE_MIN_SECONDS = 0.10
 # :root 变量表在 _build_render_context 派生一次；版式差异只体现在装配一处。
 
 
+def slot_verse_geometry(tpl, aspect, no_image):
+    """槽位版式句子流的两个派生值：窗口高与底距。
+
+    `no_image=True` 是「这一段没有图、也不打算留图槽」的降级档（无生图能力
+    时的显式选择，入口在 `--slot-no-image`）：竖屏的句子流原本钉在底部、
+    高度只有 `verse.windowHeight`，图槽一撤，画布那块就成了一片空白——
+    比"没有图"更难看。所以这一档把句子流的长高预算放宽到**图槽腾出的空间**，
+    但**只放宽能放下的那么多**：不能长过内容区（标题带以下到底边），否则
+    句子流会顶进标题带、把标题压成一行半。
+
+    横屏是左栏文档流，句子流本来就跟内容走，撤掉图槽只影响右栏空着——
+    窗口高照旧（不放大，否则字幕块会在左栏里垂出边界）。
+
+    返回值是 (windowHeight, bottom)，两画幅共用一种口径：调用方把它当
+    "这一档的 verse 几何"，不区分自己处于哪一档。
+    """
+    lay = tpl["layout"][aspect]
+    verse = lay["verse"]
+    h = verse["windowHeight"]
+    bottom = verse.get("bottom", 0)
+    if not no_image or aspect != "vertical":
+        return h, bottom
+    title = lay["title"]
+    tagline = lay["tagline"]
+    title_area = (title["maxLines"] * title["fontSize"] * tpl["typography"]["titleLineHeight"]
+                  + tagline["marginTop"]
+                  + tagline["fontSize"] * tagline["lineHeight"])
+    # 下沿走 seg_card_pad_x()（与竖屏 seg-card 的实际 padding 同一个派生值，
+    # 不在这里重写一份字符串解析）：它是"内容区下沿"的唯一真相。
+    # **不要再减一次 `bottom`**：竖屏的 `verse.bottom` 是"句子流距底边多少"，
+    # 与 seg-card 的底 padding 是同一个下沿的两种写法，减两遍等于凭空砍掉
+    # 100px 可用高度（此前就是这样算错的）。
+    room = (tpl["canvas"]["vertical"]["height"] - title["top"] - title_area
+            - seg_card_pad_x())
+    if room <= h:
+        # 腾出来的空间装不下更大的窗口：老老实实回原值。宁可留白，不要为了
+        # "填满"把字幕窗口顶进标题带。
+        return h, bottom
+    return int(room), bottom
+
+
 def _build_render_context(tpl, aspect, width, height, theme, images,
-                          fps=DEFAULT_FPS, film_span=None):
+                          fps=DEFAULT_FPS, film_span=None, no_image=False):
     """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
     :root 变量表。任何一条护栏发现模板配错即 raise。
 
@@ -405,6 +446,10 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     """
     rc = SimpleNamespace(aspect=aspect, width=width, height=height,
                          images=images, fps=fps,
+                         # 无图档（--slot-no-image）：卡片装配据此决定"要不要
+                         # 生成图槽"，:root 的句子流几何据此放宽。放在 rc 上
+                         # 而不是各处重新读 args——两个消费点必须看同一个值。
+                         no_image=bool(no_image),
                          # 公开片长：稳态循环折遍数要用它（见 _loop_repeat）。
                          # 单独构造 rc 的调用方（测试/工具）不传就是 0，循环退回
                          # 只走一遍——能渲染、只是不循环，不会静默算错。
@@ -446,14 +491,20 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # 数值互不共用。竖屏独有的定位键只存在于 vertical 块——横屏是弹性列，
     # 放 0 值占位只会让人以为改得动。
     rc.verse_clip = _vv["clipPad"]
+    # 句子流几何：两画幅都走同一个派生函数（横屏返回模板原值，见其 docstring）。
+    # 提到 if 之前定义，是因为下面两画幅共用的 :root 变量表要读它——只在
+    # vertical 分支里赋值会让 --ctv-verse-h 悄悄退回模板值（无图档就失效了，
+    # 而且没有任何报错）。
+    _verse_h, _verse_bottom = slot_verse_geometry(tpl, aspect, no_image)
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         # 卡片左右内边距（CSS padding 简写取横向值）：卡片内容盒由它内缩，标题
         # 与画布水平方向对齐。解析口径只有 `_template.seg_card_pad_x` 一份——
         # `check_svg` 的安全边距读的是同一个函数，两边不可能各解出两个数。
         _v_pad_left = seg_card_pad_x()
-        _v_verse_h = _vv["windowHeight"]
-        _v_verse_bottom = _vv["bottom"]
+        # 这一档句子流的窗口与底距由 slot_verse_geometry 一次算出：无图档要
+        # 把图槽腾出的空间算进来（见该函数 docstring），有图档原样回模板值。
+        _v_verse_h, _v_verse_bottom = _verse_h, _verse_bottom
         # 竖屏画布圆角
         _v_img_radius = _il["borderRadius"]
         # 画布左右外扩边距 marginSide：相对"卡片内容盒"各外扩多少（0 = 与内容盒
@@ -465,7 +516,15 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
         # 不再推动画布或歌词。画布底边 = verse 顶部 - 固定间距。
         _v_img_top = (height - _v_verse_bottom - _v_verse_h
                       - _v_img_bottom_gap - int(_il["height"]))
-        if _v_img_top <= 0:
+        # 无图档没有画布段，三段相加的越界判据对它不成立：句子流窗口正是
+        # **按"画布让出来的空间"算出来的**（slot_verse_geometry），拿含
+        # 画布高度的公式再判一次，等于把"腾出来的空间"又当"还要放画布"用。
+        # 这一档把 _v_img_top 直接定义成"内容区上沿"（= 标题带底边），
+        # 下面标题带那道检查与 CSS 都按同一个意思读它。
+        # 宽度一致性那条与画布高度无关，照旧执行。
+        if no_image:
+            _v_img_top = None  # 稍后用 _v_title_bottom 顶替，见下面的赋值顺序
+        elif _v_img_top <= 0:
             raise ValueError("[template] 画布位置不足：image.height / verse.windowHeight / bottom 配置超出画布")
         # 画布宽度一致性护栏：CSS 侧画布宽 = image.width + marginSide*2，
         # image.width 必须等于"屏宽 − segCard 左右内边距"，否则模板与布局漂移。
@@ -601,7 +660,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-tagline-indent:{_tgl["indent"]}px;--ctv-tagline-tick:{_tgl["tickWidth"]}px;
   --ctv-prog-height:{css_prog_height}px;
   --ctv-sub-font:{css_sub_font};
-  --ctv-verse-h:{_vv["windowHeight"]}px;--ctv-verse-clip:{_vv["clipPad"]}px;
+  --ctv-verse-h:{_verse_h}px;--ctv-verse-clip:{_vv["clipPad"]}px;
   --ctv-verse-line:{_vv["linePad"]}px;--ctv-verse-lh:{_vv["lineHeight"]};
   --ctv-verse-pad-right:{_vv["shadePadRight"]};--ctv-verse-shade:{_vv["shade"]};
   --ctv-verse-rule:{_vv["activeRule"]}em;
@@ -647,6 +706,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
                          + _tgl["marginTop"]
                          + _tgl["fontSize"] * _tgl["lineHeight"])
         _v_title_bottom = _tl["top"] + _v_title_area
+        if no_image:
+            # 无画布档：内容区上沿就是标题带底边，句子流从这里向下铺
+            _v_img_top = _v_title_bottom
         if _v_title_bottom > _v_img_top:
             raise ValueError(
                 f"[template] 竖屏标题区放不进：title.top({_tl['top']}) + 标题 "
@@ -1186,6 +1248,21 @@ def _prepare_card(rc, clip):
     if has_image:
         image_html = (_compare_html(rc, sid, win_start, vis_d) if is_compare
                       else _media_html(rc, sid, win_start, vis_d))
+    # 无图档（--slot-no-image）：槽位段确实没有图时，不生成图槽，卡片挂
+    # `text-only` 让 CSS 把句子流铺进腾出来的那块（几何宽高由 :root 的
+    # --ctv-verse-h 放宽，见 slot_verse_geometry）。
+    #
+    # 判据必须是"槽位版式 + 没图"，不能只写 `not has_image`：agenda 卡
+    # （opening/closing）的 has_image 被上面那条 `and not is_agenda` **强制**
+    # 成 False——它们本来就不出图槽。只看 has_image 的话，这一档会给开屏/结尾
+    # 页挂上 text-only，而真正缺图的内容段一个都挂不上（实测：夹具里所有段都
+    # 有图时，`text-only` 只落在两张 agenda 卡上，槽位卡反而没有）。
+    # 满幅页也不该进来：canvas/plate 的 image_html 由上面的分支保证非空，
+    # 缺图在生成期就已 exit；它们没有"图槽腾出来的那块"，铺满规则对它们是
+    # 一整套错的几何。
+    no_image_slot = (bool(getattr(rc, "no_image", False))
+                     and not has_image
+                     and not (is_agenda or is_canvas or is_plate))
     verse_html = ("" if is_canvas
                   else _plate_caption_html(seg, sid, ac_text_attr) if is_plate
                   else _verse_html(seg, sid, ac_text_attr))
@@ -1201,6 +1278,7 @@ def _prepare_card(rc, clip):
         f'  <div id="{sid}" class="clip seg-card'
         + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas
            else " seg-plate" if is_plate else "")
+        + (" text-only" if no_image_slot else "")
         + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
         f'data-track-index="1" style="clip-path:{_wipe_pair(rc)[0]};--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
         '    <div class="bg"></div>\n    <div class="grid"></div>\n'
@@ -2622,7 +2700,8 @@ def _card_timeline_lines(rc, card):
 def generate_html(manifest, audio_src, images=None,
                   width=None, height=None,
                   gsap_src=_DEFAULT_GSAP_SRC,
-                  aspect="portrait", theme=DEFAULT_THEME, fps=DEFAULT_FPS):
+                  aspect="portrait", theme=DEFAULT_THEME, fps=DEFAULT_FPS,
+                  slot_no_image=False):
     """Generate complete Hyperframes HTML composition string.
 
     Args:
@@ -2662,7 +2741,7 @@ def generate_html(manifest, audio_src, images=None,
     gsap_src_attr = esc(gsap_src)
 
     rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps,
-                               film_span=total_dur)
+                               film_span=total_dur, no_image=slot_no_image)
 
     # 段落分组只有一份：manifest["segments"]（_manifest_schema 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，

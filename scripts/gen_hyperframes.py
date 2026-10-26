@@ -1985,6 +1985,12 @@ def main(argv=None):
                         help="放行 images.json 的 repeat:-1，只为预览看手感。无限循环"
                              "会把 GSAP 总时长折算成 1e10 量级（按时刻取帧、进度条、"
                              "跨段接续一起失效），所以带它跑渲染会在入口被拒。")
+    parser.add_argument("--slot-no-image", action="store_true",
+                        help="降级档（无生图能力时用）：槽位版式段缺图不再"
+                             "空着一个大灰框，改为不放图槽、句子流占满内容区。"
+                             "只影响槽位版式；满幅页（canvas/plate）缺图照旧拦下——"
+                             "那两页没有图就没有画面。画面会明显素一些，"
+                             "production_report 会点名。")
     parser.add_argument("--draft", action="store_true",
                         help="草稿档总开关：一次放行全部迭代逃生口（缺图/坏 src 降级并占位、"
                              "槽位比例与画布字号 error 降 warn、ease 放行）。只该出现在"
@@ -2143,6 +2149,15 @@ def main(argv=None):
     # run.py 一键编排会在交付前拦截；分步执行保留显式 warn，提醒调用方补图
     # 或确认纯文字兜底。
     _uncovered = [sid for sid in sids_needing_image(manifest) if sid not in images]
+    if _uncovered and args.slot_no_image:
+        # 降级档要让"画面为什么这么素"在日志里有一句交代：这一档不等同于
+        # 忘了配图，而是作者明确接受了"没有图也要出片"。
+        _by_id = {seg["id"]: seg for seg in manifest["segments"]}
+        _slot_only = [sid for sid in _uncovered
+                      if not is_full_bleed(_by_id.get(sid, {}))]
+        if _slot_only:
+            print(f"[notice] --slot-no-image：{len(_slot_only)} 个槽位段不生成图槽"
+                  f"（句子流铺满内容区）：{', '.join(_slot_only)}", file=sys.stderr)
     if _uncovered:
         print(f"[warn] {len(_uncovered)} 个段落没有配图映射: "
               f"{', '.join(_uncovered)}——若是没找到合适的图或漏配，请按第 3 步"
@@ -2279,7 +2294,8 @@ def main(argv=None):
     html = generate_html(manifest, audio_src,
                          images=images,
                          width=w, height=h, gsap_src=gsap_src,
-                         aspect=aspect, fps=args.fps)
+                         aspect=aspect, fps=args.fps,
+                         slot_no_image=args.slot_no_image)
 
     # 原子写：index.html 是渲染输入，写到一半被打断会留下半份 HTML——
     # render 会报莫名其妙的语法错，而不是"上次生成中断了，重跑"。

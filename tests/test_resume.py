@@ -138,7 +138,7 @@ class RestoreFailureKeepsBackupUsable(unittest.TestCase):
         if resume:
             argv.append("--resume")
         patches = [mock.patch.object(P.sys, "argv", argv),
-                   mock.patch.object(P, "MimoTtsClient", return_value=client),
+                   mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client),
                    mock.patch.object(P.time, "sleep")]
         if copy2 is not None:
             patches.append(mock.patch.object(shutil, "copy2", copy2))
@@ -296,7 +296,7 @@ class ResumeSpeedExceptionDoesNotCrash(unittest.TestCase):
         if resume:
             argv.append("--resume")
         patches = [mock.patch.object(P.sys, "argv", argv),
-                   mock.patch.object(P, "MimoTtsClient", return_value=client),
+                   mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client),
                    mock.patch.object(P.time, "sleep")]
         if apply_speed is not None:
             patches.append(mock.patch.object(P, "apply_speed", apply_speed))

@@ -39,9 +39,20 @@ from _script_utils import (setup_stdio, guard_not_in_skill_dir,  # noqa: E402  �
                            write_json_atomic, remove_if_exists)
 from build_from_structured import build_parts  # noqa: E402
 # TTS 网络层收在 provider 协议模块（契约见 _tts.py 文件头）；管线只拿
-# 默认模型/base URL、client 构造和重试裁决四样
-from _tts import (DEFAULT_MODEL, DEFAULT_BASE_URL, MimoTtsClient,  # noqa: E402
-                 is_non_retryable)
+# 默认模型/base URL、client 构造、重试裁决与提供方元信息。
+# **不再直接 import 具体提供方的类**：那是"加一家要改 pipeline"的旧形状，
+# 现在是 `make_client(provider, ...)` 按名字取。测试要替换 client 就 patch
+# 下面那个 TTS_CLIENT_FACTORY 接缝，不要回来 patch 类名。
+from _tts import (DEFAULT_MODEL, DEFAULT_BASE_URL,  # noqa: E402
+                 DEFAULT_PROVIDER, PROVIDER_NAMES, make_client,
+                 is_non_retryable, provider_label, provider_needs_api_key,
+                 provider_takes_base_url_for_instance)
+
+#: 测试/嵌入方的注入点：非 None 时替代 PROVIDERS 里的构造器，签名
+#: `(api_key, base_url) -> client`。模块级名字而不是参数，是为了让
+#: `patch.object(pipeline, "TTS_CLIENT_FACTORY", ...)` 能一次性覆盖
+#: main() 里那两次构造（探针 + 真客户端）。
+TTS_CLIENT_FACTORY = None
 
 # 密钥的两级查找路径：CLI > os.environ > 这份用户级 .env
 _USER_ENV_PATH = os.path.join(os.path.expanduser("~"), ".config", "ai-video", ".env")
@@ -559,8 +570,15 @@ def _build_parser():
                              "逐段独立分句，直接产出带 segments 分组的 manifest")
     parser.add_argument("-o", "--output", default=None, help="Output directory")
     parser.add_argument("--api-key", default=None,
-                        help="MiMo TTS API key。优先级：命令行 > 环境变量 > "
-                             "~/.config/ai-video/.env（技能目录内 .env 不参与读取）")
+                        help="TTS API key。优先级：命令行 > 环境变量 > "
+                             "~/.config/ai-video/.env（技能目录内 .env 不参与读取）。"
+                             "默认提供方 mimo 读 MIMO_API_KEY")
+    parser.add_argument("--tts-provider", default=None,
+                        choices=list(PROVIDER_NAMES),
+                        help=f"TTS 提供方（默认 {DEFAULT_PROVIDER}，也可用环境变量 "
+                             f"CTV_TTS_PROVIDER 指定）。提供方协议只有 "
+                             f"synthesize 一个方法，新增一家见 scripts/_tts.py "
+                             f"的 PROVIDERS；不需要 key 的提供方不受 API key 硬闸门约束")
     parser.add_argument("--voice-id", default=list_voice_ids()[0],
                         choices=list_voice_ids(),
                         help=f"Voice ID（默认 {list_voice_ids()[0]}）；"
@@ -631,6 +649,21 @@ def _validate_args(parser, args):
     # 整条管线在烧完时间后才报"全部句子失败"。
     if not math.isfinite(args.api_timeout) or args.api_timeout <= 0:
         parser.error(f"--api-timeout 必须是大于 0 的有限秒数（收到 {args.api_timeout}）")
+
+
+def api_key_for_provider(args, env, probe_client):
+    """解析这家提供方要用的 key；返回空串表示"它要 key 但没给"。
+
+    合并顺序沿用整条管线的口径：命令行 > 环境变量 > 用户级 .env（`load_env`
+    已经依次串好，这里只看 `args` 与合并结果）。
+
+    只有需要 key 的提供方才查 key：本地/离线提供方（`needs_api_key=False`）
+    拿到空 key 是正常状态，不该被"没 key 就停"那道闸拦下——那道闸的用意是
+    "别在没鉴权的情况下打付费端点"，不是"每条链路都必须有个 key"。
+    """
+    if not provider_needs_api_key(probe_client):
+        return ""
+    return args.api_key or env.get("MIMO_API_KEY") or ""
 
 
 def _concat_voice_audio(args, ffmpeg_path, sentence_data):
@@ -909,13 +942,27 @@ def main(argv=None):
 
     # ── Resolve config (CLI > 环境变量/~/.config/ai-video/.env > 默认值) ──
     env = load_env()
-    api_key = args.api_key or env.get("MIMO_API_KEY")
-    if not api_key and not args.dry_run:
-        print("[error] No API key. Use --api-key or set MIMO_API_KEY in .env",
-              file=sys.stderr)
-        sys.exit(1)
+    # 提供方先定：它决定"要不要 key"、"base_url 有没有意义"。默认 mimo 时
+    # 密钥环境变量名仍是 MIMO_API_KEY；换一家需要别的变量名时，在 _tts.py
+    # 的 PROVIDERS 里接（本文件不认第二套变量名，避免"看起来配了其实没读到"）。
+    provider = args.tts_provider or env.get("CTV_TTS_PROVIDER") or DEFAULT_PROVIDER
     model = args.model or env.get("MIMO_TTS_MODEL") or DEFAULT_MODEL
     base_url = args.base_url or env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL
+    # 先造一次只为"问元信息"（要不要 key / 认不认 base_url）：key 与端点
+    # 都按最终值传，别传 None——MimoTtsClient 的 __init__ 就对 base_url
+    # 做 rstrip，传 None 只会在解析阶段换成一条指向 __init__ 的报错。
+    try:
+        probe = make_client(provider, args.api_key or env.get("MIMO_API_KEY"),
+                            base_url, factory=TTS_CLIENT_FACTORY)
+    except ValueError as e:
+        parser.error(str(e))
+    if not args.dry_run and not api_key_for_provider(args, env, probe):
+        print(f"[error] No API key for provider '{provider_label(probe)}'. "
+              f"Use --api-key or set MIMO_API_KEY in .env", file=sys.stderr)
+        sys.exit(1)
+    # 只解析一次：下面构造真 client 与写缓存指纹（_sentence_hash 覆盖
+    # base_url）都必须用同一个值，两处各算一遍迟早漂开。
+    api_key = api_key_for_provider(args, env, probe)
 
     # ── Read script（--source 结构化输入，逐段独立分句）───────────────
     try:
@@ -965,8 +1012,14 @@ def main(argv=None):
         sys.exit(1)
 
     # ── Initialize TTS client ──────────────────────────────────────
-    client = MimoTtsClient(api_key, base_url)
-    print(f"[api] model={model} base_url={base_url}", flush=True)
+    # 真正的 client 在这里造（上面那次 make_client 只用于问元信息，
+    # key 与 base_url 那时还没解析完）。
+    client = make_client(provider, api_key, base_url, factory=TTS_CLIENT_FACTORY)
+    if provider_takes_base_url_for_instance(client):
+        print(f"[api] provider={provider_label(client)} model={model} "
+              f"base_url={base_url}", flush=True)
+    else:
+        print(f"[api] provider={provider_label(client)} model={model}", flush=True)
 
     # ── Build per-sentence speed / voice mapping ────────────────────
     # 每句动态语速：若段落指定了 speed 则覆盖全局 args.speed，

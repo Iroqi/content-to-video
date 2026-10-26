@@ -9,10 +9,14 @@
     是否重试由 is_non_retryable 统一裁决（前两类确定性失败，网络类可重试），
     pipeline 的重试/落盘/变速逻辑不感知具体提供方。
 
-参数一律是管线的领域语汇（句子/音色/风格/模型），不是某家的请求体
-形状——OpenAI chat/completions 的 messages 预填充与 audio 参数属于
-MiMo 实现细节。第二个提供方到达时：在本文件（或新模块）加一个同
-签名的类即可，synth_sentence 一行不动。
+    参数一律是管线的领域语汇（句子/音色/风格/模型），不是某家的请求体
+    形状——OpenAI chat/completions 的 messages 预填充与 audio 参数属于
+    MiMo 实现细节。
+
+第二个提供方到达时：在本文件加一个同签名的类 + 在 PROVIDERS 注册一行，
+`make_client()` 按名字取用，pipeline 一行不动。接口面刻意只有
+`synthesize` 一个方法（不是抽象基类）：测试里的 Fake 客户端、以及将来
+接 edge-tts / 本地模型这类"根本没有 base_url"的实现，都不必继承任何东西。
 """
 import base64
 import binascii
@@ -192,3 +196,115 @@ def is_non_retryable(exc):
     if isinstance(status, int):
         return 400 <= status < 500 and status not in (408, 429)
     return False
+
+
+# ===================================================================
+# Provider 注册表：管线只通过 make_client() 拿到一个"synthesize 可调用"的对象
+# ===================================================================
+#
+# 为什么要有这一层：TTS 是整条链路唯一的付费外部依赖，也是唯一"换一家就
+# 得改 pipeline"的地方。之前 `client = MimoTtsClient(...)` 直接写在 main()
+# 里，等于把"必须买 MiMo"编码进了编排层——想在别的环境验证链路（或换一家
+# 供应商）只能改代码。收成注册表之后，加一家 = 加一个类 + 加一行。
+
+class BaseTtsProvider:
+    """提供方的可选基类：只提供三样**非必需**的东西。
+
+    刻意不是 abc.ABC：`synthesize` 的签名就是全部契约（见文件头），
+    强制继承只会让测试里的 Fake 与本应零依赖的本地实现被迫依赖本模块。
+    继承它的唯一收益是 `label` / `needs_api_key` 有默认值。
+    """
+
+    #: 产出的音频格式（管线按 WAV 处理：wave 读帧数、ffmpeg atempo）。
+    audio_format = "wav"
+
+    #: 是否需要 API key。本地/离线提供方返回 False，管线的"没 key 就停"
+    #: 那道闸只对返回 True 的提供方生效。
+    needs_api_key = True
+
+    #: 日志与 production_report 里显示的名字。
+    label = "base"
+
+    def synthesize(self, text, voice_id, voice_style, model, timeout):
+        raise NotImplementedError
+
+
+class MimoTtsProvider(MimoTtsClient, BaseTtsProvider):
+    """MiMo 端点（默认提供方）。
+
+    只做两件事：补上 label 与 needs_api_key（客户端本身不关心这些），
+    并让类名与其它提供方对齐。已有测试仍在 patch `MimoTtsClient`，
+    继承关系保持向后兼容。
+    """
+
+    label = "mimo"
+    needs_api_key = True
+
+
+#: 名字 → (构造类, 该提供方是否认 base_url 这个参数)。
+#: 第三项不是装饰：本地提供方没有 base_url，硬塞一个进去只会在日志里
+#: 打出一个"看着像在用某个端点"的假地址。
+PROVIDERS = {
+    "mimo": (MimoTtsProvider, True),
+}
+
+#: `--tts-provider` 的取值顺序（= --help 里的展示顺序）。
+PROVIDER_NAMES = tuple(PROVIDERS)
+
+#: 缺省提供方。与 DEFAULT_MODEL / DEFAULT_BASE_URL 同源同家：换默认提供方
+#: 必须连着换默认模型，否则拿 MiMo 的模型名去打别人家的端点。
+DEFAULT_PROVIDER = "mimo"
+
+
+def make_client(provider=None, api_key=None, base_url=None, factory=None):
+    """按名字造一个提供方实例。未知名字抛 ValueError（由调用方转成 CLI 报错）。
+
+    `factory` 是可注入的构造钩子（签名 `(api_key, base_url) -> client`）：
+    测试用它塞假客户端，pipeline 把它当成一个模块级名字 patch
+    （`pipeline.TTS_CLIENT_FACTORY`）。没有这个钩子，"换掉网络层"就只能靠
+    `patch.object(pipeline, "MimoTtsClient")`——那是拿类名当接缝，一旦默认
+    提供方不是 MiMo，测试仍在 patch 一个根本没被用到的符号，**照样全绿**。
+
+    返回的对象只保证有 `synthesize`；`label` / `needs_api_key` 用 getattr
+    带默认值读，第三方实现不必继承 BaseTtsProvider。
+    """
+    if factory is not None:
+        return factory(api_key, base_url)
+    name = provider or DEFAULT_PROVIDER
+    entry = PROVIDERS.get(name)
+    if entry is None:
+        raise ValueError(
+            "未知的 TTS 提供方 '%s'；可选：%s（新增提供方见 scripts/_tts.py "
+            "的 PROVIDERS）" % (name, " / ".join(PROVIDER_NAMES)))
+    cls, takes_base_url = entry
+    if takes_base_url:
+        return cls(api_key, base_url)
+    return cls()
+
+
+def provider_label(client):
+    """日志用：提供方名字。第三方实现没写 label 时退回类名。"""
+    return getattr(client, "label", None) or type(client).__name__
+
+
+def provider_needs_api_key(client):
+    """`--tts-provider` 是否需要 key。默认 True（宁可多要一次，不要静默不带鉴权）。"""
+    return getattr(client, "needs_api_key", True)
+
+
+def provider_takes_base_url(name=None):
+    """该提供方认不认 base_url（决定日志里要不要打出端点地址）。"""
+    entry = PROVIDERS.get(name or DEFAULT_PROVIDER)
+    return bool(entry and entry[1])
+
+
+def provider_takes_base_url_for_instance(client):
+    """按实例反查：从类名找注册表里的那一行。找不到按"认"处理。
+
+    宁可多打一行 base_url，也不要因为反查失败而把真实端点藏起来——
+    排障时"日志里没有端点"比"多打了一个默认端点"更难受。
+    """
+    for _name, (cls, takes) in PROVIDERS.items():
+        if isinstance(client, cls):
+            return takes
+    return True

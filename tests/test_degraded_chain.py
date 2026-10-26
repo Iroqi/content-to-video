@@ -76,12 +76,12 @@ class DegradedChainIntegration(unittest.TestCase):
 
             client = _FakeClient()
             # --api-key 显式给：key 校验发生在 client 构造之前，
-            # mock 掉 MimoTtsClient 也绕不过这一关。
+            # 注入假客户端也绕不过这一关。
             argv = ["pipeline.py", "--source", src_path, "-o", out,
                     "--api-key", "test-key", "--base-url", "https://x.example/v1",
                     "--on-fail", "silence", "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=client), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
 
@@ -137,7 +137,7 @@ class DegradedChainIntegration(unittest.TestCase):
                     "--api-key", "test-key", "--base-url", "https://x.example/v1",
                     "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=client), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client), \
                     mock.patch.object(P.time, "sleep"):
                 with self.assertRaises(SystemExit) as cm:
                     P.main()
@@ -173,12 +173,12 @@ class DegradedChainIntegration(unittest.TestCase):
 
             client = _FakeClient()
             # --api-key 显式给：key 校验发生在 client 构造之前，
-            # mock 掉 MimoTtsClient 也绕不过这一关。
+            # 注入假客户端也绕不过这一关。
             argv = ["pipeline.py", "--source", src_path, "-o", out,
                     "--api-key", "test-key", "--base-url", "https://x.example/v1",
                     "--on-fail", "silence", "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=client), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client), \
                     mock.patch.object(P, "_clear_stale_sidecars", return_value=False), \
                     mock.patch.object(P, "generate_silence") as gen_silence, \
                     mock.patch.object(P.time, "sleep"):
@@ -213,7 +213,7 @@ class ResumeFingerprintCoversEndpoint(unittest.TestCase):
                     "--api-key", "test-key", "--base-url", "https://a.example/v1",
                     "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=first), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: first), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
             self.assertEqual(len(first.calls), 2, "第一轮两句都该合成")
@@ -224,7 +224,7 @@ class ResumeFingerprintCoversEndpoint(unittest.TestCase):
                      "--api-key", "test-key", "--base-url", "https://b.example/v1",
                      "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv2), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=second), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: second), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
             self.assertEqual(
@@ -248,14 +248,14 @@ class ResumeFingerprintCoversEndpoint(unittest.TestCase):
 
             first = _FakeClient()
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=first), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: first), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
 
             second = _FakeClient()
             argv2 = list(argv) + ["--resume"]
             with mock.patch.object(P.sys, "argv", argv2), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=second), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: second), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
             self.assertEqual(second.calls, [],
@@ -296,7 +296,7 @@ class FailedMarkerLossIsNotSilent(unittest.TestCase):
                     "--api-key", "test-key", "--base-url", "https://x.example/v1",
                     "--on-fail", "silence", "--speed", "1.0", "--workers", "1"]
             with mock.patch.object(P.sys, "argv", argv), \
-                    mock.patch.object(P, "MimoTtsClient", return_value=client), \
+                    mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client), \
                     mock.patch("builtins.open", failing_open), \
                     mock.patch.object(P.time, "sleep"):
                 P.main()

@@ -5,7 +5,8 @@ audio_output/
 hf-project/
 out/
 snapshots/
-segments_source.json
+# 注意：segments_source.json **不在这里**——它是第 1 步的稿件本体（用户资产），
+# 不是产物。它连同 images/ 一起属于该被版本控制的输入。
 timing_manifest.json
 candidates.json
 

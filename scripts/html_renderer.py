@@ -1625,8 +1625,6 @@ def _derive_timeline_lines(rc, card):
     表达式由 `_derive.js_expr` 在**生成期**编译成 JS：渲染页里不出现 `eval`，也不
     出现任何来自稿件的原样字符串（参数名/选择器/属性名三处都各有白名单正则）。
     """
-    from _derive import compile_derive
-
     if not card.has_image:
         return []
     # 并置对比的两格各挂各的 derive（`rc.images["{sid}:{i}"]`，见 _normalize_images）。

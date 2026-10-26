@@ -174,7 +174,10 @@ class TestPerceptual(unittest.TestCase):
             img.paste((90, 120, 150), (0, 0, W, H))   # 整屏换色 = 换页
             _title(img, d); _verse(img, d)
 
-        r = self._run([before, after], [3.9, 4.3])
+        # segs 必须传进去：不传就落到模块默认段（seg2 从 6.0s 起），那时
+        # 4.3s 的换页相对 6.0s 偏了 1.7s，本就该报——测试却会以为自己在
+        # 验"网格误差不许判成不同步"。判据此前恒不触发，这个漏传才没暴露。
+        r = self._run([before, after], [3.9, 4.3], segs=segs)
         self.assertEqual([x for x in r["issues"] if x["kind"] == "switch_skew"], [])
 
     def test_contact_sheet_written(self):

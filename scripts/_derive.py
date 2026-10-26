@@ -31,7 +31,6 @@
 两处调用方（渲染端的 GSAP 时间线、`check_svg` 的静态自查）读的是同一份编译结果，
 所以"门禁算的"和"成片演的"不可能分家。
 """
-import json
 import math
 import re
 
@@ -366,6 +365,11 @@ class Derived:
                       for t in self.tracks],
             # 选择器在这里就拼成"整页作用域"的形式（与 director 的 target 同一条
             # 收窄规则：多段内联同名 id 不串台），渲染端不必再拼一次。
+            # 注意：这里的 "attr" 是 **derive payload 自己的键名**，意思是"绑到
+            # 哪个 SVG 属性"（取值受 BIND_ATTRS 限定），与 GSAP vars 里那个 attr
+            # 通道（_images_schema.ATTR_KEY，意思是"走 attr 插件去写属性"）**只是
+            # 同名、不是一回事**。别把两边合并成一个常量——合并完，改 schema 时
+            # 会连带改掉稿件契约，或反过来。
             "binds": [{"sel": f"{scope} {sel}", "attr": attr,
                        "js": js_expr(src, self.params)}
                       for sel, attr, _fn, src in self.binds],

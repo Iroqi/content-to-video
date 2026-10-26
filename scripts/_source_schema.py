@@ -216,7 +216,9 @@ def validate_segments_source(data):
         # 放在 dialogue 之前：beats 的 `on` 对对话段同样按"本段第几轮的第几句"
         # 计（manifest 侧的 sentences 已经把各轮摊平），这里不看 text/dialogue
         # 二选一的结果，只做形状校验。
-        _beats = validate_beats(
+        # 形状校验在这一步就做完（validate_beats 失败会抛），返回值本身没人用：
+        # 句序是否落在真实句子上要等重分句与配音完成，见 _beats.audit。
+        validate_beats(
             seg.get("beats"),
             f"segments[{i}]（title={seg.get('title')!r}）的 'beats'")
         dialogue = seg.get("dialogue")

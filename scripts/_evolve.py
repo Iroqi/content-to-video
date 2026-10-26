@@ -41,17 +41,16 @@
 """
 import xml.etree.ElementTree as ET
 
-# 槽位版式不接受的相机属性：镜头归模板（入场收拢 + Ken Burns），作者再推一层
-# 就是两条运镜叠在同一张图上，观众读到的是"图在自己乱动"。
-# `scale` 也在列：契约层按这个元组判，生成期再按它挡一次，两份必须同一份。
-CAMERA_KEYS = ("svgOrigin", "transformOrigin", "scale", "xPercent", "yPercent")
+# 槽位版式不接受的相机属性**真源在契约层**：契约层按它拒一次，本模块在生成期
+# 按 SVG 内容再挡一次，两份必须是同一份。早年版这里另抄了一个少了 `rotation`
+# 的元组——于是 `rotation` 在契约层被拒、到了本模块却放行，两条守卫互相打架
+# 且谁都不报错（看着是两道门，实际是两把不同的锁）。
+from _images_schema import _EVOLVE_CAMERA_KEYS as CAMERA_KEYS  # noqa: E402
+# 标签去命名空间、inline style 解析：与净化/门禁同一份，不各写一套
+from _svg_sanitize import _local, _style_map  # noqa: E402
 
 # 只给"结构底"用的标签：这些元素本来就不承载内容，不参与"起点态兜底"。
 _STRUCTURAL_TAGS = ("svg", "defs", "title", "desc", "metadata", "style")
-
-
-def _local(tag):
-    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
 def _iter_targets(root):
@@ -72,18 +71,54 @@ def _declared_opacity(el):
     """
     raw = el.get("opacity")
     if raw is None:
-        style = el.get("style") or ""
-        for decl in style.split(";"):
-            k, _, v = decl.partition(":")
-            if k.strip().lower() == "opacity":
-                raw = v.strip()
-                break
+        # style 的解析走 _svg_sanitize._style_map（与净化、门禁同一份）：手写
+        # 一遍的话，"style 里同一个属性写了两遍谁说话"这种细节必然分家——那边
+        # 按 CSS 取后者，这里若取前者，同一份 SVG 两边读数相反。
+        raw = _style_map(el).get("opacity")
     if raw is None:
         return None
     try:
         return float(str(raw).strip())
     except ValueError:
         return None
+
+
+def _starts_hidden(el):
+    """这一元素在**静态声明**里是不可见的（写死 opacity<=0）。
+
+    "没声明 opacity" 在渲染上等于 1（可见），所以必须把 `None` 和 `0` 分开：
+    写成 `(_declared_opacity(el) or 0) <= 0` 会把"没声明"当成 0，于是**任何**
+    没写 opacity 的元素都被算成隐藏——守卫从"抓全空页"变成"抓每一页"。
+    """
+    o = _declared_opacity(el)
+    return o is not None and o <= 0
+
+
+def _points_early(step, limit=0.2):
+    """这一拍会不会落在**段首**（< limit 秒）。
+
+    两个锚点不是一个量纲，必须分开读：
+
+    - `at` 是**句序**（"第几句之后"），`at=0` 就是第 0 句、也就是段首；
+    - `at_time` 是该段的**绝对秒**，才跟 limit 直接比。
+
+    早年版把两者塞进同一个 `float(step.get("at", 0) if "at" in step else 0)`
+    ——拿"第三句"当"第三秒"用，句子一长就误判；更糟的是只写 `at_time` 的段落
+    走 else 分支恒取 0，**恒小于 limit**，于是"段首有点亮"永远为真、整条
+    守卫永不触发。（契约层保证 at / at_time 二选一，所以两边不会同时命中。）
+    """
+    if not (step.get("set") or step.get("to") or step.get("from")):
+        return False                       # 没有实际写入的一步谈不上"点亮"
+    if "at" in step:
+        return float(step["at"]) == 0
+    if "at_time" in step:
+        v = step["at_time"]
+        if isinstance(v, str):
+            # "+0.5" / "-0.2" 这类相对写法要等前一条 beat 落定才知道值，
+            # 静态自查求不出——按"不算早"处理，宁可漏报也不误报。
+            return False
+        return float(v) < limit
+    return False
 
 
 def check_evolve(raw, steps, sid):
@@ -128,15 +163,29 @@ def check_evolve(raw, steps, sid):
 
     # 起始帧全空：所有可渲染元素都声明 opacity=0，且没有任何一步在段首（<0.2s）
     # 把它们点亮。判据只读静态声明，宁可多报一条也不让空框静默出货。
+    # painter 与 hidden 必须**同口径**，否则 `len(hidden) == len(painter)` 结构性
+    # 不可达：hidden 只认有 id 的元素（evolve 的 target 就是 `#id`），而 painter
+    # 若收全部元素，任何一个没写 id 的装饰件都会让这条守卫永远沉默。
+    # 结构性容器还要按**祖先**排除，不能只判自己：`<defs>` 里的 <linearGradient>
+    # 自己不在 _STRUCTURAL_TAGS 里，进了 painter 却永远不会有 opacity=0，而真实
+    # SVG 几乎都带 <defs>——这条守卫此前等于从未生效。
+    _parent = {c: p for p in root.iter() for c in p}
+
+    def _in_container(el):
+        p = _parent.get(el)
+        while p is not None and p is not root:
+            if _local(p.tag) in _STRUCTURAL_TAGS:
+                return True
+            p = _parent.get(p)
+        return False
+
     painter = [el for el in root.iter()
-               if el is not root and _local(el.tag) not in _STRUCTURAL_TAGS]
-    lit_early = any(
-        float(step.get("at", 0) if "at" in step else 0) < 0.2
-        and (step.get("set") or step.get("to") or step.get("from"))
-        for step in steps)
+               if el is not root and el.get("id")
+               and _local(el.tag) not in _STRUCTURAL_TAGS
+               and not _in_container(el)]
+    lit_early = any(_points_early(step) for step in steps)
     if painter and not lit_early:
-        hidden = [el for el in painter
-                  if (_declared_opacity(el) or 0) <= 0 and el.get("id")]
+        hidden = [el for el in painter if _starts_hidden(el)]
         if len(hidden) == len(painter):
             warns.append(
                 f"段落 '{sid}' 的演进图起始帧全空：SVG 里 {len(painter)} 个可渲染元素"

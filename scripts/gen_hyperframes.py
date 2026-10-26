@@ -278,6 +278,19 @@ def _size_warnings(sid, media_path, box, size):
 _SPAN_TOLERANCE = 0.05
 
 
+def entry_media_start(entry):
+    """这一条从源片第几秒起播（缺省 0）。只有 video 写它才有意义，
+    且 validate_images_json 已把值约束在 [0, ∞)。
+
+    放在**模块级**而不是嵌在某个函数里：`_probe_one` 是顶层函数，取不到
+    嵌套作用域的名字——之前 `_media_start` 嵌在 validate_images_files 里，
+    于是任何一条可解码的视频走到这里都是 NameError（视频素材这条路径从来
+    没被跑通过：probe 一崩，整个 validate_images_files 一起崩）。
+    """
+    v = entry.get("media_start", 0)
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+
 def video_span_verdict(seg_dur, vdur, media_start):
     """视频从 media_start 起播，能不能盖住 seg_dur 这一段。
 
@@ -329,12 +342,6 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
     """
     missing_imgs = []
     corrupt_imgs = []
-
-    def _media_start(entry):
-        """这一条从源片第几秒起播（缺省 0）。只有 video 写它才有意义，
-        且 validate_images_json 已把值约束在 [0, ∞)。"""
-        v = entry.get("media_start", 0)
-        return float(v) if isinstance(v, (int, float)) else 0.0
 
     # 图片/视频完整性都用 ffmpeg 全解码探测（ffmpeg 是渲染必需依赖，
     # 无需再引入 Pillow）；找不到 ffmpeg 时降级为仅做存在性校验。
@@ -443,7 +450,8 @@ def _probe_one(sid, entry, out_dir, box, seg_dur, missing_imgs, corrupt_imgs,
             if not ok:
                 corrupt_imgs.append((sid, media_path, f"视频解码失败: {reason}"))
             elif vdur is not None:
-                kind, head = video_span_verdict(seg_dur, vdur, _media_start(entry))
+                kind, head = video_span_verdict(seg_dur, vdur,
+                                                entry_media_start(entry))
                 if kind == "empty":
                     corrupt_imgs.append((sid, media_path, head))
                 elif kind in ("short", "long"):

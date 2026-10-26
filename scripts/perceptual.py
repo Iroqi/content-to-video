@@ -67,10 +67,8 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 
 # 版式判据的唯一真源在 _segments（scripts/ 已由 run_gate 的调用方放进
 # sys.path）；这里只借用"哪些版式是满幅图"这一件事，不另抄一份 ("canvas","plate")。
@@ -122,7 +120,7 @@ def _load_pil():
             "本门禁是可选的一道验收，缺依赖不影响出片。")
 
 
-def sample_times(segments, sentences, fps_free=True):
+def sample_times(segments):
     """按段生成采样时刻。
 
     每段取「起点 + 若干等分点 + 终点前一点点」：等分点保证段中段的死帧不会被
@@ -248,7 +246,14 @@ def slot_rect(aspect):
         left = float(L["margin"]) + float(L["textCol"]["width"]) + float(L["textCol"]["gap"])
         top = (ch - ih) / 2
         return (int(left), int(top), iw, ih), (cw, ch)
-    except Exception:
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        # 读不出模板**必须出声**：这里返回 (None, None) 会让上面 ink 全为 None，
+        # 「画布稀薄」判据整条静默消失——排查时看到的是"没报"，而不是"报不了"。
+        # 反过来接 Exception 更糟：它会把"代码写错"（AttributeError/NameError）
+        # 也吞成"模板不对"，于是门禁永远绿、问题永远查不到。
+        print(f"[warn] 观感门禁读不出 {aspect} 的图槽矩形"
+              f"（{type(e).__name__}: {e}）——本轮跳过「画布稀薄」判据",
+              file=sys.stderr)
         return None, None
 
 
@@ -294,7 +299,6 @@ def analyze(frames, segments, aspect="portrait"):
     ink = [_ink_in_box(im, box) if box else None for im in imgs]
     # 段归属：按 manifest 的段区间
     spans = []
-    all_spans_ends = []
     for seg in segments:
         sents = seg.get("sentences") or []
         if not sents:
@@ -305,7 +309,6 @@ def analyze(frames, segments, aspect="portrait"):
         # 读数就落到"谁都不属"上、被判成相邻段的错。
         nxt = [float(x["start_time"]) for x in sents[1:]]
         t1 = nxt[0] if nxt else float(sents[-1]["start_time"]) + float(sents[-1]["duration"])
-        all_spans_ends.append(t1)
         spans.append((seg["id"], seg.get("layout"), t0, t1))
 
     def owner(t):
@@ -396,15 +399,16 @@ def analyze(frames, segments, aspect="portrait"):
         if not spans:
             continue
         gap = t - c["t0"]
-        cands = [s for s in spans if abs(s[2] - t) <= gap + SWITCH_TOLERANCE]
-        if not cands:
-            continue
-        near = min(cands, key=lambda s: abs(s[2] - t))
-        off = t - near[2]
         # 容差 = 采样网格 + 渲染起点：帧是**采样时刻**拍的，一次换页的真实发生
         # 时刻落在 (上一次采样, 这一次采样] 之间，读数天然带一个"采样间隔"的
         # 正偏。所以判据是 `|off| > 采样间隔 + SWITCH_TOLERANCE`，而不是硬容差
         # ——否则采样越稀、判词越多，而那读的是网格不是片子。
+        #
+        # 候选必须是**全部** spans：先按同一条容差筛一遍再判，筛完剩下的条条
+        # 都落在容差内，`abs(off) > 容差` 恒假、整条永不触发——这道门禁等于
+        # 不存在，而成片里换页与旁白错开两三秒是能一眼看出来的。
+        near = min(spans, key=lambda s: abs(s[2] - t))
+        off = t - near[2]
         if abs(off) > gap + SWITCH_TOLERANCE:
             issues.append(_issue(
                 "switch_skew", near[0],
@@ -499,8 +503,11 @@ def run_gate(project, manifest, out_dir, aspect="portrait", command=None):
                "error": 说明（取帧失败时）}
     """
     try:
-        times = sample_times(manifest["segments"], manifest["sentences"])
-    except (KeyError, TypeError) as e:
+        times = sample_times(manifest["segments"])
+    except (KeyError, TypeError, ValueError) as e:
+        # ValueError 不能漏：段里的 start_time/duration 走 float() 转换，
+        # manifest 被手改成非数字字符串时抛的是它。漏了这条，一个脏 manifest
+        # 能把整个编排层（run.py）带崩，而本函数的契约是"不阻断、不 sys.exit"。
         return {"error": f"manifest 里读不出时间段：{e}"}
     all_t = sorted({t for ts in times.values() for t in ts})
     frames_dir = os.path.join(out_dir, "frames")
@@ -557,7 +564,6 @@ def main(argv=None):
         manifest = json.load(f)
     segments = manifest["segments"]
 
-    tmp = None
     try:
         if args.frames:
             outdir = args.frames
@@ -565,7 +571,7 @@ def main(argv=None):
             if not pairs:
                 raise RuntimeError(f"{outdir} 里没有 frame-N-at-Xs.png")
         elif args.project:
-            times = sample_times(segments, manifest["sentences"])
+            times = sample_times(segments)
             all_t = sorted({t for ts in times.values() for t in ts})
             if args.step:
                 all_t = [all_t[0] + i * args.step

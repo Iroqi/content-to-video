@@ -94,6 +94,15 @@ body{font-family:var(--ctv-font-family)}
    成为不透明图层，clip-path 擦除换页时新旧内容不会叠影。z-index:-2 压在氛围光
    (::after,-1) 之下；负 z 的安全性与上面 isolation 的 lint 口径同判。 */
 .seg-card>.bg,.seg-card>.grid{z-index:-2}
+/* 标题/副标题的**揭示边裁窗**：一条边从上往下走，字从下方走到原位，两者同拍
+   （见 html_renderer._reveal_tween_lines）。
+   这一层只负责"裁"，所以**不写任何 transform / overflow**——裁切走 GSAP 补的
+   `clip-path`（inset(100% 0 0 0) → inset(0%)），与段落转场同一手法：纯属性补间、
+   逐帧 seek 确定，而且**不要求容器高度恰好贴合文字**（`overflow:hidden` 的写法
+   在标题只占一行、框却按两行留高时，字会先在框里飘一段才被"裁"到，揭示变成滑动）。
+   盒子紧贴内容（width:fit-content 只在横屏/图版需要：竖屏标题区是定宽块，撑满
+   才能左对齐、也才能让 2 行钳制生效）。 */
+.title-reveal{position:relative;width:100%}
 .seg-title-wrap{position:absolute}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em;padding-left:var(--ctv-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}

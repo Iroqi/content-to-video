@@ -27,16 +27,27 @@ import _helpers as H  # noqa: F401  副作用：把 scripts/ 放进 sys.path
 import _template
 from html_renderer import generate_html
 
-# tl.from("#title-seg-a",{scale:0.92,y:22,duration:0.50,ease:"expo.out"},2.40)
-# `y:` 只在那一档给了位移时出现（纯缩放档没有 y），故可选。
+# 标题入场是「揭示边」的两层（见 html_renderer._reveal_tween_lines）：
+#   裁窗  tl.fromTo("#rev-title-seg-a",{clipPath:"inset(100% 0 0 0)"},
+#                   {clipPath:"inset(0% 0 0 0)",duration:0.50,ease:"power4.out"},2.40)
+#   字    tl.from("#title-seg-a",{y:44.00,duration:0.50,ease:"power4.out"},2.40)
+# 两条同起点、同时长、同缓动——任何一处分家，成片里就是"擦除"或"滑动"，
+# 不再是"字被一条边推上来"。所以这里把裁窗也一起匹配，交给
+# `RevealWindow` 那一组逐条对账。
 _TITLE_RE = re.compile(
-    r'tl\.from\("#title-(?P<sid>[A-Za-z0-9_-]+)",\{scale:(?P<scale>-?[\d.]+),'
-    r'(?:y:(?P<y>-?[\d.]+),)?duration:(?P<dur>[\d.]+),'
+    r'tl\.from\("#title-(?P<sid>[A-Za-z0-9_-]+)",\{y:(?P<y>-?[\d.]+),'
+    r'duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
-# tl.from("#tag-seg-a",{opacity:0,scale:0.952,y:13.2,duration:0.38,ease:"expo.out"},2.62)
+# tl.from("#tag-seg-a",{y:26.40,duration:0.38,ease:"power2.out"},2.62)
 _TAG_RE = re.compile(
-    r'tl\.from\("#tag-(?P<sid>[A-Za-z0-9_-]+)",\{opacity:0,scale:(?P<scale>-?[\d.]+),'
-    r'(?:y:(?P<y>-?[\d.]+),)?duration:(?P<dur>[\d.]+),'
+    r'tl\.from\("#tag-(?P<sid>[A-Za-z0-9_-]+)",\{y:(?P<y>-?[\d.]+),'
+    r'duration:(?P<dur>[\d.]+),'
+    r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
+# 裁窗那一层：`title` / `tag` 两个 kind 各一条，与上面的字补间一一对应。
+_REVEAL_RE = re.compile(
+    r'tl\.fromTo\("#rev-(?P<kind>title|tag)-(?P<sid>[A-Za-z0-9_-]+)",'
+    r'\{clipPath:"inset\(100% 0 0 0\)"\},\{clipPath:"inset\(0% 0 0 0\)",'
+    r'duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
 
 
@@ -86,13 +97,93 @@ class Exists(unittest.TestCase):
         for m in _TAG_RE.finditer(html):
             self.assertIn(f'id="tag-{m.group("sid")}"', html)
 
-    def test_starts_hidden(self):
-        """`from` 补间在页面加载即把起点态写在元素上（immediateRender），而卡片
-        从擦除起点起就部分可见——没有 opacity:0 的话副标题会以缩放态先在擦除窗
-        里露一小截（小字号的缩放态读成"半截字"，不像标题那样读成"正在进来"）。"""
+    def test_selector_points_at_a_real_reveal_window(self):
+        """每条字补间都配一条裁窗补间，且裁窗元素真的在 DOM 里。
+
+        起点态的"看不见"由裁窗（`clip-path: inset(100%)`）负责，不再压 `opacity:0`：
+        半透明的字在擦除窗里仍会露出半截，而裁窗是真的把它裁掉——这一层比透明度
+        更彻底，也让"字从下方被推上来"这件事在起点那一刻成立。
+        """
         _, html = render()
-        for m in _TAG_RE.finditer(html):
-            self.assertIn("opacity:0", m.group(0))
+        for kind in ("title", "tag"):
+            windows = {(m.group("kind"), m.group("sid"))
+                       for m in _REVEAL_RE.finditer(html) if m.group("kind") == kind}
+            self.assertTrue(windows, f"{kind} 一条裁窗都没有")
+            for _, sid in windows:
+                self.assertIn(f'id="rev-{kind}-{sid}"', html,
+                              f"裁窗 #{kind}-{sid} 的补间指向一个不存在的元素")
+
+
+class RevealWindow(unittest.TestCase):
+    """揭示边：裁窗与字必须同起点、同时长、同缓动，缺一条就是另一种动效。"""
+
+    def _pairs(self, html, kind):
+        rx = {"title": _TITLE_RE, "tag": _TAG_RE}[kind]
+        movers = {m.group("sid"): m for m in rx.finditer(html)}
+        wins = {m.group("sid"): m
+                for m in _REVEAL_RE.finditer(html) if m.group("kind") == kind}
+        return [(movers[s], wins[s]) for s in movers if s in wins]
+
+    def test_every_title_move_has_a_window(self):
+        _, html = render()
+        for kind in ("title", "tag"):
+            pairs = self._pairs(html, kind)
+            movers = {m.group("sid") for m in
+                      ((_TITLE_RE if kind == "title" else _TAG_RE).finditer(html))}
+            self.assertEqual({p[0].group("sid") for p in pairs}, movers,
+                             f"{kind}: 有字在动却没有裁窗＝滑动，不是揭示")
+
+    def test_window_and_text_share_one_beat(self):
+        """三条必须相等：at / duration / ease。
+
+        分家的两种后果（都在 `_reveal_tween_lines` 的 docstring 里）：窗比字慢＝
+        收尾那几帧字已经站定、窗还在开（画面上什么都没变，只看到一层边界在爬）；
+        窗比字快＝字还在走而窗已开满，长标题先露半截。
+        """
+        _, html = render()
+        for kind in ("title", "tag"):
+            for mv, win in self._pairs(html, kind):
+                sid = mv.group("sid")
+                self.assertAlmostEqual(float(win.group("at")),
+                                       float(mv.group("at")), places=2,
+                                       msg=f"{kind}/{sid}: 裁窗与字不同起点")
+                self.assertEqual(win.group("dur"), mv.group("dur"),
+                                 f"{kind}/{sid}: 裁窗与字时长不同")
+                self.assertEqual(win.group("ease"), mv.group("ease"),
+                                 f"{kind}/{sid}: 裁窗与字缓动不同")
+
+    def test_window_is_full_closed_to_full_open(self):
+        """窗的行程是"全裁 → 全开"：半开的窗会让字永远缺一角。"""
+        _, html = render()
+        for m in _REVEAL_RE.finditer(html):
+            self.assertIn("inset(100% 0 0 0)", m.group(0))
+            self.assertIn("inset(0% 0 0 0)", m.group(0))
+
+    def test_canvas_page_has_no_window(self):
+        """整页画布连标题层都不渲染，裁窗更不该有——补间指向不存在的元素是死代码。
+
+        （反面：closing 是 agenda 卡，它**有**标题，所以有裁窗。只钉"整页画布没有"
+        而不钉"closing 有"，一刀切删掉全部裁窗也能通过。）
+        """
+        m = H.make_manifest(source=H.sample_source(), dur=6.0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m), aspect="portrait",
+                                 theme="dark")
+        sids = {m_.group("sid") for m_ in _REVEAL_RE.finditer(html)}
+        self.assertNotIn("seg-b", sids, "整页画布段不该有标题裁窗")
+        self.assertIn("closing", sids, "结尾 agenda 卡的标题照旧要有揭示边")
+
+    def test_apple_opening_keeps_its_own_masks(self):
+        """开屏走它自己的 `.t-mk` 逐字裁窗，不叠这一层——两套揭示边叠在同一行
+        字上，起点会有两道边界在爬。"""
+        m = H.make_manifest(source=H.sample_source(), dur=6.0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m), aspect="portrait",
+                                 theme="dark")
+        self.assertIn("t-mk", html)
+        self.assertNotIn('id="rev-title-opening"', html)
 
 
 class Staggered(unittest.TestCase):
@@ -150,14 +241,10 @@ class SmallerAmplitude(unittest.TestCase):
             _, html = render(aspect=aspect)
             for t, g in _pairs(html):
                 sid = t.group("sid")
-                amp_t = abs(1.0 - float(t.group("scale")))
-                amp_g = abs(1.0 - float(g.group("scale")))
-                self.assertLessEqual(amp_g, amp_t + 1e-6,
-                                     f"{aspect}/{sid}: 副标题缩放幅度超过了标题")
                 yt, yg = t.group("y"), g.group("y")
                 if yt:
                     self.assertLessEqual(abs(float(yg or 0)), abs(float(yt)) + 1e-6,
-                                         f"{aspect}/{sid}: 副标题位移超过了标题")
+                                         f"{aspect}/{sid}: 副标题行程超过了标题")
 
     def test_same_direction_as_the_title(self):
         """符号继承：标题从下方上来，副标题就不能往下沉——两层反向会读成打架。
@@ -183,12 +270,10 @@ class SmallerAmplitude(unittest.TestCase):
             with mock.patch("html_renderer.load_template", return_value=tpl):
                 _, html = render()
             for t, g in _pairs(html):
-                self.assertAlmostEqual(float(g.group("scale")),
-                                       float(t.group("scale")), places=3,
-                                       msg=f"ampFrac={raw}: 幅度应当贴住标题那一档")
                 yt, yg = t.group("y"), g.group("y")
                 if yt:
-                    self.assertAlmostEqual(abs(float(yg or 0)), abs(float(yt)), places=1)
+                    self.assertAlmostEqual(abs(float(yg or 0)), abs(float(yt)), places=1,
+                                           msg=f"ampFrac={raw}: 行程应当贴住标题那一档")
 
     def test_amp_zero_disables_the_layer(self):
         """ampFrac 0 = 明确不要这层（退回改动前的行为：副标题不进时间线）。"""

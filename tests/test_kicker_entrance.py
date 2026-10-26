@@ -33,9 +33,10 @@ _KICKER_RE = re.compile(
 _KICKER_FADE_RE = re.compile(
     r'tl\.from\("#kicker-(?P<sid>[A-Za-z0-9_-]+)",\{opacity:0,duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
+# 标题入场改走揭示边之后只剩位移（没有 scale），见 test_tagline_entrance 的同名正则。
 _TITLE_RE = re.compile(
-    r'tl\.from\("#title-(?P<sid>[A-Za-z0-9_-]+)",\{scale:(?P<scale>-?[\d.]+),'
-    r'(?:y:(?P<y>-?[\d.]+),)?duration:(?P<dur>[\d.]+),'
+    r'tl\.from\("#title-(?P<sid>[A-Za-z0-9_-]+)",\{y:(?P<y>-?[\d.]+),'
+    r'duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
 
 

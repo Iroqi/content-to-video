@@ -59,16 +59,19 @@ _EVOLVE_CAMERA_KEYS = frozenset({"svgOrigin", "transformOrigin", "scale",
 # 要求入参已过本预检，不重复打。
 # 并置对比（layout "compare"）每格的键集：只有两档补间与三项出处。刻意不给
 # 播放/音频/type——两格都是静态图或 SVG（理由见 _check_pair）。
-PANE_KEYS = ("director", "evolve", "source_url", "license", "attribution")
+PANE_KEYS = ("director", "evolve", "derive", "source_url", "license", "attribution")
 
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director：写了才走净化内联（见 references/canvas.md「SVG 动画：两档」）。
+    # director / derive：写了才走净化内联（见 references/motion.md「SVG 动画：两档」）。
     "director",
     # evolve：槽位版式里的"同一元素演进"（见 references/canvas.md「槽位版式的演进」）。
     # 与 director 同一套 steps 写法，但不接管整页编排、不调机位（镜头归模板）。
     "evolve",
+    # derive：一条参数驱动的几何演绎（见 references/canvas.md「参数演绎」）。一拍只写
+    # "参数推到多少"，图内几何由表达式逐帧重算——同步与中间态都是真几何，不靠抄参数。
+    "derive",
     # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
     # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
     "stage",
@@ -368,7 +371,7 @@ def _validate_director(key, dirval, what="director"):
                              f"{sorted(_DIRECTOR_STEP_KEYS)}")
         # 锚点二选一：at（句序）或 at_time（段落绝对秒）。两者都写或都不写都是歧义，
         # 一律拒。at_time 让导演档脱离"句子分桶"：整页画布的自由编排可以直接按秒排
-        # 补间，不必迁就旁白句边界（见 references/canvas.md「SVG 动画：两档」）。
+        # 补间，不必迁就旁白句边界（见 references/motion.md「SVG 动画：两档」）。
         has_at, has_time = "at" in step, "at_time" in step
         if has_at == has_time:
             raise ValueError(
@@ -405,7 +408,13 @@ def _validate_director(key, dirval, what="director"):
         draw = step.get("draw", False)
         if not isinstance(draw, bool):
             raise ValueError(f"{where} 的 draw 必须是 JSON 布尔 true/false（实际: {draw!r}）")
-        kinds = [k for k in ("from", "to", "set") if k in step]
+        kinds = [k for k in ("from", "to", "set") if k in step
+                 and isinstance(step[k], dict)]
+        if not kinds and "to" in step:
+            # derive 的单步借用本函数做锚点/duration/ease 校验：它的 `to` 是**数字**
+            # （参数推到多少），不是补间变量。判据不能因此放宽（`to: {}` 依旧非法），
+            # 所以这里只认"数值型 to"这一种借用，其余原样往下走。
+            kinds = ["to"] if is_finite_number(step["to"]) else []
         morph = step.get("morph")
         count = step.get("count")
         typ = step.get("type")
@@ -592,6 +601,7 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_duck(key, value, src))
     _collect(errs, lambda: _check_poster(key, value))
     _collect(errs, lambda: _normalize_src(key, value, src))
+    _collect(errs, lambda: _check_derive(key, value, src))
     _collect(errs, lambda: _check_director(key, value, src))
     _collect(errs, lambda: _check_evolve(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
@@ -638,7 +648,7 @@ def _check_pair(key, value, src):
     for _opt in ("type", "poster", "loop", "muted", "autoplay", "playsinline",
                  "volume", "fade_in", "fade_out", "media_start", "duck",
                  "source_url", "license", "attribution", "query", "provider",
-                 "drift", "stage", "director", "evolve"):
+                 "drift", "stage", "director", "evolve", "derive"):
         if _opt in value:
             raise ValueError(
                 f"images.json 的 '{key}' 是并置对比（src 为一对图），不接受 "
@@ -667,6 +677,12 @@ def _check_pair(key, value, src):
             if _opt in pane:
                 what = _opt
                 _validate_director(what, pane[_opt], what=what)
+        if "derive" in pane:
+            if not is_svg_path(src[i]):
+                raise ValueError(
+                    f"images.json 的 '{key}' 的 panes[{i}] 写了 derive，但那一格 "
+                    f"src={src[i]!r} 不是 SVG——derive 只对 .svg 生效")
+            validate_derive(f"{key} 的 panes[{i}]", pane["derive"])
         # 两格各自的出处：写进 pane 才不会被上面的"单图键"拦下，而它确实
         # 是逐格的事实（左边是实拍、右边是示意图，出处本来就不一样）。
         for _opt in ("source_url", "license", "attribution"):
@@ -852,6 +868,138 @@ def _check_director(key, value, src):
             f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
             "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
     _validate_director(key, value["director"])
+
+
+DERIVE_STEP_KEYS = frozenset({"at", "at_time", "param", "from", "to",
+                              "duration", "ease", "delay"})
+DERIVE_BIND_KEYS = ("target", "attr", "expr")
+
+
+def validate_derive(key, block):
+    """`derive`：一条参数驱动的几何演绎（见 `_derive` 与 canvas.md「参数演绎」）。
+
+    与 director 的分界：director 写"什么时候哪个元素变成什么"（属性级，一个元素
+    一条）；derive 写"这个参数走到多少，几何自己算"（参数级，一拍驱动一组元素）。
+    两者可以同段共存（一个管出场、一个管连续演绎），但**同一个属性不能同时被
+    两者写**——那条冲突要连读 SVG 才知道，放在 gen_hyperframes 判。
+
+    这里只做形状与取值：键集封闭、参数名合法、初值是有限数、表达式能编译、target
+    形态与 director 同一条正则（它也进 GSAP 选择器）、step 的锚点/时长/缓动与
+    director 同一套判据（复用 `_validate_director` 的单步检查会要求 target，
+    所以锚点与时长这几条单独走一遍同名函数，判据只有一份）。
+    """
+    from _derive import (BIND_ATTRS, PARAM_NAME_RE, ExprError, compile_expr)
+    where = f"images.json 的 '{key}' 的 derive"
+    _reject_unknown_keys(block, ("params", "steps", "bind"), where)
+    params = block.get("params")
+    if not isinstance(params, dict) or not params:
+        raise ValueError(
+            f"{where}.params 必须是非空对象（参数名 → 初始值），"
+            '如 {"theta": 0}——没有参数就没有可演绎的东西')
+    for name, v in params.items():
+        if not isinstance(name, str) or not PARAM_NAME_RE.match(name):
+            raise ValueError(
+                f"{where}.params 的参数名 {name!r} 不合法：它要出现在表达式里，"
+                "只收字母或下划线开头、字母/数字/下划线、≤32 字符")
+        if not _finite(v):
+            raise ValueError(f"{where}.params.{name} 的初值必须是有限数字"
+                             f"（NaN/Infinity 不算数；实际: {v!r}）")
+    steps = block.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError(f"{where}.steps 必须是非空数组（每一步推一个参数）")
+    for i, st in enumerate(steps):
+        w = f"{where}.steps[{i}]"
+        if not isinstance(st, dict):
+            raise ValueError(f"{w} 必须是对象")
+        _reject_unknown_keys(st, DERIVE_STEP_KEYS, w)
+        if ("at" in st) == ("at_time" in st):
+            raise ValueError(
+                f"{w} 的锚点必须是 at / at_time 二选一（at=该段第几句旁白，"
+                "at_time=从该段音频起点的秒数或相对串 \"+0.5\"）")
+        anchor = {k: st[k] for k in ("at", "at_time", "duration", "ease", "delay")
+                  if k in st}
+        anchor["to"] = st.get("to")
+        # duration 的判据在这里比 director 严一档，理由不是口味：参数演绎的每一帧都是
+        # 由"进度 × 表达式"**重算**出来的，没有中间态可言——duration 缺省走模板值，写 0
+        # 则整段演绎退化成一帧瞬跳，而作者写它的意图几乎必然是"没有时长"而不是"我要瞬跳"
+        # （要瞬跳就把 to 写进 params 初值，或干脆别写这一步）。
+        if "duration" in st and float(anchor["duration"]) == 0:
+            raise ValueError(
+                f"{w} 的 duration=0——参数演绎是按进度逐帧重算几何的，时长 0 会让"
+                f"整段演绎退化成一次瞬跳；要瞬跳就直接把终值写进 params 初值，"
+                f"要演就给它一个 >0 的时长（省略则走模板缺省）")
+        _validate_director_probe(anchor, w)
+        pname = st.get("param")
+        if pname not in params:
+            raise ValueError(
+                f"{w} 的 param 必须是 params 里声明过的参数名"
+                f"（{'、'.join(sorted(params))}），实际: {pname!r}")
+        if "to" not in st:
+            raise ValueError(f"{w} 缺 'to'（这一步要把 {pname} 推到多少）——"
+                             "参数演绎必须给终点")
+        for k in ("to", "from"):
+            if k in st and not _finite(st[k]):
+                raise ValueError(f"{w} 的 {k} 必须是有限数字（实际: {st[k]!r}）")
+    binds = block.get("bind")
+    if not isinstance(binds, list) or not binds:
+        raise ValueError(
+            f"{where}.bind 必须是非空数组——没有绑定的参数不会改变画面，"
+            '一条绑定形如 {"target": "#arm", "attr": "x2", "expr": "540 + 260*cos(theta)"}')
+    for i, b in enumerate(binds):
+        w = f"{where}.bind[{i}]"
+        if not isinstance(b, dict):
+            raise ValueError(f"{w} 必须是对象")
+        _reject_unknown_keys(b, DERIVE_BIND_KEYS, w)
+        target = b.get("target")
+        if not isinstance(target, str) or not _DIRECTOR_TARGET_RE.match(target):
+            raise ValueError(
+                f"{w} 的 target 必须是单个 id 或 class 选择器（# 或 . 开头），"
+                f"与 director 同一条约束（实际: {target!r}）")
+        if b.get("attr") not in BIND_ATTRS:
+            raise ValueError(
+                f"{w} 的 attr 只收几何属性 {'/'.join(BIND_ATTRS)}（实际: "
+                f"{b.get('attr')!r}）。`d` / `points` 这类复合几何要整条重写路径，"
+                "不属于参数演绎；颜色与透明度归 director")
+        try:
+            compile_expr(b.get("expr"), params, f"{w}（{target}.{b['attr']}）")
+        except ExprError as e:
+            raise ValueError(str(e))
+    return block
+
+
+def _finite(v):
+    return is_finite_number(v) and not isinstance(v, bool)
+
+
+def _validate_director_probe(step, where):
+    """复用 director 单步里"与 target 无关"的那几条判据（锚点、duration、ease）。
+
+    为什么能复用：这些规则一旦分家，同一个 `at: 4` 在 director 里被拒、在 derive
+    里被放行，作者会以为后者更宽松——而渲染端拿同一份 `beat_positions` 解析，它只
+    认一份口径。做法是把单步塞进一个**只含这些键**的探针副本，走 director 那份
+    校验（has_at / at_time / duration / delay / ease 全部由它判），报错文案前缀换回
+    本层。`to` 由调用方保证"参数 + 数值"，探针里补一个数值占位当补间变量。
+    """
+    probe = dict(step, target="#probe")
+    # 补间变量给一个真属性，`duration` / `ease` 才走得到它们那几条判据
+    # （`{}` 会先撞"至少要有一个 from / to / set"）。
+    if "to" in probe:
+        probe["to"] = {"opacity": 1}
+    try:
+        _validate_director("?", {"steps": [probe]}, what="?")
+    except ValueError as e:
+        raise ValueError(str(e).replace("images.json 的 '?' 的 ?.steps[0]", where))
+
+
+def _check_derive(key, value, src):
+    """derive：参数驱动的几何演绎。与 director 一样只对 SVG 生效（要净化内联）。"""
+    if "derive" not in value:
+        return
+    if not is_svg_path(src):
+        raise ValueError(
+            f"images.json 的 '{key}' 写了 derive，但 src={src!r} 不是 SVG"
+            "——derive 逐帧改写图内元素的几何属性，只对 .svg 生效")
+    validate_derive(key, value["derive"])
 
 
 def _check_evolve(key, value, src):

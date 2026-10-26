@@ -31,7 +31,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，且渲染必须再加 `--allow-degraded`。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
 - **画面要有证据**：结构门禁（`check`）证明"能渲"，时长契约证明"演完"，但**没有任何一道在看画面**。交付前用 `--perceptual` 取帧：图槽是不是空的、有没有超过 3 秒画面不动、换页对不对得上旁白。判词只证明"没有明显坏"，**好不好看仍要翻那张 contact sheet**。
-- **先写台词板，再写补间**：要让画面跟着旁白变，先在稿子里写 `beats`（这一段的画面在第几句旁白时变成什么，人话），再落 `director` / `evolve`。`on` 必填，写不出来说明这一拍没想清楚。配音后 `run.py` 按最终时间轴核句序，越界 exit 2；只声明不实现会被点名。见 `references/motion.md`。
+- **先写台词板，再写补间**：要让画面跟着旁白变，先在稿子里写 `beats`（这一段的画面在第几句旁白时变成什么，人话），再落 `director` / `evolve` / `derive`。`on` 必填，写不出来说明这一拍没想清楚。配音后 `run.py` 按最终时间轴核句序，越界 exit 2；只声明不实现会被点名。见 `references/motion.md`。
 - **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`templates/` 只放结构与选择器。随画幅变或要与模板联动的观感常量写那两个 py，别在 CSS 里存第二份。
 
 ## 环境
@@ -74,7 +74,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - **要不要演**在写稿时就答完了，见 `references/writing.md`「哪些段值得交给 canvas」。只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众应该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`。动笔前先读它开头点名的那几节——**画错了没有任何报错**，管线与 `hyperframes check` 都看不见图里画得对不对；要它跟着旁白逐拍演，继续读同一文件的「SVG 动画：两档」。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的档位组合见同一份文档）。
+- **画 SVG**：`references/canvas.md`。动笔前先读它开头点名的那几节——**画错了没有任何报错**，管线与 `hyperframes check` 都看不见图里画得对不对；要它跟着旁白逐拍演，继续读 `references/motion.md`「SVG 动画：两档」。图内要有一个**连续量**驱动多个元素（角度/半径/比例/进度）时，用 `derive` 参数演绎（`references/canvas.md`「参数演绎」）——一拍只推参数，几何逐帧重算，不必把三条补间的时长手抄成一样。画完跑 `check_svg.py images/`（`--layout` / `--aspect` 的档位组合见同一份文档）。
 
 ### 4. 生成 HTML、预览、检查、渲染
 
@@ -116,5 +116,6 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 - 产物（音频、HTML、配图、成片）不得落进技能目录，脚本有 `guard_not_in_skill_dir` 拦截。
 - 进入 HTML 的文本必须走现有转义路径，不要新增未转义的 f-string 插值。
 - `accent` 与媒体路径的白名单/路径约束在 `_validate.py` 与 `_images_schema.py`，相对路径不得逃出项目根。
+- `derive` 的表达式**不经 `eval`**：自写 tokenizer + 递归下降，只收算术、白名单函数与已声明的参数；渲染页里也不出现 `eval`（生成期就编译成 JS 字面代码）。加白名单名字前先问它是否破坏逐帧可复现。
 - 音频缺失直接失败，不生成无声成片。
 - 密钥只从 CLI / 环境 / 用户 `.env` 读取，不写入 manifest、HTML、images.json 或技能目录。

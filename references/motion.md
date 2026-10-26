@@ -102,4 +102,117 @@
   `1e10` 折算进总时长，`tl.pause()/seek()`、预览进度条、按时刻取帧三处一起坏掉
   （详见 `html_renderer._loop_repeat`）。遍数在生成期按片长算，屏幕被下一张卡
   盖住的那一刻正好是循环越过片长的那一帧。
+- **让多个元素"一起"动**：三条补间各写各的 `duration`/`ease`，靠手抄保证同步——
+  抄错一条就脱节，而脱节在成片里只表现为"看着有点乱"。有一个**连续量**驱动它们时
+  改用 `derive`（见 `references/canvas.md`「参数演绎」）：一拍只推参数，几何自己算。
 
+## SVG 动画：两档（氛围循环 vs 时间轴同步的「导演」）
+
+画完怎么让它动（几何怎么画在 `references/canvas.md`，本文件只管动的这一侧）。
+选哪档只看一件事——**画面要不要对上某句话**：
+
+**① 氛围循环（墙钟，默认，走 `<img>`）**：CSS `@keyframes` / SMIL 的流动虚线、呼吸光效、循环位移。按页面墙钟自走，**无法与口播时间轴同步**，逐帧渲染不保证可复现。只用于"一直在动、动到哪儿都行"的氛围层；什么都不用写，SVG 自带 CSS/SMIL 即可。`check_svg.py` 打一条 `[warn]` 提醒它不同步。
+
+**② 时间轴同步的「导演」（净化内联，opt-in）**：要"随旁白逐句推进"的状态变化，就在 images.json 给这张 SVG 写 `director`。写了 `director` 的 SVG 会：
+
+1. **净化后内联成活 DOM**（`scripts/_svg_sanitize.py`）：删 `<script>` / `on*` / `<foreignObject>` / 任何带 scheme 的 href / `@import`（带 scheme 的一律算外部资源，内部 `#id` 与相对路径放行）；**外链 `url()` 整颗换 `about:blank`**（`style=""` 与 `fill`/`stroke`/`filter`/`mask`/`clip-path`/`marker-*` 等呈现属性里都一样，内部 `url(#id)` 不碰）；**剥掉 SMIL 与 CSS animation/transition**——墙钟动画在逐帧 seek 里不可复现，导演档一律由补间驱动。这是唯一允许内联进交付 HTML 的情形。
+2. **由 GSAP 按句驱动**：`director.steps` 每步挂在该段旁白某句起点，渲染器展开成时间线补间（属性补间，逐帧 seek 可复现）。
+
+`director` 结构（键集封闭，写错在契约层报错）：
+
+```json
+{
+  "seg4": {
+    "src": "images/seg4.svg",
+    "director": {
+      "steps": [
+        { "at": 0,   "target": "#node-a", "set": { "opacity": 1 } },
+        { "at": 0.4, "target": "#curve",  "draw": true, "duration": 1.2, "ease": "power1.inOut" },
+        { "at": 1,   "target": "#cam",    "to": { "scale": 2.2, "svgOrigin": "500 360" }, "duration": 1.5, "ease": "power2.inOut" },
+        { "at": 2,   "target": "#bar",    "from": { "attr": { "height": 0 } }, "to": { "attr": { "height": 220 } } },
+        { "at": 2,   "target": "#spark",  "morph": { "from": "M 0 60 L 40 60 L 80 60", "to": "M 0 60 L 40 10 L 80 60" }, "duration": 0.9 },
+        { "at_time": 3.5, "target": "#caption", "from": { "opacity": 0 }, "to": { "opacity": 1 } },
+        { "at_time": "+0.4", "target": ".row", "from": { "opacity": 0, "y": 16 }, "to": { "opacity": 1, "y": 0 }, "stagger": 0.12 },
+        { "at_time": "+0.3", "target": "#bigNum", "count": { "from": 0, "to": 6.02, "decimals": 2, "suffix": "×10²³" }, "duration": 1.4 },
+        { "at_time": "+0.2", "target": "#caption", "type": {}, "duration": 1.8, "ease": "none" }
+      ]
+    }
+  }
+}
+```
+
+- `at`：**该段内第几句旁白**（0 基句序，小数 = 句内偏移）。补间位置 = `sentences[⌊at⌋].start_time + (at−⌊at⌋)·duration`；句序越界（≥ 段句数）生成期报错。**整数句序是准的，小数是线性猜的**（TTS 无词级时间戳）：实测平均偏 0.2 字、最大 1.2 字（≈0.15s），唯一放大到 1s 量级的是超 ~5s 又带两三个标点的长句——写旁白时拆句。线性假设从**音频块开头**起算，要精确卡"这句第一拍"就写 `at_time: "<onset + 0.05>"`。确认某拍踩在哪个词上：`ffmpeg -hide_banner -i audio_output/sentences/s007.wav -af silencedetect=noise=-35dB:d=0.18 -f null -`，看 `silence_start` 落在第几个标点后。
+- `at_time`：**与 `at` 二选一**（都写或都不写契约层报错）。从**该段音频起点**排：**数字** = 绝对秒；**相对串** `"+N"`/`"-N"` = 上一条 beat 结束后再 N 秒（首条退到段落起点；只有真占时间的步——有 `from`/`to`/`draw`，或 morph/count/type 这类负责整段的原语——才推进游标，纯 `set` 停在原地）。**它与语音没有任何绑定**（重配音/改句长/动 `--gap` 会整体错位且不报错）。**跟旁白走的节拍用 `at`；`at_time` 只留给真不跟旁白的那一拍**（相机推镜、纯节奏卡点）。
+  生成期查三件事（`_timeline.beat_positions`，门禁算的落点就是真执行的那一拍）：① 落点在本页可见窗口外 → `[warn]`（窗外等于没演）；② 压在句间/段尾静音上不报（那是节奏）；③ 起点在窗内、终点越过下段起点 → `[warn]`（被切在半路，终态没出现；跨度按 `duration × 遍数` + `stagger` 算）。接续页上更要在窗内：烘焙搬的是收尾终态。
+- `target`：图内**单个 id 或 class 选择器**（`#`/`.` 开头）。作用域自动收到该段容器 `#img-<sid>` 下，多段同名 id/class 不串台。**class 选择器专为 `stagger` 开**。逗号/后代/伪类不收。**target 必须真实存在**——落空不是报错而是静默没动画，由 `gen_hyperframes.py` 生成期按文件拦成 error。
+- `draw`：可选布尔，描边自绘（"线自己长出来"）。目标必须是**有描边的形状**（path/line/polyline/带 stroke 的圆矩形）。收起态（`strokeDashoffset:1`）由渲染器写在**段起点**而不是这一拍——GSAP 会把补间终点值预渲染，写在这一拍会让切页第一秒整条线先亮满、到该画时反而往回缩。
+- `morph`：同拓扑 path 形变（`{"from": "M…", "to": "M…"}`）。硬约束：`from`/`to` **同拓扑**（命令字母序列与每命令数值个数一致，只坐标不同）；target 必须是该 `<path>` 的 id；不能叠 `from`/`to`/`set`/`draw`。`from` 要和 SVG 里画好的 `d` 一致，否则第 0 帧跳变。
+- `set` / `to` / `from`：GSAP 补间变量，`draw`/`morph`/`count` 之外至少要有一个。`set`=瞬时；`from`+`to`=fromTo；单独 `to`/`from` 各走一路。值只收 **JSON 可序列化**的（标量/数组/对象；非 CSS 属性如 `r`/`height`/`d` 走 `attr:{}`），**禁任何 `on*` 回调键**（信源不可信）。**`attr` 必须是对象**：标量/数组写法本页不报错，但跨段接续的烘焙只认对象，非对象会被当 CSS 属性写进 `style`，下一页起始画面从第一帧就是坏的。
+- `count`：数字滚动（`{"to": 数, "from"?, "decimals"?, "prefix"?, "suffix"?}`）。`<text>` 数值从 `from`（缺省 0）缓动到 `to`。target 指 `<text>`；不能叠 `from`/`to`/`set`/`draw`/`morph`。**console 探针要写 `tl.seek(t, false)`**——GSAP `seek()` 默认 `suppressEvents=true` 会跳过 `onUpdate`，count/字幕高亮这类靠回调的会"看起来卡住"。
+- `type`：打字机逐字揭示（只认空对象 `{}`）。运行时读 `<text>` 现成 `textContent` 作源串逐字揭示；"打什么字"由 SVG 决定，**无参数可配**，要改快慢用 step 级 `duration`/`ease`（匀速写 `"ease": "none"`）。target 指直接写文本的 `<text>`（带 `<tspan>` 排版的复杂文本会被压平）。不能叠其它补间原语，`stagger` 被契约层拒。
+- `stagger`：可选，配 class 目标做一组元素错峰揭示。数字（间隔秒）或对象（GSAP 原生 `each`/`amount`/`from`/`grid`/`ease`）。只对有补间的 step 生效；`morph`/`count`/`type`/`draw` 各自负责整段，配 `stagger` 被拒。
+- `duration` / `ease` / `delay`：可选。缺省取模板 `animation.director`（视觉真源单一数据源）。这三个旋钮连同 `stagger`/`repeat`/`yoyo` **只能写在 step 级**：塞进 `to`/`from`/`set` 补间变量里被契约层拒（会被覆盖掉或让门禁跨度与真实跨度分家）。
+- `ease`：缓动档。**认不出的档当场报错**，照报错列出的合法族名/方向写法改即可。选档手感：缺省 `power2.out` 是"慢收"；物件**进场**用 `.in`、**退场/落定**用 `.out`、来回摆与推镜用 `.inOut`，要弹要跳用 `back`/`bounce`/`elastic`。目录外的档（`rough` 这类 EasePack 里的）只在 `--until html --allow-ease` 预览档放行，且渲染时会静默退回缺省缓动——只用来试手感，定稿换回目录里的。
+- `repeat` / `yoyo`：让同一拍演好几遍。`repeat: N` = 再演 N 遍（共 N+1）；`repeat: -1` = 无限循环，演到被下一页盖过来；`yoyo: true` = 来回（偶数遍收在起点）。"呼吸"一条步即可。规矩：
+  - **跨度按遍数算**（`duration × 遍数`）：相对链游标、出窗 warn 右界、接续烘焙"最后停在哪儿"读同一个数（`_timeline.beat_span`）。
+  - **只有真会"演"的步能配**（`from`/`to`/`draw`/`morph`/`count`/`type`）。纯 `set` 被拒；单写 `yoyo` 被拒（只演一遍 GSAP 不会回头）。
+  - **`morph` 不能配 `repeat: -1`**（采样没有终点）也不能配 `duration: 0`（0 秒采不出中间态=瞬跳）；补间类步的 `duration: 0` 是"瞬时生效"，合法。
+  - **跨段接续按收尾那一头搬**：见「跨段接续」的 `repeat`/`yoyo` 一条。
+
+**觉得"动画和语音不太同步"时**：`gen_hyperframes.py … --beat-report` 逐拍列绝对秒与踩点（`in` 句内 / `gap` 句间静音 / `tail` 段尾 / `before`·`after` 窗外——窗外就是没在成片里演过的）。`in` 不等于准（句内 frac 是线性假设），怀疑踩错词用上面那条 `silencedetect` 命令定位，**别改代码**。预览另算：`preview.js` 时间线为主、音频跟随（差 >0.15s 才硬拉一次 `currentTime`），成片逐帧 seek 严格相等。
+
+**十二个够用的"演"**（每招一行，写法见上面原语）：
+
+- **逐句推进**：一步挂一句，`set`/`to` 把该讲到的节点点亮、卡片浮起。
+- **运镜 / 相机（pan·zoom）**：把要动的场景包进 `<g id="cam">`，对它补间 `scale`/`x`/`y`（GSAP 写成 SVG `transform`，逐帧 seek 确定）。例：`{"at": 0, "target": "#cam", "to": {"scale": 2.2, "x": -300, "y": -120, "svgOrigin": "500 360"}, "duration": 1.8}`，再来一步 `scale: 1` 拉回全景。
+  **焦点没写时渲染器替你钉一个**：注入本页 `#cam` 内容并集中心当 `svgOrigin`，于是运行期、跨段烘焙、出画 warn 三方同一原点；**写了 `svgOrigin` 的以你写的为准**，什么都不注入。
+  **`#cam` 里只放主视觉。** 标题、结论句、公式带、图例条这类"文字带"留在 `#cam` **之外**（它们是给观众读的，不该跟着镜头跑）；要跟推镜就单独补一步与相机同步的补间。
+  **放大位移离焦点越远越大**：实测 1080×1440 画布 `scale:1.16 svgOrigin:"540 660"` 把页底 y=1362 标签推到 1476（出画），页顶标题贴边。
+  **机器兜住的部分**：生成期 `director_prepare` 按运镜**收尾位**把 `#cam` 内容投影回画幅，静止时整条出画或切在上下边缘外的文字打 `[warn]`（只认 `<g id="cam">`；几何在 `scripts/_cam_crop.py`）。停在 warn 不上 error——"静止位看不见"也可能是故意的。
+  **机器兜不住的那件事**：只判"出画"不判"撞字"——推出去后可能正好压到 `#cam` 之外那行静止标题/旁白上。所以**留白按"推完那一帧"算，不是按 SVG 源码算**：把收尾位 `scale`/平移套一遍坐标，和静止元素基线比。
+- **自绘 + 错峰（draw + stagger）**：`draw:true` 让曲线/坐标轴自己长出来；一组元素配 `stagger` 一条 step 逐个错峰揭示，不必手写递增 `at`。
+- **数字滚动（count）**：`count:{from,to,decimals,suffix}` 让数值"讲到就数上去"。
+- **逐字揭示（type）**：`type:{}` 把 `<text>` 现成整段文字逐字打出来；`"ease":"none"` 匀速。
+- **首拍晚于段起点时，渲染器替你把起点态前置**：`_canvas_first_beat` 在段起点给每个带 `from`（或 `morph.from`）的目标补一次 `tl.set(sel, from, 段起点)`，不改你的节拍，只是把起点从第一拍移到段首。首拍本来就在 +0.2s 以内的不重复写；`to` 不参与。
+- **自由场景（整页画布 × 导演）**：`layout:"canvas"` 不生成标题层/句子流层 DOM，整屏就是这张图 + 导演 = 一整个可编排舞台，什么时候出现用 `at_time` 按秒排。**第一拍要尽早落子**（0.1s 量级）：切过来的瞬间画布是空的，把底图/坐标轴/标题放最靠前那一拍（生成期按「起始帧全空」盯着）。
+- **形变（morph·同拓扑）**：同一条 `<path>` 换 y 坐标长高、折线被拉直、A 态到 B 态——只要命令序列一致就能演，逐帧可复现、零依赖。
+- **立体感（投影多边形 + morph，不是真 3D）**：等距或单点透视手算投影，同一物体 2–3 个姿态各写一条同拓扑 path 用 `morph` 串。不走 three.js：产物仍是可解析 SVG，各道门禁照常生效。真 3D 曲面转体做不了就别硬凹。
+- **呼吸 / 脉动（repeat·yoyo）**：一条步配 `repeat`/`yoyo` 让光晕明灭几次；收尾停哪头由遍数说话（`yoyo`+偶数遍回起点）——同一数驱动游标、出窗 warn 与接续烘焙。`duration` 0.4–0.7s 的往复最像呼吸，1.5s 只会读成"还没演完"。
+- **聚光（压暗对照组，不点亮主角）**：给其余那组 `to: {"opacity": 0.25}` 比给主角"亮起来"省——压暗才产生亮度差，且被压暗的留在原位不必重画。配 `stagger` 让一组 `.dim` 错峰暗下去。
+- **两层视差**：背景层 `scale: 1.05`、主视觉 `scale: 1.3`，同一 `svgOrigin`，推近时两层错开速度。运镜自查只认 `#cam`，第二层不在视野里——推近幅度按**收尾位**自己套一遍坐标。
+- **歪元素而不是歪相机**：要"被推翻/被审视"给元素一步 `rotation: -4`，别转相机（相机一转整页连文字带一起斜，读成"页面坏了"）。
+
+### 跨段接续（images.json 的 `stage: "keep"`）：导演跨页接着演
+
+一个舞台动作常一句话讲不完，而段落边界是硬的（每页各自内联、各自从 `opacity="0"` 起步）。给接续页写 `"stage": "keep"`，这一页的起点是**上一页演完的那幅画面**：
+
+```json
+{
+  "seg2": {"src": "images/stage.svg", "director": {"steps": ["… 最后一拍是 #cam 推近 …"]}},
+  "seg3": {"src": "images/stage.svg", "stage": "keep",
+           "director": {"steps": ["… 在推近后的画面上继续演 …"]}}
+}
+```
+
+**多数情况下这个字段不用你写**：生成期逐段判三条，全中就当这一页写了 `"stage": "keep"`（`_stage_carry.infer_stage_keep`）：
+
+1. 本段 `src` 与上一段**指向同一张图**；
+2. 上一段已经（因写了 `director` 而）净化内联——有可读的元素态；
+3. 上一段末拍把相机停在**非原位**（推近/平移过，且收尾位可解析、非 `repeat: -1` 这类没有收尾的动画）。
+
+判中会在生成日志里点出段名并说明怎么改回去。**要阻止推断**（想让这一页独立重演），任选其一即可：换开两页的 `src`，或去掉上一段末拍那条运镜——都比你手写一个字段更接近"我本来就想换画"。显式写了 `stage` 的段一律不动（包括写成非法值：契约层去报，推断不替作者改写）。
+
+机制（口径在 `scripts/_stage_carry.py`）：生成 HTML 时按 manifest 段序把上一页所有补间的**收尾态**烘焙进这一页的内联副本——相机姿态折成 `#cam` 内新增静态 `<g data-ctv-stage transform="…">`（**不写进 `#cam` 自身 transform**），元素级 `opacity`/`attr` 落到节点起始属性，`x`/`y` 折成 `translate(dx,dy) 原串` 前缀。
+
+**量连续性按柱子边沿定位，别拿整幅 PSNR 当判据**：页界两帧的配色本就整幅换色，PSNR 量出来的是配色差异不是没接上。
+
+约束：
+
+- **两页 `src` 必须指向同一张图**（不同路径无从烘焙）；由 `gen_hyperframes` 按段序判，判不过点名到段落的 error。这条同时是自动推断的第一条判据：同图 + 上一页相机停在非原位，机器就替你盖章。
+- **上一页必须写了 `director`**（写了才净化内联，`<img>` 那份没有可读元素态）。接续页**自己可以不写**：一段演完、下一页只是"停在那幅画上说话"合法，steps 为空画面照样接续。
+- **元素级 `transform` 只接 `x`/`y`**：平移跟原点无关，能精确折成外层平移。`scale`/`rotation`/`skew`/`xPercent` 跳过并 warn（要以元素 bbox 中心为原点折算，中心是"占位盒"估的，宁可不接也不悄悄挪位）；元素自带 `rotate`/`matrix`/`skew` 时连 `x`/`y` 也接不动，同样出声。
+- **`repeat`/`yoyo` 按收尾那一头接**：`yoyo`+偶数遍回到起点，什么都不搬（这是对的）；`repeat: -1` **没有收尾态**，不搬并点名到 target 出声。相机上有无限循环，整台相机的收尾位不作数（不折 `<g data-ctv-stage>`）。
+- **接续页不要给 `<defs>` 里的元素写补间**（渐变/滤镜/marker/`<symbol>`，及被 `url(#id)`/`href="#id"` 引用的 id）：同一张 SVG 内联两份后 id 重复，图内引用按文档序只认第一份（= 上一页那幅），这一拍打在本页份上没人读。生成期按步报 error。要延续渐变/滤镜状态就在前一段写。
+- **相机绕的那一点是渲染器钉的**（"页界不跳"的前提，不是可选项）：作者整页没写 `svgOrigin`/`transformOrigin` 时，渲染器给相机步注入**本页 `#cam` 内容并集中心**当 `svgOrigin`（`_cam_crop.cam_default_origin`），跨段烘焙与出画 warn 用同一个点。**写了原点的页面以你写的为准**。
+
+接续页附带两处渲染端行为：**不走擦除**（wipe 强制归零，与整页画布同一条硬切路径），**不生成配图入场补间**（`#img-{sid}` 的淡入+上移正是"页界回弹"的本体）。

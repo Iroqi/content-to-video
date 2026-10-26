@@ -1399,6 +1399,93 @@ def _canvas_first_beat(card, director, beats):
     return out
 
 
+def _derive_timeline_lines(rc, card):
+    """`derive`：一条参数驱动的几何演绎（见 `_derive`、canvas.md「参数演绎」）。
+
+    与 `evolve` / `director` 的根本差别：那边一拍写"哪个元素变成什么"，这边一拍只写
+    **参数被推到多少**，图内的几何由 `bind` 里的表达式**逐帧重算**。好处有三，
+    每一条都是属性级补间做不到的：
+
+    - 同步是免费的：三个元素一起动只需要一个参数（不再靠作者把三条 duration/ease
+      抄成一样）；
+    - 中间态是真几何：`cos` 走的就是圆，不是两条路径之间的插值（`morph` 走的是弦）；
+    - 一拍一拍累进：推到 90 度的下一拍从 90 度接着走。
+
+    实现是一条代理补间：`els` 存每一拍"已过缓动的进度"，GSAP 把每拍的进度 0→1
+    （时长与缓动取该拍），`onUpdate` 里按 `els` 重算这一帧全部绑定属性并
+    `setAttribute`。逐帧 seek 幂等——属性只由 `(时刻 → 进度 → 参数 → 表达式)` 决定。
+
+    表达式由 `_derive.js_expr` 在**生成期**编译成 JS：渲染页里不出现 `eval`，也不
+    出现任何来自稿件的原样字符串（参数名/选择器/属性名三处都各有白名单正则）。
+    """
+    from _derive import compile_derive
+
+    if not card.has_image:
+        return []
+    # 并置对比的两格各挂各的 derive（`rc.images["{sid}:{i}"]`，见 _normalize_images）。
+    # 单图版式读 `rc.images[sid]`，那一条的 sid 不会是分格键，两条路互不串台。
+    targets = ([f"{card.sid}:{i}" for i in (0, 1)]
+               if getattr(card, "layout", None) == "compare" else [card.sid])
+    out = []
+    for key in targets:
+        out.extend(_derive_lines_for(rc, card, key))
+    return out
+
+
+def _derive_lines_for(rc, card, key):
+    """上者按媒体键拆出来的单格实现（`key` = sid 或 `{sid}:{i}`）。"""
+    from _derive import compile_derive
+
+    entry = rc.images.get(key)
+    opts = (entry or {}).get("opts", {})
+    block = opts.get("derive")
+    if not block:
+        return []
+    # 作用域收窄到这一格的容器：多段内联同名 id 才不会串台（与 director 同一条
+    # 规则；分格再收一层到 `-{i}`，左右两格画同一张 SVG 也不会互相改写）。
+    scope = f"#img-{key.replace(':', '-')}"
+    dflt = rc.anim["director"]
+    try:
+        beats = beat_positions(block["steps"], card.seg["sentences"], card.s,
+                               dflt["duration"])
+    except ValueError as e:
+        raise ValueError(f"段落 '{card.sid}' 的 derive.steps 有一步 {e}")
+    d = compile_derive(block, dflt["duration"])
+    payload = d.js_payload(scope)
+    # 本次未写 ease 的拍走模板缺省（与 director 同一个数）
+    for st in payload["steps"]:
+        st["ease"] = st["ease"] or dflt["ease"]
+
+    # 表达式必须逐条内联成闭包（渲染页里不能用 `eval`），所以生成期就把它排成一行行。
+    lines = [
+        ";(function(){var D=" + json.dumps(payload, ensure_ascii=False) + ";"
+        "var el=D.steps.map(function(){return 0;});"
+        "var ez=D.steps.map(function(s){return gsap.parseEase(s.ease)||function(t){return t;};});"
+        "var env=function(){var e={};"
+        "for(var k in D.params){e[k]=D.params[k];}"
+        "for(var i=0;i<D.steps.length;i++){var s=D.steps[i];"
+        "e[s.p]=s.a+(s.b-s.a)*el[i];}return e;};"
+        "var f0=function(e){return " + payload["binds"][0]["js"] + ";};"
+    ]
+    for j, b in enumerate(payload["binds"][1:], start=1):
+        lines.append(f"var f{j}=function(e){{return {b['js']};}};")
+    pack = ", ".join(json.dumps([b["sel"], b["attr"], f"f{j}"], ensure_ascii=False)
+                     for j, b in enumerate(payload["binds"]))
+    lines.append("var B=[" + pack + "];")
+    lines.append(
+        "var draw=function(){var e=env();"
+        "for(var j=0;j<B.length;j++){var n=document.querySelector(B[j][0]);"
+        "if(!n)continue;n.setAttribute(B[j][1],String(Math.round(B[j][2](e)*10000)/10000));}};")
+    lines.append("draw();")
+    for i, (pos, dur) in enumerate(beats):
+        # 每一拍推进的是 els[i]（0→1），`draw` 读全部进度重算——所以三拍串联时
+        # 后面的拍天然接着前面的终值走。
+        lines.append(f"tl.to(el,{{duration:{dur:.2f},ease:ez[{i}],"
+                     f"onUpdate:draw,{i}:1}},{pos:.2f});")
+    lines.append("})();")
+    return lines
+
+
 def _director_timeline_lines(rc, card):
     """SVG「导演」补间：整页画布的 director.steps（展开逻辑见 `_expand_steps`）。"""
     if not card.has_image:
@@ -2243,7 +2330,7 @@ def _pane_carriers(rc, card):
     逐格而不是放弃：两格图整段完全静止，这一页就只剩"两张钉死的海报"——
     正是 Ken Burns 要解决的那个问题，而且并置对比页往往还更长（要让人来回看）。
 
-    哪一格不参与也在这里判：写着 director/evolve 的那格是作者已手写编排的
+    哪一格不参与也在这里判：写着 director/evolve/derive 的那格是作者已手写编排的
     内联 SVG（`> svg` 不是 `> img`，选择器本来就落空），视频同理。
     """
     if getattr(card, "layout", None) == "compare":
@@ -2393,6 +2480,9 @@ def _card_timeline_lines(rc, card):
     # 槽位版式的图内演进（images.json 的 evolve）：不接管编排，只让图里的元素跟着
     # 旁白变。与 director 互斥（契约层已拒），所以两条不会同时往同一张图上写补间。
     lines.extend(_evolve_timeline_lines(rc, card))
+    # 参数演绎（images.json 的 derive）：一拍推一个参数，几何逐帧重算。与上面两条
+    # 可以同段共存（一个管出场、一个管连续演绎），同属性冲突由生成期拦。
+    lines.extend(_derive_timeline_lines(rc, card))
     # 并置对比两格各自的补间（panes[0]/panes[1]）。单独一条：这一版式的两张图
     # 各有各的容器 id，作用域与上面两条都不同。
     lines.extend(_compare_timeline_lines(rc, card))

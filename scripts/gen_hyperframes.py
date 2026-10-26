@@ -1310,6 +1310,239 @@ def _evolve_prepare(images, segments, out_dir, dflt_dur, errs, warns):
     return errs, warns
 
 
+def _derive_prepare(images, segments, out_dir, dflt_dur, errs, warns):
+    """参数演绎 `derive` 的生成期体检 + 净化内联（与 `_evolve_prepare` 同构）。
+
+    与前两条路的差别只有一处：它改的**不是某个元素的某个属性**，而是由参数算出来
+    的一组属性。于是多出三类只有这里才查得出来的病：
+
+    - **target 落空 / at 越界 / 出窗**：与 evolve 逐字同判（同一批函数，不另立口径）。
+    - **起始帧读数与初值对不上**（warn）：SVG 里 `x2="800"`，而把这个属性绑上去的
+      表达式在 `params` 初值处算出 540——第一拍之前画面是 800，第一帧一落地跳到
+      540，看着像"图自己闪了一下"。作者多半是把表达式改过、忘了同步改 SVG。
+      只认整页唯一命中的单 id 绑定，class 多元素与 `transform` 一律跳过（那两种
+      本来就不该按"属性串相等"比）。
+    - **同属性两头写**（error）：同一段里 director 也在给 `#arm` 的 `x2` 补间。
+      两条时间线都在写同一个属性，后写的赢，先写的白写——而**哪条后写取决于 DOM
+      里脚本的挂载顺序**，作者不可能算得准。这种"静默半张图不演"必须在生成期拦。
+
+    复用 `_svg_selectable_tokens` 收选择器：净化器只摘 `on*`/外链，id 与 class 原样
+    保留，所以源文本里收的集合与内联后 DOM 上的一致。
+    """
+    from _derive import compile_derive
+    seg_by_id = {seg["id"]: seg for seg in segments}
+    dflt_dur = _director_default_duration() if dflt_dur is None else dflt_dur
+    for sid, entry in (images or {}).items():
+        # 并置对比的每一格都可能挂 derive，逐格走（与 evolve 同一条内联通道）
+        if isinstance(entry.get("src"), list):
+            _derive_compare_panes(sid, entry, out_dir, seg_by_id, segments,
+                                  dflt_dur, errs, warns)
+            continue
+        block = entry.get("derive")
+        if not block:
+            continue
+        src = entry["src"]
+        path = os.path.join(out_dir, src)
+        if not os.path.isfile(path):
+            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 在 {out_dir} 下不存在")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 读不了: {e}")
+            continue
+        try:
+            markup, notes = sanitize_svg_for_inline(raw)
+        except ValueError as e:
+            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 无法净化内联: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 的 derive 配图 {src}：{n}")
+        try:
+            d = compile_derive(block, dflt_dur, f"段落 '{sid}' 的 derive")
+        except ValueError as e:
+            # 契约层已经编译过一遍；走到这里说明 images.json 不是经它进来的
+            errs.append(str(e))
+            continue
+        entry["inline_svg"] = markup
+        _derive_checks(sid, src, raw, block, d, entry, seg_by_id.get(sid),
+                       segments, dflt_dur, errs, warns)
+    return errs, warns
+
+
+def _derive_compare_panes(sid, entry, out_dir, seg_by_id, segments, dflt_dur,
+                          errs, warns):
+    """并置对比条目里带 `derive` 的格子：内联 + 同一套体检（含"和本格 director 打架"）。"""
+    from _derive import compile_derive
+    srcs = entry["src"]
+    panes = entry.get("panes") or [{}, {}]
+    for i, pane in enumerate(panes):
+        block = (pane or {}).get("derive")
+        if not block:
+            continue
+        src = srcs[i] if i < len(srcs) else None
+        if not src:
+            continue
+        path = os.path.join(out_dir, src)
+        if not os.path.isfile(path):
+            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 在 {out_dir} 下不存在")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 读不了: {e}")
+            continue
+        try:
+            markup, notes = sanitize_svg_for_inline(raw)
+        except ValueError as e:
+            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 无法净化内联: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src}：{n}")
+        try:
+            d = compile_derive(block, dflt_dur,
+                               f"段落 '{sid}' 第 {i} 格的 derive")
+        except ValueError as e:
+            errs.append(str(e))
+            continue
+        # panes[i] 的内联由 _inline_compare_panes 回填（它认 evolve/director）；
+        # 这里自己回填，免得两条路谁先跑谁说话。
+        pane["inline_svg"] = markup
+        _derive_checks(sid, src, raw, block, d, pane, seg_by_id.get(sid),
+                       segments, dflt_dur, errs, warns, pane_idx=i)
+
+
+def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
+                   dflt_dur, errs, warns, pane_idx=None):
+    """`derive` 的判据本体，单图与并置分格共用（`holder` = entry 或 pane）。"""
+    where = f"段落 '{sid}'" + (f" 第 {pane_idx} 格" if pane_idx is not None else "")
+    ids = _svg_selectable_tokens(raw)
+
+    # ① 选择器落空：静默没有动画
+    for i, b in enumerate(block["bind"]):
+        if b["target"] not in ids:
+            errs.append(f"{where} 的 derive.bind[{i}] target={b['target']} 在 {src} 里"
+                        f"找不到对应 id/class 的元素——选择器落空不会报错，只会"
+                        f"静默不改任何属性。给该元素补上这个 id/class，或改 target")
+
+    # ② 与 director 抢同一个属性：两条时间线都在写，谁后写谁赢（且不可预测）
+    dir_steps = ((holder.get("director") or {}).get("steps") or []) + \
+                ((holder.get("evolve") or {}).get("steps") or [])
+    bound = {(b["target"], b["attr"]) for b in block["bind"]}
+    for j, step in enumerate(dir_steps):
+        tgt = step.get("target")
+        for key in ("from", "to", "set"):
+            for attr in (step.get(key) or {}):
+                if (tgt, attr) in bound:
+                    errs.append(
+                        f"{where}：derive 在给 {tgt} 的 {attr} 按参数算值，"
+                        f"而同一段的 director/evolve.steps[{j}] 也在补间同一个属性"
+                        f"——两条时间线都写它，先写的白写（谁后写取决于脚本挂载顺序）。"
+                        f"把这个属性交给其中一条：要么从 derive.bind 里删掉，"
+                        f"要么把那一拍的 {attr} 从 director 那步拿掉")
+
+    if seg is None:
+        errs.append(f"{where} 写了 derive，但 manifest 里没有这一段")
+        return
+
+    # ③ at 句序越界（at_time 锚绝对时间，与句数无关，跳过）
+    n_sent = len(seg["sentences"])
+    for i, st in enumerate(block["steps"]):
+        if "at" in st and int(st["at"]) >= n_sent:
+            errs.append(f"{where} 的 derive.steps[{i}] at={st['at']} 越界："
+                        f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
+
+    # ④ 出窗：derive 的 step 没有 target，_beat_window_warnings 的文案要读它，
+    #    所以给它一个能指认的名字（参数名比 target 更有用）。
+    probe = [dict(st, target=f"「{st['param']}」") for st in block["steps"]]
+    for w in _beat_window_warnings(probe, seg["sentences"],
+                                   float(seg["sentences"][0]["start_time"]),
+                                   next_speech_start(segments, seg["id"]), dflt_dur):
+        warns.append(f"{where} 的 derive 配图 {src}：{w}"
+                     .replace("director.steps[", "derive.steps["))
+
+    # ⑤ 起始帧读数与 params 初值不一致：第一帧会跳一下。只认**唯一命中**的单 id
+    #    绑定——class 多元素各写各的静态值，`transform` 是复合串，都不该按"属性串
+    #    相等"比。
+    try:
+        want = {(sel, attr): v for sel, attr, v
+                in derived.geometry(dict(derived.params))}
+    except Exception:                     # 初值处就算不出来由 ⑥ 报，这里不重复
+        want = {}
+    for i, b in enumerate(block["bind"]):
+        if not b["target"].startswith("#") or b["attr"] == "transform":
+            continue
+        if _svg_id_count(raw, b["target"]) != 1:
+            continue
+        want_v = want.get((b["target"], b["attr"]))
+        if want_v is None:
+            continue
+        have = _svg_attr(raw, b["target"], b["attr"])
+        if have is None:
+            continue                      # 元素上没写这个属性：CSS/缺省值接管，不比
+        if abs(have - want_v) > 0.5:
+            warns.append(
+                f"{where} 的 derive：{b['target']} 在 SVG 里写死 {b['attr']}={have:g}，"
+                f"而表达式在 params 初值（{_fmt_params(derived.params)}）处算出 "
+                f"{want_v:g}——第一帧落地时会跳 {abs(have - want_v):g}。要么改 SVG 的静态值，"
+                f"要么改 params 初值，让两者对齐（见 references/canvas.md「参数演绎」）")
+
+    # ⑥ 端点处仍算不出来（除零 / 定义域外 / 越界到 inf）：成片里那一帧会抛异常，
+    #    GSAP 的 onUpdate 一抛就断在那一帧，后面的拍全部不演。
+    for label, env in _derive_endpoint_envs(block, derived):
+        try:
+            derived.geometry(env)
+        except Exception as e:
+            errs.append(f"{where} 的 derive 在 {label} 算不出来：{e}")
+
+
+def _derive_endpoint_envs(block, derived):
+    """每个参数的每个端点的 env（初值、每拍起点、每拍终点），供端点自检。"""
+    out = [("params 初值", dict(derived.params))]
+    for name in derived.params:
+        for k, st in enumerate([s for s in block["steps"] if s["param"] == name]):
+            a = st.get("from", derived.params[name] if k == 0 else None)
+            env_a = dict(derived.params)
+            env_a[name] = st["to"]
+            out.append((f"「{name}」第 {k} 拍推到 {st['to']:g}", env_a))
+            if a is not None:
+                env_b = dict(derived.params)
+                env_b[name] = a
+                out.append((f"「{name}」第 {k} 拍起点 {a:g}", env_b))
+    return out
+
+
+def _fmt_params(params):
+    return "、".join(f"{k}={v:g}" for k, v in sorted(params.items()))
+
+
+def _svg_id_count(raw, sel):
+    """选择器（`#id` 或 `.class`）在 SVG 里命中几个元素。"""
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return 0
+    if sel.startswith("#"):
+        return sum(1 for el in root.iter() if el.get("id") == sel[1:])
+    return sum(1 for el in root.iter() if sel[1:] in (el.get("class") or "").split())
+
+
+def _svg_attr(raw, sel, attr):
+    """该选择器唯一命中元素的静态属性值（数字）；找不到元素/属性 → None。"""
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    hit = [el for el in root.iter()
+           if el.get("id") == sel[1:] or sel[1:] in (el.get("class") or "").split()]
+    if len(hit) != 1:
+        return None
+    v = hit[0].get(attr)
+    return _parse_num(v)
+
+
 def _inline_compare_panes(sid, entry, out_dir, seg_by_id, segments, dflt_dur,
                           errs, warns):
     """并置对比条目的逐格净化内联：`panes[i]` 里有 director/evolve 的那格才内联。
@@ -1897,6 +2130,12 @@ def main(argv=None):
                                           _director_default_duration(), [], [])
     _dir_errs.extend(_ev_errs)
     _dir_warns.extend(_ev_warns)
+    # 参数演绎（derive）：净化内联 + 落空/越界/出窗/起始帧/与 director 抢属性。
+    # 同一条通道、同一份净化，所以"只是按参数算值"不是放宽安全面的理由。
+    _dv_errs, _dv_warns = _derive_prepare(images, manifest["segments"], out_dir,
+                                          _director_default_duration(), [], [])
+    _dir_errs.extend(_dv_errs)
+    _dir_warns.extend(_dv_warns)
     for _w in _dir_warns:
         print(f"[warn] {_w}", file=sys.stderr)
     if args.beat_report:

@@ -232,9 +232,9 @@ def audit(manifest, images=None):
         if images is not None and not _declares_motion(images, sid):
             warns.append(
                 f"段落 '{sid}' 写了 {len(beats)} 拍，但 images.json 里这一段没有"
-                f"任何 director / evolve 补间——「{beats[0]['change'][:24]}」只写在"
+                f"任何 director / evolve / derive 补间——「{beats[0]['change'][:24]}」只写在"
                 "台词板上，画面不会动。台词板是意图层，实现要落到 images.json 的 "
-                "director.steps 或 evolve.steps；这一段不想演就把 beats 删掉")
+                "director.steps / evolve.steps / derive.steps；这一段不想演就把 beats 删掉")
     return errs, warns, total
 
 
@@ -246,14 +246,15 @@ def count(manifest):
 def _declares_motion(images, sid):
     """images.json 里这一段声明了补间没有。
 
-    只认 `director`（整页编排）与 `evolve`（槽位内演进）两个键：它们是仓库里仅有的
-    两条"画面随旁白变"的通路。`stage: keep` 只搬上一页的收尾态、本身不产生新的拍，
-    所以不算——写了 keep 而没有 steps 的段落，台词板照样落空。
+    只认 `director`（整页编排）、`evolve`（槽位内演进）与 `derive`（参数演绎）三个
+    键：它们是仓库里仅有的三条"画面随旁白变"的通路。`stage: keep` 只搬上一页的收尾
+    态、本身不产生新的拍，所以不算——写了 keep 而没有 steps 的段落，台词板照样落空。
+    `derive` 的"步"是推参数而不是改属性，但在台词板眼里它同样是"这一拍有画面对应"。
     """
     entry = images.get(sid)
     if not isinstance(entry, dict):
         return False
-    for key in ("director", "evolve"):
+    for key in ("director", "evolve", "derive"):
         val = entry.get(key)
         if isinstance(val, dict) and val.get("steps"):
             return True

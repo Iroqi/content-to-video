@@ -638,25 +638,36 @@ class DirectorDraft(unittest.TestCase):
         self.assertEqual(self.fragment(spec), {"steps": []})
 
     def test_repeat_and_yoyo_are_carried_into_the_draft(self):
-        """新特性要有脚手架出口：呼吸/脉动在 spec 里写一次，草稿原样带出。"""
+        """新特性要有脚手架出口：呼吸/脉动在 spec 里写一次，草稿原样带出。
+
+        脚手架自己也不收 `repeat:-1`：它和 images.json 走的是同一份判据
+        （`_validate_repeat_yoyo`），无限循环会把 GSAP 总时长折算成 1e10、按时刻取帧
+        这件事本身失效。这里钉住的是"同一条判据在脚手架侧也生效"——两侧口径分家的话，
+        作者在 canvas_kit 里试好的循环写进 images.json 才被拒，中间那一步白做。
+        """
         spec = {"elements": [
             {"kind": "circle", "id": "a", "cx": 100, "cy": 100, "r": 10,
              "repeat": 3, "yoyo": True},
             {"kind": "circle", "id": "b", "cx": 200, "cy": 100, "r": 10,
-             "repeat": -1},
+             "repeat": 5},
             {"kind": "circle", "id": "c", "cx": 300, "cy": 100, "r": 10,
              "repeat": 0},
         ]}
         steps = self.fragment(spec)["steps"]
         self.assertEqual(steps[0]["repeat"], 3)
         self.assertEqual(steps[0]["yoyo"], True)
-        self.assertEqual(steps[1]["repeat"], -1)
+        self.assertEqual(steps[1]["repeat"], 5)
         self.assertNotIn("yoyo", steps[1])
         # repeat:0 与缺省等价，不塞进去（与渲染端 _cycle_vars 同口径）
         self.assertNotIn("repeat", steps[2])
         # 真契约：带 repeat/yoyo 的草稿必须能直接过 images.json 的 director 校验
         validate_images_json({"seg7": {"src": "images/seg7.svg",
                                        "director": {"steps": steps}}})
+        # 同一份判据在脚手架侧也拒无限循环
+        with self.assertRaises(ValueError) as cm:
+            self.fragment({"elements": [{"kind": "circle", "id": "d", "cx": 400,
+                                         "cy": 100, "r": 10, "repeat": -1}]})
+        self.assertIn("repeat:-1", str(cm.exception))
 
     def test_repeat_on_structure_element_is_refused(self):
         """结构底不进 steps，写了等于没写；又没有"哪一拍"可反复，当场拒。"""

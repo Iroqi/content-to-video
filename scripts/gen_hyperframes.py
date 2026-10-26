@@ -154,9 +154,11 @@ from _ease import allow_extra as ease_allow_extra  # noqa: E402  宽松档的开
 from _manifest_schema import load_timing_manifest  # noqa: E402
 from _evolve import check_evolve  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
-                            is_svg_path)
+                            is_svg_path,
+                            allow_infinite_loop as infinite_loop_allow)  # noqa: E402  宽松档开关
 from _segments import (is_full_bleed, sids_needing_image,  # noqa: E402
                        seg_layout, STRUCTURAL_SIDS)
+from _css_guard import css_transform_leaks, leak_message  # noqa: E402  CSS↔GSAP 抢 transform
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir,
                            media_verdict, unique_tmp)  # noqa: E402  素材可用性判据（与 run.py 同一份函数）
@@ -610,8 +612,6 @@ def svg_background_warnings(images, segments, out_dir):
 
 
 _FRAME0_HIDDEN_TAGS = frozenset({"defs", "title", "desc", "metadata", "style"})
-
-
 def _is_zero_opacity(v):
     """静态 opacity 值是否等于 0（"0" / "0.0" / "0e0" 都算）。
 
@@ -1579,6 +1579,20 @@ def _fmt_params(params):
     return "、".join(f"{k}={v:g}" for k, v in sorted(params.items()))
 
 
+def _composition_css_text():
+    """模板样式表的原文（CSS ↔ GSAP 抢 transform 那道门禁的一侧）。
+
+    只读**模板文件**，不读产物里的内联副本：产物已经把 `var(--ctv-*)` 与占位符替换
+    过一遍，选择器却是同一条；读模板省掉"从 HTML 里切 <style> 再反解"的一段脆逻辑。
+    文件不在（自定义模板目录）时返回空串——门禁退化成不判，而不是崩。
+    """
+    try:
+        with open(TEMPLATES_DIR / "composition.css", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def _svg_id_count(raw, sel):
     """选择器（`#id` 或 `.class`）在 SVG 里命中几个元素。"""
     try:
@@ -1967,6 +1981,10 @@ def main(argv=None):
                         help="把钉固 GSAP core 之外的 ease 也放行，只为预览。core 没有的档"
                              "在渲染里会静默退回缺省缓动，成片与预览看到的不一样，所以"
                              "带上它跑渲染会在入口被拒。")
+    parser.add_argument("--allow-infinite-loop", action="store_true",
+                        help="放行 images.json 的 repeat:-1，只为预览看手感。无限循环"
+                             "会把 GSAP 总时长折算成 1e10 量级（按时刻取帧、进度条、"
+                             "跨段接续一起失效），所以带它跑渲染会在入口被拒。")
     parser.add_argument("--draft", action="store_true",
                         help="草稿档总开关：一次放行全部迭代逃生口（缺图/坏 src 降级并占位、"
                              "槽位比例与画布字号 error 降 warn、ease 放行）。只该出现在"
@@ -1982,6 +2000,10 @@ def main(argv=None):
         # 放行必须早于任何契约校验（images.json 的 director 校验就发生在下面的
         # load_images_json 里），否则宽松档写了也会先被钉固目录拒掉。
         ease_allow_extra(True)
+    if args.allow_infinite_loop or args.draft:
+        # 同一条理由、同一个位置。默认拒收 `repeat:-1` 见
+        # `_images_schema.allow_infinite_loop` 的注释。
+        infinite_loop_allow(True)
     _init_visual_knobs(parser, args)
 
 
@@ -2262,6 +2284,14 @@ def main(argv=None):
     # 原子写：index.html 是渲染输入，写到一半被打断会留下半份 HTML——
     # render 会报莫名其妙的语法错，而不是"上次生成中断了，重跑"。
     write_text_atomic(args.output, html)
+
+    # CSS 与 GSAP 抢 `transform`：**必须在 HTML 落地之后判**——判据的一侧是"这一版
+    # 到底补间了哪些元素"，那是产物里才有的事实（模板改一个类名，CSS 侧不变、补间
+    # 侧就变了）。写完再判，报的是"你手上这份 HTML 的实际状态"，不是对模板的猜。
+    _css_leaks = css_transform_leaks(_composition_css_text(), html)
+    if _css_leaks:
+        print(f"[error] {leak_message(_css_leaks)}", file=sys.stderr)
+        sys.exit(1)
 
     # 复制预览脚本到 HTML 输出目录（index.html 引用同目录 preview.js）
     # 路径复用 html_renderer.TEMPLATES_DIR：模板资产的位置只认一处，别在这再拼一遍

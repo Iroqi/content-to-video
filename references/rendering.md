@@ -56,11 +56,12 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 - 时长被句间静音钳制：gap = 下一段 start − 本段 end（`--gap`，默认 0.4s）。`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`。
 - **揭屏的前提是卡元素的 `data-duration` 覆盖整个入场窗口**（窗口与 `wipe`/`win_start` 在 `generate_html` 的 clips 预处理里一次算齐）。外层 hyperframes 的可见窗口 `[data-start, data-start + data-duration)` 是**半开区间**，所以补间的**结束态别正好压在末端**：压线那一帧永不渲染（不报错，只是动画少一拍）。窗口末端按 `段时长 + gap + wipe` 算。
 - 卡必须是不透明层：每卡自带 `.bg`/`.grid`（`z-index:-2`）。透明卡做 wipe 会双影叠字。
-- **整页画布不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现；按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子，见 `references/motion.md`「SVG 动画：两档」；开头全空会被生成期打 `[warn]`「起始帧全空」。`stage:"keep"` 接续页同样 `wipe=0`、不生成配图入场补间（见 `motion.md`「跨段接续」）。
-- title / image 按模板参数入场。标题入场**按段序轮换节奏**（`_template.titleEntrance.rhythm` 四档：`back.out` 弹一下 / `expo.out` 滑上来 / `power3.out` 淡入 / `power2.out` 大落差落定，按**卡片序**取模，不是按会漂的配图序）；第 0 段仍是 `scale:0.5` 那一档。tagline 跟着标题那一档进来（幅度小一号、起点错峰）。
+- **满幅页（整页画布 / 图版）不参与模板转场**：`wipe` 强制归零走"瞬间切"（引导线、剥离、暗边都以 `wipe<=0` 为闸不生成），它在自己的**音频起点**整页出现；按**版式**判定，四档 `style` 一律生效。切过去那瞬间画布是空的——让导演第一拍尽早落子，见 `references/motion.md`「SVG 动画：两档」；开头全空会被生成期打 `[warn]`「起始帧全空」。`stage:"keep"` 接续页同样 `wipe=0`、不生成配图入场补间（见 `motion.md`「跨段接续」）。
+- title / image 按模板参数入场。标题入场**按段序轮换节奏**（`_template.titleEntrance.rhythm` 四档：`back.out` 从 0.5 缩放弹出 / `power4.out` 40px 重落定 / `power3.out` 34px 滑入 / `power3.out` 56px 大落差，按**卡片序**取模，不是按会漂的配图序）；第 0 段仍是 `scale:0.5` 那一档。tagline 跟着标题那一档进来（幅度小一号、起点错峰）。
+  **每一档的行程都按曲线配过**：首帧位移 < 4px 的档等于"纯淡入"（旧表的 `y:22 + expo.out` 就是——第一帧只走 2.8px）。判据、采样表与反算公式见 `references/motion.md`「曲线的行程预算」，`tests/test_motion_design.py` 按 GSAP 实采样钉住这条。
   **题头组第一行** `.agenda-kicker`：开屏由苹果编排逐字演；**结尾页**跟标题同拍、从字距展开态整行收拢（`animation.titleEntrance.kicker`）。两页的 kicker 都带一枚行尾字距垫，保证展开期间行宽不变、最后一字不被裁。
-  image 入场是**两层**（框先落位、图本体收拢，见「配图」settle 一条），之后是贯穿整段的缓慢运镜（Ken Burns）——一段落在画面上的 8~20 秒里，一直在动的只有它和句子流。
-  **CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。
+  image 入场是**两层**（框先落位、图本体收拢，见「配图」settle 一条），之后是贯穿整段的缓慢运镜（Ken Burns）——一段落在画面上的 8~20 秒里，一直在动的只有它和句子流。**满幅页（图版 / 整页画布 / 接续页）两层都不生成**：擦开即到位，要演由作者在 SVG 里演（`references/motion.md`「两种进场不可混用」）。
+  **CSS 不得给 GSAP 补间的元素声明 `transform`**；要居中/位移用绝对定位的 auto 外边距。这条**已经是生成期门禁**：`gen_hyperframes` 生成完 HTML 后拿 `templates/composition.css` 里声明了 `transform` 的选择器与产物里实际补间到的选择器求交，命中即 `error`（点名两侧选择器与修补办法，见 `scripts/_css_guard.py`）。伪元素（`.tagline::before` 那类）豁免——GSAP 够不着它。别再假设"写着别做就没人做"。
 - verse 当前句用该段 accent 色高亮（荧光笔式渐变下划线），字重不切换。对话段（`dialogue`）在**轮次切换的首句**行首挂说话人标签 `.verse-who`（同一人连说多句只挂第一句）。字幕的**换色与透明度**在成片里是瞬时的：淡入补间只由 `preview.js` 在人工预览分支注入，**别给 `.verse*` 加 `transition`**；而**滚动位移**与接力窗口内的**景深**是逐帧插值的（见下「焦点层级的第三个维度」「第四个维度」），不是瞬时。
 - **词级强调（karaoke）**：当前句按句内进度从左往右点亮，未念到的半句压暗。它只由「时刻 + 开口时刻 `data-t0` + 发声长度 `data-voiced` + 实测字宽」决定，不含"亮到第几个"的状态，所以逐帧乱序 seek 也幂等；换句时刻仍由 cue 硬切。TTS 没有词级时间戳，句内匀速是唯一可用的假设。
   **进度分母是发声长度，不是音频块长度**：manifest 的 `voiced`（`references/tts_pipeline.md`「发声区间」）扣掉了句首吸气与句尾拖音，念完那一刻进度正好 100%，不会"最后几个字先亮完、再干等"。老 manifest 无该字段退回 `data-t1`，行为与从前逐字节一致。同理 cue 起点是 `start_time + onset`，字幕在**开口那一刻**才换。
@@ -204,6 +205,10 @@ hf-project/
 | `keep` 接续页界上图形**位置**跳一下（尺寸不变） | 没写原点时 GSAP 绕 `#cam` bbox 左上角，那个角还跟着别的步的 `from` 瞬态飘 | `motion.md`「跨段接续」里「相机绕的那一点是渲染器钉的」 |
 | `keep` 接续页界上整幅换色，但图形其实接上了 | 每页 `--seg-accent` 不同，模板氛围光与进度条在切页那帧整幅换色。**要量连续性就按柱子边沿定位，别拿整幅 PSNR 当判据** | `motion.md`「跨段接续」的实测段 |
 | 图内标签在成片里看不见，全流程零报错 | `<img>` 载入的 SVG 里文字不属于 HTML 文本流，没有一道检查量它 | `canvas.md`「图内文字的对比度」里「没有任何一道检查会量它」 |
+| 某一页的标题"没进场"，直接就位（或者从半路弹出来） | CSS 给同一个元素声明了 `transform`，与 GSAP 写的 inline transform 抢属性——补间静默失效。**现在生成期就会 error**（`_css_guard.py`），报错直接点名两侧选择器 | `motion.md`「曲线的行程预算」旁那一条；修法是把 CSS 的静态位移换成绝对定位 + auto 外边距 |
+| 标题/图块的入场"看得出在变、但看不出在动" | 这条曲线在这条行程上等于淡入（首帧位移 < 4px，典型是短行程配 `expo`/`power4`） | `motion.md`「曲线的行程预算」；加大行程或换 `power2/3.out` |
+| 图版页/整页画布页一来就"浮上来" | 满幅页也吃了配图入场补间（旧行为）。现在已按 `is_full_bleed_card` 统一跳过 | `motion.md`「两种进场不可混用」 |
+| 渲染出来的片长不对、按时刻取帧全是同一帧 | 某处写了 `repeat:-1`，GSAP 把总时长折算成 1e10 量级。**契约层现在直接拒** | `motion.md`「SVG 动画：两档」的 `repeat`/`yoyo` 第 3 条 |
 | 图内文字右缘出血（量出来的右缘超过上限） | `text-anchor="end"` 的落点要按量出来的字宽倒推，不是按字符数估 | `canvas.md`「整页画布」里「安全边距照页面走」 |
 | 图里两行文字压在一起（`hyperframes check` 报 `content_overlap`） | 两条 y 只差十来个像素——`canvas_kit` 的柱标签固定落在 `base_y+32`，自己加的说明文字很容易撞上它。`check_svg` 查不到图内压字，只有 `check` 的 Layout 阶段能量 | `canvas.md`「画布几何」的末条 |
 | `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报；豁免标记已由模板打在每一行上 | `motion.md`「官方校验命令」里 Layout 的 `text_occluded` 一条 |

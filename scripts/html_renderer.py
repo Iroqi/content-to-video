@@ -2340,6 +2340,12 @@ def _title_rhythm(a_title, ordinal):
     档位表在 `_template.titleEntrance.rhythm`，按**卡片序**取模逐项覆盖
     `from`/`y`/`ease`；缺 `rhythm` 时退回顶层 `from`/`ease`。
     有限集轮换而不是随机：随机让相邻两段有概率撞成同一种，严格轮换保证连续四段不重样。
+
+    **y 是行程，ease 必须按行程选**（四档表随 `_template.py` 改过一次）。`expo` /
+    `power4` 这类"前 10% 走掉一半"的档，只有在行程 ≥100px 或时长 ≥0.8s 时才看得出
+    运动；旧表第二档是 `y:22 + expo.out`，0.5 秒的档里第一帧（33ms）只走 2.8px、
+    0.1 秒走掉一半行程——屏幕上读到的是一条纯淡入，这一档等于不存在。现在的配置
+    每档首帧位移 ≥ 4px（`tests/test_ease.py` 按 GSAP 实采样钉住这条）。
     """
     return _cycle_pick({"from": a_title["from"], "y": 0, "ease": a_title["ease"]},
                        a_title.get("rhythm"), ordinal)
@@ -2567,10 +2573,14 @@ def _card_timeline_lines(rc, card):
     if card.has_image and not is_full_bleed_card(card) and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
-        # 整页画布连这条补间也不生成：wipe 揭开即要求画面到位，配图再自带
-        # 0.2s 延迟淡入会演成"先擦出空页、再浮出海报"的两段式（实测 15.9s 帧）。
+        # **满幅版式（整页画布 / 图版，判据只有 is_full_bleed_card 一份）连这条补间
+        # 也不生成**：wipe 揭开即要求画面到位，配图再自带 0.2s 延迟淡入会演成"先擦
+        # 出空页、再浮出海报"的两段式（实测 15.9s 帧）。图版是"这一页就是那张画"，
+        # 它的进场只有两种合法写法——硬切（转场负责），或作者在 SVG 里自己演（运镜
+        # / 自绘）。模板给它"框先落位、图在框里收拢"是错的：图版根本没有框。
         # 接续页（stage:"keep"）同样跳过：这一页的画面是上一页演完的样子，
         # 再淡入+上移 40px 就是 _stage_carry 要消灭的那种"页界回弹"。
+        # 两类的共同点：**页面第一帧就必须是完成态**。
         #
         # 容器层只占入场预算的 frameFrac：**框先落位**，图本体随后在框里收拢
         # （_image_settle_lines）。两层错峰才有"镜头落到素材上"的层次——四样东西

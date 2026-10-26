@@ -88,8 +88,10 @@ REFERENCE_MAX_BYTES = 44_000
 
 
 # 官方门禁噪声表的对账真源：代码里的码 → 文档里必须出现 `` `码` ``。
+# 表在「官方校验命令」那一节，那一节连同噪声表一起在 motion.md（rendering.md 顶到
+# 单文件上限后按主题下沉：验的是"怎么验动作"，与"该不该动"同一个决策时刻）。
 NOISE_SOURCE = os.path.join("scripts", "_render_backend.py")
-NOISE_DOC = os.path.join("references", "rendering.md")
+NOISE_DOC = os.path.join("references", "motion.md")
 
 
 def noise_codes():

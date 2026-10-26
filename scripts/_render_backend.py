@@ -187,7 +187,7 @@ def build_render_command(output: str, quality: str, fps: int, workers: int,
 # 官方门禁（v0.8.185）已登记的 finding 码：预期噪声静默放过、明确错误保留；
 # 未登记 warning 仍会点名，避免 CLI 升级后新增检查被默认吞掉。
 # ⚠ 升级 CLI 后这张表要跟着 `hyperframes check <项目> --json` 的实际输出复核；
-# 与 references/rendering.md「官方校验命令」那张噪声表由 tests/check_docs.py 对账。
+# 与 references/motion.md「官方校验命令」那张噪声表由 tests/check_docs.py 对账。
 GATE_NOISE_CODES = {
     # lint：本模板结构决定必然出现，不是待修问题
     "composition_file_too_large": "HTML 体量随稿子规模走",

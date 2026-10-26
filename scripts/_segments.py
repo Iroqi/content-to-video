@@ -60,14 +60,14 @@ def needs_image(seg):
     """该段是否计入"配图覆盖率 / 缺图拦截"。run.py 与 gen_hyperframes 共用这一条。
 
     内容段一律计入（槽位版式缺图只是少一块画面，仍然该报）；结构性页默认不计入
-    （agenda 卡纯文字），但 layout:"canvas" 那一页整页就是那张图，不计入的话
+    （agenda 卡纯文字），但整页画布 / 图版那一页整页就是那张图，不计入的话
     覆盖率会报"全部命中"而 HTML 步骤必然 exit 1。两边各写一份口径的代价就是
     一个拦一个放，报告数字和实际能不能出片对不上。
 
     seg 是已过契约的 manifest 段（id 非空由 _manifest_schema 把守），直接下标；
     留 .get 兜底等于宣称"id 可能缺失"，而那种数据根本到不了这里。
     """
-    return is_content_sid(seg["id"]) or seg_layout(seg) == "canvas"
+    return is_content_sid(seg["id"]) or is_full_bleed(seg)
 
 
 def sids_needing_image(manifest):
@@ -82,15 +82,34 @@ def sids_needing_image(manifest):
             if needs_image(seg)]
 
 
-# 段落版式四档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
+# 段落版式五档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
 # 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
-# 画）；"compare" = 并置对比（标题区照旧，图槽一分为二，两张图各自按旁白入场 /
-# 演进）；"agenda" = 开屏/结尾那张纯文字页。只有 agenda 绑段 id：它是结构性页专属
-# 的投影卡（行来自全片其它段——作者能选这一档，选不了它印什么，见 seg_layout）；
-# canvas / compare 两段通用。
+# 画）；"plate" = 图版（配图铺满这一页，只保留一层文字——标题 + 一句字幕，不画
+# 句子流、不画 tagline，见 PLATE_FIELDS）；"compare" = 并置对比（标题区照旧，
+# 图槽一分为二，两张图各自按旁白入场 / 演进）；"agenda" = 开屏/结尾那张纯文字页。
+# 只有 agenda 绑段 id：它是结构性页专属的投影卡（行来自全片其它段——作者能选这一
+# 档，选不了它印什么，见 seg_layout）；canvas / plate / compare 三段通用。
 # 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
-# references/canvas.md「整页画布」与同文件「并置对比」。
-LAYOUT_VALUES = ("canvas", "compare", "agenda")
+# references/canvas.md「整页画布」与同文件「并置对比」「图版」。
+LAYOUT_VALUES = ("canvas", "plate", "compare", "agenda")
+
+# "配图铺满这一页"的两档：整页画布（无字层）与图版（标题 + 一句字幕）。渲染端据此
+# 把图槽盒拉到整幅、并在 clips 预处理里同理把 wipe 归零（画面主导的页不参与翻页
+# 转场）。**只有这一份判据**：html_renderer 的图槽几何、wipe 归零、字体图槽体检的
+# 分派、check_svg 的框尺寸都从这里读——各处各写一份 `in ("canvas", "plate")` 的
+# 代价是加第三档时漏掉某一处，那一处就静默按 4:3 槽位量一张整页的图。
+FULL_BLEED_LAYOUTS = ("canvas", "plate")
+
+
+def is_full_bleed(seg):
+    """这一页的配图是不是铺满整幅（canvas / plate）。"""
+    return seg_layout(seg) in FULL_BLEED_LAYOUTS
+
+
+# 图版（layout:"plate"）是"图主导 + 一层最小的文字层"：满幅主视觉 + 标题 + **一句**
+# 字幕。两样不上画面——句子流（只显示当前句，不滚）与 tagline。写稿时这两个字段
+# 照旧写，它们是数据源（agenda 投影、别的版式都要用），只是这一页不画。
+PLATE_FIELDS = "title"
 STRUCTURAL_SIDS = ("opening", "closing")
 
 # 需要"一对图"的版式：images.json 里对应条目写成 {"src": ["左", "右"], ...}。
@@ -100,7 +119,7 @@ PAIRED_LAYOUTS = ("compare",)
 
 
 def seg_layout(seg):
-    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'compare' / 'agenda'。
+    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'plate' / 'compare' / 'agenda'。
 
     agenda 由 pipeline 自动盖进 manifest，所以正常数据里它已经在 `layout` 字段上；
     这里仍按 id 兜一档，是因为手写 manifest 是本技能支持的用法（见
@@ -119,9 +138,10 @@ def _validate_layout(value, where, *, content=False):
     渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
 
     两个显式值里只有 agenda 绑段 id：它是结构性页那张投影卡，内容段借用它等于在
-    画面上印别人的目录。canvas 反过来谁都能用，包括 opening/closing——那条路的
-    代价（标题层、句子流、章节列表全都不再上画面）由作者自愿承担，门禁只保证
-    画布本身成立（有图、等比、字号够，见 gen_hyperframes.canvas_layout_errors）。
+    画面上印别人的目录。canvas / plate 反过来谁都能用，包括 opening/closing——
+    那条路的代价（整页画布：标题层、句子流、章节列表全都不再上画面；图版：句子流
+    与 tagline 不再上画面）由作者自愿承担，门禁只保证画面本身成立（有图、等比、
+    字号够，见 gen_hyperframes.canvas_layout_errors）。
     """
     if value is None:
         return

@@ -101,7 +101,7 @@ body{font-family:var(--ctv-font-family)}
    两画幅同款故无属性限定，宽度走 --ctv-tagline-tick。开屏/结尾已是纯文字
    agenda 卡，不再出现 tagline。 */
 .tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
-.seg-progress{position:absolute;bottom:0;left:0;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
+.seg-progress{position:absolute;bottom:0;left:0;z-index:3;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
 /* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
    不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。
    轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
@@ -340,8 +340,8 @@ body{font-family:var(--ctv-font-family)}
    需要遮罩层；文字对比度由画布自己负责（见 references/rendering.md）。
    选择器用 [data-aspect] 抬到 0,3,0，与两条画幅各自的 .seg-image 定位规则
    （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
-[data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
-[data-aspect] .seg-canvas .seg-image::after{display:none}
+[data-aspect] .seg-canvas .seg-image,[data-aspect] .seg-plate .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
+[data-aspect] .seg-canvas .seg-image::after,[data-aspect] .seg-plate .seg-image::after{display:none}
 /* 画布页的氛围光要比槽位那枚**大得多、软得多**：画布页不画满幅底板，主题渐变 + 网格 +
    这团光就是它全部的景深来源。槽位那枚 58%×42% 的光斑放到整屏上只盖住中间一小块，
    边缘仍是平的，而且它的椭圆边界在深色页底上看得出来——读作糊在主视觉后面的一块色斑而不是
@@ -349,10 +349,38 @@ body{font-family:var(--ctv-font-family)}
    抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
    网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
 [data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
-/* 进度条与底轨抬到媒体之上：槽位版式里媒体永远够不到页底，这两条被 img/video
-   的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把
-   段进度整个盖掉。 */
-[data-aspect] .seg-canvas .seg-progress,[data-aspect] .seg-canvas::before{z-index:2}
+/* 底轨（卡上的 ::before）抬到媒体之上：槽位版式里媒体永远够不到页底，被 img/video
+   的 z-index:1 压着也看不出差别；画布与图版拉满全屏后，一张铺到页底的照片就会
+   把它整个盖掉。进度条本身的层高在基规则里一次定死（z-index:3）——图版的字幕
+   层是 z-index:2，进度条压不过去就会被字幕的暗垫吃掉最后一条。 */
+[data-aspect] .seg-canvas::before,[data-aspect] .seg-plate::before{z-index:2}
+
+/* ── 图版（段落 layout: "plate"，两画幅同一份结构）──────────────────────
+   图主导，但保留一层最小的文字：标题压在顶部、一句字幕压在底部。它填的是槽位
+   版式（文字主导 + 一张配图）与整页画布（一个字都没有）之间的空档——3b1b 的
+   每一帧就是这个样子。句子流层由渲染器**不生成**（只挂当前句，见
+   html_renderer._plate_caption_html），tagline 也不画。
+   图槽盒与整页画布同一套几何（拉满整幅、撤掉圆角/外发光/内描边），所以那条
+   规则一条两用；这里只补两层文字。
+   两层文字都必须自己带暗垫（scrim）：满幅图可以是任何亮度，白字直接落在浅色
+   照片上就读不出来——这是画布版式交给作者、而图版必须由模板兜住的一件事
+   （画布页没有 HTML 文字，图版有）。渐变从透明到 78% 页底色，边界看不见，
+   只把字托起来。 */
+[data-aspect] .seg-plate .plate-head{position:absolute;left:var(--ctv-pl-title-x);right:var(--ctv-pl-title-x);top:var(--ctv-pl-title-t);z-index:2}
+/* 标题带的暗垫：从页顶一路淡到标题带下方，盖住标题那一块。挂在伪元素上而不是
+   往 .plate-head 自己身上写背景——标题盒的高度随字数变，背景跟着算就永远差一截。 */
+[data-aspect] .seg-plate .plate-head::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-title-x));right:calc(-1 * var(--ctv-pl-title-x));top:calc(-1 * var(--ctv-pl-title-t));height:var(--ctv-pl-title-scrim);z-index:-1;pointer-events:none;background:linear-gradient(180deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
+[data-aspect] .seg-plate .plate-title{line-height:var(--ctv-pl-title-lh);text-wrap:balance}
+/* 一句字幕：钉在页底、只显示当前句。行是绝对定位的一摞，运行时每帧只让一句
+   可见（见 runtime.js 的 plateSync）——**不做焦点衰减**（屏幕上只有一句，没有
+   "离焦多远"可言），也**不滚动**（滚动是句子流的事：一屏一摞句子的产物）。
+   2 行钳制是给长句兜底的：图版不滚，第 3 行会直接压到安全边距外面去。 */
+[data-aspect] .seg-plate .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
+[data-aspect] .seg-plate .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
+[data-aspect] .seg-plate .plate-clip{position:relative}
+[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;visibility:hidden;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
+[data-aspect] .seg-plate .plate-line.plate-on{visibility:visible}
+[data-aspect] .seg-plate .plate-line.plate-on.plate-accent{color:var(--seg-accent-text)}
 
 /* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
    与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何

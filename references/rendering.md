@@ -2,7 +2,7 @@
 
 - **要跑/调渲染**：「HTML 预览与渲染」「性能参数」。
 - **画面出了问题**：「画面翻车速查表」按症状查；版式真源在「画面结构」与「动画」。
-- **要跑官方校验**：「官方校验命令」——`check` 的已知噪声与必须当真的条目都在那里。
+- **要跑官方校验**：[motion.md](motion.md)「官方校验命令」——`check` 的已知噪声与必须当真的条目都在那里。
 - **要知道"这一页屏幕上到底有没有东西"**：[perceptual.md](perceptual.md)「观感门禁」——唯一一道在看画面的检查。
 
 ## 主题
@@ -26,6 +26,17 @@ verse 句子流（竖屏钉底；横屏排在左文字栏末、随栏垂直居�
 - **portrait**：标题区定高（模板派生）、两行钳制，超出裁切；4:3 画布（980×735）居中，verse 钉底。标题区压到画布顶边时报 `[template] 竖屏标题区放不进`。
 - **landscape**：左文字栏固定 613px 宽，右侧槽位 1067×800。**没有行数钳制**，守卫只降字号：超 16 字降到 54px、超 22 字降到 48px；超 16 字打 `[warn]`。
 - **整页画布（`layout: "canvas"`，两画幅同一份规则）**：三层塌成一层——配图拉满整幅（圆角/外发光/1px 内描边全撤），标题层与句子流层**不生成**；**不要自画满幅底板**（见 `references/canvas.md`「不铺满幅底」）。文字对比度是**画布作者的责任**：`Contrast` 门禁看不见 SVG 里的字，生成期按文件拦——该段必须有配图，SVG 比例与图内 px 字号跟画幅对账（见 `references/canvas.md`「整页画布」「图内文字的对比度」）。进度条与底轨抬到 `z-index:2`。
+- **图版（`layout: "plate"`，两画幅同一份规则）**：三层塌成**两层半**——配图拉满整幅（同整页画布那套几何，`.seg-plate` 与 `.seg-canvas` 共用一条 CSS 规则），**句子流层不生成**，改为页底「一句字幕」层；标题层缩成单行压在顶部 scrim 上，tagline 不入 DOM。
+
+  ```text
+  标题（一行 + 顶部 scrim）
+  ↓
+  满幅主视觉
+  ↓
+  一句字幕（页底 + 底部 scrim，随旁白换句）
+  ```
+
+  换句由运行时 `plateSync(t)` 驱动：`.plate-line` 叠放在同一位置，只给当前句加 `.plate-on`（凭 `data-t0`/`data-t1` 判），前一句不留痕；当前句的 emphasis 片段加 `.plate-accent`。**图版不滚**：字幕超过 `captionMaxLines`（2 行）会被判 `error` 而不是缩字号——半句是不行的，压短那句。几何真源是 `_template.py` 顶层 `plate.<画幅>`（`titleSize` / `captionFontSize` / `captionInsetX` / `captionInsetBottom` / `titleScrimHeight` / `captionScrimHeight` 等），CSS 只放选择器。选型判据与写稿约束见 `references/canvas.md`「图版」。
 
 opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agenda"` 由 pipeline 盖章）。要换成整页海报用顶层 `opening_layout` / `closing_layout: "canvas"`，那一页只剩一张满幅配图 + 进度条。字段、行数上限、`nameTrim`、守卫阈值**以 `references/writing.md` 为准**。
 
@@ -112,7 +123,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
   **取景方向不写在模板里**：**相邻两张静态图必漂向相反一侧**，四张一轮回走遍四个象限；幅度按段落 id 派生（与 `canvas_kit` 的手绘抖动共用同一份 `seeded_wobble`）——同一稿件重跑逐字节一致。
   **三条约束**：`object-fit:cover` 已铺满槽位，**scale < 1 就会在槽位边缘露出页背景**（是露底，不是"图小了"），所以只允许单调推近、最小值恒为 1；位移必须落在推近让出的盈余里（放大 s 倍单侧多 `(s−1)/2 × 槽位边长`，所以写比例不写 px）；**ease 恒为 `none`**，不开放成旋钮。呼吸档的进度系数**单调不减但增量不均**。
   **段尾必须补一条 0.01s 的"钉住"补间**（`_image_drift_lines` 的 `pin`，放在语句序列**最后**）。GSAP 建时间线时会把每条 `fromTo` 的终点值预渲染一遍，最后一段的终点（例 scale 1.06）在 `t=0` 就写在元素上——成片里"切页第一秒图比后面大一圈，1.0s 又缩回去"。终点值按语句顺序互相覆盖，所以钉住只能排最后。
-  **三类载体不漂**：`<video>`（它自己每秒 24 帧在放，叠运镜是运动冗余）、写了 `director` 的内联 SVG（那段作者已手写过编排，别替他叠第二层意图）、整页画布与 `stage:"keep"` 接续页（与它们跳过配图入场补间同一口径）。
+  **三类载体不漂**：`<video>`（它自己每秒 24 帧在放，叠运镜是运动冗余）、写了 `director` 的内联 SVG（那段作者已手写过编排，别替他叠第二层意图）、满幅版式（`canvas` / `plate`）与 `stage:"keep"` 接续页（与它们跳过配图入场补间同一口径）。
 - **SVG 的「导演」**：images.json 写 `director` 时 SVG 净化后内联成活 DOM、`director.steps` 按句起点展开成 GSAP 补间——写法与净化清单见 `references/motion.md`「SVG 动画：两档」。要时间轴同步的状态变化用它，纯氛围循环走 `<img>`+墙钟（配图整体仍会吃上面那条 Ken Burns）。
 
 ## HTML 预览与渲染
@@ -180,43 +191,6 @@ hf-project/
 
   `--workers` 与它冲突时 **CLI 赢**，`run.py` 打 `[warn]`；`--no-low-memory-mode` 关自判。**容器里自判读宿主机总内存、不是 cgroup 限额**——小限额容器跑在大内存宿主上不会自动进低内存档，要显式 `PRODUCER_LOW_MEMORY_MODE=1`（低内存档 = worker 钉 1 + 截图抓帧）。Chrome 启动/协议超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 
-## 官方校验命令（优先于手搓探针）
-
-```bash
-npx -y hyperframes@0.8.185 check <项目目录>          # lint + runtime + layout + motion + contrast，一个门禁
-npx -y hyperframes@0.8.185 lint <项目目录>           # 只跑静态那一阶段（不开浏览器）：改 HTML 的迭代期用它
-npx -y hyperframes@0.8.185 snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
-npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
-```
-
-`check` = lint + browser 五阶段（Runtime / Layout / Motion / Contrast / Craft），**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
-
-**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_NOISE_CODES`（预期噪声）之外的新 code 当真——`GATE_STRICT_CODES` 里的码即使只以 warning 出现也照样点名，Lint 有 error 时额外点一条 `browser_stages_skipped`。阶段按结构认（顶层带 `findings` 的块都判读），CLI 新增阶段不用改这张表。
-
-本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_NOISE_CODES` 与下面这张噪声表一起复核。
-
-- 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
-- **Lint 有 error ⇒ browser 五阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast/Craft 显示 0 项不是通过，是失明**。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
-- 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
-  - 噪声（**全表以 `scripts/_render_backend.py` 的 `GATE_NOISE_CODES` 为准**，`tests/check_docs.py` 逐码对账，改一边不改另一边会报错）：
-    `gsap_callback_dom_measurement`（补间回调里量字宽）、`timeline_track_too_dense`（字幕时钟轨按帧打点）、`composition_file_too_large`（HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）、`css_transition_used`（模板兜底 CSS 的过渡，运行时由 GSAP 接管）、`overlapping_gsap_tweens`（入场与运镜在交接处碰同一属性）、`gsap_repeated_fromto_without_baseline`（同一 `fromTo` 先后落在不同元素上）、`gsap_infinite_repeat`（**开屏页才有**，默认强绑定）、`gsap_timeline_set_initial_hide`（开场前显式藏层）。
-  - 误报：`negative_z_index`（**恒 5 条**＝ CSS 里负 z-index 规则的条数：`.seg-card::after`、`.apple-halo`、`.apple-glow`、`.seg-card>.bg/.grid`、`.verse::before`），Fix 是 `isolation: isolate`（已加在各层的直接父元素上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
-  - 于是条数≈`5 + 卡片数 + 6`（candidate 与整条链实测：竖屏 3 卡 14 条、横屏 3 卡 14 条，类型逐条相同）；**条数随卡片数走，别拿任何一个样本当固定值**。
-  - `container_overflow` **不该再出现**：入场收拢（settle 起手 `scale` 1.05~1.08）与 Ken Burns 全程以 `scale≥1` 铺满槽位，子元素 bbox 每帧都比容器大几像素——配图容器 `#img-*` 带 `data-layout-allow-overflow` 把这条豁免掉。真出现就是**有人拿掉了那个标记**或**槽位里塞了比例不对的 SVG**（后者由生成期槽位比例护栏拦，见 `references/imagery.md`）。
-  - **判据**：`GATE_NOISE_CODES` 之外的新增条目一律当真（`run.py` 会以 `unregistered:<code>` 点名）。**类型多出一类就要查**——条数随卡片数变，类型本该恒定。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
-- `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
-- Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，判成"文字藏在不透明元素下"。做法是打豁免属性，而**三个属性的继承规则不同，别按一套打**：
-  - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：只认元素**自己身上**、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带。
-  - `data-layout-allow-overflow`：**继承到子树**，打在 `.verse`（`overflow:hidden` 所在层）一处即可。别撤 `overflow`：撤掉后长段滚动会刷出一批 info 级 `text_box_overflow`，随段落长度线性增长。
-  - **同一属性在两个阶段规则不同**：Layout 阶段（`layout-audit`）用元素自己身上的 `hasAttribute`，豁免就打报出来的那一层；Contrast 阶段（`contrast-audit`）走 `closest()`，打祖先即可。补 `overflow` 对 Layout 的 `text_occluded` 不管用。
-  - **调 `proseCoverageFloor` 优于层层打标**：成句长文本要被盖住超过 15% 才报，可压：`--layout "proseCoverageFloor=0.05"`。单词级短 label 不受保护，沾到就算。
-  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式，画面正常就是某层漏打了豁免，按 `check` 报的选择器补。
-  - **横屏的段落标题**（`#title-*`）会在**段落入场附近**多出 info 级 `text_occluded`（竖屏没有）：检查器恰在擦除进行中采样。`snapshot --at` 看标题好好在那儿就是这条，info 不进退出码，确认画面正常即可忽略。
-- `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
-- 渲染前用 `npx -y hyperframes@0.8.185 doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
-- **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`doctor` 不支持 `--strict`，要 warning 也阻断的是 `check --strict`。
-- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes@0.8.185 preview --background`。
-
 ## 画面翻车速查表
 
 按**看到的症状**查，不按知识点查——出问题时你手里只有一个现象。每条给的是成因与去处，去处写成 `文件`「章节」+ 具体那一条，可直接跳过去。
@@ -232,8 +206,8 @@ npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chro
 | 图内标签在成片里看不见，全流程零报错 | `<img>` 载入的 SVG 里文字不属于 HTML 文本流，没有一道检查量它 | `canvas.md`「图内文字的对比度」里「没有任何一道检查会量它」 |
 | 图内文字右缘出血（量出来的右缘超过上限） | `text-anchor="end"` 的落点要按量出来的字宽倒推，不是按字符数估 | `canvas.md`「整页画布」里「安全边距照页面走」 |
 | 图里两行文字压在一起（`hyperframes check` 报 `content_overlap`） | 两条 y 只差十来个像素——`canvas_kit` 的柱标签固定落在 `base_y+32`，自己加的说明文字很容易撞上它。`check_svg` 查不到图内压字，只有 `check` 的 Layout 阶段能量 | `canvas.md`「画布几何」的末条 |
-| `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报；豁免标记已由模板打在每一行上 | `rendering.md`「官方校验命令」里 Layout 的 `text_occluded` 一条 |
-| `check` 的 Runtime/Layout/Motion/Contrast/Craft 全是空结果 | Lint 有 error，browser 五阶段被 `shouldBlockRender` 整个跳过。先修 Lint 到 0 error 再判后面五阶段 | `rendering.md`「官方校验命令」 |
+| `check` 报 Layout `text_occluded`，但快照里文字好好地在那儿 | 句子流滚出窗口的行 rect 仍在原位，属误报；豁免标记已由模板打在每一行上 | `motion.md`「官方校验命令」里 Layout 的 `text_occluded` 一条 |
+| `check` 的 Runtime/Layout/Motion/Contrast/Craft 全是空结果 | Lint 有 error，browser 五阶段被 `shouldBlockRender` 整个跳过。先修 Lint 到 0 error 再判后面五阶段 | `motion.md`「官方校验命令」 |
 | 压缩成片后轴线/网格/分隔线像是没画 | 色档太暗 + 线宽不足 3px 在压缩后被抹平 | `canvas.md`「整页画布的密度与层次」里「辅助线要敢用亮档」 |
 | 整张画面发闷、像一片渐变加一块图 | 背景网格太暗被整体 alpha 再合成一次（模板 `_theme.grid_color`），或氛围光椭圆边界还看得出来（`ambience.alpha`/`edge`） | 本节「画面结构」的氛围光与网格两条（改前成片对比度只有 1.08:1） |
 | 暂停一帧像一页空白（中段整条空带） | 标题/主视觉/注脚没分成三段并用中景连起来 | `canvas.md`「整页画布的密度与层次」里「竖向不许有整条空带」 |
@@ -247,6 +221,9 @@ npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chro
 | 浏览器里颜色分明、成片里发闷 | 图内最大档与最小档字号比值不足 2，观众分不出主次 | `canvas.md`「整页画布」里「图内可以有标题，字号按整页读」 |
 | 整页画布在浏览器里是均匀一块死色 | 铺了满幅底板，把模板背景三层盖掉了 | `canvas.md`「不铺满幅底」里那条整页画布的说明（生成期也会按段落 `[warn]`，判据与自查同一份） |
 | 只有开头一秒是空的 | 整页画布没有转场遮，逐拍揭示意味着前 1 秒画面是空的 | `canvas.md`「整页画布的密度与层次」里谈导演页起始帧那条（全空起步会被生成期 `[warn]`「起始帧全空」拦出来） |
+| 图版的字幕一直是空的，或好几句话叠在一起 | 运行时没接上字幕层（`.verse` 换了类名成 `.plate-caption`，句子流那套按 `.verse` 找元素，找不到就静默什么都不做） | `canvas.md`「图版」第 3 条；`plateSync(t)` 只给当前句加 `.plate-on` |
+| 图版上一句话只念出半截，屏幕上就没了 | 图版不滚：超过 `captionMaxLines`（2 行）的行被 CSS 钳掉。生成期本该按 `error` 拦下 | 生成期 `canvas_layout_errors` 的「超过 captionMaxLines」一条；把那句压短或拆句 |
+| 图版的标题压在主体上、或者字幕顶到了标题 | 页顶标题带 + 页底字幕带加起来超过页高 | 生成期 `canvas_layout_errors` 的「两层文字撞在一起」一条；压短那句或 `--set plate.<画幅>.captionFontSize=…` 调小 |
 | 开了 `--low-memory-mode`，`--workers 4` 却像没生效 | 低内存档由 CLI 把 worker 钉成 1，它赢。`run.py` 会打一条 `[warn]` | `rendering.md`「性能参数」 |
 | 成片里某一段画面是糊的、虚的 | 素材像素不够铺满它那一页的框：`cover` 只保证填满、不保证清楚，放大 2 倍以上细节就没了，而全流程零报错 | `imagery.md`「两种形式的统一规则」里「统一使用同一个内容画布」的第二条规格 |
 | 配图明明够清晰，生成期却报"不够大" | 按它实际落地的框判：整页画布按整幅（1080×1440 / 1920×1080），槽位按 4:3 那一块。同一张图在槽位够用、换成整页画布就不够 | `imagery.md`「两种形式的统一规则」里「统一使用同一个内容画布」 |

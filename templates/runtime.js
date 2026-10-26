@@ -798,6 +798,51 @@ const verseTick = (t) => {
     verseScroll(c, t, curT0, curSi);
   }
 };
+// ── 图版（layout:"plate"）：一屏一句 ────────────────────────────────────
+// 图版的字幕层不是句子流：DOM 里是这一段的**全部句子各占一行**（绝对定位叠在
+// 同一处，见 html_renderer._plate_caption_html），运行时每帧只让"当前这一句"
+// 可见。为什么不做成"只放当前句、换句时改 textContent"：那样每帧都要写文本，
+// 而写文本会重排、打乱卡拉OK覆盖物的逐字命中；更重要的一条是整个仓库的纪律
+// ——**同一时刻的画面必须是时间 t 的纯函数**，DOM 里预先摆好全部的句子，
+// 归位就只剩一个 class 的开关，乱序 seek 幂等。
+//
+// 句子区间取 data-t0 / data-t1（生成期按 start_time + onset 到下一句开口写的，
+// 与 cue 轨同源），所以"哪一句在屏幕上"与"字幕该是谁"是同一个答案，不会分家。
+const plates = Array.from(document.querySelectorAll(".plate-caption"));
+const plateState = new Map();
+const plateCache = new Map();
+const plateShow = (cap, i) => {
+  const st = plateState.get(cap);
+  if (st === i) return;                  // 一句之内不碰 DOM：这一位每帧都会被算一遍
+  plateState.set(cap, i);
+  for (const el of cap.querySelectorAll(".plate-line")) {
+    const on = i >= 0 && parseInt(el.getAttribute("data-i"), 10) === i;
+    el.classList.toggle("plate-on", on);
+    // 当前句吃本段 accent（与句子流的活动行同一个读法：色值来自卡上的
+    // --seg-accent-text，已过文本对比度保底）。换色是**瞬时**的，不加过渡——
+    // 每一帧必须等于时间线时刻的选择，过渡会让颜色滞后于换句。
+    el.classList.toggle("plate-accent", on);
+  }
+};
+const plateSync = (t) => {
+  for (const cap of plates) {
+    // 句子表按 DOM 顺序取一次，与 verseCacheOf 同一条懒测量纪律（结构恒定、
+    // 字体就绪不影响这里的区间值）。
+    let st = plateCache.get(cap);
+    if (!st) {
+      st = [];
+      for (const el of cap.querySelectorAll(".plate-line")) {
+        st.push({i: parseInt(el.getAttribute("data-i"), 10),
+                 t0: parseFloat(el.getAttribute("data-t0"))});
+      }
+      plateCache.set(cap, st);
+    }
+    let cur = -1;
+    // 末句之后一直停在它（句间 gap 与页尾留白里字幕不该空）；首句之前不显示
+    for (const L of st) if (isFinite(L.t0) && t >= L.t0) cur = L.i;
+    plateShow(cap, cur);
+  }
+};
 const verseSync = (t, t2) => {
   // 时钟锚：只信"主时间线的时刻"。**不要**再拿 gsap.globalTimeline.time() 当锚：
   // 那是墙钟（页面打开后一直在涨），只要它碰巧 ≥ 当前 seek 到的 t 就会被当成
@@ -815,6 +860,7 @@ const verseSync = (t, t2) => {
   if (!isFinite(tt) || Math.abs(tt - cueClock.t) < 1e-4) return;
   cueClock.t = tt;
   verseTick(tt);
+  plateSync(tt);
 };
 // ── 时钟轨：让"每帧都会有一次回调"成为结构保证，而不是靠渲染器的实现细节 ──
 // 一段只有零长 tween、没有可见属性的空轨，层级放在所有视觉补间**之上**（层级

@@ -12,8 +12,8 @@
     python scripts/check_svg.py images/ --layout auto         # 混用目录：逐文件推断档位
 
 检查项（error 让退出码为 1，warn 只提示）：
-  - 根节点：纯数字 width/height 或 viewBox；槽位版式必须 4:3，整页画布必须与
-    画幅等比（竖屏 1080×1440、横屏 1920×1080）                          [error]
+  - 根节点：纯数字 width/height 或 viewBox；槽位版式必须 4:3，整页画布与图版
+    必须与画幅等比（竖屏 1080×1440、横屏 1920×1080）                     [error]
   - 安全：<script>、on* 事件属性、<foreignObject>、外链资源（http/https）、
     DOCTYPE/ENTITY                                                      [error]
   - 字号：按"画布宽 ÷ SVG 宽"折算后的最终 px 低于 26px                   [warn]
@@ -49,6 +49,7 @@ import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 
+from _segments import FULL_BLEED_LAYOUTS as FULL_BLEED
 from _path_morph import path_endpoints, path_segments, y_span
 from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
                            _css_unescape, _is_external_href,   # 外链/墙钟判据与净化器同一份
@@ -413,9 +414,12 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             resolved.update(layout=layout, aspect=aspect)
         if _infer_err:
             errors.append(_infer_err)
-        if layout == "canvas":
+        if layout in FULL_BLEED:
+            # 图版（plate）的图槽盒与整页画布逐像素同一套几何（CSS 一条规则两用），
+            # 所以框尺寸、安全边距、内容盒全都按画幅算——按槽位的 980×735 去量一张
+            # 1080×1440 的图，比例会判错、字号会少算一档。
             cw, ch_ = canvas_sizes()[aspect]
-            label = f"{cw}×{ch_}（{aspect} 整页画布）"
+            label = f"{cw}×{ch_}（{aspect} {'整页画布' if layout == 'canvas' else '图版'}）"
         else:
             # 槽位框随画幅变（竖屏 980×735 / 横屏 1067×800，都是 4:3）。
             # 折算字号与建议尺寸都必须按当前画幅算——拿竖屏的 980 去折横屏的
@@ -546,7 +550,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
             if fh:
                 c = min(contrast_ratio(fh, s) for s in theme_bg_stops(theme))
-                if layout == "canvas" and c < 4.5:
+                if layout in FULL_BLEED and c < 4.5:
                     warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 主题页底最坏一档只有 "
                                  f"{c:.1f}:1（<4.5:1）。它若直接落在页底上就是看不清；若压在"
                                  f"自己画的浅色底板上，本条不成立可忽略。画布的氛围光还会再吃一档")
@@ -569,12 +573,12 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                     continue
                 # 整页画布上 opacity=0 是导演逐拍点亮的起始态（终帧才亮），不是吃掉对比度；
                 # 半透明才是真问题——它会让亮起来的那一帧本身就偏灰。
-                if layout == "canvas" and n == 0:
+                if layout in FULL_BLEED and n == 0:
                     continue
                 warns.append(f"文字 {content.strip()[:12]!r} 带 {name}={n:g}，会真实吃掉对比度；换更暗的实色")
 
             # 整页画布安全边距（只看字面 x、且祖先无 transform 时才可信）
-            if layout == "canvas" and scale is not None and not has_transform_ancestor(el):
+            if layout in FULL_BLEED and scale is not None and not has_transform_ancestor(el):
                 xv = _parse_num(el.get("x"))
                 if xv is not None:
                     anchor = inherited(el, "text-anchor") or "start"
@@ -615,7 +619,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             has_font_family = True
 
         # 满幅底板（判据与生成期门禁共用 _svg_sanitize.is_full_bleed_backdrop）
-        if layout in ("slot", "canvas") and is_full_bleed_backdrop(el, vb_w, vb_h):
+        if layout in ("slot",) + FULL_BLEED and is_full_bleed_backdrop(el, vb_w, vb_h):
             fb_counts[layout] += 1
             if not draft:
                 if layout == "slot":
@@ -712,7 +716,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         # 图元坐标写在 viewBox 系里，空带判据必须按 viewBox 量——缩放写法
         # （width/height 与 viewBox 差一个倍数）下拿固有像素尺寸当页高，空带
         # 的位置和占比都会量错（见 _ink_band 的满幅注释同源的那条修法）。
-        if layout == "canvas" and vb_w and vb_h:
+        if layout in FULL_BLEED and vb_w and vb_h:
             band = _ink_band(el, tag, inherited, vb_w, vb_h)
             if band:
                 ink_bands.append(band)
@@ -741,8 +745,8 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                      "无法与口播时间轴同步，只适合氛围循环。要"
                      "「随某句话变化」的时间轴同步动画，改用 images.json 的 director（净化内联后由 GSAP 补间驱动；"
                      "内联时这些墙钟动画会被剥离，见 references/motion.md「SVG 动画：两档」）")
-    if layout == "canvas":
-        warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
+    if layout in FULL_BLEED:
+        warns.append(("整页画布" if layout == "canvas" else "图版") + "：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
                      "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"
                      "以及文字是否真的溢出。用 canvas.md「图内文字的对比度」的内联副本 "
                      "+ `hyperframes check` 量一次")
@@ -787,8 +791,9 @@ def collect(paths):
 def main():
     ap = argparse.ArgumentParser(description="手绘 SVG 配图静态自查（尽力而为，不替代人眼复核）")
     ap.add_argument("paths", nargs="+", help="SVG 文件或目录")
-    ap.add_argument("--layout", choices=["slot", "canvas", "auto"], default="slot",
-                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；"
+    ap.add_argument("--layout", choices=["slot", "canvas", "plate", "auto"], default="slot",
+                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；plate = 图版"
+                         "（满幅图 + 标题 + 一句字幕，图槽几何与整页画布相同）；"
                          "auto = 按每个文件自身的比例推断（混用目录一次跑完，"
                          "整页画布还会连画幅一起定下来）")
     ap.add_argument("--aspect", choices=list(canvas_sizes()), default="portrait",

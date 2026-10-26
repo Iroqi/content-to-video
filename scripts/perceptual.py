@@ -35,8 +35,10 @@ SVG 源码里的坐标。这三四道加起来仍然回答不了一个最简单�
    占约 1.5%，而 `check_svg` / `lint` / `Layout` 三道全绿——图里"没有东西"
    不是这三位能看出来的。整页画布段不看这条：它的设计就是大片留白 + 少量字，
    按同一条线判会全是误报。
-2. **空页**（整页画布段）：这类页面没有字幕层也没有标题层，画面就是全部。
-   覆盖率低于 `EMPTY_COVERAGE` 判空页——观众在这十几秒里什么都没有。
+2. **空页**（画面主导的页：整页画布 / 图版）：这类页面的画面就是全部（图版只多
+   两条窄带上的字），覆盖率低于 `EMPTY_COVERAGE` 判空页——观众在这十几秒里
+   什么都没有。图版**不按槽位框**量稀薄：它的图铺满整幅，按 4:3 槽位框去量只会
+   量到图中间那一块，比例失真。
 3. **死帧连片**：相邻两次采样之间画面几乎不动，就是一段"死帧"。连起来超过
    `DEAD_SECONDS` 就报。1.2%（`MOTION_MIN`）是"一页十几秒只有一条运镜在爬"
    的量级（实测 Ken Burns 6%/s 的推近在 2 秒间隔上只变 0.2–0.4%），比它小
@@ -59,7 +61,7 @@ SVG 源码里的坐标。这三四道加起来仍然回答不了一个最简单�
 
 两条：`--frames`（已有 PNG 目录，CI 里可以缓存复用）或现取（调
 `hyperframes snapshot`，需要 Node + Chrome）。取帧命令与口径见
-`references/rendering.md`「官方校验命令」——本模块只是把它的产物变成判词。
+`references/motion.md`「官方校验命令」——本模块只是把它的产物变成判词。
 """
 import argparse
 import json
@@ -69,6 +71,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# 版式判据的唯一真源在 _segments（scripts/ 已由 run_gate 的调用方放进
+# sys.path）；这里只借用"哪些版式是满幅图"这一件事，不另抄一份 ("canvas","plate")。
+from _segments import FULL_BLEED_LAYOUTS, is_full_bleed  # noqa: E402
 
 # ── 判据（全部是"成片可读性"的直接翻译，不是手感）─────────────────────
 # 整页画布段的"空页"下限：低于它判空页。0.6% 相当于 1080×1440 上一块约
@@ -136,9 +142,9 @@ def sample_times(segments, sentences, fps_free=True):
         last = sents[-1]
         t1 = float(last["start_time"]) + float(last["duration"])
         span = max(0.0, t1 - t0)
-        # 整页画布段加密：它连字幕都没有，静一秒就是空一秒
-        is_canvas = seg.get("layout") == "canvas"
-        step = 1.5 if is_canvas else 2.0
+        # 画面主导的页（整页画布 / 图版）加密：整页画布连字幕都没有，静一秒就是
+        # 空一秒；图版只有一条句字幕在换，同样经不起长静止
+        step = 1.5 if is_full_bleed(seg) else 2.0
         n = max(MIN_SAMPLES_PER_SEG, int(span // step) + 1)
         # 起点后让 0.6s 起来（擦除与入场补间都在这段里），末点收在终点前 0.4s
         lo = t0 + 0.6
@@ -319,17 +325,23 @@ def analyze(frames, segments, aspect="portrait"):
         st["ink"].append(k)
         st["times"].append(f["t"])
 
-    # 1) 画布稀薄（槽位版式） / 空页（整页画布）
+    # 1) 画布稀薄（槽位版式） / 空页（满幅版式）
     for sid, st in per_seg.items():
-        if st["layout"] == "canvas":
+        if st["layout"] in FULL_BLEED_LAYOUTS:
             empty = [t for t, c in zip(st["times"], st["cover"]) if c < EMPTY_COVERAGE]
             if empty:
+                # 两档满幅版的空法不同：整页画布连标题层都不生成，空就是真的一片
+                # 空；图版至少还压着标题与一句字幕，所以"空"说的是那张满幅图没
+                # 撑起来——判据用同一个覆盖率下限，判词各说各的原因。
+                why = ("整页画布段没有字幕层也没有标题层，空就是真的一片空。"
+                       if st["layout"] == "canvas" else
+                       "图版段那张图没撑起整幅（标题与一句字幕再满也只是几行字），"
+                       "画面读起来仍是一页空的。")
                 issues.append(_issue(
                     "empty_page", sid,
                     f"{len(empty)}/{len(st['times'])} 个采样点是空页"
                     f"（覆盖最高 {max(st['cover']) * 100:.2f}%，下限 "
-                    f"{EMPTY_COVERAGE * 100:.1f}%）——整页画布段没有字幕层也没有"
-                    f"标题层，空就是真的一片空。", times=empty))
+                    f"{EMPTY_COVERAGE * 100:.1f}%）——{why}", times=empty))
             continue
         inks = [k for k in st["ink"] if k is not None]
         if not inks:

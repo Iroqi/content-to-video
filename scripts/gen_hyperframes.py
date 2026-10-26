@@ -155,8 +155,8 @@ from _manifest_schema import load_timing_manifest  # noqa: E402
 from _evolve import check_evolve  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path)
-from _segments import (sids_needing_image, seg_layout,  # noqa: E402
-                       STRUCTURAL_SIDS)
+from _segments import (is_full_bleed, sids_needing_image,  # noqa: E402
+                       seg_layout, STRUCTURAL_SIDS)
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir,
                            media_verdict, unique_tmp)  # noqa: E402  素材可用性判据（与 run.py 同一份函数）
@@ -512,8 +512,8 @@ def slot_svg_ratio_errors(images, segments, out_dir, box_w, box_h, draft=False):
     """
     errs, warns = [], []
     for seg in segments:
-        if seg_layout(seg) == "canvas":
-            continue          # 画布版式由 canvas_layout_errors 按画幅判，判据不同
+        if is_full_bleed(seg):
+            continue          # 画布/图版由 canvas_layout_errors 按画幅判，判据不同
         sid = seg["id"]
         entry = images.get(sid)
         if not entry:
@@ -592,9 +592,9 @@ def svg_background_warnings(images, segments, out_dir):
                      if is_full_bleed_backdrop(el, vb_w, vb_h)]
         if not backdrops:
             continue
-        if seg_layout(seg) == "canvas":
+        if is_full_bleed(seg):
             warns.append(
-                f"段落 '{sid}' 的整页画布配图 {entry['src']} 铺了一张满幅底板："
+                f"段落 '{sid}' 的满幅配图（{seg_layout(seg)}）{entry['src']} 铺了一张满幅底板："
                 f"模板本来就在这一页底下画好了三层（主题渐变 / 只在页缘"
                 f"显形的网格 / 本段 accent 氛围光），满幅底板把三层整个盖掉，"
                 f"画布页就退回一片死平。删掉它让三层透出来（见 "
@@ -722,7 +722,7 @@ def _canvas_sids_missing_src(missing_imgs, images, seg_by_id):
     """
     return {sid for sid, rel in missing_imgs
             if sid in seg_by_id
-            and seg_layout(seg_by_id[sid]) == "canvas"
+            and is_full_bleed(seg_by_id[sid])
             and (images.get(sid) or {}).get("src") == rel}
 
 
@@ -742,7 +742,7 @@ def materialize_missing_canvas_placeholders(images, segments, out_dir,
     """
     filled = []
     for seg in segments:
-        if seg_layout(seg) != "canvas":
+        if not is_full_bleed(seg):
             continue
         sid = seg["id"]
         if missing_sids is not None:
@@ -775,16 +775,16 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
     """
     errs, warns = [], []
     for seg in segments:
-        if seg_layout(seg) != "canvas":
+        if not is_full_bleed(seg):
             continue
         # id/src/sentences 都由契约把守（validate_timing_manifest、
         # validate_images_json），消费端直接下标，不再留永不可达的兜底
         sid = seg["id"]
         entry = images.get(sid)
         if not entry:
-            errs.append(f"段落 '{sid}' 声明了 layout=\"canvas\"（整页画布），"
-                        f"images.json 里却没有它的配图——画布版式不画标题层和"
-                        f"句子流层，没有配图就什么都不剩")
+            errs.append(f"段落 '{sid}' 声明了 layout=\"{seg_layout(seg)}\"（满幅图版式），"
+                        f"images.json 里却没有它的配图——这一页的配图铺满整个画幅"
+                        f"（canvas 连标题层都没有，plate 只剩标题与一句字幕悬在空页上）")
             continue
         src = entry["src"]
         path = os.path.join(out_dir, src)
@@ -837,10 +837,71 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
                          f"读不到 px 字号（写成 class / em / 相对单位了）——"
                          f"折算后是否还够 {MIN_READABLE_FONT_PX}px 下限没人验得了，"
                          f"按画幅原尺寸画就不用猜")
-        warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白不会出现在画面上"
-                     f"（标题层与句子流层都不生成），这张 SVG 里有 {n_text} 个"
-                     " <text>——请确认要点已经画进图内；句子越少越要确认")
+        if seg_layout(seg) == "plate":
+            # 图版有 HTML 文字层（标题 + 一句字幕），所以"旁白全都不上画面"这条
+            # 不成立；但那一层只占页顶与页底两条窄带，中段仍然是"图里有没有字"
+            # 的问题——一条点名而不是照抄画布那条错误的说法。
+            warns.append(f"段落 '{sid}' 图版：{n_sent} 句旁白只有**当前一句**轮流"
+                         f"出现在页底，中段画面全靠这张 SVG（图内 {n_text} 个"
+                         f" <text>）——请确认主视觉自己说清了这一页的点")
+        else:
+            warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白不会出现在画面上"
+                         f"（标题层与句子流层都不生成），这张 SVG 里有 {n_text} 个"
+                         " <text>——请确认要点已经画进图内；句子越少越要确认")
+    errs.extend(_plate_overlap_errors(segments, canvas_w, canvas_h,
+                                     "vertical" if canvas_h > canvas_w else "landscape"))
     return errs, warns
+
+
+def _plate_overlap_errors(segments, canvas_w, canvas_h, aspect):
+    """图版的两层文字会不会撞在一起：页底字幕往上长、页顶标题往下长。
+
+    **画面上唯一一处"静态算得出、成片才暴露"的溢出**：图版的字幕层钉在页底、
+    最多 `captionMaxLines` 行、字号取自模板；一个长句按每行 `可用宽 ÷ 字号` 个字
+    折行之后占了 n 行，n 行的高度 + 标题带的高度一旦超过页高，字幕就顶进标题——
+    两行字叠着画，`hyperframes check` 只报"文字溢出容器"（info 级），作者看不出
+    该删字还是该改模板。这里按 CJK 字宽 ≈ 字号 估行数，直接拦。
+
+    估算口径与 `_title_font_px` 里 agenda 那条守卫同一条（整行离散打包，不按面积
+    猜），所以除数、行距、边距全部从模板同一处取；两处各拍一个系数，就会"一个说
+    放得下、一个说完蛋"。
+    """
+    p = load_template()["plate"][aspect]
+    cap_fs = max(1, int(p["captionFontSize"]))
+    cap_w = canvas_w - 2 * int(p["captionInsetX"])
+    per_line = max(1, cap_w // cap_fs)
+    # 页顶标题带的最大高度：图版不钳行数、只降字号（_title_font_px 的图版档按
+    # 字数降到 guardSize2 为止），所以按"降到底的字号 × 2 行"取上限——上限取小了
+    # 会把撞车放过去，取大了会误报短标题的段。
+    head_h = (int(p["titleInsetTop"])
+              + 2 * float(p["guardSize2"]) * float(p["titleLineHeight"]))
+    # 页底字幕带：n 行 + 底部内边距 + 一道安全缝（标题与字幕之间至少留 24px）
+    errs = []
+    for seg in segments:
+        if seg_layout(seg) != "plate":
+            continue
+        for sent in seg["sentences"]:
+            text = (sent.get("text") or "").strip()
+            n_lines = -(-len(text) // per_line)          # ceil
+            cap_h = int(p["captionInsetBottom"]) + n_lines * cap_fs * float(p["captionLineHeight"])
+            if min(n_lines, int(p["captionMaxLines"])) != n_lines:
+                # 超过 captionMaxLines 会被 CSS 钳掉（图版不滚，第 3 行直接消失），
+                # 屏幕上就是一句念了一半的字幕。
+                errs.append(
+                    f"段落 '{seg['id']}' 的图版字幕有一句 {len(text)} 字，按 {cap_fs}px "
+                    f"字号每行只放得下 {per_line} 字，会占 {n_lines} 行，超过 "
+                    f"captionMaxLines={p['captionMaxLines']}——图版不滚，多出的行被"
+                    f"钳掉（观众看到的是半句）。把这一句压到 {per_line * int(p['captionMaxLines'])} "
+                    f"字以内，或拆成两句（图版换句=换一屏，拆句正是它要的节奏）")
+                break
+            if head_h + cap_h + 24 > canvas_h:
+                errs.append(
+                    f"段落 '{seg['id']}' 的图版文字层撞在一起：页顶标题带约 "
+                    f"{head_h}px + 页底字幕 {n_lines} 行约 {cap_h}px，超出页高 "
+                    f"{canvas_h}px——两层文字会在画面中间叠着画。压短这一句，"
+                    f"或用 --set plate.{aspect}.captionFontSize=… 调小字幕")
+                break
+    return errs
 
 
 def _svg_selectable_tokens(raw):
@@ -1998,7 +2059,7 @@ def main(argv=None):
             # 是够用的）。
             _box_slot = get_image_box(args.aspect)
             _box_full = get_canvas(args.aspect)
-            _seg_boxes = {seg["id"]: (_box_full if seg_layout(seg) == "canvas"
+            _seg_boxes = {seg["id"]: (_box_full if is_full_bleed(seg)
                                       else _box_slot)
                           for seg in _segs}
             missing_imgs, corrupt_imgs = validate_images_files(

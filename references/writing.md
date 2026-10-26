@@ -48,7 +48,8 @@
 
   要自己钉一支色就写 `accent`——显式值**不参与弧**、也不把弧拉长，其余未写的段照旧铺弧。
 - `layout`（可选）：**不写 = 槽位版式**（标题区 + 配图槽 + verse 句子流）；写 `"canvas"` = **整页画布**（配图铺满整个画面，渲染器不生成标题层与句子流层，标题和上画面文字全由配图自己画）。穿插节奏与选型判据在 `references/canvas.md`「整页画布」。三条后果：① 该段**必须有配图**，没图就只剩进度条空帧，直接报错；② `title` 仍必填，但只喂开屏/结尾 agenda 行，**不再出现在该段画面上**；③ 该段口播**没有 HTML 字幕层**（DOM 不生成），要句子出现在画面就得自己画进 SVG（导演档 `type`/`at` 能逐拍揭示，见 `references/motion.md`「SVG 动画：两档」）——静音/听障观看时观众只剩画面，口播关键句务必画进图里。双人对话别放进整页画布，否则轮次信息只剩声音。
-  取值只有 `"canvas"` 给内容段：`"agenda"` 是结构性页那一档，内容段手写它契约层直接报错（那页的行是从全片其它段投影出来的）；大小写或空格写错同样报错——静默退回槽位版式会让画里的标题和 HTML 标题同框。结构性页漏盖 `layout` 时按 id 兜回 agenda。结构性页换版式用顶层 `opening_layout` / `closing_layout`（不写 = pipeline 盖 `"agenda"`；手写 manifest 时可直接写 `"canvas"`）。几何与对比度见 `references/rendering.md`「画面结构」与 `references/canvas.md`「整页画布」。
+  - 写 `"plate"` = **图版**：三层塌成两层半——配图同样满幅，但**句子流换成页底「一句字幕」**（一屏一句，说到下一句换一句，不留前句），标题缩成一行压在顶部。四条后果：① 该段**必须有配图**（缺图报错）；② `tagline` 不上画面（图版没有那一栏）；③ 字幕**只有当前一句**，所以单句要短——超过 `captionMaxLines`（2 行）生成期直接 `error`，竖屏约 44 字是上限；④ `title` 仍必填且**上画面**（与整页画布不同）。选型判据、与整页画布的分工见 `references/canvas.md`「图版」，版式细节见 `references/rendering.md`「画面结构」。
+  取值只有 `"canvas"` / `"plate"` 给内容段：`"agenda"` 是结构性页那一档，内容段手写它契约层直接报错（那页的行是从全片其它段投影出来的）；大小写或空格写错同样报错——静默退回槽位版式会让画里的标题和 HTML 标题同框。`canvas` 与 `plate` 都属**满幅版式**（`FULL_BLEED_LAYOUTS`，同一个判据管几何/转场/运镜/门禁），区别只在文字层留几层。结构性页漏盖 `layout` 时按 id 兜回 agenda（结构性页也接受 `"plate"`）。结构性页换版式用顶层 `opening_layout` / `closing_layout`（不写 = pipeline 盖 `"agenda"`；手写 manifest 时可直接写 `"canvas"` / `"plate"`）。几何与对比度见 `references/rendering.md`「画面结构」与 `references/canvas.md`「整页画布」「图版」。
 - `speed`（可选，有默认值）：段落级语速，覆盖全局 `--speed`。
 - `voice_id` / `voice_style`（可选，有默认值）：内容段音色与语气，覆盖全局；正文换音色靠它。`voice_id` 必须取预置音色表里的 ID（见 `references/tts_pipeline.md`），写错直接报错；两者都参与句子音频指纹，改音色后 `--resume` 重合成受影响句子。对话段落别在这里指定，音色归 `speakers` 注册表。opening/closing 是自动造的结构性页，**不支持**这两个字段，换开场音色用全局 `--voice-id`。
 - `text` / `dialogue`（**二选一，必填其一**）：
@@ -82,7 +83,7 @@
 
 ### 开场/结尾专用顶层字段
 
-- `opening_layout` / `closing_layout`（可选）：把那一页从 agenda 投影卡换成**整页海报**。写 `"canvas"` 时走内容段整页画布同一条路；下面几条 agenda 字段照旧写，仍是数据源，只是不上那一页画面——标题和要点得自己画进图里。不写 = `"agenda"`，判据见 `references/canvas.md`「整页画布」。
+- `opening_layout` / `closing_layout`（可选）：把那一页从 agenda 投影卡换成**整页海报**。写 `"canvas"` 时走内容段整页画布同一条路，写 `"plate"` 时走图版那条路（留标题 + 一句字幕）；下面几条 agenda 字段照旧写，仍是数据源，只是不上那一页画面——标题和要点得自己画进图里。不写 = `"agenda"`，判据见 `references/canvas.md`「整页画布」「图版」。
 - `opening_title` / `closing_title`：agenda 卡大标题。`opening_title` 缺省回退顶层 `title`，再缺省"本期内容"；`closing_title` 缺省"小结"。写稿时按主题显式设置。
 - `opening_tagline` / `closing_tagline`：卡标题上方的等宽小字 kicker（如 `AI WEEKLY · 2026-W38`）。缺省空字符串 → 不显示（与内容段 tagline 兜底不同）。
 - `cta`（可选）：结尾卡尾行，带 `→` 前缀。**至多一条**，行动号召或下期预告二选一；**单行**，含换行契约层拒绝。缺省不显示。

@@ -70,7 +70,7 @@ def validate_segments_source(data):
             "segments_source.json 的 'opening_animation' 已随「默认强绑定」移除："
             "开屏页（agenda 版式）现在无需配置即自动获得苹果风开场动画，"
             "请删掉这个键；若想要无文本编排的开屏页，把 opening_layout 写成 "
-            "\"canvas\"（整页海报）。")
+            "\"canvas\"（整页海报），或 \"plate\"（满幅图 + 标题与一句字幕）。")
     _reject_unknown_keys(data, SOURCE_KEYS, "segments_source.json 顶层")
     segments = data.get("segments")
     if not isinstance(segments, list) or not segments:
@@ -95,7 +95,8 @@ def validate_segments_source(data):
                 raise ValueError(f"segments_source.json 的 '{key}' 非法：{e}") from e
 
     # 结构性页的版式覆盖：不写 = agenda 投影卡（pipeline 盖章），写 "canvas" =
-    # 整页海报。只有这两个去向，所以这里按取值分派、不看段 id（content=False）。
+    # 整页海报，写 "plate" = 图版（满幅图 + 标题 + 一句字幕）。这三条去向所以这里
+    # 按取值分派、不看段 id（content=False）。
     for key in ("opening_layout", "closing_layout"):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
 

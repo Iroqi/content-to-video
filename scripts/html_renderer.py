@@ -23,7 +23,8 @@ from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
                        get_canvas, get_image_box, normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME)
-from _segments import (is_content_sid, seg_layout)
+from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
+                       is_full_bleed, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
 from _ease import validate_ease as ease_validate
@@ -423,6 +424,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # 从模板提取 CSS 变量值
     _tl = rc.tl = tpl_layout["title"]
     _ag = rc.ag = tpl_layout["agenda"]
+    # 图版（layout:"plate"）的字号/几何各画幅一份，挂在模板顶层 `plate`
+    rc.plate = tpl["plate"][aspect]
     _vv = tpl_layout["verse"]
     _il = tpl_layout["image"]
     _tgl = tpl_layout["tagline"]
@@ -504,6 +507,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # CSS 只拿 var(--ctv-amb-*) 拼字符串，不在 [data-aspect] 分支里存第二份。
     _amb = tpl_layout["ambience"]
     _camb = tpl["canvasAmbience"]
+    _pl = rc.plate
     # 句尾收束时长：这里先落 0（= 不演，CSS 规则自动失效），generate_html 的
     # 卡片循环里拿到全片 cue 之后再覆写成真值（那边才有句子表）。
     _settle_now = 0.0
@@ -616,6 +620,12 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
+  --ctv-pl-title-lh:{_pl["titleLineHeight"]};--ctv-pl-title-x:{_pl["titleInsetX"]}px;
+  --ctv-pl-title-t:{_pl["titleInsetTop"]}px;--ctv-pl-title-scrim:{_pl["titleScrimHeight"]}px;
+  --ctv-pl-cap-x:{_pl["captionInsetX"]}px;--ctv-pl-cap-b:{_pl["captionInsetBottom"]}px;
+  --ctv-pl-cap-lines:{_pl["captionMaxLines"]};--ctv-pl-cap-fs:{_pl["captionFontSize"]}px;
+  --ctv-pl-cap-lh:{_pl["captionLineHeight"]};--ctv-pl-cap-weight:{_pl["captionWeight"]};
+  --ctv-pl-cap-scrim:{_pl["captionScrimHeight"]}px;
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{num_fmt(_relay_s)};
   --ctv-scroll-ease:{_scroll_ease};
@@ -631,7 +641,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
         # line-clamp + overflow:hidden，CJK 墨迹必须装进行盒。微软雅黑度量盒
         # ≈1.32em 刚好不裁，但 Linux headless 回退 Noto Sans CJK Black 时墨迹
         # ≈1.39em，1.32 会被官方门禁 hyperframes check 报 clipped_text
-        # （references/rendering.md「官方校验命令」：不在噪声之列）。64×1.45
+        # （references/motion.md「官方校验命令」：不在噪声之列）。64×1.45
         # 两行 + tagline 一行的预算 = 原 72×1.32 几乎不变，两画幅都够装。
         _v_title_area = (_tl["maxLines"] * _tl["fontSize"] * css_title_lh
                          + _tgl["marginTop"]
@@ -685,16 +695,32 @@ def _card_colors(rc, seg):
     return ac, ac_attr, esc(ac_text)
 
 
-def _title_font_px(rc, seg, sid, is_agenda):
+def _title_font_px(rc, seg, sid, is_agenda, is_plate=False):
     """标题字号（内联，唯一不被 CSS 覆盖的标题数值），阈值/字号一律取模板：
     - agenda 页带长度守卫：agenda 头豁免了行数钳制（见 composition.css），
       长标题会无限折行挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数
       内放得下为止；横屏的行预算被 maxRows 吃满，标题只锁 1 行，竖屏允许
       压进 2 行；
+    - 图版页沿用槽位版式的阈值表（`layout.<画幅>.title`），但**不设行数钳制**：
+      标题压在满幅图上、没有定高标题区，超长就折行（与横屏同一个取舍），
+      只降字号、不裁字；
     - 横屏内容段超阈值按 guardSize 降档，配合 text-wrap:balance 折行，避免
       长标题把左栏撑出孤字；竖屏内容段一律取 fontSize。
     """
     _tl, _ag, aspect, width = rc.tl, rc.ag, rc.aspect, rc.width
+    if is_plate:
+        # 图版与横屏共用一张阈值表（guardChars1/guardSize1…），竖屏那份模板没有
+        # 这几个键，按"超长降一档"从当前字号与宽度推：每行至少放 8 个字。
+        _pl = rc.plate
+        _base = float(_pl.get("titleSize", _tl["fontSize"]))
+        _tlen = len(seg["title"])
+        _cap1 = int(_pl.get("guardChars1", 16))
+        _cap2 = int(_pl.get("guardChars2", 22))
+        if _tlen > _cap2:
+            _base = float(_pl.get("guardSize2", _tl.get("guardSize2", _base * 0.78)))
+        elif _tlen > _cap1:
+            _base = float(_pl.get("guardSize1", _tl.get("guardSize1", _base * 0.87)))
+        return f"{max(MIN_READABLE_FONT_PX, _base):.0f}px"
     if is_agenda:
         # --set 能把任意 JSON 标量写进模板叶子（0 也合法），而字号是"每行能放
         # 几个字"的除数：0 会让下面那条整除 ZeroDivisionError 裸栈，崩在一个与
@@ -1052,6 +1078,17 @@ def _is_keep_page(rc, sid):
     return bool(entry) and entry["opts"].get("stage") == "keep"
 
 
+def is_full_bleed_card(card):
+    """这张卡是不是"画面主导的满幅页"（整页画布 / 图版）。
+
+    与 `_segments.is_full_bleed(seg)` 是同一个判据的两种入口：那边吃 manifest 段，
+    这边吃已装配的卡（渲染器的时间线各处只有卡）。版式名单仍只由 _segments 持有，
+    这里不复制一份字面量——复制之后加第三档满幅版式时，漏掉的那一处会静默按
+    槽位页处理（配图入场、Ken Burns、擦除转场全回来一遍）。
+    """
+    return card.layout in FULL_BLEED_LAYOUTS
+
+
 def _prepare_card(rc, clip):
     """把一段归一成渲染消费的全部形状：id/颜色/版式判定 + 标题字号 +
     各部件 HTML（题头组、配图、句子流、卡壳、进度条）。
@@ -1100,6 +1137,16 @@ def _prepare_card(rc, clip):
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
     # _segments._validate_layout 把守；这里只认 canvas 且必须有配图。
     is_canvas = layout == "canvas"
+    # 图版（layout: "plate"）：图主导，但保留一层最小的文字层——标题 + **一句**字幕。
+    # 它填的是槽位版式（文字主导）与整页画布（一个字都没有）之间的空档：3b1b 的
+    # 每一帧就是这个样子。句子流层整层不生成（只挂当前句，不滚动），tagline 也不画
+    # ——这是它自己那一层，别的页一律照旧（见 references/canvas.md「图版」）。
+    is_plate = layout == "plate"
+    if is_plate and not has_image:
+        raise ValueError(
+            f"段落 '{sid}' 声明了 layout=\"plate\"（图版），但没有配图——这一页"
+            "满幅就是那张图，缺图只剩标题与字幕悬在空页上。请在 images.json 给"
+            "该段配一张图，或去掉 layout 字段回到槽位版式")
     if is_canvas and not has_image:
         # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
         raise ValueError(
@@ -1116,12 +1163,15 @@ def _prepare_card(rc, clip):
     # 消费，白算之外还会把 `font-size:;`（title_size 为空的守卫值）嵌进一串
     # 永不发射的 HTML 里——死代码不该长得像坏 CSS。
     title_size = ("" if is_canvas
-                  else _title_font_px(rc, seg, sid, is_agenda))
+                  else _title_font_px(rc, seg, sid, is_agenda, is_plate))
     # agenda 卡的副标题是 `.agenda-kicker`（`_agenda_col_html` 画在 `.agenda-head`
     # 里），**不是** `#tag-{sid}`——这一行算出来也不会进 DOM。留着它，
     # `card.tagline_html` 就对"这一段到底画没画副标题"给了第二个答案：副标题入场
     # 补间会指向一个永远不存在的元素（与画布页那段"死代码不该长得像坏 CSS"同源）。
-    tagline_html = "" if (is_canvas or is_agenda) else _tagline_html(rc, seg, sid, ac)
+    # 图版的文字层只有标题 + 一句字幕（references/canvas.md「图版」），tagline 是
+    # 槽位版式的题头组才有的一行，这一页不画。
+    tagline_html = ("" if (is_canvas or is_agenda or is_plate)
+                    else _tagline_html(rc, seg, sid, ac))
     # 结尾 kicker 的**存在性**：`_kicker_entrance_lines` 拿它当闸门，与
     # `tagline_html` 同一个口径——补间只在"真有这一行"时生成。开屏那行不在这里
     # 生成（它挂在 _apple_opening_lines 里），所以苹果开场时为 False。
@@ -1136,7 +1186,9 @@ def _prepare_card(rc, clip):
     if has_image:
         image_html = (_compare_html(rc, sid, win_start, vis_d) if is_compare
                       else _media_html(rc, sid, win_start, vis_d))
-    verse_html = "" if is_canvas else _verse_html(seg, sid, ac_text_attr)
+    verse_html = ("" if is_canvas
+                  else _plate_caption_html(seg, sid, ac_text_attr) if is_plate
+                  else _verse_html(seg, sid, ac_text_attr))
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
     # 不推导盒几何。
@@ -1147,7 +1199,8 @@ def _prepare_card(rc, clip):
     # 之下、卡片背景色之上。
     card_open = (
         f'  <div id="{sid}" class="clip seg-card'
-        + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
+        + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas
+           else " seg-plate" if is_plate else "")
         + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
         f'data-track-index="1" style="clip-path:{_wipe_pair(rc)[0]};--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
         '    <div class="bg"></div>\n    <div class="grid"></div>\n'
@@ -1156,7 +1209,8 @@ def _prepare_card(rc, clip):
         f'    <div class="seg-progress" id="prog-{sid}" '
         f'style="background:{ac_attr};width:0"></div>\n'
     )
-    title_wrap = ("" if is_canvas else (
+    title_wrap = ("" if is_canvas else _plate_title_wrap(rc, seg, sid, title_size, ac)
+                  if is_plate else (
         f'    <div class="seg-title-wrap">\n'
         f'      <div class="seg-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
@@ -1174,7 +1228,8 @@ def _prepare_card(rc, clip):
         gets_line=clip["gets_line"],
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
-        has_image=has_image, is_canvas=is_canvas, title_size=title_size,
+        has_image=has_image, is_canvas=is_canvas, is_plate=is_plate,
+        title_size=title_size,
         apple_opening=apple_opening,
         # agenda 卡装配时回写实际行数（_agenda_col_html）；非 agenda 页用不到，
         # 留 0 而不是 getattr 兜底——苹果开场只在 agenda 卡上生效，读到的
@@ -1185,6 +1240,59 @@ def _prepare_card(rc, clip):
         kicker_html=kicker_html,
         verse_html=verse_html, card_open=card_open,
         progress_html=progress_html, title_wrap=title_wrap)
+
+
+def _plate_title_wrap(rc, seg, sid, title_size, ac):
+    """图版（layout:"plate"）的标题带：一行标题压在满幅图上。
+
+    与槽位版式的 `.seg-title-wrap` 是两个盒子而不是同一个加修饰类：槽位那一个是
+    "标题区 + tagline"的定高块（竖屏还带行数钳制），图版这一个只有标题、且要压
+    在图之上（CSS 走 .plate-head）。共用一个盒子就得在两套几何之间来回覆盖，
+    而这两套几何的每一处差异都是有意的（见 references/rendering.md「画面结构」）。
+    """
+    return (
+        f'    <div class="plate-head">\n'
+        f'      <div class="seg-title plate-title" id="title-{sid}" '
+        f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac}40">'
+        f'{esc(seg["title"])}</div>\n'
+        f'    </div>'
+    )
+
+
+def _plate_caption_html(seg, sid, ac_text_attr):
+    """图版的一句字幕：**只有当前句**，不滚动、不带历史。
+
+    句子流（`.verse`）那套在这里是错的：它把整段句子排成一列、按焦点滚动，读起来
+    是"一页上有 5 句在等"。图版要的是 3b1b 那种"一屏一句"——当前句出现在底部，
+    换句时整行换掉。所以 DOM 结构与句子流不同（`.plate-caption` 而不是 `.verse`），
+    运行时按 `.plate-line` 的 data-t0/data-t1 判"这一帧该显示哪一句"，词级强调
+    （`.verse-em` / `.verse-ved`）与说话人标签照旧可用——它们是**句内**的事，与
+    "一屏几句"无关。
+
+    行不做焦点衰减（亮度/尺寸/模糊）：屏幕上只有一句，没有"离焦多远"可言。
+    """
+    lines = []
+    for s2 in seg["sentences"]:
+        t0 = round(float(s2["start_time"]), 2)
+        t1 = round(float(s2["start_time"]) + float(s2["duration"]), 2)
+        onset = float(s2.get("onset") or 0.0)
+        voiced = s2.get("voiced")
+        voiced_attr = ("" if voiced is None
+                       else f' data-voiced="{max(0.01, float(voiced)):.2f}"')
+        lines.append(
+            f'<div class="plate-line" data-i="{s2.get("index", -1)}"'
+            f' data-t0="{t0 + onset:.2f}" data-t1="{max(t0 + 0.01, t1):.2f}"'
+            f'{voiced_attr}'
+            f' data-layout-allow-overlap data-layout-allow-occlusion>'
+            f'{esc(s2["text"])}{_em_marker()}{_ved_layer(s2["text"])}</div>'
+        )
+    return (
+        f'\n    <div class="plate-caption" id="cap-{sid}" '
+        f'data-layout-allow-overflow data-layout-allow-overlap '
+        f'data-layout-allow-occlusion>'
+        f'<div class="plate-clip" data-accent="{ac_text_attr}">'
+        f'{"".join(lines)}</div></div>'
+    )
 
 
 def _assemble_card(rc, card, clips, manifest):
@@ -1206,6 +1314,16 @@ def _assemble_card(rc, card, clips, manifest):
         return (card.card_open
                 + f'{card.image_html}\n'
                 + card.progress_html
+                + '  </div>')
+    if card.is_plate:
+        # 图版：满幅图 + 一层文字（标题压在顶部、一句字幕压在底部）。两个文字层的
+        # 盒几何全在 CSS（.plate-head / .plate-caption），这里只排顺序——标题 →
+        # 图 → 字幕 → 进度条，与竖屏槽位版式同一个纵向阅读顺序，差别只是图占满整页。
+        return (card.card_open
+                + card.title_wrap
+                + f'{card.image_html}\n'
+                + card.progress_html
+                + f'    {card.verse_html}\n'
                 + '  </div>')
     if rc.aspect == "landscape":
         # 横屏内容段：左栏（标题组+句子流）垂直居中成一块，媒体卡居右。
@@ -2023,7 +2141,9 @@ def _still_image_carrier_sid(rc, card):
     入场收拢与持续运镜作用在**同一个元素**（`#img-{sid} > img`）上，所以"哪些
     载体能独立运镜"只能有一个答案——不是两处巧合地一致。
     """
-    if not card.has_image or card.is_canvas or card.is_keep:
+    # 图版与整页画布同一口径：画面主导的页，配图要"揭开即在位"，不收拢、不漂；
+    # 运镜交给作者（图版本来就是给 SVG director / compare 用的档）。
+    if not card.has_image or is_full_bleed_card(card) or card.is_keep:
         return None
     if getattr(card, "layout", None) == "compare":
         # 并置对比：两格里只要有一格是可漂的静态图就算"有载体"（逐格判在
@@ -2444,7 +2564,7 @@ def _card_timeline_lines(rc, card):
     # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。
     if card.apple_opening:
         lines.extend(_apple_opening_lines(rc, card))
-    if card.has_image and not card.is_canvas and not card.is_keep:
+    if card.has_image and not is_full_bleed_card(card) and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
         # 整页画布连这条补间也不生成：wipe 揭开即要求画面到位，配图再自带
@@ -2563,13 +2683,14 @@ def generate_html(manifest, audio_src, images=None,
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)
-        # 整页画布段：入场交给导演逐拍演，模板转场（clip-path 擦除 / 引导线 / 旧页剥离）
-        # 一律退场。把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、
-        # _line_timeline_lines、peel 三处都以 wipe<=0 为闸自动不生成，画布页在自己的
-        # 音频起点整页出现、运动全由 director 驱动（对标 3b1b 的连续镜头，而非翻页）。
+        # 画面主导的页（整页画布 / 图版，判据只有 _segments.is_full_bleed 一份）：
+        # 入场交给导演逐拍演，模板转场（clip-path 擦除 / 引导线 / 旧页剥离）一律退场。
+        # 把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、_line_timeline_lines、
+        # peel 三处都以 wipe<=0 为闸自动不生成，这一页在自己的音频起点整页出现、运动
+        # 全由 director 驱动（对标 3b1b 的连续镜头，而非翻页）。
         # 接续页（stage:"keep"）同理且更要紧：这一页的画面是上一页演完的样子，
         # 擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry 烘焙的意义。
-        if (seg_layout(clip["seg"]) == "canvas"
+        if (is_full_bleed(clip["seg"])
                 or _is_keep_page(rc, clip["seg"]["id"])):
             clip["wipe"] = 0.0
         clip["win_start"] = round(max(0.0, s_i - clip["wipe"]), 2)
@@ -2587,7 +2708,7 @@ def generate_html(manifest, audio_src, images=None,
         clip["gets_line"] = bool(_is_line and clip["wipe"] > 0)
         clip["peel"] = None
         if (_is_line and i and clip["wipe"] > 0
-                and seg_layout(clips[i - 1]["seg"]) != "canvas"):
+                and not is_full_bleed(clips[i - 1]["seg"])):
             prev_sid = clips[i - 1]["seg"]["id"]  # sid 由契约把守，见 _prepare_card
             clip["peel"] = (prev_sid, clip["wipe"])
             clips[i - 1]["gets_peeled"] = True  # 旧卡要挂底缘暗边（_peel_shade_html）

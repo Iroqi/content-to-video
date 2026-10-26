@@ -82,19 +82,25 @@ def sids_needing_image(manifest):
             if needs_image(seg)]
 
 
-# 段落版式三档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
+# 段落版式四档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
 # 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
-# 画）；"agenda" = 开屏/结尾那张纯文字页。只有 agenda 绑段 id：它是结构性页专属
+# 画）；"compare" = 并置对比（标题区照旧，图槽一分为二，两张图各自按旁白入场 /
+# 演进）；"agenda" = 开屏/结尾那张纯文字页。只有 agenda 绑段 id：它是结构性页专属
 # 的投影卡（行来自全片其它段——作者能选这一档，选不了它印什么，见 seg_layout）；
-# canvas 两段通用——内容段用它换整页画布，结构性页用它把整页让给一张海报。
+# canvas / compare 两段通用。
 # 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
-# references/canvas.md「整页画布」。
-LAYOUT_VALUES = ("canvas", "agenda")
+# references/canvas.md「整页画布」与同文件「并置对比」。
+LAYOUT_VALUES = ("canvas", "compare", "agenda")
 STRUCTURAL_SIDS = ("opening", "closing")
+
+# 需要"一对图"的版式：images.json 里对应条目写成 {"src": ["左", "右"], ...}。
+# 这个清单同时是"这条 entry 该按哪套校验"的唯一分派依据——_images_schema 校验
+# 形状、html_renderer 装配、check_svg 量尺寸都从它读，不各抄一份。
+PAIRED_LAYOUTS = ("compare",)
 
 
 def seg_layout(seg):
-    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'agenda'。
+    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'compare' / 'agenda'。
 
     agenda 由 pipeline 自动盖进 manifest，所以正常数据里它已经在 `layout` 字段上；
     这里仍按 id 兜一档，是因为手写 manifest 是本技能支持的用法（见

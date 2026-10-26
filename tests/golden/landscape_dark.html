@@ -361,6 +361,25 @@ body{font-family:var(--ctv-font-family)}
    段进度整个盖掉。 */
 [data-aspect] .seg-canvas .seg-progress,[data-aspect] .seg-canvas::before{z-index:2}
 
+/* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
+   与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何
+   直接继承两条画幅各自的 .seg-image 定位规则，见下两行），里面两格平分。
+   为什么让外层沿用 .seg-image 的类名：边框、圆角、外发光、内描边 ::after、
+   Layout 门禁的盒子假设全都按"一个槽"成立——拆成两个独立槽就要给每一道门禁
+   各教一遍"这两个其实是一个"。所以外层仍带 .seg-image（槽的容器），
+   两格是 .seg-compare-pane（各占一半，各自 overflow:hidden 裁自己的图）。
+   竖屏两格上下排（1080 宽的画幅里左右各 490 太窄，纵向各 367 正好是 4:3 的
+   半高）；横屏两格左右排（1920 里各 848 × 888，够放两张 4:3）。 */
+[data-aspect] .seg-compare{top:var(--ctv-v-img-top);left:0;right:0;margin:0 auto;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2);height:var(--ctv-v-img-height);border-radius:var(--ctv-v-img-radius);display:grid;grid-template-columns:1fr;grid-template-rows:1fr 1fr;gap:var(--ctv-v-img-cmp-gap);overflow:visible}
+[data-aspect="landscape"] .seg-compare{top:var(--ctv-l-margin);right:var(--ctv-l-margin);left:auto;bottom:var(--ctv-l-margin);margin:auto 0;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);grid-template-columns:1fr 1fr;grid-template-rows:1fr;gap:var(--ctv-l-img-cmp-gap)}
+/* 两格各自的盒子：位置归 grid，装饰归自己（每格独立圆角 + 内描边，读作"两张卡"
+   而不是"一张卡被划了一刀"）。.seg-image 的绝对定位在这里必须撤掉——它属于
+   "槽的容器"那一档，格是 grid 的子项。
+   bare-media 撤外发光与内描边（SVG 不铺满幅底，见根规则那段），这一档照旧。 */
+[data-aspect] .seg-compare-pane{position:relative;inset:auto;margin:0;width:auto;height:auto;border-radius:calc(var(--ctv-v-img-radius) * 0.6);overflow:hidden}
+[data-aspect] .seg-compare-pane.bare-media{box-shadow:none}
+[data-aspect] .seg-compare-pane.bare-media::after{display:none}
+
 /* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
    全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
    吃留白——省出的空间用来抬进行数上限）、句子流锚底。几何差异
@@ -463,6 +482,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-l-text-w:613px;--ctv-l-text-gap:56px;
   --ctv-l-title-lh:1.15;
   --ctv-l-img-w:1067px;--ctv-l-img-h:800px;
+  --ctv-l-img-cmp-gap:14px;
   --ctv-l-img-radius:12px;
 }
 

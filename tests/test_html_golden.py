@@ -16,13 +16,43 @@ from html_renderer import generate_html
 CASES = {
     "portrait_dark": dict(aspect="portrait", theme="dark"),
     "landscape_dark": dict(aspect="landscape", theme="dark"),
+    # 并置对比：两格各自一条补间（左格 evolve、右格 director），两画幅各一份。
+    # 单独立用例是因为这一版式的 DOM 与时间线作用域都另成一套（`#img-{sid}-{i}`），
+    # 槽位版式的快照照不到它。
+    "compare_portrait": dict(aspect="portrait", theme="dark", _case="compare"),
+    "compare_landscape": dict(aspect="landscape", theme="dark", _case="compare"),
 }
 
 
+def _compare_source():
+    """样例稿改一段成并置对比（段内两句，正好一格一拍）。"""
+    src = H.sample_source()
+    src["segments"][0]["layout"] = "compare"
+    src["segments"][0]["text"] = "左边是常见写法。右边是这一版的写法。"
+    return src
+
+
+def _compare_images(manifest):
+    imgs = H.sample_images(manifest)
+    imgs["seg-a"] = {
+        "src": ["images/seg-a-0.svg", "images/seg-a-1.svg"],
+        "panes": [
+            {"evolve": {"steps": [{"at": 0, "target": "#a",
+                                   "to": {"opacity": 0.4}}]}},
+            {"director": {"steps": [{"at": 1, "target": "#b",
+                                     "to": {"opacity": 1}}]}},
+        ],
+    }
+    return imgs
+
+
 def render(**kw):
-    m = H.make_manifest()
+    case = kw.pop("_case", None)
+    m = (H.make_manifest(_compare_source()) if case == "compare"
+         else H.make_manifest())
+    imgs = _compare_images(m) if case == "compare" else H.sample_images(m)
     with contextlib.redirect_stderr(io.StringIO()):
-        return generate_html(m, "audio/combined.wav", images=H.sample_images(m), **kw)
+        return generate_html(m, "audio/combined.wav", images=imgs, **kw)
 
 
 class Golden(unittest.TestCase):

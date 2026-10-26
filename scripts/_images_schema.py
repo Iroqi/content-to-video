@@ -14,7 +14,8 @@ from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
 from _ease import validate_ease  # noqa: E402
-from _validate import is_finite_number  # noqa: E402  数值守卫的单一谓词（拒 NaN/Inf）
+from _validate import (_reject_unknown_keys,  # noqa: E402  未知键拦截（panes 分格也走同一份）
+                       is_finite_number)  # noqa: E402  数值守卫的单一谓词（拒 NaN/Inf）
 
 
 def validate_relative_project_path(src, where):
@@ -56,6 +57,10 @@ _EVOLVE_CAMERA_KEYS = frozenset({"svgOrigin", "transformOrigin", "scale",
 # （`position`/`fit`/`alt` 这类凭空发明的写法不该被静默丢掉）。
 # warn 只在预检（validate_images_json）打；html_renderer._normalize_images
 # 要求入参已过本预检，不重复打。
+# 并置对比（layout "compare"）每格的键集：只有两档补间与三项出处。刻意不给
+# 播放/音频/type——两格都是静态图或 SVG（理由见 _check_pair）。
+PANE_KEYS = ("director", "evolve", "source_url", "license", "attribution")
+
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
@@ -67,6 +72,8 @@ MEDIA_ENTRY_KEYS = frozenset({
     # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
     # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
     "stage",
+    # panes：并置对比（layout "compare"）的两格声明（见 _check_pair）。
+    "panes",
     # inline_svg：**内部键**，由 gen_hyperframes 净化后回填。进这个集合只为不被
     # unknown_media_keys 误报；用户手写会被 validate_images_json 直接拒（否则等于
     # 开了"绕过净化、把任意字符串塞进 DOM"的注入口）。
@@ -562,6 +569,12 @@ def _validate_entry(key, value, errs):
             f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
         return
     src = value.get("src")
+    # 一对图（并置对比版式）：src 写成 ["左", "右"]，两个位各自可以挂 director /
+    # evolve。它与单图条目是两套形状，判据也分开——先判这一支再落到单图那套，
+    # 免得"src 不是字符串"那句把一对图判成错误。
+    if isinstance(src, list):
+        _collect(errs, lambda: _check_pair(key, value, src))
+        return
     # type 组先报src 缺失/类型，之后各组只在 src 是字符串时才查路径与媒体类型——
     # 早退会把同段里其它键的错一起吞掉（比只报一条更糟：改完 src 重跑才知道
     # 还有下一处）。四个播放开关不依赖 src，缺 src 也要照报。
@@ -583,6 +596,88 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_evolve(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
     _collect(errs, lambda: _check_drift(key, value))
+
+
+def _check_pair(key, value, src):
+    """并置对比版式的条目：`src` 是一对图，`panes` 可选。
+
+    形状：
+
+        {"seg3": {"layout_compare": true,
+                  "src": ["images/before.svg", "images/after.svg"],
+                  "panes": [{"director": {...}}, {"director": {...}}]}}
+
+    为什么允许 `panes` 而不是把两套补间塞进一个 `director`：两张图各自有自己
+    的元素 id（`#a`、`#b` 往往重名），合成一份 steps 就分不清这一条打的是哪一格。
+    分格声明是唯一不会歧义的写法。
+
+    刻意**不接受视频**：两段视频同屏时各自的音轨、各自的循环相位、各自的
+    duck 让路会互相打架，而这一版式要的是"并排看清两个状态的差别"——动态的
+    并置反而让人分不清哪边在动。要动画就用 SVG（panes 里的 director/evolve 够用）。
+    """
+    if len(src) != 2:
+        raise ValueError(
+            f"images.json 的 '{key}' 的 src 是一对图（并置对比版式），必须正好 2 项"
+            f"（左 / 右），实际 {len(src)} 项")
+    for i, item in enumerate(src):
+        if not isinstance(item, str):
+            raise ValueError(
+                f"images.json 的 '{key}' 的 src[{i}] 必须是字符串路径"
+                f"（实际: {type(item).__name__}）")
+        if _is_video_src(value, item):
+            raise ValueError(
+                f"images.json 的 '{key}' 的 src[{i}]={item!r} 是视频：并置对比"
+                "只收静态图与 SVG。两段视频同屏时各自的音轨、循环相位、duck "
+                "让路会互相打架，动态并置也让人分不清哪边在动——"
+                "要两份都动就画 SVG，用 panes 里的 director/evolve 分别驱动")
+        # 路径归一（越界/绝对路径）与单图同一条判据，回写成两边各自一项。
+        src[i] = validate_relative_project_path(
+            item, f"images.json 的 '{key}' 的 src[{i}]")
+    # 单图专属的键在这一支上都不成立：type/poster/播放开关/音频路由按
+    # 单条媒体算，一对图没有"这一条的 type"这回事。
+    for _opt in ("type", "poster", "loop", "muted", "autoplay", "playsinline",
+                 "volume", "fade_in", "fade_out", "media_start", "duck",
+                 "source_url", "license", "attribution", "query", "provider",
+                 "drift", "stage", "director", "evolve"):
+        if _opt in value:
+            raise ValueError(
+                f"images.json 的 '{key}' 是并置对比（src 为一对图），不接受 "
+                f"'{_opt}'（那是单图条目的键）。"
+                "两格各自的补间写进 panes[0] / panes[1]，"
+                "两格各自的出处写进 panes[i] 的同名键；整页的运镜与接续在这一版式"
+                "上不适用")
+    panes = value.get("panes")
+    if panes is None:
+        value["panes"] = _default_panes(key)
+        return
+    if not isinstance(panes, list) or len(panes) != 2:
+        raise ValueError(
+            f"images.json 的 '{key}' 的 'panes' 必须是 2 项的数组"
+            "（[左格, 右格]，每格 {\"director\"?: …, \"evolve\"?: …}）")
+    for i, pane in enumerate(panes):
+        if pane is None:
+            panes[i] = {}
+            continue
+        if not isinstance(pane, dict):
+            raise ValueError(
+                f"images.json 的 '{key}' 的 panes[{i}] 必须是对象"
+                f"（实际: {type(pane).__name__}）")
+        _reject_unknown_keys(pane, PANE_KEYS, f"images.json 的 '{key}' 的 panes[{i}]")
+        for _opt in ("director", "evolve"):
+            if _opt in pane:
+                what = _opt
+                _validate_director(what, pane[_opt], what=what)
+        # 两格各自的出处：写进 pane 才不会被上面的"单图键"拦下，而它确实
+        # 是逐格的事实（左边是实拍、右边是示意图，出处本来就不一样）。
+        for _opt in ("source_url", "license", "attribution"):
+            if _opt in pane and not isinstance(pane[_opt], str):
+                raise ValueError(
+                    f"images.json 的 '{key}' 的 panes[{i}].{_opt} 必须是字符串")
+
+
+def _default_panes(key):
+    """没写 panes 时给两格各一份空声明（= 两张静态图，各自不动）。"""
+    return [{}, {}]
 
 
 def _check_video_only_opts(key, value, src):

@@ -369,76 +369,100 @@ def validate_images_files(images, out_dir, seg_durs=None, seg_boxes=None):
         return True, "", parse_duration(err_text), parse_video_size(err_text)
 
     for sid, entry in images.items():
-        # 上游 validate_images_json 已保证每条都是媒体对象、src 必填非空
-        media_type = entry.get("type", "auto")
-        media_path = entry["src"]
-        # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
-        if media_type == "auto":
-            media_type = classify_media_path(media_path)
-        # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
-        # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
-        p = os.path.join(out_dir, media_path)
-        # 存在性与越界都走 _script_utils.media_verdict——与 run.py 的覆盖率/
-        # `--until html` 拦截同一个函数，两道门必须给同一个答案。
-        verdict = media_verdict(out_dir, media_path)
-        if verdict == "missing":
-            missing_imgs.append((sid, media_path))
+        # 并置对比（src 是一对图）：两格各自当成一条独立媒体过同一套探测。
+        # 展开而不另写一套：存在性、越界、损坏、像素够不够、比例贴不贴合——
+        # 这五道判据与单图完全相同，只是作用在两张图上。不展开的话
+        # 下面的 os.path.join(out_dir, media_path) 会拿到一个 list 直接崩。
+        if isinstance(entry.get("src"), list):
+            panes = entry.get("panes") or []
+            for i, pane_src in enumerate(entry["src"]):
+                sub = {"src": pane_src}
+                # 逐格的中断点写成 `seg3[1]`，与生成期其它分格报错同一写法。
+                sub_sid = f"{sid}[{i}]"
+                box = (seg_boxes or {}).get(sid)
+                if panes and isinstance(panes[i], dict):
+                    sub.update({k: v for k, v in panes[i].items()
+                                if k in ("source_url", "license", "attribution")})
+                _probe_one(sub_sid, sub, out_dir, box,
+                           (seg_durs or {}).get(sid, 0),
+                           missing_imgs, corrupt_imgs, _ffmpeg_probe,
+                           _probe_media_ok)
             continue
-        if verdict == "escapes":
-            corrupt_imgs.append((sid, media_path,
-                                 "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
-            continue
-        poster = entry.get("poster")
-        # poster 的问题只记录、不提前 continue：同一条目的 src 若也有毛病，必须
-        # 一起报出来（先 continue 会让人以为"只是封面缺了"，修完才发现视频本身
-        # 还是坏的，白跑一轮）。
-        if poster:
-            poster_verdict = media_verdict(out_dir, poster)
-            if poster_verdict == "missing":
-                missing_imgs.append((sid, poster))
-            elif poster_verdict == "escapes":
-                corrupt_imgs.append((sid, poster,
-                                     "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
-        # 视频用 ffmpeg 解码探测（只查存在性不够：
-        # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
-        if media_type == "video":
-            _size = None
-            if _ffmpeg_probe:
-                ok, reason, vdur, _size = _probe_media_ok(p)
-                if not ok:
-                    corrupt_imgs.append((sid, media_path,
-                                         f"视频解码失败: {reason}"))
-                elif vdur is not None:
-                    seg_dur = (seg_durs or {}).get(sid, 0)
-                    kind, head = video_span_verdict(seg_dur, vdur,
-                                                    _media_start(entry))
-                    if kind == "empty":
-                        corrupt_imgs.append((sid, media_path, head))
-                    elif kind in ("short", "long"):
-                        print(f"[warn] {head}", file=sys.stderr)
-            _size_warnings(sid, media_path, (seg_boxes or {}).get(sid), _size)
-            continue
-        # svg 是文本格式，ffmpeg 打不开，存在性校验已足够；矢量也不验尺寸
-        # （缩放不失真，它另有比例与字号两道门禁）
-        if is_svg_path(p):
-            continue
-        # 栅格图（jpg/png/webp/gif…）用 ffmpeg 全解码探测损坏/截断——
-        # ffmpeg 是渲染必需依赖，无需再引入 Pillow
-        # 尺寸只在"知道框多大"时才读：没框就不比，也就不用为它开一次文件
-        _size = raster_size(p) if (seg_boxes or {}).get(sid) else None
-        if _ffmpeg_probe:
-            ok, reason, _dur, _probe_size = _probe_media_ok(p)
-            if not ok:
-                corrupt_imgs.append((sid, media_path,
-                                     f"图片损坏或无法解码: {reason}"))
-            # 头解析读不出的格式（avif/heic 之类）退回 ffmpeg 的流信息
-            _size = _size or _probe_size
-        _size_warnings(sid, media_path, (seg_boxes or {}).get(sid), _size)
-    if not _ffmpeg_probe and images:
-        print("[warn] ffmpeg 不可用，跳过配图完整性（损坏/截断）校验，"
-              "仅做了文件存在性校验（ffmpeg 是渲染必需依赖，正常环境"
-              "不会出现此降级）", file=sys.stderr)
+        _probe_one(sid, entry, out_dir, (seg_boxes or {}).get(sid),
+                   (seg_durs or {}).get(sid, 0), missing_imgs, corrupt_imgs,
+                   _ffmpeg_probe, _probe_media_ok)
     return missing_imgs, corrupt_imgs
+
+
+def _probe_one(sid, entry, out_dir, box, seg_dur, missing_imgs, corrupt_imgs,
+               _ffmpeg_probe, _probe_media_ok):
+    """单条媒体的完整性探测（`validate_images_files` 的循环体，逐条调用）。
+
+    抽成函数只为让并置对比的两格能复用同一套判据——两格各写一遍就是
+    "左格验了像素、右格忘了比例"这类漏检的来源。
+
+    `box` 是这一条要被 `cover` 铺进的框（像素）；`seg_dur` 是它所在段的时长。
+    """
+    media_type = entry.get("type", "auto")
+    media_path = entry["src"]
+    # .mp4 路径若被当图片送 ffmpeg 会误报"损坏"，先按扩展名推断再分流
+    if media_type == "auto":
+        media_type = classify_media_path(media_path)
+    # src 已由 validate_images_json 归一成相对项目根路径；即便绝对路径漏进来，
+    # os.path.join 遇绝对第二参数直接返回它，下面 is_inside 兜住越界。
+    p = os.path.join(out_dir, media_path)
+    # 存在性与越界都走 _script_utils.media_verdict——与 run.py 的覆盖率/
+    # `--until html` 拦截同一个函数，两道门必须给同一个答案。
+    verdict = media_verdict(out_dir, media_path)
+    if verdict == "missing":
+        missing_imgs.append((sid, media_path))
+        return
+    if verdict == "escapes":
+        corrupt_imgs.append((sid, media_path,
+                             "媒体路径通过软链接或绝对路径越出 HTML 项目目录"))
+        return
+    poster = entry.get("poster")
+    # poster 的问题只记录、不提前 return：同一条目的 src 若也有毛病，必须
+    # 一起报出来（先 return 会让人以为"只是封面缺了"，修完才发现视频本身
+    # 还是坏的，白跑一轮）。
+    if poster:
+        poster_verdict = media_verdict(out_dir, poster)
+        if poster_verdict == "missing":
+            missing_imgs.append((sid, poster))
+        elif poster_verdict == "escapes":
+            corrupt_imgs.append((sid, poster,
+                                 "poster 路径通过软链接或绝对路径越出 HTML 项目目录"))
+    # 视频用 ffmpeg 解码探测（只查存在性不够：
+    # 截断/损坏的 mp4 要到渲染时才炸，白烧一整轮渲染时间）
+    if media_type == "video":
+        _size = None
+        if _ffmpeg_probe:
+            ok, reason, vdur, _size = _probe_media_ok(p)
+            if not ok:
+                corrupt_imgs.append((sid, media_path, f"视频解码失败: {reason}"))
+            elif vdur is not None:
+                kind, head = video_span_verdict(seg_dur, vdur, _media_start(entry))
+                if kind == "empty":
+                    corrupt_imgs.append((sid, media_path, head))
+                elif kind in ("short", "long"):
+                    print(f"[warn] {head}", file=sys.stderr)
+        _size_warnings(sid, media_path, box, _size)
+        return
+    # svg 是文本格式，ffmpeg 打不开，存在性校验已足够；矢量也不验尺寸
+    # （缩放不失真，它另有比例与字号两道门禁）
+    if is_svg_path(p):
+        return
+    # 栅格图（jpg/png/webp/gif…）用 ffmpeg 全解码探测损坏/截断——
+    # ffmpeg 是渲染必需依赖，无需再引入 Pillow
+    # 尺寸只在"知道框多大"时才读：没框就不比，也就不用为它开一次文件
+    _size = raster_size(p) if box else None
+    if _ffmpeg_probe:
+        ok, reason, _dur, _probe_size = _probe_media_ok(p)
+        if not ok:
+            corrupt_imgs.append((sid, media_path, f"图片损坏或无法解码: {reason}"))
+        # 头解析读不出的格式（avif/heic 之类）退回 ffmpeg 的流信息
+        _size = _size or _probe_size
+    _size_warnings(sid, media_path, box, _size)
 
 
 def _svg_intrinsic_size(path):
@@ -1239,6 +1263,13 @@ def _evolve_prepare(images, segments, out_dir, dflt_dur, errs, warns):
     dflt_dur = _director_default_duration() if dflt_dur is None else dflt_dur
     for sid, entry in (images or {}).items():
         block = entry.get("evolve")
+        # 并置对比（src 是一对图）：两格各自可能挂 director/evolve，逐格净化内联。
+        # 不分格处理的话 panes[i] 里的补间永远不生效——那一格的图会一直是
+        # `<img>`，GSAP 按 `#img-{sid}-{i} #target` 找不到元素，静默无动画。
+        if isinstance(entry.get("src"), list):
+            _inline_compare_panes(
+                sid, entry, out_dir, seg_by_id, segments, dflt_dur, errs, warns)
+            continue
         if not block:
             continue
         src = entry["src"]
@@ -1277,6 +1308,61 @@ def _evolve_prepare(images, segments, out_dir, dflt_dur, errs, warns):
                                        next_speech_start(segments, sid), dflt_dur):
             warns.append(f"段落 '{sid}' 的 evolve 配图 {src}：{w}")
     return errs, warns
+
+
+def _inline_compare_panes(sid, entry, out_dir, seg_by_id, segments, dflt_dur,
+                          errs, warns):
+    """并置对比条目的逐格净化内联：`panes[i]` 里有 director/evolve 的那格才内联。
+
+    每格独立于另一格：左边是导演档、右边是静态图是**常见**写法（"我改了哪边"
+    本身就是要讲的事），所以这里不要求两格同档。
+
+    补间语法与单图条目那份完全一致（`_validate_director` 在契约层已按同一套
+    校验过 panes[i]），这里只负责把 SVG 净化后回填到该格的 `inline_svg`——
+    渲染端 `_compare_html` 读到它就内联成活 DOM。写完立刻 pop 掉：
+    `_normalize_images` 会把格里的非 src/type 键当 opts 抄一遍，留着等于把整段
+    SVG 文本复制进 opts（体积翻倍，且那段 markup 会进生产报告）。
+    """
+    srcs = entry["src"]
+    panes = entry.get("panes") or [{}, {}]
+    for i, pane in enumerate(panes):
+        block = (pane or {}).get("evolve") or (pane or {}).get("director")
+        if not block:
+            continue
+        src = srcs[i] if i < len(srcs) else None
+        if not src:
+            continue
+        path = os.path.join(out_dir, src)
+        if not os.path.isfile(path):
+            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 在 {out_dir} 下不存在")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 读不了: {e}")
+            continue
+        try:
+            markup, notes = sanitize_svg_for_inline(raw)
+        except ValueError as e:
+            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 无法净化内联: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 第 {i} 格的配图 {src}：{n}")
+        if (pane or {}).get("evolve"):
+            bad, soft = check_evolve(raw, block["steps"], f"{sid}[{i}]")
+            errs.extend(bad)
+            warns.extend(soft)
+        pane["inline_svg"] = markup
+        seg = seg_by_id.get(sid)
+        if seg is None:
+            continue
+        n_sent = len(seg["sentences"])
+        for j, step in enumerate(block["steps"]):
+            if "at" in step and int(step["at"]) >= n_sent:
+                errs.append(
+                    f"段落 '{sid}' 第 {i} 格的第 {j} 拍 at={step['at']} 越界："
+                    f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
 
 
 def _director_beats(steps, seg, dflt_dur):

@@ -239,6 +239,12 @@ def _image_coverage(manifest_path, images_json):
         return bool(media_verdict(proj_dir, src))
 
     def _entry_unusable(entry):
+        # 并置对比（src 是一对图）：两项都要可用。只判第一项的话，右格图还没画
+        # 完时覆盖率会报"齐全"，而 gen 下一步会以"第 1 格配图不存在" fail-fast
+        # ——报告说齐了、出片失败，正是这个函数要消灭的那类分歧。
+        src = entry.get("src")
+        if isinstance(src, list):
+            return any(_unusable(s) for s in src)
         return any(_unusable(entry[k])
                    for k in ("src", "poster") if entry.get(k))
 

@@ -252,6 +252,24 @@ def _normalize_images(images):
         # 未知键的告警已在 _images_schema.validate_images_json（预检）打过——
         # 本函数契约要求入参必须过那道预检（见 docstring），这里不重复打。
         media_path = media["src"]
+        # 并置对比（src 是一对图）：两格各自成一条媒体记录，键为 f"{sid}:0/1"。
+        # 单图版式那套读 `rc.images[sid]` 的地方不受影响（它们的 sid 不会是
+        # 一对图），分格侧统一走 _pane_media 取。
+        if isinstance(media_path, list):
+            panes = media.get("panes") or [{}, {}]
+            for i, path in enumerate(media_path):
+                media_type = classify_media_path(path, "auto")
+                side = panes[i] if i < len(panes) else {}
+                # inline_svg 是生成期回填的内部键，只服务本函数消费一次；
+                # 留在 opts 里会被当成播放选项抄进渲染上下文（体积翻倍）。
+                opts = {k: v for k, v in side.items()
+                        if k not in ("src", "type")}
+                normalized[f"{sid}:{i}"] = {
+                    "src": path,
+                    "type": media_type,
+                    "opts": opts,
+                }
+            continue
         media_type = classify_media_path(media_path, media.get("type", "auto"))
         media_opts = {k: v for k, v in media.items() if k not in ("src", "type")}
         normalized[sid] = {
@@ -260,6 +278,11 @@ def _normalize_images(images):
             "opts": media_opts,
         }
     return normalized
+
+
+def _pane_media(rc, sid, i):
+    """并置对比第 i 格的媒体记录（`_normalize_images` 已按 `{sid}:{i}` 摊平）。"""
+    return rc.images.get(f"{sid}:{i}") or {}
 
 
 def _subtitle_cue_spans(sentences):
@@ -626,6 +649,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-v-title-area:{_v_title_area:.2f}px;--ctv-v-title-lines:{_tl["maxLines"]};
   --ctv-v-img-w:{int(_il["width"])}px;--ctv-v-img-ms:{_v_img_ms}px;
   --ctv-v-img-top:{_v_img_top}px;--ctv-v-img-height:{int(_il["height"])}px;--ctv-v-img-radius:{_v_img_radius}px;
+  --ctv-v-img-cmp-gap:{int(_il["compareGap"])}px;
   --ctv-v-verse-bottom:{_v_verse_bottom}px;"""
     else:
         # 刻意不注入 --ctv-l-gap：左右两栏都是绝对定位，栏间距由 margin/textW/imgW
@@ -635,6 +659,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-l-text-w:{int(_ltext["width"])}px;--ctv-l-text-gap:{int(_ltext["gap"])}px;
   --ctv-l-title-lh:{_tl["lineHeight"]};
   --ctv-l-img-w:{int(_il["width"])}px;--ctv-l-img-h:{_l_img_h}px;
+  --ctv-l-img-cmp-gap:{int(_il["compareGap"])}px;
   --ctv-l-img-radius:{_il["borderRadius"]}px;"""
     rc.relay_s = _relay_s
     rc.root_vars = ":root{\n" + root_shared + "\n" + root_aspect + "\n}"
@@ -878,6 +903,39 @@ def _media_html(rc, sid, s, d):
     )
 
 
+def _compare_html(rc, sid, s, d):
+    """并置对比版式的两格图槽：`.seg-image.seg-compare-pane`，左 0 右 1。
+
+    为什么是"一个容器 + 两个格"而不是两个独立 `.seg-image`：版式语义是**一个
+    图槽被分成两格**——边框、圆角、发光、Layout 门禁的盒子假设都按"一个槽"
+    成立，拆成两个槽就要给每一道门禁各教一遍"这两个其实是一个"。
+
+    两格各自独立：
+    - 各自的 id（`img-{sid}-0/1`）：补间才能分别打，`panes[i].director` 的
+      target 也才有稳定锚点。
+    - 各自的 `<img>`（SVG 照旧不铺满幅底，走 bare-media 撤掉装饰底）。
+    - 各自的内联 SVG（写了 director/evolve 的那格）：gen_hyperframes 把净化后
+      的 SVG 回填在 `inline_svg` 上，逐格独立。
+    """
+    panes = []
+    for i in (0, 1):
+        media = _pane_media(rc, sid, i)
+        path = media.get("src", "")
+        inline = (media.get("opts") or {}).get("inline_svg")
+        if inline:
+            cls, inner = "svg-inline", inline
+        else:
+            cls = "bare-media" if is_svg_path(path) else ""
+            inner = f'<img src="{quote(path)}" alt="">'
+        panes.append(
+            f'      <div class="seg-image seg-compare-pane{(" " + cls) if cls else ""}"'
+            f' id="img-{sid}-{i}" data-pane="{i}" data-layout-allow-overflow>\n'
+            f'        {inner}\n'
+            f'      </div>')
+    return ('\n    <div class="seg-compare" id="cmp-' + sid + '">\n'
+            + "\n".join(panes) + "\n    </div>")
+
+
 def _em_marker():
     """词级强调的挂点：正文之后一个**空** span。生成期只给挂点、不切字。
 
@@ -1025,6 +1083,19 @@ def _prepare_card(rc, clip):
     # 版式（整页海报）时同样没有文本编排（agenda 的 DOM 都不生成）。
     apple_opening = sid == "opening" and is_agenda
     has_image = (sid in rc.images) and not is_agenda
+    # 并置对比（layout: "compare"）：图槽一分为二，左右各一张。两张图的记录被
+    # 摊平成 `{sid}:0` / `{sid}:1`，所以 has_image 要按分格重新判——单看
+    # `sid in rc.images` 在这一版式上永远为假，会走进"缺图"那条分支。
+    is_compare = layout == "compare"
+    if is_compare:
+        has_image = all(f"{sid}:{i}" in rc.images for i in (0, 1))
+        if not has_image:
+            raise ValueError(
+                f"段落 '{sid}' 声明了 layout=\"compare\"（并置对比），但 images.json "
+                "里没有它的一对图。这一版式整页只有两张图——标题之外什么都不剩，"
+                "缺图就出一块空槽。请写成 "
+                f'"{sid}": {{"src": ["images/{sid}-a.svg", "images/{sid}-b.svg"]}}，'
+                "或去掉 layout 字段回到槽位版式")
     # 整页画布（layout: "canvas"）：配图就是这一页——槽位拉满全屏，HTML 的
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
     # _segments._validate_layout 把守；这里只认 canvas 且必须有配图。
@@ -1061,7 +1132,10 @@ def _prepare_card(rc, clip):
     # 所以两段窗口的差集不是"稍早一点/稍晚一点"，而是头尾各有一段卡片还在
     # 画面上、video 已被判出窗——画面上只剩一个空图槽（实测 0.4s ≈ 10 帧）。
     # <img> 没有 data-start、继承祖先卡的窗口，两种素材必须同一口径。
-    image_html = _media_html(rc, sid, win_start, vis_d) if has_image else ""
+    image_html = ""
+    if has_image:
+        image_html = (_compare_html(rc, sid, win_start, vis_d) if is_compare
+                      else _media_html(rc, sid, win_start, vis_d))
     verse_html = "" if is_canvas else _verse_html(seg, sid, ac_text_attr)
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
@@ -1143,6 +1217,9 @@ def _assemble_card(rc, card, clips, manifest):
                 + f'{card.image_html}\n'
                 + card.progress_html
                 + '  </div>')
+    # 竖屏：标题在上、图槽居中、句子流在底。并置对比只换图槽内部结构
+    # （`.seg-compare` 里两格），四层纵向顺序与槽位版式完全一致——所以这里
+    # 不另开分支。
     return (card.card_open
             + card.title_wrap
             + f'{card.image_html}\n'
@@ -1334,7 +1411,7 @@ def _director_timeline_lines(rc, card):
     return _expand_steps(rc, card, director, key="director", pin_cam=True)
 
 
-def _expand_steps(rc, card, block, key="director", pin_cam=True):
+def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
     """把一段编排（director / evolve 同构）展开成挂在主时间线上的 GSAP 补间。
 
     位置取自该段旁白的句子（可为句内小数偏移）——于是图内
@@ -1367,10 +1444,13 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True):
     - 补间变量经 json.dumps 序列化：schema 已挡掉 on* 回调与非标量，这里只把它
       变成合法 JS 对象字面量，字符串引号/特殊字符由 JSON 转义兜住。
     """
-    entry = rc.images.get(card.sid) or {}
+    entry = (rc.images.get(card.sid) or {}) if pane is None else _pane_media(rc, card.sid, pane)
     sentences = card.seg["sentences"]
     dflt = rc.anim["director"]
     sid = card.sid
+    # 并置对比的分格作用域：每格有自己的容器 id（img-{sid}-0/1），否则两格的
+    # 同名 target（#a）会互相串台——左边那条补间打到右边那格上。
+    scope = f"#img-{sid}" if pane is None else f"#img-{sid}-{pane}"
     # 节拍→绝对秒的解析在 _timeline.beat_positions，与生成期门禁/对轴报告共用一份
     # （两处各写一套，门禁就会对着渲染器不会用的时刻报错）。
     try:
@@ -1391,7 +1471,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True):
     if pin_cam:
         lines.extend(_canvas_first_beat(card, block, beats))
     for step, (pos, dur) in zip(block["steps"], beats):
-        sel = f"#img-{sid} {step['target']}"
+        sel = f"{scope} {step['target']}"
         sel_js = json.dumps(sel)
         ease = step.get("ease", dflt["ease"])
         stagger = step.get("stagger")   # 命中一组元素时逐个错峰（GSAP 原生 stagger）
@@ -1521,6 +1601,27 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True):
             lines.append(
                 f"tl.from({sel_js}, {json.dumps(_with_timing(step['from']))}, {pos:.2f})")
     return lines
+
+
+def _compare_timeline_lines(rc, card):
+    """并置对比两格的补间：`panes[i].director` / `.evolve` 逐格展开。
+
+    两格各用 `#img-{sid}-{i}` 作作用域（见 `_expand_steps` 的 `pane` 参数）。
+    这一版式上不接相机：相机会话属于整页画布（`director` + `layout:"canvas"`），
+    而这里两个格子的景别本来就是要**并排对照**的——一格推近另一格不动，读作
+    "这两件事不一样大"，而作者想说的是"这两件事形状不同"。
+    """
+    if not card.has_image or getattr(card, "layout", None) != "compare":
+        return []
+    out = []
+    for i in (0, 1):
+        pane = (rc.images.get(f"{card.sid}:{i}") or {}).get("opts") or {}
+        for key in ("director", "evolve"):
+            block = pane.get(key)
+            if block:
+                out.extend(_expand_steps(rc, card, block, key=key,
+                                         pin_cam=False, pane=i))
+    return out
 
 
 def _evolve_timeline_lines(rc, card):
@@ -1837,6 +1938,11 @@ def _still_image_carrier_sid(rc, card):
     """
     if not card.has_image or card.is_canvas or card.is_keep:
         return None
+    if getattr(card, "layout", None) == "compare":
+        # 并置对比：两格里只要有一格是可漂的静态图就算"有载体"（逐格判在
+        # `_pane_carriers`，那一格不该漂就自然不在结果里）。若两格都是内联 SVG
+        # 或视频，`_pane_carriers` 会返回空列表，两个函数都自然不生成补间。
+        return card.sid if _pane_carriers(rc, card) else None
     media = rc.images.get(card.sid) or {}
     if media.get("type") == "video" or (media.get("opts") or {}).get("inline_svg"):
         return None
@@ -1975,30 +2081,36 @@ def _image_drift_lines(rc, card):
     # "切页第一秒图比后面大一圈，到 1.0s 又缩回去"（实测 t=0…0.98 恒为 1.06，
     # t=1.0 才跳到 1）。终点值按语句顺序互相覆盖，所以只要**最后**一条把起点写
     # 回去就行：0.01s 的 fromTo，与段擦除同一条口径（真 tween、回退 seek 也回滚）。
-    pin = (f'tl.fromTo("#img-{card.sid} > img",{{scale:1,x:0,y:0}},'
-           f'{{scale:1,x:0,y:0,duration:0.01,ease:"none"}},'
-           f'{max(0.0, card.s + lead - 0.01):.2f})')
+    # 载体按格展开（并置对比两张图各一条，单图版式就一条）。
+    carriers = _pane_carriers(rc, card)
+    pins = [(f'tl.fromTo("{_sel}",{{scale:1,x:0,y:0}},'
+             f'{{scale:1,x:0,y:0,duration:0.01,ease:"none"}},'
+             f'{max(0.0, card.s + lead - 0.01):.2f})') for _sel in carriers]
     if not breath:
-        return [f'tl.fromTo("#img-{card.sid} > img",{{scale:1,x:0,y:0}},'
-                f'{{scale:{num_fmt(scale_to, 4)},x:{xf},y:{yf},'
-                f'duration:{avail:.2f},ease:"none"}},{card.s + lead:.2f})', pin]
+        return ([f'tl.fromTo("{_sel}",{{scale:1,x:0,y:0}},'
+                 f'{{scale:{num_fmt(scale_to, 4)},x:{xf},y:{yf},'
+                 f'duration:{avail:.2f},ease:"none"}},{card.s + lead:.2f})'
+                 for _sel in carriers] + pins)
     # 呼吸：把"匀速推到顶"换成"快 / 缓 / 快"的分段推进。每段仍写成 fromTo
     # 并显式给出**自己的起点值**（= 上一段的终值），所以乱序 seek 依然幂等
     # ——任何时候 seek 到第 i 段，GSAP 都能从写死的起点直接算出该帧，不依赖
     # 上一帧留下的状态。首段的起点就是 (1, 0, 0)，与不呼吸时逐像素一致。
     out = []
-    t0 = card.s + lead
-    prev = (1.0, 0.0, 0.0)
-    for dt, sc, xr, yr, ease in breath:
-        cur = (sc, x * xr, y * yr)
-        out.append(
-            f'tl.fromTo("#img-{card.sid} > img",'
-            f'{{scale:{num_fmt(prev[0], 5)},x:{num_fmt(prev[1])},y:{num_fmt(prev[2])}}},'
-            f'{{scale:{num_fmt(cur[0], 5)},x:{num_fmt(cur[1])},y:{num_fmt(cur[2])},'
-            f'duration:{dt:.2f},ease:"none"}},{t0:.2f})')
-        prev = cur
-        t0 += dt
-    return out + [pin]
+    # 每一格各自一条完整的呼吸链（各自的起点态、各自的终止钉值）。两格共用一条
+    # 链就会变成"两格同步缩放"，读起来像整块图在呼吸，而不是两张图各自有镜头。
+    for _sel in carriers:
+        t0 = card.s + lead
+        prev = (1.0, 0.0, 0.0)
+        for dt, sc, xr, yr, ease in breath:
+            cur = (sc, x * xr, y * yr)
+            out.append(
+                f'tl.fromTo("{_sel}",'
+                f'{{scale:{num_fmt(prev[0], 5)},x:{num_fmt(prev[1])},y:{num_fmt(prev[2])}}},'
+                f'{{scale:{num_fmt(cur[0], 5)},x:{num_fmt(cur[1])},y:{num_fmt(cur[2])},'
+                f'duration:{dt:.2f},ease:"none"}},{t0:.2f})')
+            prev = cur
+            t0 += dt
+    return out + pins
 
 
 def _cycle_pick(base, rhythm, ordinal):
@@ -2118,10 +2230,33 @@ def _image_settle_lines(rc, card, lead):
     bw, bh = get_image_box(rc.aspect)
     x = _unit_frac(pick["panX"]) * span * bw / 2.0
     y = _unit_frac(pick["panY"]) * span * bh / 2.0
-    sel = f"#img-{card.sid} > img"
-    return [f'tl.fromTo("{sel}",{{scale:{num_fmt(scale, 4)},x:{num_fmt(x)},'
+    return [f'tl.fromTo("{_sel}",{{scale:{num_fmt(scale, 4)},x:{num_fmt(x)},'
             f'y:{num_fmt(y)}}},{{scale:1,x:0,y:0,duration:{dur:.2f},'
-            f'ease:"{pick["ease"]}"}},{card.s + offset:.2f})']
+            f'ease:"{pick["ease"]}"}},{card.s + offset:.2f})'
+            for _sel in _pane_carriers(rc, card)]
+
+
+def _pane_carriers(rc, card):
+    """这一页"能独立承载运镜"的图载体选择器列表。
+
+    单图版式返回一条（`#img-{sid} > img`）；并置对比返回两条，逐格一条。
+    逐格而不是放弃：两格图整段完全静止，这一页就只剩"两张钉死的海报"——
+    正是 Ken Burns 要解决的那个问题，而且并置对比页往往还更长（要让人来回看）。
+
+    哪一格不参与也在这里判：写着 director/evolve 的那格是作者已手写编排的
+    内联 SVG（`> svg` 不是 `> img`，选择器本来就落空），视频同理。
+    """
+    if getattr(card, "layout", None) == "compare":
+        out = []
+        for i in (0, 1):
+            media = _pane_media(rc, card.sid, i)
+            if (media.get("opts") or {}).get("inline_svg"):
+                continue
+            if media.get("type") == "video":
+                continue
+            out.append(f"#img-{card.sid}-{i} > img")
+        return out
+    return [f"#img-{card.sid} > img"]
 
 
 def _breath_segments(breathe, avail, scale_to):
@@ -2234,8 +2369,14 @@ def _card_timeline_lines(rc, card):
         # （_image_settle_lines）。两层错峰才有"镜头落到素材上"的层次——四样东西
         # （圆角/描边/辉光/图）同时到位读出来只是一块东西浮上来。
         lead = _entrance_lead(rc, card)
+        # 并置对比的容器 id 是 `cmp-{sid}`（它带着 .seg-image 类但换了名，见
+        # _compare_html）：照抄 `#img-{sid}` 会选到 0 个元素，GSAP 静默不报错，
+        # 成片里这一页就是"啪一下出现"。两格共用一个容器，整块一起入场——
+        # 两格各入各的会读成"两张无关的图先后到场"，而它们要对照着看。
+        _frame_sel = (f"#cmp-{sid}" if getattr(card, "layout", None) == "compare"
+                      else f"#img-{sid}")
         lines.append(
-            f'tl.from("#img-{sid}",{{opacity:0,y:{a_img["vert_y"]},'
+            f'tl.from("{_frame_sel}",{{opacity:0,y:{a_img["vert_y"]},'
             f'duration:{a_img["duration"] * max(0.0, _unit_frac(a_img.get("frameFrac", 1.0))) * _k:.2f},'
             f'ease:"{a_img["ease"]}"}},'
             f'{s + a_img["startDelay"] * _k:.2f})'
@@ -2252,6 +2393,9 @@ def _card_timeline_lines(rc, card):
     # 槽位版式的图内演进（images.json 的 evolve）：不接管编排，只让图里的元素跟着
     # 旁白变。与 director 互斥（契约层已拒），所以两条不会同时往同一张图上写补间。
     lines.extend(_evolve_timeline_lines(rc, card))
+    # 并置对比两格各自的补间（panes[0]/panes[1]）。单独一条：这一版式的两张图
+    # 各有各的容器 id，作用域与上面两条都不同。
+    lines.extend(_compare_timeline_lines(rc, card))
     return lines
 
 

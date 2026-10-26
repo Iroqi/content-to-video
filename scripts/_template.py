@@ -251,6 +251,10 @@ def seg_card_pad_x():
             "[template] layout.vertical.segCard.padding 必须是合法 CSS 长度") from e
 
 
+# layout.vertical.image.compareGap：并置对比（layout:"compare"）两格之间的缝隙。
+# 不能借 marginSide（图槽离页面左右边的外边距，竖屏为 0）也不能借
+# bottomGapToVerse（图槽离句子流的距离）——两者都不是"两格之间"。缝隙太小
+# 两格读成"一张图被划了一刀"，太大又让每格变窄、图变小。
 _TEMPLATE_JSON = r'''
 {
   "canvas": {
@@ -299,7 +303,8 @@ _TEMPLATE_JSON = r'''
         "bottomGapToVerse": 50,
         "borderRadius": 12,
         "marginSide": 0,
-        "glow": 40
+        "glow": 40,
+        "compareGap": 14
       },
       "subtitle": {
         "fontSize": 40,
@@ -374,7 +379,8 @@ _TEMPLATE_JSON = r'''
         "width": 1067,
         "height": 800,
         "borderRadius": 12,
-        "glow": 40
+        "glow": 40,
+        "compareGap": 14
       },
       "textCol": {
         "width": 613,

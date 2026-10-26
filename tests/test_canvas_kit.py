@@ -493,7 +493,8 @@ class Roughness(unittest.TestCase):
             {"kind": "panel", "x": 0, "y": 0, "w": 100, "h": 100}]})),
             seed=seed, amp=8.0)
         edge = {"kind": "panel", "x": 0, "y": 0,
-                "w": w * K.FULL_BLEED_FRAC - 3, "h": h * K.FULL_BLEED_FRAC - 3}
+                "w": w * _svg_sanitize.FULL_BLEED_FRAC - 3,
+                "h": h * _svg_sanitize.FULL_BLEED_FRAC - 3}
         with self.assertRaises(ValueError) as cm:
             K._emit_panel(edge, ctx, "spec 的 elements[1]")
         self.assertIn("铺满了整页", str(cm.exception))

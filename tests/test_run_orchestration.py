@@ -132,7 +132,7 @@ class Harness:
                                   pipeline_main or self.fake_pipeline),
                 mock.patch.object(R.gen_hyperframes, "main", self.fake_gen),
                 mock.patch.object(R, "render_wait", self.fake_render),
-                mock.patch.object(R, "hyperframes_command", lambda p: ["fakehf"]),
+                mock.patch.object(R, "hyperframes_command", lambda: ["fakehf"]),
                 mock.patch.object(R, "run_check", self.fake_check),
                 mock.patch.object(R, "probe_video_duration", self.fake_probe),
                 contextlib.redirect_stdout(out),

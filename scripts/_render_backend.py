@@ -38,8 +38,12 @@ def hyperframes_spec() -> str:
             or DEFAULT_HYPERFRAMES_SPEC)
 
 
-def hyperframes_command(project: Optional[str] = None) -> list[str]:
-    # 版本相关门禁只对 DEFAULT_HYPERFRAMES_SPEC 验证过；始终交给 npx 按 spec 解析。
+def hyperframes_command() -> list[str]:
+    """`npx -y <钉固 spec>` 的基命令：命令形态与项目无关（项目路径是子命令的参数）。
+
+    版本相关门禁只对 DEFAULT_HYPERFRAMES_SPEC 验证过；始终交给 npx 按 spec 解析。
+    不接 project：接了而不用，等于对外宣称"这条命令随项目变化"，那是假的。
+    """
     npx = shutil.which("npx")
     return [npx or "npx", "--yes", hyperframes_spec()]
 
@@ -215,7 +219,7 @@ GATE_NOISE = frozenset(GATE_NOISE_CODES)
 
 def build_check_command(project, command=None):
     """拼一条 `hyperframes check --json`（lint + 浏览器各阶段，一个门禁）。"""
-    base = list(command) if command else hyperframes_command(project)
+    base = list(command) if command else hyperframes_command()
     return resolve_command(base + ["check", project, "--json"])
 
 
@@ -303,7 +307,11 @@ def run_check(project, command=None, timeout=1800):
     起 CLI 的地方全在本题。
     """
     args = build_check_command(project, command=command)
-    t0 = time.time()
+    # 量的是**间隔**，所以走 monotonic：墙钟被 NTP 校正或休眠唤醒改动时，
+    # 一次十几秒的 check 会报出负数或凭空多几十分钟（与 _render_poll_loop
+    # 同一条理由）。注意下面的 snapshot_frames 比的是文件 mtime，那是墙钟，
+    # 那里必须用 time.time()。
+    t0 = time.monotonic()
     try:
         r = subprocess.run(args, cwd=project, capture_output=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
@@ -311,7 +319,7 @@ def run_check(project, command=None, timeout=1800):
     raw = (r.stdout or b"").decode("utf-8", "replace")
     # --json 把整份报告打到 stdout，前后可能夹着 CLI 的进度行。
     report = _first_json_object(raw)
-    return check_verdict(report), time.time() - t0
+    return check_verdict(report), time.monotonic() - t0
 
 
 def _adaptive_grace(size_bytes):
@@ -608,7 +616,7 @@ def snapshot_frames(project, video_path, times, out_dir, command=None):
     产物路径 = 含 contact-sheet 的目录（官方给的那张拼图是"一眼看全片"的入口）。
     失败一律返回 (None, 人话)，由调用方决定只 warn。
     """
-    cmd = list(command) if command else hyperframes_command(project)
+    cmd = list(command) if command else hyperframes_command()
     # 先拼全参数、**再** resolve：Windows 上 resolve_command 命中 .cmd 时会把整条
     # 命令包进 `cmd /c "…"` 字符串（_cmdline_for_batch）。先 resolve 再往后面接
     # 子命令参数，那些参数就落在 cmd.exe 自己的 argv 里、进不了 /c 的命令体——

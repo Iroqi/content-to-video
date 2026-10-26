@@ -88,7 +88,7 @@ class MimoTtsClient:
             # Request() 构造与 urlopen 都可能对畸形 URL 抛 ValueError
             # （`unknown url type`）：构造阶段就抛，所以两者必须在同一段 try 里。
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw_body = resp.read().decode("utf-8")
+                raw = resp.read()
         except urllib.error.HTTPError as e:
             # 响应体单独兜一层：连接已在断的边缘时 `e.read()` 自己会抛（超时/
             # ConnectionReset），直接写在 raise 里会把 `e.code` 一起吞掉——
@@ -108,6 +108,17 @@ class MimoTtsClient:
             raise BadAudioResponseError(
                 f"TTS 请求地址不合法（{e}）——检查 --base-url 的写法"
                 "（应是 http(s)://… 的完整地址）") from None
+        # 解码**单起一层，绝不放进上面那段 try**：UnicodeDecodeError 是 ValueError
+        # 的子类，混进去会被"地址不合法"那条接住。于是网关/代理回了压缩或二进制的
+        # 错误页时，报错指向 --base-url（而它是对的），并把一次可能瞬态的网关故障
+        # 钉成确定性失败——100 句里第 1 句就整条放弃。
+        try:
+            raw_body = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise BadAudioResponseError(
+                f"TTS 响应不是 UTF-8 文本（{e}）——多半是网关/代理塞回了压缩或"
+                "二进制的错误页，检查 --base-url 是否直连支持 audio 参数的端点"
+            ) from None
         # JSON 解析留在 urlopen 的 try **之外**：urlopen 的 ValueError 上面已接住，
         # 这里只剩响应的解析。200 但 body 不是 JSON（网关返回 HTML 错误页之类）
         # 也是端点配错：重试同一次请求不会变好，按确定性失败处理。

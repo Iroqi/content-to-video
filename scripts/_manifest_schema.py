@@ -95,9 +95,12 @@ def _validate_voiced_span(s, where):
             f"{where} 的 onset({s['onset']}) + voiced({s['voiced']}) 超过了"
             f" duration({s['duration']})——发声不可能比音频块还长。"
             "手改过 start_time/duration 而没同步改这两个字段时最容易撞上这一点。")
-    if s.get("synth_failed") and float(s["voiced"]) > 0:
+    if s.get("synth_failed"):
         # 静音兜底句本来就没有"发声"：给它写一个正的发声长度，等于让字幕按一个
         # 不存在的说话区间推进（画面里一片安静，字幕却在逐字点亮）。
+        # 判据**只留 synth_failed 这一条**：voiced 的取值由上面 positive=True
+        # 兜住，再挂个 `and float(s["voiced"]) > 0` 是恒真子条件——看着在判"给
+        # 了个正的发声长度"，其实什么都没判，还让后来人以为这条分支挑过。
         raise ValueError(
             f"{where} 是 synth_failed 的静音兜底句，不该有 voiced——"
             "这一句没有发声区间可言，删掉 onset/voiced 两个字段即可。")

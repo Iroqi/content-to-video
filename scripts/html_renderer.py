@@ -22,7 +22,7 @@ from _theme import (
 from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
                        get_canvas, get_image_box, normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
-                            MEDIA_DUCK_VOLUME)
+                            MEDIA_DUCK_VOLUME, ATTR_KEY)
 from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
                        is_full_bleed, seg_layout)
 from _path_morph import make_morph, interp as _morph_interp
@@ -1597,7 +1597,7 @@ def _canvas_first_beat(card, director, beats):
             continue
         src = step.get("from")
         if src is None and "morph" in step:
-            src = {"attr": {"d": step["morph"]["from"]}}
+            src = {ATTR_KEY: {"d": step["morph"]["from"]}}
         if not src:
             continue
         seen.add(target)
@@ -1820,7 +1820,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
                 d = _morph_interp(pf, pt, ease_fn(p))
                 t = round(pos + u * span, 2)
                 lines.append(
-                    f"tl.set({sel_js}, {json.dumps({'attr': {'d': d}})}, {t:.2f})")
+                    f"tl.set({sel_js}, {json.dumps({ATTR_KEY: {'d': d}})}, {t:.2f})")
             continue
 
         if "count" in step:
@@ -1873,7 +1873,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
             # 段起点之前元素处在收起态，与"这段还没开始画"的语义一致。
             lines.append(
                 f"tl.set({sel_js}, "
-                f"{json.dumps({'attr': {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
+                f"{json.dumps({ATTR_KEY: {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
                 f"{card.s:.2f})")
             draw_vars = {"strokeDashoffset": 0, "duration": dur, "ease": ease}
             draw_vars.update(_cycle_vars(step))

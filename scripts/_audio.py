@@ -26,6 +26,13 @@ COMBINED_AUDIO_NAME = "combined.wav"
 # 且没有任何报错信号）。语音句本身保持 TTS 原生格式，不套这个常量。
 DEFAULT_SAMPLE_RATE = 24000
 
+# 变速中转文件的命名两半：**跨模块真源**——这里落盘，pipeline 的 sidecar 清理按
+# `<句>.spd.*.tmp.wav` 这个 glob 扫残留。任一侧改了字面量，另一侧就扫不到残渣，
+# 而残渣的下场是被当成"原速备份"再做一次变速——错语速静默上线，全程零报错。
+# 不加前导点：隐藏文件扫不到；后缀必须是 .wav：ffmpeg 按输出名推断容器。
+SPEED_TMP_PREFIX = ".spd."
+SPEED_TMP_SUFFIX = ".tmp.wav"
+
 
 def _run_ff(args, timeout):
     """ffmpeg 子进程统一入口：捕获输出、超时返回 None。
@@ -282,8 +289,12 @@ def apply_speed(ffmpeg_path, wav_path, speed, prev_speed=None):
     # 后缀必须是 .wav：ffmpeg 按输出名推断容器格式。中段留随机串以避开名撞车
     # （同一 -o 目录并行跑时两条 FFmpeg 写同一个中转会互踩）——所以这里不加前导
     # 点：pipeline 的 sidecar 清理按 `<句>.spd.*.tmp.wav` 扫它，隐藏文件扫不到。
+    # 名字的两半是**跨模块真源**（SPEED_TMP_PREFIX / SPEED_TMP_SUFFIX，见文件
+    # 头）：清理那一侧照字面拼一遍的话，改一侧另一侧就扫不到残渣，而残渣的下
+    # 场是被当成原速源再做一次变速——错语速静默上线。
     tmp = unique_tmp(os.path.dirname(os.path.abspath(wav_path)),
-                     os.path.basename(wav_path) + ".spd.", ".tmp.wav")
+                     os.path.basename(wav_path) + SPEED_TMP_PREFIX,
+                     SPEED_TMP_SUFFIX)
     # 补偿变速必须以当前文件为源（它就是最新状态）；常规路径优先用原速备份
     src = wav_path if compensate else (
         orig_path if os.path.exists(orig_path) and orig_path != wav_path else wav_path)

@@ -125,7 +125,7 @@ class Commands(unittest.TestCase):
         with mock.patch.dict(os.environ,
                              {"CTV_HYPERFRAMES_PACKAGE": "hyperframes@9.9.9"}, clear=True), \
              mock.patch.object(RB.shutil, "which", return_value="/usr/bin/npx"):
-            self.assertEqual(RB.hyperframes_command("project"),
+            self.assertEqual(RB.hyperframes_command(),
                              ["/usr/bin/npx", "--yes", "hyperframes@9.9.9"])
 
     def test_fmt_cmd(self):

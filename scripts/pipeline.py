@@ -24,7 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _audio import (apply_speed, concat_audio,  # noqa: E402
                     ffmpeg_usable, generate_silence, get_ffmpeg, measure_duration,
-                    wav_data_consistent, COMBINED_AUDIO_NAME)
+                    wav_data_consistent, COMBINED_AUDIO_NAME,
+                    SPEED_TMP_PREFIX, SPEED_TMP_SUFFIX)
 # 核心管线不反向依赖任何可选脚本：默认倍速与时长估算一律从契约模块取
 from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: E402
                        DEFAULT_CHARS_PER_SEC, estimate_sentence_seconds,
@@ -180,7 +181,14 @@ def _sentence_entry(index, text, path, duration, ffmpeg_path):
 # 语速状态、.failed 放弃标记。凡动一句的音频都要连这些一起动。
 # 条目是**拼在句子路径后的 glob 片段**，不是字面后缀：变速中转名带 mkstemp
 # 随机串，写成 `.spd.tmp.wav` 就扫不到残留。
-_SIDECAR_SUFFIXES = (".orig.wav", ".spd", ".spd.*.tmp.wav", ".failed")
+# 放弃标记的后缀收成常量：它在四处各拼一次字面量（本行、指纹比对时的探测、
+# 兜底分支的改写、补录成功后的清理），改名时漏一处 = "这句是静音占位"这个事实
+# 悄悄读不到或清不掉。
+_FAILED_SUFFIX = ".failed"
+# 变速中转名带 mkstemp 随机串，所以那一格是 `前缀 + * + 后缀` 的 glob 片段，
+# 不能写字面后缀（见 _audio.SPEED_TMP_*）。
+_SIDECAR_SUFFIXES = (".orig.wav", ".spd",
+                     SPEED_TMP_PREFIX + "*" + SPEED_TMP_SUFFIX, _FAILED_SUFFIX)
 
 
 def _sidecar_paths(out_path, suffixes):
@@ -550,7 +558,7 @@ def _observe_resume_state(out_path, ffmpeg_path, text, voice_id, voice_style,
                       if audio_exists else True),
         spd_exists=spd_exists, spd_readable=spd_readable, spd_applied=spd_applied,
         orig_wav_exists=os.path.exists(out_path + ".orig.wav"),
-        failed_marker_exists=os.path.exists(out_path + ".failed"),
+        failed_marker_exists=os.path.exists(out_path + _FAILED_SUFFIX),
     )
 
 def _tts_worker(task, client, ffmpeg_path, model, api_timeout):
@@ -1147,11 +1155,19 @@ def main(argv=None):
                           f"（{type(e).__name__}: {e}）；audio kept at "
                           f"previous speed", file=sys.stderr)
                 if _reapplied:
-                    # 只有真的施加了变速才算"重处理过"：apply_speed_to=1.0 时
-                    # apply_speed 是还原/空操作（连 ffmpeg 都没起），标签必须
-                    # 跟"这一句本次到底动没动过音频文件"对齐（见下方 _tag）。
-                    _replayed = _replayed or needs_speed_change(
-                        decision.apply_speed_to)
+                    # 标签必须跟"这一句本次到底动没动过音频文件"对齐（见下方 _tag）。
+                    # apply_speed 有三种落点，只有最后一种没碰盘：
+                    #   · 请求语速 ≠ 1 ⇒ 起 ffmpeg，tmp 经 os.replace 覆盖；
+                    #   · 请求语速 == 1 且盘上有 .orig.wav ⇒ copy2 把原速盖回来
+                    #     ——**不是空操作**：ffmpeg 没起，但文件整份被改写。这正是
+                    #     "上一版 1.5x、这次跑 1.0x"的常态，报成纯复用会把排查
+                    #     语速问题的人引向"这句没动过"；
+                    #   · 请求语速 == 1、无备份、且 .spd 已声明盘上就是原速 ⇒ 真没动。
+                    _moved = (needs_speed_change(decision.apply_speed_to)
+                              or facts.orig_wav_exists
+                              or (reapply_prev is not None
+                                  and needs_speed_change(reapply_prev)))
+                    _replayed = _replayed or _moved
                     if decision.write_spd is not None:
                         if not _write_spd(out_path, decision.write_spd, label,
                                           "下次 --resume 会重新对齐语速"):
@@ -1295,9 +1311,9 @@ def main(argv=None):
                         # 兜底过、留了个 .failed marker（比如用户手动删了旧的静音
                         # mp3 之后重跑、这次没再失败），清掉 marker，不然下次
                         # resume 会把这个已经补录好的句子又标成 synth_failed。
-                        stale_marker = out_path + ".failed"
-                        if os.path.exists(stale_marker):
-                            remove_if_exists(stale_marker)
+                        # remove_if_exists 内部已判过存在性，外面不必再问一次
+                        # ——两次判断之间还有个 TOCTOU 窗口。
+                        remove_if_exists(out_path + _FAILED_SUFFIX)
                         print(f"[TTS {done_count}/{pending_count}] {label} "
                               f"{preview} -> {dur:.2f}s", flush=True)
                         continue
@@ -1349,7 +1365,7 @@ def main(argv=None):
                         # 假装正常的静音洞。
                         _marker_ok = True
                         try:
-                            with open(out_path + ".failed", "w",
+                            with open(out_path + _FAILED_SUFFIX, "w",
                                        encoding="utf-8"):
                                 pass
                         except OSError as _e:

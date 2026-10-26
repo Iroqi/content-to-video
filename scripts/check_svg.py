@@ -47,7 +47,6 @@ import os
 import re
 import sys
 import unicodedata
-import xml.etree.ElementTree as ET
 
 from _segments import FULL_BLEED_LAYOUTS as FULL_BLEED
 from _path_morph import path_endpoints, path_segments, y_span
@@ -56,8 +55,8 @@ from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCL
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
                            is_full_bleed_backdrop, parse_svg_strict, svg_points,
                            root_px_size, root_viewbox_size, shape_bbox)  # noqa: E402  与 _cam_crop 同一份包围盒
-from _theme import (contrast_ratio, css_color_to_hex,  # noqa: E402  WCAG 数学与 hex 归一化不在这里重抄
-                    theme_bg_stops, DEFAULT_THEME)
+from _theme import (css_color_to_hex, worst_contrast,  # noqa: E402  hex 归一与"对最坏一档"判据不在这里重抄
+                    DEFAULT_THEME)
 from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa: E401
                        load_template, same_aspect, seg_card_pad_x, svg_text_band)
 
@@ -103,7 +102,6 @@ def safe_margins():
 # 文字填充色的唯一判据是对页底（主题渐变各档 stop）的对比度：按最坏一档算，
 # <3:1 即瞎字。不另养"背景色族"字面量。
 
-_HEX = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 # 等宽字符区间（CJK 汉字 + 中文标点 + 假名 + 全角）：落在这个区间外的一律按
 # 0.55em 算。只写汉字区间会把「，。」和假名算成半角，中文句子的估算宽度系统性
 # 偏小——偏小是危险方向：端点落在文字上的判断会漏报"松散端点"。
@@ -547,9 +545,15 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             # 画法，见 canvas.md「图内文字的对比度」），按页底算出来的数对它不成立，
             # 所以这里没有判死的资格。
             fill = inherited(el, "fill")
-            fh = css_color_to_hex(fill) if fill and _HEX.match(fill.strip()) else None
+            # 归一化**只交给 css_color_to_hex**：它同时认 hex 与 CSS 标准色名
+            # （与 _theme.is_safe_css_color 放行的是同一批写法）。前面不能再垫一
+            # 道只认 hex 的正则——那会让同一个颜色因写法不同而结论不同：写
+            # #000080 报 error、写等价的 navy 却静默放行，而深色底上的深蓝字正
+            # 是本条要拦的东西。解析不了（none / currentColor / url(#grad)）
+            # 时它返回 None，与"不查"逐字节一致。
+            fh = css_color_to_hex(fill) if fill else None
             if fh:
-                c = min(contrast_ratio(fh, s) for s in theme_bg_stops(theme))
+                c = worst_contrast(fh, theme)
                 if layout in FULL_BLEED and c < 4.5:
                     warns.append(f"文字 {content.strip()[:12]!r} 填充 {fh} 对 {theme} 主题页底最坏一档只有 "
                                  f"{c:.1f}:1（<4.5:1）。它若直接落在页底上就是看不清；若压在"

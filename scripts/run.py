@@ -458,7 +458,11 @@ def main():
     # --speed / --voice-id 有 argparse 默认值也要永远透传：否则 resume 指纹
     # 依赖两边默认值恰好相同。
     tts_args += ["--speed", str(args.speed), "--voice-id", args.voice_id]
-    if args.voice_style:
+    # 空串是**显式声明**，不是"没给"：它表示"这一段不要任何风格指令"，而 pipeline
+    # 里段/轮级的 voice_style 判据就是按这个口径写的（用 `is not None` 而非 `or`）。
+    # 这里若按真值判，空串就被吃成"退回 pipeline 默认播报文案"——作者写下的"不要
+    # 风格"被静默翻成"要默认风格"，两句意思相反且零报错。
+    if args.voice_style is not None:
         tts_args += ["--voice-style", args.voice_style]
     if args.gap is not None:
         tts_args += ["--gap", str(args.gap)]
@@ -663,7 +667,7 @@ def main():
     # 就能给出的信息（--until html 就是给人工预览收口的）。
 
     # HTML 已生成；渲染复用同一次 Hyperframes 命令解析。
-    _HF_COMMAND = hyperframes_command(project)
+    _HF_COMMAND = hyperframes_command()
 
     if args.until == "html":
         _REPORT["skipped"].append("render（--until html）")

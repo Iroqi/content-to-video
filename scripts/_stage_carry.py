@@ -287,10 +287,11 @@ def _settle_step(root, step):
         if step.get("draw"):
             # 演完 = 线长满了：pathLength=1 归一 + dasharray=1 + dashoffset=0（solid）。
             transforms += _settle_payload(el, {
-                "attr": {"pathLength": 1},
+                ATTR_KEY: {"pathLength": 1},
                 "strokeDasharray": 1, "strokeDashoffset": 0})
         if "morph" in step:
-            transforms += _settle_payload(el, {"attr": {"d": step["morph"]["to"]}})
+            transforms += _settle_payload(el,
+                                          {ATTR_KEY: {"d": step["morph"]["to"]}})
         count = step.get("count")
         if count is not None:
             # schema 保证写了 count 就不会有 set/to/draw/morph，所以这里不用继续往下走

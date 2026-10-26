@@ -359,6 +359,19 @@ def theme_bg_stops(theme):
     return re.findall(r"#[0-9a-fA-F]{6}", get_theme_colors(theme)["bg_gradient"])
 
 
+def worst_contrast(color, theme):
+    """该色对主题页底**最坏一档**的对比度。
+
+    文字具体落在哪一档底色上由版面决定，判读只能按最坏那档算；取 min 两边自动
+    选对——深底上的浅字怕最亮那档，浅底上的深字怕最暗那档。早年版手挑中间档当
+    唯一边界，那是在赌；改取最坏后槽位判定一字不变，只是不再赌。
+
+    判据**只此一份**：check_svg（门禁）与 canvas_kit（取色）都调它。两处各写一
+    遍 min 的那天，两边就只是"恰好相等"——改一边另一边静默分家。
+    """
+    return min(contrast_ratio(color, s) for s in theme_bg_stops(theme))
+
+
 def ensure_text_contrast(color, backgrounds, target=4.5):
     """accent 文字色的对比度保底：达标原样返回，否则朝黑/白逐步推移到达标。
 

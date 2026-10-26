@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
 from _beats import validate_beats  # noqa: E402  台词板归一（简写 → {on, change}）
 from _theme import (arc_accent, arc_accent_indices,  # noqa: E402
-                    get_accent_palette, get_default_accent)
+                    get_default_accent)
 from _timeline import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
 
 DEFAULT_ACCENT = get_default_accent()

@@ -43,12 +43,13 @@ from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # n
                            seeded_wobble, write_text_atomic)
 # 满幅判据整个走 _svg_sanitize._covers_viewbox（阈值常量也在它那边）：check_svg
 # 与这里判的是同一件事，判据就该只有一份。
-from _svg_sanitize import FULL_BLEED_FRAC, _covers_viewbox  # noqa: E402  满幅阈值唯一真源
+from _svg_sanitize import _covers_viewbox  # noqa: E402  满幅阈值唯一真源
 from _template import (get_canvas, get_image_box, load_template,  # noqa: E402
                        normalize_aspect, put_override)
-from _theme import (DEFAULT_THEME, contrast_ratio, css_color_to_hex,  # noqa: E402
+from _theme import (DEFAULT_THEME, css_color_to_hex,  # noqa: E402
                     ensure_text_contrast, get_default_accent,
-                    get_theme_colors, mix, on_arc, theme_bg_stops)
+                    get_theme_colors, mix, on_arc, theme_bg_stops,
+                    worst_contrast)
 from _validate import _reject_unknown_keys, _validate_accent  # noqa: E402
 from _validate import _validate_finite_number  # noqa: E402
 
@@ -626,9 +627,8 @@ def _check_ids_unique(els):
 
 # ── 取色：全部从主题/accent 派生，不写字面 hex ────────────────────
 def _contrast_safe(color, theme):
-    """该色对主题页底最坏一档的对比度（与 check_svg 同一算法，同一判读口径）。"""
-    stops = theme_bg_stops(theme)
-    return min(contrast_ratio(color, s) for s in stops)
+    """该色对主题页底最坏一档的对比度（判据在 _theme.worst_contrast）。"""
+    return worst_contrast(color, theme)
 
 
 def _palette(theme, accent):

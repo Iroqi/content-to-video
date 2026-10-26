@@ -161,6 +161,19 @@ _PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
 # 是 stage:"keep" 接续页第 0 帧就坏且生成期零报错。跨模块相等由
 # `tests/test_shared_geometry.py` 钉住。
 ATTR_KEY = "attr"
+
+# 无限循环（repeat:-1）的放行开关：与 `_ease.allow_extra` 同一个形状，只由
+# `gen_hyperframes --allow-infinite-loop`（预览档）在进程内打开。**契约层默认拒收**，
+# 因为它换不来任何画面收益，只换来一条 1e10 量级的总时长——而"按时刻取帧"是核对
+# 成片的唯一手段。开关只活在当前进程，绝不落进产物。
+_ALLOW_INFINITE = {"on": False}
+
+
+def allow_infinite_loop(on=True):
+    """开/关无限循环的宽松档。只影响 `_validate_repeat_yoyo`。"""
+    _ALLOW_INFINITE["on"] = bool(on)
+
+
 # at_time 的相对写法：以 "+0.5" / "-0.2" 出现，含义是"上一条 beat 结束之后再过
 # 这么多秒"（首条则从段落音频起点算）。让整页画布的自由时间线能顺次链接节奏，
 # 不必每步手算绝对秒——重配音后绝对秒会整体漂移，相对链则跟着上一条走。
@@ -326,12 +339,27 @@ def _validate_repeat_yoyo(step, where):
 
     repeat 只收整数：GSAP 吃 0.5 这种半遍，而跨段接续与出画自查都要说"最后停在
     哪一头"，半遍收尾在两者里都是猜。
+
+    **`repeat:-1`（无限循环）在这里就拒**，不再"运行时按片长折算"。GSAP 把无限循环
+    按 `REPEAT_DELAY=1e10` 折算总时长，整条时间线从此变成 1e10 量级，
+    `tl.pause()/seek()`、预览进度条、按时刻取帧三处一起坏掉——而那三处正是"成片与
+    预览是否一致"的唯一证据链。这不是"少写一个旋钮"，是换来一个**可证明的时长**：
+    每一拍的总跨度都写死在数据里，manifest 就能核"演完没有"。
+    无限循环的正当需求（呼吸 / 漂移）由模板自己的稳态层承担，那里按片长折算遍数
+    （`html_renderer._loop_repeat`），不经过作者的手。要循环几次就写几次，
+    渲染端另有 `--allow-infinite-loop` 给"先看手感"的预览档。
     """
     if "repeat" in step:
         v = step["repeat"]
         if isinstance(v, bool) or not isinstance(v, int) or v < -1:
             raise ValueError(f"{where} 的 repeat 必须是 ≥-1 的整数（-1=无限循环，"
                              f"0=只演一遍；实际: {v!r}）")
+        if v == -1 and not _ALLOW_INFINITE["on"]:
+            raise ValueError(
+                f"{where} 写了 repeat:-1（无限循环）：GSAP 会按 1e10 折算整条时间线的"
+                "总时长，按时刻取帧、预览进度条、跨段接续三处一起失效，而这三处正是"
+                "核对成片的唯一手段。写成实际遍数（如 repeat:5）；只想先看手感可以走"
+                "预览档 --until html --allow-infinite-loop（带它渲染会在入口被拒）")
     if "yoyo" in step:
         if not isinstance(step["yoyo"], bool):
             raise ValueError(f"{where} 的 yoyo 必须是 JSON 布尔 true/false"

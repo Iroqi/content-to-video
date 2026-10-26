@@ -331,6 +331,10 @@ def _build_parser():
     parser.add_argument("--allow-ease", action="store_true",
                         help="预览档（只配 --until html）：放行 GSAP core 之外的 ease 档名。"
                              "带它跑渲染会在入口报错——那些档在渲染里会静默退回缺省缓动")
+    parser.add_argument("--allow-infinite-loop", action="store_true",
+                        help="预览档（只配 --until html）：放行 images.json 的 repeat:-1。"
+                             "无限循环把总时长折算成 1e10 量级，按时刻取帧/进度条/跨段接续"
+                             "一起失效；带它跑渲染会在入口报错")
     parser.add_argument("--draft", action="store_true",
                         help="草稿档总开关：一次放行全部迭代逃生口（缺图/坏 src 降级并占位、"
                              "槽位比例与画布字号降 warn、ease 放行、渲染 best-effort）。"
@@ -409,6 +413,12 @@ def main():
         parser.error("--allow-ease 只配 --until html（预览档）：那些档名只影响预览，"
                      "渲染时 GSAP 会静默换成缺省缓动——成片和你看到的不一样。"
                      "定稿时去掉这个旗标，把 ease 换回 --help 里列出的档")
+    # 无限循环同理，且更硬：它不只换一条曲线，它把整条时间线的总时长换成 1e10，
+    # 于是"按时刻取帧核对"这件事本身失效——预览能看，成片却无从核对。
+    if args.allow_infinite_loop and args.until != "html" and not args.draft:
+        parser.error("--allow-infinite-loop 只配 --until html（预览档）：无限循环会把"
+                     "GSAP 总时长折算成 1e10 量级，渲染出来的片长不可信、按时刻取帧也"
+                     "不成立。定稿时把 repeat:-1 改成实际遍数")
 
     out = os.path.abspath(args.output)
     project = os.path.abspath(args.project) if args.project else \
@@ -644,6 +654,9 @@ def main():
     if args.allow_ease:
         html_args.append("--allow-ease")
         _REPORT["skipped"].append("ease 钉固目录（--allow-ease，预览档）")
+    if args.allow_infinite_loop:
+        html_args.append("--allow-infinite-loop")
+        _REPORT["skipped"].append("无限循环拒收（--allow-infinite-loop，预览档）")
     _run_step(gen_hyperframes.main, html_args, "生成 HTML")
 
     # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s

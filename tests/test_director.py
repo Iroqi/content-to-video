@@ -380,18 +380,54 @@ class TweenKnobContract(unittest.TestCase):
 
     def test_repeats_accepted_on_every_replayable_primitive(self):
         steps = [{"at": 0, "target": "#a", "draw": True, "repeat": 1, "yoyo": True},
-                 {"at": 0, "target": "#n", "count": {"to": 5}, "repeat": -1},
+                 {"at": 0, "target": "#n", "count": {"to": 5}, "repeat": 2},
                  {"at": 0, "target": "#t", "type": {}, "repeat": 2, "yoyo": True},
                  {"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
                                                      "to": "M 0 5 L 1 9"}, "repeat": 3}]
         for step in steps:
             self._ok(step)
 
-    def test_infinite_repeat_rejected_for_morph_only(self):
-        """morph 是生成期采样：没有终点就无从采样。运行期的补间/count/type 相反是确定的。"""
-        self._bad({"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
-                                                      "to": "M 0 5 L 1 9"},
-                   "repeat": -1}, "没有终点可采")
+    def test_infinite_repeat_rejected_everywhere_by_default(self):
+        """`repeat:-1` 不再"运行期按片长折算"，直接在契约层拒。
+
+        病根：GSAP 把无限循环按 REPEAT_DELAY=1e10 折算总时长，整条时间线从此是 1e10
+        量级——按时刻取帧、预览进度条、跨段接续三处一起失效，而"按时刻取帧"是核对
+        成片的唯一手段。正当的稳态循环（呼吸/漂移）由模板层按片长折算，不经过作者。
+        放宽档只给预览：`_images_schema.allow_infinite_loop(True)`（gen 的
+        --allow-infinite-loop），且 gen 入口拒绝它与真渲染同时出现。
+        """
+        for step in ({"at": 0, "target": "#n", "count": {"to": 5}, "repeat": -1},
+                     {"at": 0, "target": "#a", "draw": True, "repeat": -1},
+                     {"at": 0, "target": "#t", "type": {}, "repeat": -1}):
+            self._bad(step, "repeat:-1", "1e10")
+
+    def test_infinite_repeat_allowed_under_preview_flag(self):
+        from _images_schema import allow_infinite_loop
+        allow_infinite_loop(True)
+        try:
+            self._ok({"at": 0, "target": "#n", "count": {"to": 5}, "repeat": -1})
+        finally:
+            allow_infinite_loop(False)
+        # 关掉之后同一份数据重新被拒——开关是进程级状态，不是一次性豁免
+        self._bad({"at": 0, "target": "#n", "count": {"to": 5}, "repeat": -1},
+                  "repeat:-1")
+
+    def test_infinite_repeat_rejected_for_morph(self):
+        """morph 有两条理由拒 `repeat:-1`：采样要终点，且无限循环本身已被拒。
+
+        放宽档下仍要拒 morph 这一条——两个理由各管一件事，先命中的是"无限循环"
+        那条（顺序在 `_validate_repeat_yoyo` 里，早于 morph 的采样判据）。
+        """
+        from _images_schema import allow_infinite_loop
+        step = {"at": 0, "target": "#p", "morph": {"from": "M 0 0 L 1 1",
+                                                   "to": "M 0 5 L 1 9"},
+                "repeat": -1}
+        self._bad(step, "repeat:-1")
+        allow_infinite_loop(True)
+        try:
+            self._bad(step, "没有终点可采")
+        finally:
+            allow_infinite_loop(False)
 
     def test_zero_duration_rejected_for_morph(self):
         """duration:0 的形变采不出中间态，成片里是瞬跳——不是"很快"，是没有。

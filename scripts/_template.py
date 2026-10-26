@@ -498,9 +498,9 @@ _TEMPLATE_JSON = r'''
       "ease": "back.out(1.7)",
       "rhythm": [
         {"from": 0.5, "y": 0, "ease": "back.out(1.7)"},
-        {"from": 0.92, "y": 22, "ease": "expo.out"},
-        {"from": 0.72, "y": 0, "ease": "power3.out"},
-        {"from": 1.0, "y": 34, "ease": "power2.out"}
+        {"from": 0.92, "y": 40, "ease": "power4.out"},
+        {"from": 0.72, "y": 34, "ease": "power3.out"},
+        {"from": 1.0, "y": 56, "ease": "power3.out"}
       ],
       "tagline": {
         "delayFrac": 0.45,

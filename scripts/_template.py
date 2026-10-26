@@ -493,14 +493,13 @@ _TEMPLATE_JSON = r'''
   },
   "animation": {
     "titleEntrance": {
-      "from": 0.5,
       "duration": 0.5,
-      "ease": "back.out(1.7)",
+      "ease": "power3.out",
       "rhythm": [
-        {"from": 0.5, "y": 0, "ease": "back.out(1.7)"},
-        {"from": 0.92, "y": 40, "ease": "power4.out"},
-        {"from": 0.72, "y": 34, "ease": "power3.out"},
-        {"from": 1.0, "y": 56, "ease": "power3.out"}
+        {"y": 44, "ease": "power4.out"},
+        {"y": 56, "ease": "power3.out"},
+        {"y": 34, "ease": "power3.out"},
+        {"y": 62, "ease": "expo.out"}
       ],
       "tagline": {
         "delayFrac": 0.45,

@@ -296,7 +296,13 @@ class Structure(unittest.TestCase):
                 html = self._render_with_style(style)
                 self.assertIn(f'clip-path:{frm}', html)
                 self.assertIn(f'clipPath:"{to}"', html)
-                self.assertNotIn("inset(100% 0 0 0)", html)
+                # 卡片**自身**的揭屏补间不能用 vertical 的 inset 几何。
+                # 不能简写成 `assertNotIn("inset(100% 0 0 0)")`：标题揭示边的裁窗
+                # 正是同一串 inset（见 html_renderer._reveal_tween_lines），
+                # 那是 `#rev-*` 的补间，与换页几何无关。
+                self.assertEqual(
+                    re.findall(r'tl\.fromTo\("#(?!rev-)[\w-]+",'
+                               r'\{clipPath:"inset\(100% 0 0 0\)"', html), [])
 
     def test_unknown_wipe_style_rejected(self):
         with self.assertRaises(ValueError):
@@ -649,11 +655,11 @@ class AppleOpening(unittest.TestCase):
         html = self._render_apple()
         # 苹果编排取代通用 back.out 标题入场（两条补间同元素会打架）
         self.assertNotIn('tl.from("#title-opening"', html)
-        # 非开屏卡照旧走通用入场；closing 不带苹果编排。
-        # 不断言具体档位（scale 0.5 / 0.92 / 0.72 / 1.0）：标题入场的曲线按段序
-        # 轮换（见 _template.titleEntrance.rhythm），把一个档位写死进断言等于
-        # 禁止轮换。
-        self.assertIn('tl.from("#title-seg-a",{scale:', html)
+        # 非开屏卡照旧走通用入场（揭示边：只有位移、没有缩放）；closing 不带苹果
+        # 编排。不断言具体档位（44 / 56 / 34 / 62px）：标题入场的行程按段序轮换
+        # （见 _template.titleEntrance.rhythm），把一个档位写死进断言等于禁止轮换。
+        self.assertIn('tl.from("#title-seg-a",{y:', html)
+        self.assertNotIn('tl.from("#title-seg-a",{scale:', html)
         self.assertNotIn('tl.fromTo("#halo-closing"', html)
         self.assertNotIn('id="glow-closing"', html)
 

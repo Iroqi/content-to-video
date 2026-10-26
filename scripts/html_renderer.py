@@ -231,12 +231,17 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
             if ch.isspace()
             else f'<span class="t-mk"><span class="t-ch"><span class="t-in">{esc(ch)}</span></span></span>'
             for ch in seg["title"])
+    # 揭示边的裁窗层：苹果开场那一支自己带 `.t-mk` 裁窗（逐字揭示边是另一种
+    # 编法），只有走通用入场的 agenda 卡（典型是结尾页）需要外面这一层。
+    _rev_open = "" if apple_opening else f'<div class="title-reveal" id="rev-title-{sid}">'
+    _rev_close = "" if apple_opening else "</div>"
     return (f'    <div class="agenda-col"{col_attr}>\n'
             f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'
+            f'{_rev_open}'
             f'<div class="seg-title" id="title-{sid}" '
             f'style="font-size:{title_size};text-shadow:0 0 {ag["titleGlow"]}px {ac_attr}40">'
-            f'{title_html}</div></div>\n'
+            f'{title_html}</div>{_rev_close}</div>\n'
             f'      {agenda_html}{tail_html}\n')
 
 
@@ -1287,13 +1292,18 @@ def _prepare_card(rc, clip):
         f'    <div class="seg-progress" id="prog-{sid}" '
         f'style="background:{ac_attr};width:0"></div>\n'
     )
+    # 副标题的裁窗层只在真有副标题时生成：空盒子既没有补间也没有内容，留在
+    # DOM 里只是给 Layout 门禁多一个"这里有个盒子"的账。
+    _tag_rev = (f'      <div class="title-reveal" id="rev-tag-{sid}">'
+                f'{tagline_html}</div>\n' if tagline_html else "")
     title_wrap = ("" if is_canvas else _plate_title_wrap(rc, seg, sid, title_size, ac)
                   if is_plate else (
         f'    <div class="seg-title-wrap">\n'
-        f'      <div class="seg-title" id="title-{sid}" '
+        f'      <div class="title-reveal" id="rev-title-{sid}">'
+        f'<div class="seg-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
-        f'{esc(seg["title"])}</div>\n'
-        f'      {tagline_html}\n'
+        f'{esc(seg["title"])}</div></div>\n'
+        f'{_tag_rev}'
         f'    </div>'
     ))
     return SimpleNamespace(
@@ -1330,9 +1340,10 @@ def _plate_title_wrap(rc, seg, sid, title_size, ac):
     """
     return (
         f'    <div class="plate-head">\n'
-        f'      <div class="seg-title plate-title" id="title-{sid}" '
+        f'      <div class="title-reveal" id="rev-title-{sid}">'
+        f'<div class="seg-title plate-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac}40">'
-        f'{esc(seg["title"])}</div>\n'
+        f'{esc(seg["title"])}</div></div>\n'
         f'    </div>'
     )
 
@@ -2415,18 +2426,54 @@ def _cycle_pick(base, rhythm, ordinal):
 def _title_rhythm(a_title, ordinal):
     """按段序取标题入场的节奏档，让每章开场不是同一套曲线。
 
-    档位表在 `_template.titleEntrance.rhythm`，按**卡片序**取模逐项覆盖
-    `from`/`y`/`ease`；缺 `rhythm` 时退回顶层 `from`/`ease`。
+    档位表在 `_template.titleEntrance.rhythm`，按**卡片序**取模逐项覆盖 `y`/`ease`；
+    缺 `rhythm` 时退回顶层 `ease`（行程为 0＝不演位移）。
     有限集轮换而不是随机：随机让相邻两段有概率撞成同一种，严格轮换保证连续四段不重样。
+
+    **四档只有行程与曲线两个量，没有缩放**：标题入场是「揭示边」（见
+    `_reveal_tween_lines`），字从下方走到原位、裁窗同步开合。旧表里混着缩放档
+    （`from:0.5` 配 `back.out`）——整块缩放绕中心发生，而标题是左对齐的文字块，
+    缩放期间**左缘一直在动**；观众的眼睛已经锚在左缘那个位置上，它一动，"站定"
+    就读不出来。揭示边让文字盒自始至终不动，动的只有那条边。
 
     **y 是行程，ease 必须按行程选**（四档表随 `_template.py` 改过一次）。`expo` /
     `power4` 这类"前 10% 走掉一半"的档，只有在行程 ≥100px 或时长 ≥0.8s 时才看得出
     运动；旧表第二档是 `y:22 + expo.out`，0.5 秒的档里第一帧（33ms）只走 2.8px、
     0.1 秒走掉一半行程——屏幕上读到的是一条纯淡入，这一档等于不存在。现在的配置
-    每档首帧位移 ≥ 4px（`tests/test_ease.py` 按 GSAP 实采样钉住这条）。
+    每档首帧位移 ≥ 4px（`tests/test_motion_design.py` 按 GSAP 实采样钉住这条）。
     """
-    return _cycle_pick({"from": a_title["from"], "y": 0, "ease": a_title["ease"]},
+    return _cycle_pick({"y": 0, "ease": a_title["ease"]},
                        a_title.get("rhythm"), ordinal)
+
+
+def _reveal_tween_lines(sel_clip, sel_inner, y, duration, ease, at):
+    """一条「揭示边」的两层补间：裁窗从上往下开，字同时从下方走到原位。
+
+    前沿排版的标题入场不是"整块浮上来"，而是**字不动、边在走**（Apple 产品页、
+    Vercel / Linear 的标题揭示都是这一招）。两层各管一件事：
+
+    - `#rev-*` 裁窗：`clip-path` 从 `inset(100% 0 0 0)`（全裁）补到 `inset(0%)`。
+      与段落转场（wipe）同一手法——纯属性补间、逐帧 seek 确定、不依赖容器高度
+      恰好贴合文字。
+    - 标题本体：`y` 从 `+行程` 补到 0。字本身**不透明**、不缩放，所以没有任何
+      一帧是"半透明的字在飘"。
+
+    两层必须**同起点、同时长、同缓动**，任何一处分家都会在成片里显形：
+    - 只写裁窗＝擦除（wipe）：字钉在原地被揭开，没有"被推上来"的动感；
+    - 只写位移＝滑动：进出的边界是画面外而不是裁窗，长标题会先露半截；
+    - 时长不一样：收尾那几帧窗已经开满而字还在走（或反之），落位会"抖一下"。
+
+    行程为 0 时整条不生成（那一档就是不演入场），调用方不必再判一次。
+    """
+    if not y:
+        return []
+    return [
+        f'tl.fromTo("{sel_clip}",{{clipPath:"inset(100% 0 0 0)"}},'
+        f'{{clipPath:"inset(0% 0 0 0)",duration:{duration:.2f},'
+        f'ease:"{ease}"}},{at:.2f})',
+        f'tl.from("{sel_inner}",{{y:{num_fmt(y)},'
+        f'duration:{duration:.2f},ease:"{ease}"}},{at:.2f})',
+    ]
 
 
 def _tagline_entrance_lines(rc, card, rh):
@@ -2446,8 +2493,9 @@ def _tagline_entrance_lines(rc, card, rh):
     0→76% 只占 2 帧，错峰读不出来；`back.out` 会让小字号副标题冲过 1 再弹回，是抖动
     不是弹性。
 
-    `from` 补间会给元素写 `opacity:0`——卡片从擦除起点就部分可见，不压透明度的话
-    副标题会以缩放态在擦除窗里先露半截。
+    **副标题自带一枚裁窗**（`#rev-tag-*`），与标题那一条是同一个动作的两个落点，
+    不共用一枚：共用时窗按标题的节奏开合，副标题起点更晚，它开始动的那几帧窗已经
+    开过头了——字会在窗里"飘"一段才被接住，正是揭示边要消灭的那种滑动感。
     """
     tg = rc.anim["titleEntrance"].get("tagline")
     if not tg or not card.tagline_html:
@@ -2462,12 +2510,8 @@ def _tagline_entrance_lines(rc, card, rh):
     if dur <= 0.01:
         return []
     y = float(rh.get("y") or 0.0) * amp
-    frm = 1.0 - (1.0 - float(rh["from"])) * amp
-    parts = ["opacity:0", f"scale:{num_fmt(frm, 4)}"]
-    if y:
-        parts.append(f"y:{num_fmt(y)}")
-    return [f'tl.from("#tag-{card.sid}",{{' + ",".join(parts)
-            + f',duration:{dur:.2f},ease:"{tg["ease"]}"}},{card.s + start:.2f})']
+    return _reveal_tween_lines(f"#rev-tag-{card.sid}", f"#tag-{card.sid}",
+                               y, dur, tg["ease"], card.s + start)
 
 
 def _settle_rhythm(a_img, ordinal):
@@ -2629,12 +2673,12 @@ def _card_timeline_lines(rc, card):
     if not card.is_canvas and not card.apple_opening:
         a_title = a_["titleEntrance"]
         _rh = _title_rhythm(a_title, getattr(card, "title_ordinal", 0))
-        lines.append(
-            f'tl.from("#title-{sid}",{{scale:{_rh["from"]},'
-            + (f'y:{_rh["y"]},' if _rh["y"] else "")
-            + f'duration:{a_title["duration"] * _k:.2f},'
-            f'ease:"{_rh["ease"]}"}},{s:.2f})'
-        )
+        # 标题入场 = 一条揭示边（裁窗 + 字同步走），不是整块缩放。四档轮换的只有
+        # 行程与曲线；**没有缩放**：标题是左对齐的文字块，绕中心缩放时左缘一直在
+        # 动，而"站定"恰恰要求左缘不动（详见 `_title_rhythm` 的口径）。
+        lines.extend(_reveal_tween_lines(
+            f"#rev-title-{sid}", f"#title-{sid}", _rh["y"],
+            a_title["duration"] * _k, _rh["ease"], s))
         # 副标题跟着**同一档**节奏进来（幅度小一号、起点错峰）：题头组两行一起
         # 到位就还是"一块东西浮上来"。参数挂在标题档位上而不是另开一组，理由见
         # `_tagline_entrance_lines`。

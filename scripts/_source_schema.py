@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
+from _beats import validate_beats  # noqa: E402  台词板（beats）形状校验
 from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
                        is_content_sid, ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
 from _timeline import validate_speed  # noqa: E402
@@ -30,7 +31,8 @@ SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
                "closing_tagline", "closing_speed", "closing_layout", "cta",
                "speakers", "segments")
 SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
-                "speed", "voice_id", "voice_style", "takeaway", "layout")
+                "speed", "voice_id", "voice_style", "takeaway", "layout",
+                "beats")
 SPEAKER_KEYS = ("voice_id", "voice_style", "label")
 # 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
 # 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
@@ -207,6 +209,15 @@ def validate_segments_source(data):
         _validate_layout(seg.get("layout"),
                          f"segments[{i}]（title={seg.get('title')!r}）",
                          content=True)
+        # 台词板（可选）：这一段的画面在第几句旁白时变成什么，人话写法。
+        # 契约只校验"每拍都说了第几句、且说的是人话"；句序是否落在真实句子
+        # 上要等重分句与配音完成，见 _beats.audit 在 run.py 生成 HTML 后那一次。
+        # 放在 dialogue 之前：beats 的 `on` 对对话段同样按"本段第几轮的第几句"
+        # 计（manifest 侧的 sentences 已经把各轮摊平），这里不看 text/dialogue
+        # 二选一的结果，只做形状校验。
+        _beats = validate_beats(
+            seg.get("beats"),
+            f"segments[{i}]（title={seg.get('title')!r}）的 'beats'")
         dialogue = seg.get("dialogue")
         # 类型必须在这里拦下：非列表的 truthy dialogue（字符串/对象）若放行，
         # 会绕过 has_dialogue 判定、又在 build_from_structured 的 if dialogue:

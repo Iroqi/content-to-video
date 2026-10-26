@@ -89,6 +89,33 @@ class Harness:
         os.makedirs(self.project, exist_ok=True)
         write_json_atomic(os.path.join(self.project, "images.json"), mapping)
 
+    def put_beats(self, sid, beats, images_extra=None):
+        """给某个内容段挂台词板，并把配图配额补齐（否则缺图闸会先拦）。
+
+        台词板的核对发生在 TTS 之后、生成 HTML 之前，所以测试要能像作者那样
+        在 manifest 与 images.json 两处分别落东西。
+        """
+        for seg in self.manifest["segments"]:
+            if seg["id"] == sid:
+                seg["beats"] = beats
+                break
+        else:
+            raise AssertionError(f"manifest 里没有段落 {sid}")
+        # 先按 manifest 需要配图的段落齐（样例稿里有整页画布段，缺图连预览
+        # HTML 都不给生成），再把调用方给的那一段覆盖上去。
+        self.make_images_complete()
+        if images_extra is not None:
+            write_json_atomic(os.path.join(self.project, "images.json"),
+                              images_extra)
+
+    def add_motion(self, sid, steps):
+        """给某个段在 images.json 里加一条补间声明（配图映射此时已齐）。"""
+        path = os.path.join(self.project, "images.json")
+        with open(path, encoding="utf-8") as f:
+            mapping = json.load(f)
+        mapping[sid]["evolve"] = {"steps": steps}
+        write_json_atomic(path, mapping)
+
     def invoke(self, extra_argv, pipeline_main=None):
         """跑一次 run.main()，返回 (stdout, stderr)；SystemExit 原样上抛。
 
@@ -617,6 +644,54 @@ class OfficialGateWiring(unittest.TestCase):
         gate_step = next(s for s in self.h.report()["steps"]
                          if s["name"] == "官方门禁 check")
         self.assertTrue(gate_step["ok"], "非阻断 warning 不应把报告步骤记成失败")
+
+
+class BeatsGate(unittest.TestCase):
+    """台词板的句序核对接在"manifest 已校验、HTML 未生成"这个位置上。
+
+    为什么要在编排层测：越界本身是静默失效（成片里完全看不出来），它唯一能被
+    挡住的机会就是这道闸；闸站在哪一步比闸本身更容易写错——早一步拿不到最终
+    句数，晚一步已经烧进产物。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_out_of_range_on_blocks_before_html(self):
+        # seg-a 在样例稿里只有 2 句；on=5 落在空处。
+        self.h.put_beats("seg-a", [{"on": 0, "change": "点亮 a"},
+                                   {"on": 5, "change": "推到第六态"}])
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("越界", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv, "越界时不该生成 HTML")
+
+    def test_valid_beats_pass_and_are_reported(self):
+        self.h.put_beats("seg-a", [{"on": 1, "change": "把第一条压暗"}])
+        self.h.add_motion("seg-a", [{"at": 1, "target": "#a", "to": {"opacity": 0.3}}])
+        self.h.invoke(["--until", "html"])
+        self.assertIsNotNone(self.h.gen_argv)
+        self.assertEqual(self.h.report()["beats"],
+                         {"total": 1, "errors": 0, "warnings": 0})
+
+    def test_beats_without_any_tween_warns_but_does_not_block(self):
+        # 台词板写成愿望清单：要点名，但不该拦——这一版仍然能出片，
+        # 拦下来的结果是作者只能删掉台词板，那反而丢掉了意图记录。
+        self.h.put_beats("seg-a", ["把第一条压暗"])
+        _, err = self.h.invoke(["--until", "html"])
+        self.assertIn("画面不会动", err)
+        self.assertIsNotNone(self.h.gen_argv)
+        self.assertEqual(self.h.report()["beats"]["warnings"], 1)
+
+    def test_draft_does_not_skip_the_beats_gate(self):
+        """--draft 放松的是占位/比例/字号这类"还没画完"的档，句序错位不是——
+        它会让整段台词板错位，而草稿同样交付给人看。"""
+        self.h.put_beats("seg-a", [{"on": 9, "change": "推到第十态"}])
+        with self.assertRaises(SystemExit):
+            self.h.invoke(["--until", "html", "--draft"])
+        self.assertIsNone(self.h.gen_argv)
 
 
 if __name__ == "__main__":

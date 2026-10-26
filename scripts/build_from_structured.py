@@ -15,6 +15,7 @@ from typing import Dict, List
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _text import split_sentences  # noqa: E402  复用同一份分句逻辑，杜绝两边漂移
+from _beats import validate_beats  # noqa: E402  台词板归一（简写 → {on, change}）
 from _theme import (arc_accent, arc_accent_indices,  # noqa: E402
                     get_accent_palette, get_default_accent)
 from _timeline import OPENING_CLOSING_DEFAULT_SPEED  # noqa: E402
@@ -189,6 +190,11 @@ def _collect_blocks(source):
         # 不写就不进 extra，下游按槽位版式渲染。
         if seg.get("layout") is not None:
             extra["layout"] = seg["layout"]
+        # 台词板（归一后的 [{on, change}]，形状由 _beats.validate_beats 把关）：
+        # 透传进 manifest，好让 run.py 在真实时间轴上核对句序是否越界。它**不进
+        # HTML**——台词板是意图层，渲染端只认 images.json 里的 director/evolve。
+        if seg.get("beats"):
+            extra["beats"] = validate_beats(seg.get("beats"), f"段落 {seg.get('id') or i}")
         # 缺省段落 id 用中性前缀 seg（配图键与文件名同源）。
         sid = (seg.get("id") or "").strip()
         if not sid:

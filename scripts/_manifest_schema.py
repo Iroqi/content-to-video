@@ -15,6 +15,7 @@ from _degraded import KEYS as DEGRADED_KEYS  # noqa: E402  降级词汇表（注
 from _segments import (CONTENT_SID_PREFIX, STRUCTURAL_SIDS,  # noqa: E402
                        _validate_layout, _validate_sid, is_content_sid,
                        ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  与 _source_schema 共用 ON_SCREEN_SEGMENT_KEYS
+from _beats import validate_beats  # noqa: E402  台词板形状校验（与 source 侧同一份）
 from _timeline import TIMELINE_TOLERANCE  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                        _validate_display_text, _validate_finite_number,
@@ -40,7 +41,10 @@ MANIFEST_SENTENCE_KEYS = ("index", "text", "start_time", "duration",
 MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
                          "speed", "layout",
                          "voice_id", "voice_style",
-                         "takeaway", "turns")
+                         "takeaway", "turns",
+                         # 台词板（可选）：从 source 透传，不进 HTML。它是
+                         # 意图层，_beats.audit 拿它和本文件的句子时间轴对账。
+                         "beats")
 # 顶层也一起封闭：只封下面两层会留一半——combined_audio / closing_cta 都是可选键，
 # 拼错了读侧 .get() 兜默认值，一声不吭（清单在 17 份真实 manifest 上实测稳定）。
 MANIFEST_TOP_KEYS = ("schema_version", "status", "degraded", "sentences",
@@ -290,6 +294,13 @@ def validate_timing_manifest(data):
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
                          content=is_content_sid(sid))
+        # 台词板（可选，由 pipeline 从 source 透传；manifest 明写可手写，所以这里
+        # 也要认）。只做形状校验，句序是否落在真实句子上由 _beats.audit 拿本
+        # 文件已校验的 sentences 去核——那时才知道最终分成了几句。
+        if sg.get("beats") is not None:
+            sg["beats"] = validate_beats(
+                sg["beats"],
+                f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 'beats'")
         # agenda 数据源字段（渲染层直接读 manifest）：类型错会在
         # renderer 的 [:trim] 切片处炸裸 TypeError，这里提前报对人。
         if sg.get("takeaway") is not None:

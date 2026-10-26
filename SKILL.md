@@ -31,6 +31,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，且渲染必须再加 `--allow-degraded`。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
 - **画面要有证据**：结构门禁（`check`）证明"能渲"，时长契约证明"演完"，但**没有任何一道在看画面**。交付前用 `--perceptual` 取帧：图槽是不是空的、有没有超过 3 秒画面不动、换页对不对得上旁白。判词只证明"没有明显坏"，**好不好看仍要翻那张 contact sheet**。
+- **先写台词板，再写补间**：要让画面跟着旁白变，先在稿子里写 `beats`（这一段的画面在第几句旁白时变成什么，人话），再落 `director` / `evolve`。`on` 必填，写不出来说明这一拍没想清楚。配音后 `run.py` 按最终时间轴核句序，越界 exit 2；只声明不实现会被点名。见 `references/motion.md`。
 - **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`templates/` 只放结构与选择器。随画幅变或要与模板联动的观感常量写那两个 py，别在 CSS 里存第二份。
 
 ## 环境
@@ -57,7 +58,7 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不压成单人讲述；双人对话别放进 `layout:"canvas"` 段（整页画布没有字幕层，轮次信息只剩声音）。内容段最多 7 段（≤6 段才放得下 `cta`）。
 
-写稿时顺手定好 `layout:"canvas"` 的段落，别等第 3 步才想。字段全集、行数与字数预算、`speakers[].label` 上墙约束、agenda 行为、哪些段值得交给 canvas，都在 `references/writing.md`。
+写稿时顺手定好 `layout:"canvas"` 的段落，别等第 3 步才想。同一时刻也想清楚**哪些段要让图跟着旁白变**：那就在该段写 `beats`（台词板），每条绑一个整数句序。字段全集、行数与字数预算、`speakers[].label` 上墙约束、agenda 行为、哪些段值得交给 canvas，都在 `references/writing.md`；台词板怎么用见 `references/motion.md`。
 
 ### 2. TTS
 

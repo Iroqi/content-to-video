@@ -39,6 +39,7 @@ from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定
                            guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
                            media_verdict)  # noqa: E402  素材可用性判据（与 gen 同一份函数）
 import perceptual  # noqa: E402  观感门禁（像素判据，见 --perceptual）
+import _beats as beats  # noqa: E402  台词板核对（句序是否落在最终时间轴上）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
 import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 
@@ -589,6 +590,28 @@ def main():
         else:
             print(f"[warn] HTML 预览继续生成，但 {_why}；"
                   "最终渲染必须显式加 --allow-degraded。", file=sys.stderr)
+
+    # ── 台词板核对：句序对不对得上最终时间轴 ──────────────────────
+    # 写稿时 beats 的 `on` 是整数句序，而句子是**重分句**后定下来的（_text 的分句
+    # 规则与本段标题、对话轮次的摊平都会影响句数）。一旦句数变了，`on: 4` 就会
+    # 落到一片空处——静默失效，成片里完全看不出来。所以核对必须排在 manifest 已
+    # 校验之后、生成 HTML 之前：早一点拿不到最终句数，晚一点已经烧进产物。
+    #
+    # 越界是 error（会让整段台词板错位，成片看不出来），其余是 warn。
+    _beats_errs, _beats_warns, _beats_total = beats.audit(
+        _tm, load_images_json(images_json) if has_images else None)
+    for _e in _beats_errs:
+        print(f"[run][error] 台词板：{_e}", file=sys.stderr)
+    for _w in _beats_warns:
+        print(f"[run][warn] 台词板：{_w}", file=sys.stderr)
+    _REPORT["beats"] = {"total": _beats_total,
+                        "errors": len(_beats_errs), "warnings": len(_beats_warns)}
+    if _beats_errs:
+        _write_report(_report_path())
+        print("[run] 台词板的句序对不上最终时间轴，未生成 HTML。"
+              "按上面每条把 'on' 改到真实的那一句（或删掉这一拍）后重跑。",
+              file=sys.stderr)
+        sys.exit(2)
 
     # ── 第 4 步 a：生成 composition HTML ──────────────────────────
     html_args = ["-m", manifest, "-o", os.path.join(project, "index.html"),

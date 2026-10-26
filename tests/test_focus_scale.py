@@ -1,6 +1,6 @@
 """焦点层级的第二个维度：尺寸（离焦距离同时决定亮度与缩放）。
 
-动机（.brainstorm/2026-10-25-focus-scale.md）：焦点衰减只做了一维——"远"只被表达
+动机：焦点衰减只做了一维——"远"只被表达
 成"暗"，同一档里第 2 行和第 4 行一样远。前沿歌词 UI（Apple Music 逐行、Apple
 Music Like Lyrics 的 spring）让层级同时落在透明度与缩放上。本轮补上尺寸那一维：
 同一条几何曲线、另一个 ratio，走 transform 而不是 font-size（改字号会重排：折行

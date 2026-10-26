@@ -38,6 +38,7 @@ from _render_backend import (hyperframes_command,  # noqa: E402
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
                            media_verdict)  # noqa: E402  素材可用性判据（与 gen 同一份函数）
+import perceptual  # noqa: E402  观感门禁（像素判据，见 --perceptual）
 import pipeline  # noqa: E402  进程内直调 TTS 步骤
 import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 
@@ -344,6 +345,13 @@ def _build_parser():
                         help="只预检 TTS 链路（分句/段检测/稿件契约），不合成、"
                              "不写任何文件；--until 在 dry-run 下不生效（HTML/"
                              "渲染步骤整体跳过）")
+    parser.add_argument("--perceptual", action="store_true",
+                        help="跑观感门禁：按段取帧，量「图槽是不是空的 / 画面有没有"
+                             "长时间不动 / 换页与旁白对不对得上」，并把 contact sheet "
+                             "与判词写进 <project>/perceptual/。这是全仓唯一一道在看"
+                             "画面的检查（其余门禁都看结构）。需要 Node + Chrome + "
+                             "Pillow；只报不拦，判词进 production_report 的 "
+                             "perceptual 字段")
     parser.add_argument("--check-frames", action="store_true",
                         help="用官方 `hyperframes snapshot` 在成片上取几帧（含首末帧，"
                              "拼一张 contact sheet）落进 hf-project/snapshots/，交付前"
@@ -616,6 +624,23 @@ def main():
 
     if args.until == "html":
         _REPORT["skipped"].append("render（--until html）")
+        # 预览档也能跑观感门禁：那时帧来自预览 HTML（无编码损失），量的是编排
+        # 本身而不是编码质量——迭代期"这一页根本没内容"就该在这里被发现，
+        # 而不是等渲染完一支片子。
+        if args.perceptual:
+            _perc_dir = os.path.join(project, "perceptual")
+            _r = perceptual.run_gate(project, _tm, _perc_dir, aspect=args.aspect,
+                                     command=["npx", "-y", os.environ.get(
+                                         "CTV_HYPERFRAMES_PACKAGE", "hyperframes@0.8.185")])
+            _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
+            if _r.get("error"):
+                print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)
+            else:
+                print(f"[run] 观感门禁：{_r['frames']} 帧，{len(_r['issues'])} 条判词，"
+                      f"拼图 {_r['contact_sheet']}")
+                for _it in _r["issues"]:
+                    print(f"[run][warn] {_it['kind']} @ {_it['seg']}: {_it['msg']}",
+                          file=sys.stderr)
         _write_report(_report_path())
         print(f"[run] 已生成 {os.path.join(project, 'index.html')}。"
               "先在浏览器里打开它确认版式和配图，定稿后去掉 --until 直接渲染。",
@@ -759,6 +784,31 @@ def main():
         else:
             print(f"[run][warn] 取帧未完成（{_why}）：成片已生成，但这一眼没人替你看。",
                   file=sys.stderr)
+
+    # ── 观感门禁（--perceptual）：唯一一道在看画面的检查 ────────────────
+    # 前面所有门禁都在看结构：official check 判"能不能渲"，成片时长契约判
+    # "演完没有"，`--check-frames` 只是把帧递给人。而"这一页在屏幕上到底
+    # 有没有东西、有没有替旁白动过"从来没有人量过——这正是本仓库与 3b1b 式
+    # 讲解最大的差距，也是它最不该缺的一道。默认关（要 Node + Chrome + Pillow），
+    # `--perceptual` 打开；只报不拦，报告进 production_report 的 perceptual 字段。
+    if args.perceptual:
+        _perc_dir = os.path.join(project, "perceptual")
+        _r = perceptual.run_gate(project, _tm, _perc_dir, aspect=args.aspect,
+                                 command=_HF_COMMAND)
+        _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
+        if _r.get("error"):
+            _REPORT["skipped"].append(f"观感门禁（取帧失败：{_r['error'][:120]}）")
+            print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)
+        else:
+            _has = _r["issues"]
+            print(f"[run] 观感门禁：{_r['frames']} 帧，{len(_has)} 条判词，"
+                  f"拼图 {_r['contact_sheet']}")
+            for _it in _has:
+                print(f"[run][warn] {_it['kind']} @ {_it['seg']}: {_it['msg']}",
+                      file=sys.stderr)
+            if not _has:
+                print("[run] 空页 / 死帧 / 换页时序三项都过——但判词只说明"
+                      "『没有明显坏』，好不好看仍要翻那张拼图。")
 
     print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())

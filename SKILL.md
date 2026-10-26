@@ -20,6 +20,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | 第 3 步 动效：该不该动、动多快（四职务 / 三条减法） | `references/motion.md` | 从不（写任何补间之前都要过） |
 | 第 4 步预览、渲染、官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 画面不对劲，不知道该改哪 | `rendering.md`「画面翻车速查表」 | 没出问题就不用 |
+| 想知道"这一页在屏幕上到底有没有东西" | [perceptual.md](references/perceptual.md) | 需要 Node+Chrome+Pillow；只看结构不用 |
 
 ## 核心规则
 
@@ -29,6 +30,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 - **时间轴单一来源**：`timing_manifest.json` 的句子时间轴同时驱动字幕、段落和动画，不要在 HTML 里另维护一份时长。
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，且渲染必须再加 `--allow-degraded`。
 - **契约先校验**：source、manifest、images.json 在入口统一校验；缓存无法证明语速/音色状态时宁可重建。
+- **画面要有证据**：结构门禁（`check`）证明"能渲"，时长契约证明"演完"，但**没有任何一道在看画面**。交付前用 `--perceptual` 取帧：图槽是不是空的、有没有超过 3 秒画面不动、换页对不对得上旁白。判词只证明"没有明显坏"，**好不好看仍要翻那张 contact sheet**。
 - **视觉真源**：版式、字体、动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`templates/` 只放结构与选择器。随画幅变或要与模板联动的观感常量写那两个 py，别在 CSS 里存第二份。
 
 ## 环境

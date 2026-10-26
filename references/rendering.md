@@ -30,6 +30,13 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**（`layout: "agen
 
 ## 动画
 
+### 先过一遍动画的四职务
+
+写每一条补间之前，先确认它在替观众做哪件事（引导视线 / 展示变化 / 推进叙事 /
+操作反馈），以及三条减法、快慢与缓动的取法。判据、反例和减法清单在
+`references/motion.md`——那里是"该不该动、动多快"的决策依据；本文件只讲
+"怎么实现"。
+
 动画参数全部来自 `_template.py` 的 `animation` 数据：
 
 - 段落入场默认**方向擦除（wipe）**：新卡用 clip-path 从全遮蔽补到全覆盖（时长与缓动取 `animation.segmentWipe`）。`style` 全片统一：`line`（**默认**）/ `vertical` / `diagonal` / `circle`（71%）；写错档生成期报错。旧卡**不淡出**。整页画布除外（硬切）。

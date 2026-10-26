@@ -17,6 +17,7 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 | 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
 | 第 3 步选形式、素材落 `images.json` | `references/imagery.md` | 全片都是手绘 SVG 时 |
 | 第 3 步 SVG：画 + 演（几何、对比度、导演档、跨段） | `references/canvas.md` | 不画 SVG 就不用读 |
+| 第 3 步 动效：该不该动、动多快（四职务 / 三条减法） | `references/motion.md` | 从不（写任何补间之前都要过） |
 | 第 4 步预览、渲染、官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 画面不对劲，不知道该改哪 | `rendering.md`「画面翻车速查表」 | 没出问题就不用 |
 

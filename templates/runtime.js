@@ -832,8 +832,31 @@ const verseSync = (t, t2) => {
 // 一条 12fps / 20s 的片子也就 240 个零长 tween，开销可以忽略；两档行为一致，
 // 预览看到的推进节奏与成片逐帧一致，这才是更值钱的。
 const CUES_FPS = parseFloat("__CTV_FPS__") || 30;
+// ── 时间线终点：为什么必须把 `repeat:-1` 折成有限遍数 ────────────────────
+// 页内的氛围循环（主光呼吸、副光斑漂移）是**稳态**的：它们没有终点，靠时间线
+// 在下一张卡盖上页面时被丢弃。但 GSAP 把 `repeat:-1` 的补间按
+// `(REPEAT_DELAY=1e10)` 折算总时长，于是整条时间线变成 1e10 + 循环段尾 量级。
+// 那个数不是"很长"，是"坏掉"：
+//   · `tl.pause()` / `seek()` 落在 1e10 的起点上，引擎要把整条时间线跑到那里；
+//   · preview 的进度条 max 与"播完"判定都读 `tl.duration()`，于是永远 0/10000000000s；
+//   · 按时刻取帧的工具（snapshot / 手搓探针）拿不到真实片长。
+//
+// 第一版修法是"构建完再 `tl.duration(片长X)`"——**实测无效**：GSAP 的 duration
+// setter 会先算出当前总长再按比例改子项的 timeScale，而无限循环子项的时长本身
+// 就是 1e10，比例算出来仍是 1e10，写回去原地不动（浏览器里量过：调用后
+// `tl.duration()` 依旧 10000000002.5）。所以不能"事后压"，只能"事前不写无限"。
+//
+// 现在的做法：**不写无限**。氛围循环的遍数在生成期按片长算好（见
+// html_renderer 的 `_loop_repeat`：`ceil(片长 / 周期) - 1`，下限 1），最后一个
+// 循环的终点正好越过片长——而那正是页面被下一张卡盖住、没人再看它的时刻，
+// 稳态语义不变，时长回到真实量级。
+// 公开片长（manifest 的 total_duration）：时钟轨铺到它为止，"最后一拍"就是它。
+const FILM_SPAN = (() => {
+  const v = parseFloat("__CTV_DURATION__");
+  return isFinite(v) && v > 0 ? v : 0;
+})();
 const buildCueTrack = () => {
-  const span = cueSpan();
+  const span = FILM_SPAN || cueSpan();
   if (!(span > 0)) return;
   const step = 1 / CUES_FPS;
   const ts = [];
@@ -855,11 +878,15 @@ const buildCueTrack = () => {
     }
   }
   uniq.sort((a, b) => a - b);
-  const clock = gsap.timeline({paused: true});
+  const clock = gsap.timeline({paused: true, totalDuration: span});
   for (const t of uniq) clock.to({}, {duration: 0}, t);
   tl.add(clock, 0);
 };
 buildCueTrack();
+// 时钟轨的终点就是片长（`totalDuration: span`）：它是"最后一拍"的权威时刻，
+// 在这里再钉一次是给 `repeat` 之外的写法兜底（作者自己写的 `repeat: 5` 之类
+// 会把尾部长出去一点）。**不**再用 `tl.duration(x)` 压总长——见上面那段：
+// 它对无限循环子项无效，而只要循环已经折成有限遍数，时长自己就落在真实量级。
 tl.eventCallback("onUpdate", function() {
   verseSync(tl.time());
   if (window.__pvUpdate) window.__pvUpdate(); // 预览刷新钩子（无预览时为空）

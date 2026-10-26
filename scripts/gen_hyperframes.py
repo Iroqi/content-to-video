@@ -152,6 +152,7 @@ from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa:
                        load_template, put_override, same_aspect)
 from _ease import allow_extra as ease_allow_extra  # noqa: E402  宽松档的开关只有一份
 from _manifest_schema import load_timing_manifest  # noqa: E402
+from _evolve import check_evolve  # noqa: E402
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path)
 from _segments import (sids_needing_image, seg_layout,  # noqa: E402
@@ -1212,6 +1213,72 @@ def director_prepare(images, segments, out_dir):
     return errs, warns
 
 
+def _evolve_prepare(images, segments, out_dir, dflt_dur, errs, warns):
+    """槽位版式 `evolve` 的生成期体检 + 净化内联（与 director_prepare 同构）。
+
+    为什么单独一遍、不进 director_prepare：两者的内联理由不同——director 内联是
+    为了**接管整页编排**（标题层与句子流层都不生成），evolve 内联只是为了**给槽位里
+    的图加一条图内补间**，版面、入场、运镜全部照旧。混在一个循环里写，迟早有人把
+    "内联 = 整页画布"当成同义词。
+
+    查的还是那三件（消息按 evolve 措辞）：
+
+    - **target 落空**（error）：选择器匹配不到 = 静默无动画。
+    - **图里不再调机位**（error）：契约层已拒相机属性，这里按 SVG 原文再挡一次。
+    - **起始帧全空**（warn）：所有元素写死 `opacity=0` 且没有段首点亮——槽位版式
+      那半秒标题、句子流、配图都在入场，空框比不动更差。
+    - **节拍出窗**（warn）：与 director 同一个判据、同一个函数，落点算的是真执行
+      的那一拍。
+
+    内联走同一条净化（`sanitize_svg_for_inline`），于是 `<script>` / `on*` / 外链 /
+    SMIL / 墙钟 CSS 动画在两条路上被剥得一模一样——安全性不能因为"只是加个小动画"
+    而松一档。
+    """
+    seg_by_id = {seg["id"]: seg for seg in segments}
+    # 与渲染端同一份缺省时长：两处取值不同，落点就会差一截而门禁仍是绿的
+    dflt_dur = _director_default_duration() if dflt_dur is None else dflt_dur
+    for sid, entry in (images or {}).items():
+        block = entry.get("evolve")
+        if not block:
+            continue
+        src = entry["src"]
+        path = os.path.join(out_dir, src)
+        if not os.path.isfile(path):
+            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 在 {out_dir} 下不存在")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 读不了: {e}")
+            continue
+        try:
+            markup, notes = sanitize_svg_for_inline(raw)
+        except ValueError as e:
+            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 无法净化内联: {e}")
+            continue
+        for n in notes:
+            warns.append(f"段落 '{sid}' 的 evolve 配图 {src}：{n}")
+        bad, soft = check_evolve(raw, block["steps"], sid)
+        errs.extend(bad)
+        warns.extend(soft)
+        entry["inline_svg"] = markup
+        seg = seg_by_id.get(sid)
+        if seg is None:
+            errs.append(f"段落 '{sid}' 写了 evolve，但 manifest 里没有这一段")
+            continue
+        n_sent = len(seg["sentences"])
+        for i, step in enumerate(block["steps"]):
+            if "at" in step and int(step["at"]) >= n_sent:
+                errs.append(f"段落 '{sid}' 的 evolve.steps[{i}] at={step['at']} 越界："
+                            f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
+        for w in _beat_window_warnings(block["steps"], seg["sentences"],
+                                       float(seg["sentences"][0]["start_time"]),
+                                       next_speech_start(segments, sid), dflt_dur):
+            warns.append(f"段落 '{sid}' 的 evolve 配图 {src}：{w}")
+    return errs, warns
+
+
 def _director_beats(steps, seg, dflt_dur):
     """steps → [(绝对秒, 时长)]，锚在段落首句起点；解析不动时返回 None。
 
@@ -1735,6 +1802,15 @@ def main(argv=None):
     # 导演（时间轴同步 SVG 动画）的生成期体检 + 净化内联：必须在 generate_html
     # 之前跑，它把净化后的 SVG 回填进 entry["inline_svg"]，渲染端才知道这张要内联。
     _dir_errs, _dir_warns = director_prepare(images, manifest["segments"], out_dir)
+    # 槽位版式的图内演进（evolve）：同一条净化、同一套节拍判据，但不接管编排。
+    # 放在 director_prepare 之后，错误一并打印——两条路一起判完再退出，作者一次
+    # 就能看到全部问题，不必改一个跑一遍。
+    _dir_errs = list(_dir_errs)
+    _dir_warns = list(_dir_warns)
+    _ev_errs, _ev_warns = _evolve_prepare(images, manifest["segments"], out_dir,
+                                          _director_default_duration(), [], [])
+    _dir_errs.extend(_ev_errs)
+    _dir_warns.extend(_ev_warns)
     for _w in _dir_warns:
         print(f"[warn] {_w}", file=sys.stderr)
     if args.beat_report:

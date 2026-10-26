@@ -537,7 +537,14 @@ _TEMPLATE_JSON = r'''
             "y": 18,
             "scale": 1.04,
             "blur": 12,
-            "ease": "power3.out"
+            "ease": "power3.out",
+            "mask": {
+              "stagger": 0.012,
+              "duration": 0.5,
+              "blur": 9,
+              "rise": 0.34,
+              "ease": "expo.out"
+            }
           }
         },
         "kicker": {

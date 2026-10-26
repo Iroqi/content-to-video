@@ -55,7 +55,7 @@ body{font-family:var(--ctv-font-family)}
 /* 苹果风开场（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
    模拟苹果发布会的"产品光"。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
    不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
-   交给 GSAP 编排（淡入 + repeat:-1 呼吸），CSS 只负责形状与颜色。 */
+   交给 GSAP 编排（淡入 + 呼吸，遍数按片长折算），CSS 只负责形状与颜色。 */
 .apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
 /* 苹果开场副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
    副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
@@ -65,6 +65,15 @@ body{font-family:var(--ctv-font-family)}
    的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
    与折行；静态开场标题是纯文本、不命中这里。 */
 .t-ch{display:inline-block;white-space:pre}
+/* 苹果开场标题的"揭示边"两层（见 html_renderer 的 _agenda_col_html）：
+   `.t-mk` 是外层的裁剪窗，`.t-in` 是窗里的字。边由 GSAP 对 `.t-in` 补 y
+   （`mask.rise` × 字高）产生，字本身**不参与透明度补间**——逐字淡入是"打字机
+   在打字"，一列字被同一条边推上来才是"镜头落在这句话上"。
+   裁剪窗的上下各留 `mask.rise` 的余量（padding + 负 margin），否则字在起手位
+   会被切掉上缘；overflow:hidden 只裁这个窗口，行高与折行都不变。 */
+.t-mk{display:inline-block;overflow:hidden;vertical-align:bottom;
+  padding-top:var(--ctv-tm-top,0.34em);margin-top:calc(-1 * var(--ctv-tm-top,0.34em))}
+.t-in{display:inline-block;white-space:pre}
 /* 苹果开场 kicker 的逐字 span（同 .t-ch 的由来：transform 要生效 + 空格
    不折叠）。与 .t-ch 分开两类：kicker 的字距舞 animate **每一个** .k-ch
    （含空格——GSAP 函数式值按目标序号求值，序号即字符序号），标题那支

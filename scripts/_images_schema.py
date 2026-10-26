@@ -46,6 +46,12 @@ def validate_relative_project_path(src, where):
             depth += 1
     return norm
 
+# 槽位版式 evolve 不接受相机属性：镜头归模板（入场收拢 + Ken Burns 运镜），
+# 作者再推一层就是两层意图打架，画面读成"图在自己乱动"。要整页推镜请走 director
+# 的整页画布。真源在这里，_evolve.check_evolve 从它读，不另抄一份。
+_EVOLVE_CAMERA_KEYS = frozenset({"svgOrigin", "transformOrigin", "scale",
+                                 "xPercent", "yPercent", "rotation"})
+
 # images.json 条目里渲染端**真正会读**的键。之外的键一律 warn 点名
 # （`position`/`fit`/`alt` 这类凭空发明的写法不该被静默丢掉）。
 # warn 只在预检（validate_images_json）打；html_renderer._normalize_images
@@ -55,6 +61,9 @@ MEDIA_ENTRY_KEYS = frozenset({
     "source_url", "license", "attribution", "query", "provider",
     # director：写了才走净化内联（见 references/canvas.md「SVG 动画：两档」）。
     "director",
+    # evolve：槽位版式里的"同一元素演进"（见 references/canvas.md「槽位版式的演进」）。
+    # 与 director 同一套 steps 写法，但不接管整页编排、不调机位（镜头归模板）。
+    "evolve",
     # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
     # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
     "stage",
@@ -325,21 +334,25 @@ def _validate_repeat_yoyo(step, where):
                              "偶数遍收尾回起点）")
 
 
-def _validate_director(key, dirval):
-    """校验 images.json 条目的导演档编排块（时间轴同步的 SVG 动画）。"""
+def _validate_director(key, dirval, what="director"):
+    """校验 images.json 条目的编排块（时间轴同步的 SVG 动画）。
+
+    `what` 只换报错里的名字：evolve 与 director 共用同一套 steps 语法，两条路
+    的锚点/target/互斥规则必须一模一样，复制一份是下一处漂移的起点。
+    """
     if not isinstance(dirval, dict):
-        raise ValueError(f"images.json 的 '{key}' 的 director 必须是对象")
+        raise ValueError(f"images.json 的 '{key}' 的 {what} 必须是对象")
     unknown = set(dirval) - {"steps"}
     if unknown:
         raise ValueError(
-            f"images.json 的 '{key}' 的 director 含未知键 {sorted(unknown)}——只认 'steps'")
+            f"images.json 的 '{key}' 的 {what} 含未知键 {sorted(unknown)}——只认 'steps'")
     steps = dirval.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError(
-            f"images.json 的 '{key}' 的 director.steps 必须是非空数组"
+            f"images.json 的 '{key}' 的 {what}.steps 必须是非空数组"
             "（每一步 = 在某句旁白时对某个 SVG 元素补间）")
     for i, step in enumerate(steps):
-        where = f"images.json 的 '{key}' 的 director.steps[{i}]"
+        where = f"images.json 的 '{key}' 的 {what}.steps[{i}]"
         if not isinstance(step, dict):
             raise ValueError(f"{where} 必须是对象")
         unknown = set(step) - _DIRECTOR_STEP_KEYS
@@ -567,6 +580,7 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_poster(key, value))
     _collect(errs, lambda: _normalize_src(key, value, src))
     _collect(errs, lambda: _check_director(key, value, src))
+    _collect(errs, lambda: _check_evolve(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
     _collect(errs, lambda: _check_drift(key, value))
 
@@ -743,6 +757,46 @@ def _check_director(key, value, src):
             f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
             "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
     _validate_director(key, value["director"])
+
+
+def _check_evolve(key, value, src):
+    """evolve：槽位版式里"讲到哪儿、图里的元素就变到哪儿"（见 _evolve）。
+
+    与 director 的差别只在语义边界，语法是同一套：steps 的校验**原样复用**
+    `_validate_director`，于是三条锚点规则（at / at_time 二选一、at 非负、
+    target 是单个 id/class）两边永远一致。evolve 只额外管两件：
+
+    - **不能与 director 同段**：一个是整页编排、一个是槽位内演进，同时写就是
+      两个作者抢同一张图（画面上表现为机位和内容各按各的节拍走）。
+    - **不再调机位**：`svgOrigin` / `scale` 这类相机写法归 director；槽位里的
+      镜头由模板的入场收拢与 Ken Burns 负责，作者再推一层就是两层意图打架。
+      这条在生成期按 SVG 内容再查一遍（见 `_evolve.check_evolve`），这里先把
+      最明显的错误挡在契约层。
+    """
+    if "evolve" not in value:
+        return
+    errs = []
+    if "director" in value:
+        errs.append(
+            f"images.json 的 '{key}' 同时写了 director 和 evolve——前者是整页画布"
+            "编排（标题层与句子流层都不生成），后者是槽位版式里的图内演进。"
+            "二选一：要整页跟着旁白演用 director，只想让图里的元素跟着变用 evolve")
+    if not is_svg_path(src):
+        errs.append(
+            f"images.json 的 '{key}' 写了 evolve，但 src={src!r} 不是 SVG"
+            "——evolve 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
+    if errs:
+        raise ValueError("\n".join(errs))
+    _validate_director(key, value["evolve"], what="evolve")
+    for i, step in enumerate(value["evolve"]["steps"]):
+        for bucket in ("to", "from", "set"):
+            vars_ = step.get(bucket) or {}
+            cam = sorted(k for k in vars_ if k in _EVOLVE_CAMERA_KEYS)
+            if cam:
+                raise ValueError(
+                    f"images.json 的 '{key}' 的 evolve.steps[{i}] 的 {bucket} 写了 "
+                    f"{cam}：槽位版式的镜头归模板（入场收拢 + 运镜），图内不再调机位。"
+                    "要让整页跟着旁白推镜，把这段换成 layout:\"canvas\" 写 director")
 
 
 def _check_stage(key, value, src):

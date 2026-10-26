@@ -501,17 +501,25 @@ class AppleOpening(unittest.TestCase):
         self.assertIn('class="apple-halo" id="halo-opening"', html)
         self.assertIn('class="apple-glow" id="glow-opening"', html)
         self.assertIn('data-opening-anim="apple"', html)
-        # 主光：淡入 + repeat:-1 呼吸（v2 参数：in 1.2 / breathe 1.3）
+        # 主光：淡入 + 呼吸（v2 参数：in 1.2 / breathe 1.3）。
+        # 呼吸的遍数是**有限**的：无限循环会把 GSAP 总时长撑成 1e10 量级
+        # （预览进度条 / 按时刻取帧全坏），遍数在生成期按片长折算。
         self.assertIn('tl.fromTo("#halo-opening",{opacity:0},{opacity:0.50', html)
-        self.assertIn('repeat:-1,yoyo:true', html)
+        self.assertIn('duration:1.30,repeat:', html)       # 有限遍数（按片长折算）
+        self.assertNotIn("repeat:-1,", html)                # 不再写无限循环
         # 副光：淡入 + x/y/scale 漂移（repeat:-1 yoyo，稳态循环）
         self.assertIn('tl.fromTo("#glow-opening",{opacity:0},{opacity:0.50', html)
         self.assertIn('x:90,y:60,scale:1.35,opacity:0.28,duration:2.60', html)
-        # 标题逐字浮出：字符 span 目标 + blur/scale + stagger（值从模板取）
-        self.assertIn('<span class="t-ch">本</span>', html)
-        self.assertIn('#opening .t-ch:not(.t-sp)', html)
-        self.assertIn('filter:"blur(12px)",duration:0.55,', html)
-        self.assertIn('stagger:0.04', html)
+        # 标题"揭示边"：字在裁剪窗里被推上来（字本身不透明），整行从虚焦收紧。
+        # 逐字 opacity 是"打字机"，这里锁住"边在走、字在站定"这个结构：
+        # 外层 .t-mk 裁窗、内层 .t-in 只做位移，行级只补 filter 不补 opacity。
+        self.assertIn('<span class="t-mk"><span class="t-ch"><span class="t-in">本</span>', html)
+        self.assertIn('#opening .t-in",{y:28.56', html)
+        self.assertIn('filter:"blur(9px)"', html)
+        self.assertIn('tl.from("#opening .seg-title",{filter:"blur(9px)",'
+                      'duration:0.80,ease:"power2.out"}', html)
+        # 反证：标题这条不能再出现逐字 opacity（那是被替换掉的旧演法）
+        self.assertNotIn('#opening .t-ch:not(.t-sp)",{opacity:0', html)
         # kicker：拆字 + 逐字 x 展开（letterSpacing 补间的 transform 等价式）
         self.assertIn('<span class="k-ch">A</span>', html)
         self.assertIn('<span class="k-ch">W</span>', html)
@@ -654,13 +662,13 @@ class AppleOpening(unittest.TestCase):
                                  images=H.sample_images(m),
                                  aspect="portrait", theme="dark")
         # 实体按字符整体包在单个 span 里（浏览器解析后仍是 & / < / >）
-        self.assertIn('<span class="t-ch">&amp;</span>', html)
-        self.assertIn('<span class="t-ch">&lt;</span>', html)
-        self.assertIn('<span class="t-ch">&gt;</span>', html)
+        self.assertIn('<span class="t-in">&amp;</span>', html)
+        self.assertIn('<span class="t-in">&lt;</span>', html)
+        self.assertIn('<span class="t-in">&gt;</span>', html)
         # 语义收口：把每个 span 的内容按 HTML 语义解码后拼接，必须还原出原文。
         # 老 bug（实体被拆散）的解码结果是字面 "Q&amp;A &lt;版本&gt; 专场"，
         # 与原文对不上——这一条拦的是"看着像转义了、渲染出来却错了"。
-        spans = re.findall(r'<span class="t-ch(?: t-sp)?"[^>]*>(.*?)</span>', html)
+        spans = re.findall(r'<span class="t-in">(.*?)</span>', html)
         text = "".join(_htmlmod.unescape(s) for s in spans)
         self.assertEqual(text, "Q&A <版本> 专场")
 
@@ -691,6 +699,42 @@ def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
     return {"schema_version": 2, "status": "ok", "degraded": {}, "sentences": [],
             "total_duration": round(t + seg_dur, 3), "gap": gap,
             "voice_id": "冰糖", "segments": segs}
+
+
+class LoopRepeat(unittest.TestCase):
+    """氛围循环的遍数按片长折算（而不是 `repeat:-1`）。
+
+    病根：GSAP 把 `repeat:-1` 按 `REPEAT_DELAY=1e10` 折总时长，整条时间线变成
+    1e10 量级，`tl.pause()/seek()`、预览进度条、"按时刻取帧"三处同时坏掉。
+    事后 `tl.duration(x)` **压不动**（setter 按子项时长比例缩放，1e10 的比例
+    仍是 1e10——浏览器里量过），所以只能在生成期就不写无限。
+    """
+
+    def test_loop_repeat_tracks_film_span(self):
+        from html_renderer import _loop_repeat
+        # 20s 片 / 1.3s 一个周期 → 走 15 遍（15×1.3=19.5s，末遍收在片长之前）
+        self.assertEqual(_loop_repeat(1.3, 20.0), 15)
+        # 片长短于一个周期：仍要演一遍，否则这一页完全静止
+        self.assertEqual(_loop_repeat(2.6, 1.0), 1)
+        # 没有片长（单独构造 rc 的调用方）：退回一遍，不写无限
+        self.assertEqual(_loop_repeat(1.3, 0), 1)
+        # 非法周期不炸，退回一遍
+        self.assertEqual(_loop_repeat(0, 20.0), 1)
+
+    def test_longer_film_gets_more_cycles(self):
+        from html_renderer import _loop_repeat
+        self.assertLess(_loop_repeat(1.3, 20.0), _loop_repeat(1.3, 60.0))
+
+    def test_rendered_html_has_no_infinite_loop(self):
+        """整份 HTML 里不该再出现 `repeat:-1`：它是那三处坏掉的总开关。"""
+        s = dict(H.sample_source(), opening_tagline="AI WEEKLY")
+        m = H.make_manifest(s)
+        with contextlib.redirect_stderr(io.StringIO()):
+            html = generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
+        # 只查补间：注释里出现这个写法是解释"为什么不用它"，不算违规
+        self.assertNotIn("repeat:-1,", html)
 
 
 class AppleOpeningBudget(unittest.TestCase):
@@ -725,14 +769,17 @@ class AppleOpeningBudget(unittest.TestCase):
 
     @staticmethod
     def _char_stagger(html):
+        """标题揭示边的逐字错峰（`.t-in` 那条；旧版是 `.t-ch` 的 opacity 波次）。"""
         return float(re.search(
-            r'#opening \.t-ch:not\(\.t-sp\)",\{[^}]*stagger:([\d.]+)', html).group(1))
+            r'#opening \.t-in",\{y:[\d.]+,duration:[\d.]+,'
+            r'stagger:([\d.]+)', html).group(1))
 
     def test_enough_window_keeps_original_speed(self):
         """窗口装得下就原速——归一化不能变成"一律压缩"，那会让正常开场变味。"""
         html, vis, err = self._render(3.0, 2)
         self.assertEqual(self._k(html), 1.0)
-        self.assertIn('duration:0.55,stagger:0.04,ease:"power3.out"', html)
+        self.assertIn("duration:0.50,stagger:0.01", html)
+        self.assertIn("ease:\"expo.out\"}", html)
         self.assertIn("stagger:0.12", html)
         self.assertNotIn("可见窗口", err)
 
@@ -744,8 +791,7 @@ class AppleOpeningBudget(unittest.TestCase):
         self.assertLess(k, 1.0)
         # 逐项对账：模板原值 → 写出的值（补间参数保留 2 位小数，比对留 0.01）
         for pat, orig in (
-            (r'#opening \.t-ch:not\(\.t-sp\)",\{opacity:0,y:18,scale:1.04,'
-             r'filter:"blur\(12px\)",duration:([\d.]+)', 0.55),   # 标题字符
+            (r'#opening \.t-in",\{y:[\d.]+,duration:([\d.]+)', 0.50),  # 标题揭示边
             (r'#opening \.agenda-kicker",\{opacity:0,'
              r'filter:"blur\(8px\)",duration:([\d.]+)', 0.8),     # kicker 整行
             (r'#opening \.k-ch",\{x:\(i\)=>i\*[\d.]+,'
@@ -799,11 +845,14 @@ class AppleOpeningBudget(unittest.TestCase):
         压它们等于让开场一直喘，而且它们不参与"舞演完没有"的判定。压缩只落
         在淡入与其起点。"""
         html, vis, err = self._render(1.0, 7)
-        # 主光 breatheDur 1.3 / 副光 breatheDur 2.6 原样写出
-        self.assertIn('duration:1.30,repeat:-1,yoyo:true', html)
-        self.assertIn('duration:2.60,repeat:-1,yoyo:true', html)
+        # 主光 breatheDur 1.3 / 副光 breatheDur 2.6 原样写出（周期不参与压缩）。
+        # 遍数按片长折算（`_loop_repeat`），所以这里只锁周期，不锁遍数——
+        # 遍数由 `test_loop_repeat_tracks_film_span` 单独覆盖。
+        self.assertIn('duration:1.30,repeat:', html)
+        self.assertIn('duration:2.60,repeat:', html)
+        self.assertNotIn("repeat:-1,", html)
         # 呼吸起点跟着淡入一起压缩：起点 = 淡入时长(1.2×k)，不再落在 1.20
-        start = float(re.search(r'repeat:-1,yoyo:true,ease:"sine.inOut"\},([\d.]+)',
+        start = float(re.search(r'repeat:\d+,yoyo:true,ease:"sine.inOut"\},([\d.]+)',
                                 html).group(1))
         self.assertAlmostEqual(start, round(1.2 * self._k(html), 2), delta=0.011)
 

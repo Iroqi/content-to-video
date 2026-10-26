@@ -216,9 +216,19 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     # 标题里的 & / < / > 以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
     title_html = esc(seg["title"])
     if apple_opening:
+        # 每个字外面一层 `.t-mk`（裁剪窗）+ 里面一层 `.t-in`（字本身）：揭示边是
+        # **一行连续移动的边**，不是每个字各自"蹦"一下。
+        #
+        # 为什么多这一层：逐字 `opacity 0→1` 的观感是"打字机在打字"——每个字都有
+        # 自己的出生时刻，观众数得出字数。真实镜头里字是**被推上来的**：边在同一条
+        # 基线上匀速走过，走过的字是完整的，没走过的字还没进入画面。所以
+        # `.t-mk` 裁形状（overflow:hidden），`.t-in` 只做位移，字本身**永远不透明**。
+        # 逐字仍保留一个极小的 `y` 差（`mask.stagger`）制造"边是斜的"错觉，但幅度
+        # 只有字高的三分之一，读起来是整体的一个动作。
         title_html = "".join(
-            f'<span class="t-ch t-sp">{esc(ch)}</span>' if ch.isspace()
-            else f'<span class="t-ch">{esc(ch)}</span>'
+            f'<span class="t-mk"><span class="t-ch t-sp"><span class="t-in">{esc(ch)}</span></span></span>'
+            if ch.isspace()
+            else f'<span class="t-mk"><span class="t-ch"><span class="t-in">{esc(ch)}</span></span></span>'
             for ch in seg["title"])
     return (f'    <div class="agenda-col"{col_attr}>\n'
             f'{halo_html}'
@@ -362,7 +372,7 @@ SETTLE_MIN_SECONDS = 0.10
 
 
 def _build_render_context(tpl, aspect, width, height, theme, images,
-                          fps=DEFAULT_FPS):
+                          fps=DEFAULT_FPS, film_span=None):
     """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
     :root 变量表。任何一条护栏发现模板配错即 raise。
 
@@ -370,7 +380,11 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     摸模板——同一数值的第二个真相源就是漂移的开始。
     """
     rc = SimpleNamespace(aspect=aspect, width=width, height=height,
-                         images=images, fps=fps)
+                         images=images, fps=fps,
+                         # 公开片长：稳态循环折遍数要用它（见 _loop_repeat）。
+                         # 单独构造 rc 的调用方（测试/工具）不传就是 0，循环退回
+                         # 只走一遍——能渲染、只是不循环，不会静默算错。
+                         film_span=float(film_span or 0))
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
     rc.theme_colors = get_theme_colors(theme)
@@ -1238,6 +1252,23 @@ def _line_timeline_lines(rc, card):
     return lines
 
 
+def _loop_repeat(cycle_sec, film_span):
+    """稳态循环要走的遍数：按公开片长折算，而不是写 `repeat:-1`。
+
+    为什么不用 `-1`：GSAP 把无限循环按 `(REPEAT_DELAY=1e10)` 折算总时长，整条
+    时间线于是变成 1e10 量级，`tl.pause()/seek()`、预览进度条、按时刻取帧三处
+    全部坏掉（症状与实测见 runtime.js 里那段注释；事后 `tl.duration(x)` 压不动，
+    因为 setter 按子项时长比例缩放，1e10 的比例仍是 1e10）。
+
+    遍数 = `ceil(片长 / 周期) - 1`，下限 1：片长短于一个周期时也走一遍（不然这
+    一页完全静止），否则让最后一个循环的终点正好越过片长——页面在那一刻已被下
+    一张卡盖住，稳态语义不变，时长回到真实量级。
+    """
+    if not (cycle_sec > 0) or not (film_span > 0):
+        return 1
+    return max(1, math.ceil(film_span / cycle_sec) - 1)
+
+
 def _cycle_vars(step):
     """step 上的 repeat / yoyo → 要塞进 GSAP 补间变量的那几项（没写就不塞）。
 
@@ -1292,8 +1323,21 @@ def _canvas_first_beat(card, director, beats):
 
 
 def _director_timeline_lines(rc, card):
-    """SVG「导演」补间：把 images.json 的 director.steps 展开成挂在同一条
-    时间线上的 GSAP 补间，位置取自该段旁白的句子（可为句内小数偏移）——于是图内
+    """SVG「导演」补间：整页画布的 director.steps（展开逻辑见 `_expand_steps`）。"""
+    if not card.has_image:
+        return []
+    entry = rc.images.get(card.sid)
+    opts = (entry or {}).get("opts", {})
+    director = opts.get("director")
+    if not director:
+        return []
+    return _expand_steps(rc, card, director, key="director", pin_cam=True)
+
+
+def _expand_steps(rc, card, block, key="director", pin_cam=True):
+    """把一段编排（director / evolve 同构）展开成挂在主时间线上的 GSAP 补间。
+
+    位置取自该段旁白的句子（可为句内小数偏移）——于是图内
     元素的状态变化、描边生长、运镜都和口播对齐，且因为是时间线属性补间（非墙钟），
     逐帧 seek 完全可复现。
 
@@ -1323,31 +1367,30 @@ def _director_timeline_lines(rc, card):
     - 补间变量经 json.dumps 序列化：schema 已挡掉 on* 回调与非标量，这里只把它
       变成合法 JS 对象字面量，字符串引号/特殊字符由 JSON 转义兜住。
     """
-    if not card.has_image:
-        return []
-    entry = rc.images.get(card.sid)
-    opts = (entry or {}).get("opts", {})
-    director = opts.get("director")
-    if not director:
-        return []
+    entry = rc.images.get(card.sid) or {}
     sentences = card.seg["sentences"]
     dflt = rc.anim["director"]
     sid = card.sid
     # 节拍→绝对秒的解析在 _timeline.beat_positions，与生成期门禁/对轴报告共用一份
     # （两处各写一套，门禁就会对着渲染器不会用的时刻报错）。
     try:
-        beats = beat_positions(director["steps"], sentences, card.s, dflt["duration"])
+        beats = beat_positions(block["steps"], sentences, card.s, dflt["duration"])
     except ValueError as e:
-        raise ValueError(f"段落 '{sid}' 的 director.steps 有一步 {e}")
+        raise ValueError(f"段落 '{sid}' 的 {key}.steps 有一步 {e}")
     # 相机缺省原点的钉值：作者整页没写 svgOrigin/transformOrigin 且真的推了近，就把
     # 生成期算的那个内容中心写成显式 svgOrigin 注入。不钉的话 GSAP 绕的是 `#cam` 自身
     # bbox 的左上角（实测，见 _cam_crop.cam_default_origin 的 docstring），那个角还跟着
     # 别的步的 from 瞬态飘 —— 出画 warn 与跨段烘焙算的取景就和成片不是一幅画。
-    pin = cam_default_origin(opts.get("inline_svg"), director["steps"])
+    # 槽位版式的 evolve 不调机位（契约层已拒相机属性），原点注入这件事对它没有意义：
+    # 槽位里的镜头由模板的入场收拢与运镜负责，再钉一个原点只会让"图内原点"与
+    # "CSS transform-origin"两个中心打架。
+    pin = (cam_default_origin(entry.get("opts", {}).get("inline_svg"), block["steps"])
+           if pin_cam else None)
 
     lines = []
-    lines.extend(_canvas_first_beat(card, director, beats))
-    for step, (pos, dur) in zip(director["steps"], beats):
+    if pin_cam:
+        lines.extend(_canvas_first_beat(card, block, beats))
+    for step, (pos, dur) in zip(block["steps"], beats):
         sel = f"#img-{sid} {step['target']}"
         sel_js = json.dumps(sel)
         ease = step.get("ease", dflt["ease"])
@@ -1480,6 +1523,33 @@ def _director_timeline_lines(rc, card):
     return lines
 
 
+def _evolve_timeline_lines(rc, card):
+    """槽位版式 SVG 的「演进」补间（images.json 的 `evolve`，见 `_evolve`）。
+
+    与 `_director_timeline_lines` 共用全部的"怎么演"（锚点、draw、morph、count、
+    type、stagger、repeat/yoyo），区别只在**它不接管编排**：
+
+    - 版面仍是槽位版式：标题层、句子流层、配图入场收拢、Ken Burns 运镜都照旧；
+      这条补间只是叠在图内元素上，让"讲到的那个状态"真的出现在画面里。
+    - **不注入相机原点**：槽位里的镜头归模板，`evolve` 已在契约层拒掉相机属性，
+      这里也就不做 `cam_default_origin` 那一套（对槽位图算出来的中心没有意义）。
+    - **起点态取图上的静态值**：只写 `to` 的补间从元素当前值起补（GSAP 缺省），
+      所以"结构底可见、内容从初态长到终态"是默认语义，不会出现整块空框。
+
+    实现上给 director 那段加上 `pin_cam` 与 `key` 两个开关复用同一份展开逻辑：
+    两套编排的节拍解析、时序参数、ASI 护栏、morph 采样必须逐字一致——复制一份
+    就是下一处"门禁算的落点和成片不一样"。
+    """
+    if not card.has_image:
+        return []
+    entry = rc.images.get(card.sid)
+    opts = (entry or {}).get("opts", {})
+    evolve = opts.get("evolve")
+    if not evolve:
+        return []
+    return _expand_steps(rc, card, evolve, key="evolve", pin_cam=False)
+
+
 def _kicker_kern_pad_px(rc):
     """结尾 kicker 行尾的字距垫宽度（px）：整行字距展开的总量，一字一格。
 
@@ -1586,8 +1656,16 @@ def _apple_opening_budget(rc, card):
     # 先行、内容跟上），各自算收尾——曾漏过 idx 那条，模板里 content 的
     # delay+duration 数值较大时永远盖得住，一旦被调小，预算就对着一个比真实
     # 收尾更早的时刻开灯，压不压、压多少全凭巧合。
-    ends = [a_t["chars"]["delay"] + a_t["chars"]["stagger"] * max(0, n_chars - 1)
-            + a_t["chars"]["duration"],
+    # 标题那条按**揭示边**算（mask.stagger 比 chars.stagger 密，收尾更早），行级
+    # 显影 1.6× 的时长与它同起跑、更晚收——两者取大，不另开一项：
+    # 预算要对着"最后一个字站定"那一帧，不是对着某个已经不再使用的参数。
+    # 模板里缺 `mask` 块（手写模板 / 老 --set 覆写）时按旧口径算：缺省值不在这里
+    # 编第二份，直接用 chars 自己那三个数——宁可把预算算贵一点（多压一点），
+    # 也不要因为一个可选键不在就整条开场算不出预算。
+    a_m = a_t["chars"].get("mask") or a_t["chars"]
+    ends = [a_t["chars"]["delay"] + max(
+                a_m["stagger"] * max(0, n_chars - 1) + a_m["duration"],
+                a_m["duration"] * (1.6 if "mask" in a_t["chars"] else 1.0)),
             a_r["idx"]["delay"] + a_r["stagger"] * (n - 1)
             + a_r["idx"]["duration"],
             a_r["content"]["delay"] + a_r["stagger"] * (n - 1)
@@ -1646,17 +1724,20 @@ def _apple_opening_lines(rc, card):
         f'{{opacity:{halo["opacity"]:.2f},duration:{halo["in"] * k:.2f},'
         f'ease:"sine.out"}},{t:.2f})'
     )
-    # 主光呼吸挂淡入完成之后：repeat:-1 永不停，seek 回放由 GSAP 按时间解析，
-    # 与 director 的 repeat:-1 同一种确定性（无"最后停在哪儿"可争）。
+    # 主光呼吸挂淡入完成之后。**不写 repeat:-1**：无限循环会把 GSAP 的总时长撑成
+    # 1e10 量级（`tl.pause()/seek()`、预览进度条、按时刻取帧全部坏掉，详见
+    # `_loop_repeat`）。遍数在生成期按片长算好，最后一个循环的终点越过片长，
+    # 也就是页面被下一张卡盖住的那一刻——观众读到的仍是"一直在呼吸"。
     # breatheDur 不参与压缩——它是淡入之后的稳态循环，与"舞演完没有"无关。
     lines.append(
         f'tl.to("#halo-{sid}",{{opacity:{halo["breatheTo"]:.2f},'
-        f'duration:{halo["breatheDur"]:.2f},repeat:-1,yoyo:true,'
+        f'duration:{halo["breatheDur"]:.2f},'
+        f'repeat:{_loop_repeat(halo["breatheDur"], rc.film_span)},yoyo:true,'
         f'ease:"sine.inOut"}},{t + halo["in"] * k:.2f})'
     )
     # 副光斑：等 delay 之后淡入（duration 是淡入时长，配置里的 glow.duration，
     # 不拿 delay 充当——曾出现 delay 兼任淡入时长、glow.duration 整条死配置的
-    # 读法），淡入完成后 x/y/scale 缓慢漂移（repeat:-1 yoyo）。漂移是稳态循环，
+    # 读法），淡入完成后 x/y/scale 缓慢漂移（同样按片长折遍数，不写无限）。漂移是稳态循环，
     # 同主光呼吸一样不参与压缩；它的锚点却要按压缩后的淡入收尾算（delay+
     # duration 都乘 k），否则短开场里漂移会抢在淡入还没演完时就开始。
     gl = halo["glow"]
@@ -1668,20 +1749,36 @@ def _apple_opening_lines(rc, card):
     lines.append(
         f'tl.to("#glow-{sid}",{{x:{gl["x"]},y:{gl["y"]},'
         f'scale:{gl["scale"]},opacity:{gl["breatheTo"]:.2f},'
-        f'duration:{gl["breatheDur"]:.2f},repeat:-1,yoyo:true,'
+        f'duration:{gl["breatheDur"]:.2f},'
+        f'repeat:{_loop_repeat(gl["breatheDur"], rc.film_span)},yoyo:true,'
         f'ease:"sine.inOut"}},{t + (gl["delay"] + gl["duration"]) * k:.2f})'
     )
     # 标题逐字浮出：目标选 .t-ch 排除空格 .t-sp（空格的 transform 无视觉意义）。
     # 字符 span 由渲染器拆好（见 _agenda_col_html），inline-block + white-space:pre
     # 保证 transform 生效且折行/字距不变。
+    # 标题揭示：一条**连续的揭示边**从左走到右，字被这条边推上来。
+    #
+    # 改之前是逐字 `opacity 0→1` + 各自的 y/scale/blur，每个字都有自己的出生时刻，
+    # 观众数得出字数——那是"打字机"，不是"镜头"。现在字**不透明**，只做位移：
+    #   · `.t-in` 从 `mask.rise × 字高` 落到位（overflow 窗在 `.t-mk` 上裁出边），
+    #   · 每字错峰 `mask.stagger`，且比 `chars.stagger` 更密——边是斜的不是阶梯，
+    #   · 缓动 `expo.out`：起手就是全速、末端收得很慢，边走过之后字已经站定，
+    #     读起来是"这句话被推上来并且站住了"，而不是"一个个字弹出来"。
+    # 行级那一下（整行从 blur 12px 收到实焦）仍保留在这条边之外：它负责"这一页
+    # 显影"，边负责"这句话读到哪儿"，两个动作不抢同一件事。
     a_t = ap["title"]["chars"]
+    a_m = a_t["mask"]
+    rise_px = round(rc.ag["titleSize"] * float(a_m["rise"]), 2)
     lines.append(
-        f'tl.from("#{sid} .t-ch:not(.t-sp)",{{opacity:0,'
-        f'y:{a_t["y"]},scale:{a_t["scale"]},'
-        f'filter:"blur({a_t["blur"]}px)",'
-        f'duration:{a_t["duration"] * k:.2f},'
-        f'stagger:{a_t["stagger"] * k:.2f},'
-        f'ease:"{a_t["ease"]}"}},{t + a_t["delay"] * k:.2f})'
+        f'tl.from("#{sid} .t-in",{{y:{rise_px},'
+        f'duration:{a_m["duration"] * k:.2f},'
+        f'stagger:{a_m["stagger"] * k:.2f},'
+        f'ease:"{a_m["ease"]}"}},{t + a_t["delay"] * k:.2f})'
+    )
+    lines.append(
+        f'tl.from("#{sid} .seg-title",{{filter:"blur({a_m["blur"]}px)",'
+        f'duration:{a_m["duration"] * k * 1.6:.2f},'
+        f'ease:"power2.out"}},{t + a_t["delay"] * k:.2f})'
     )
     if has_kicker:
         a_k = ap["kicker"]
@@ -2152,6 +2249,9 @@ def _card_timeline_lines(rc, card):
     )
     # 导演补间挂在本卡时间线末尾：位置各自取句子起点，与上面的入场/进度条互不干扰。
     lines.extend(_director_timeline_lines(rc, card))
+    # 槽位版式的图内演进（images.json 的 evolve）：不接管编排，只让图里的元素跟着
+    # 旁白变。与 director 互斥（契约层已拒），所以两条不会同时往同一张图上写补间。
+    lines.extend(_evolve_timeline_lines(rc, card))
     return lines
 
 
@@ -2197,7 +2297,8 @@ def generate_html(manifest, audio_src, images=None,
     # html.escape），不再手写只覆盖 & 与 " 的半边 replace。
     gsap_src_attr = esc(gsap_src)
 
-    rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps)
+    rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps,
+                               film_span=total_dur)
 
     # 段落分组只有一份：manifest["segments"]（_manifest_schema 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
@@ -2329,6 +2430,10 @@ def generate_html(manifest, audio_src, images=None,
         # 帧率改了这里也跟着变，所以必须在生成期落数字，不能写死 30
         "__CTV_FPS__": f"{float(fps):g}",
         "__CTV_COMPOSITION_ID__": COMPOSITION_ID,
+        # 时间线终点：页内 repeat:-1 的循环会把 GSAP 时长撑到 1e10 量级，预览进度条
+        # 与取帧工具都读这个数。公开片长（manifest 的 total_duration）既是它的上限，
+        # 也正是循环被下一张卡盖住的时刻——两件事同一个数。
+        "__CTV_DURATION__": f"{total_dur:.2f}",
     }, "runtime.js")
     html = _fill(_load_asset("composition.html"), {
         "__CTV_GSAP_SRC__": gsap_src_attr,

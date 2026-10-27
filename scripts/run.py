@@ -75,6 +75,10 @@ def _total_seconds():
 def _write_report(path):
     if _DRY_RUN:
         return
+    # 降级明细在这里补齐，而不是在各 return 点各补一次：--until html /
+    # --until images / --until tts 都提前返回，漏掉任何一处就会出现"报告说
+    # 没事、manifest 说整片无配音"的自相矛盾（unvoiced_preview 正是这么漏的）。
+    _backfill_degraded()
     try:
         _REPORT["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         _REPORT["total_seconds"] = _total_seconds()
@@ -84,6 +88,24 @@ def _write_report(path):
         write_json_atomic(path, _REPORT)
     except Exception as e:
         print(f"[run] 写制作报告失败（不影响主流程产出）：{e}", file=sys.stderr)
+
+
+def _backfill_degraded():
+    """manifest 已存在而报告还没记降级时，从 manifest 补一份。
+
+    无副作用、幂等：manifest 不在（还没到 TTS 那一步）或已经记过就什么都不做。
+    """
+    if _REPORT.get("degraded"):
+        return
+    manifest = os.path.join(_REPORT_DIR or "", MANIFEST_FILENAME)
+    if not os.path.isfile(manifest):
+        return
+    try:
+        _tm = load_timing_manifest(manifest)
+    except ValueError:
+        return
+    _REPORT["degraded"] = [{"type": t, "count": n, "detail": d}
+                           for t, n, d in degraded_items(_tm)]
 
 
 def _print_report_summary():
@@ -278,7 +300,7 @@ def _build_parser():
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
                         choices=[12, 24, 30, 60],
                         help="输出帧率（默认 24；12 是快速看画面的低规格迭代档）。"
-                             "实测档位与耗时见 references/rendering.md「性能参数」。"
+                             "固定开销约 8.5s/次，冷跑再多 6s。"
                              "gen_hyperframes 自己还接受 1–240，这里只放行实测过的档位")
     parser.add_argument("--quality", default="looks",
                         choices=["draft", "looks", "standard", "high", "delivery"],
@@ -290,8 +312,8 @@ def _build_parser():
                              "所以默认选官方那一档而不是裸档")
     parser.add_argument("--workers", type=int, default=4,
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
-                             "有效区间与实测饱和点见 references/rendering.md「性能参数」；"
-                             "低配机器遇 V8 堆崩溃或配图体积大时建议降到 2")
+                             "8 之前有效、之后饱和；低配机器遇 V8 堆崩溃或配图"
+                             "体积大时降到 2")
     # 低内存档是官方 CLI 的旗标（--help：钉 1 worker + screenshot capture +
     # 跳过自动 worker 校准，默认按总内存 ≤8GB 自判）。低配机器非它不可——实测
     # 3.9GB/2 核机上不加就落在抓帧超时重抓。三态：不给 = 交给 CLI 自判，
@@ -471,6 +493,20 @@ def main():
     tts_args += ["--on-fail", args.on_fail]
     if args.dry_run:
         tts_args.append("--dry-run")
+    # ── 无 key 也允许出预览 ────────────────────────────────────────
+    # 预览档（--until html / check）是纯本地编译，不产出成片、不花渲染成本；
+    # 把这件事抵押给 TTS 账户余额是荒唐的。没有 key 时自动降级到 --no-tts：
+    # 时间轴按字数估算，manifest 标 degraded，HTML 照出。定稿路径（不给
+    # --until）不降级——那条路要交付成片，无声片不是成片，必须硬停。
+    # --allow-degraded 不参与这个判断：它是"我接受降级产物"的显式声明，
+    # 而这里问的是"有没有钱配音"。
+    if args.until in ("html", "check") and not args.dry_run \
+            and not pipeline.has_tts_key():
+        print("\n[run] 未检测到 MIMO_API_KEY：TTS 跳过，按估算时长出预览"
+              "（产物标记 degraded，不可直接渲染；补上 key 后重跑会自动重合成）",
+              flush=True)
+        tts_args.append("--no-tts")
+        _REPORT.setdefault("skipped", []).append("TTS（无 API key，预览档按估算时长）")
     _run_step(pipeline.main, tts_args, "TTS")
 
     # ── 第 3 步：配图 ─────────────────────────────────────────────

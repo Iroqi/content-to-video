@@ -116,6 +116,12 @@ class Harness:
         mapping[sid]["evolve"] = {"steps": steps}
         write_json_atomic(path, mapping)
 
+    def drop_manifest(self):
+        """把假 pipeline 写下的 manifest 删掉——复现"还没走到 TTS 那一步"。"""
+        path = os.path.join(self.out, "timing_manifest.json")
+        if os.path.isfile(path):
+            os.remove(path)
+
     def invoke(self, extra_argv, pipeline_main=None):
         """跑一次 run.main()，返回 (stdout, stderr)；SystemExit 原样上抛。
 
@@ -502,6 +508,87 @@ class FailurePropagation(unittest.TestCase):
             self.h.invoke(["--until", "html"], pipeline_main=write_broken)
         # 进程内 code 就是那句人话（解释器代打时才映射成退出码 1）
         self.assertIn("timing_manifest.json 无法读取", str(cm.exception.code))
+
+
+class PreviewWithoutKey(unittest.TestCase):
+    """预览档没 key 时自动降级到 `--no-tts`；定稿路径不降级。
+
+    这条行为的分界线是"要不要交付成片"：预览是纯本地编译，定稿要的是成片，
+    无声片不是成片。两边搞反的后果都很糟——预览档硬停等于把画面迭代抵押给
+    账户余额，定稿档静默降级等于交付一支没有声音的片子。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def _no_key(self):
+        return mock.patch.object(R.pipeline, "has_tts_key", lambda: False)
+
+    def test_preview_without_key_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "html"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+        self.assertTrue(any("TTS" in s for s in self.h.report()["skipped"]),
+                        "报告里没记「跳过了 TTS」，读者会以为这次是真配了音")
+
+    def test_check_stage_also_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "check"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+
+    def test_render_path_never_falls_back(self):
+        """不给 --until 就等于"要成片"：没 key 必须让 pipeline 自己硬停，
+        run.py 不许替它降级，也不许替它决定"无声也能交"。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke([])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_with_key_preview_does_not_fall_back(self):
+        self.h.make_images_complete()
+        with mock.patch.object(R.pipeline, "has_tts_key", lambda: True):
+            self.h.invoke(["--until", "html"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_dry_run_is_left_alone(self):
+        """--dry-run 本来就不碰网络，没必要给它加 --no-tts（两者语义不同：
+        一个「只看分句」，一个「产出一份 degraded 时间轴自检」）。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke(["--until", "html", "--dry-run"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+
+class ReportBackfillsDegraded(unittest.TestCase):
+    """`production_report.json` 的降级明细不许漏——预览档提前 return 会漏。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_unvoiced_preview_lands_in_report_even_on_early_return(self):
+        """无配音档在 `--until html` 的最后一步才落 manifest，而报告在
+        finally 里写——不回填的话报告恒为 `degraded: []`，读者看到的是
+        "这一次干干净净"，实际整片无声。"""
+        manifest = dict(self.h.manifest)
+        manifest["status"] = "degraded"
+        manifest["degraded"] = {D.UNVOICED_PREVIEW: True,
+                                D.SILENCE_FALLBACK_COUNT: 3}
+        self.h.manifest = manifest
+
+        def fake_gen(argv):
+            self.h.gen_argv = list(argv)
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"], pipeline_main=self.h.fake_pipeline)
+        rep = self.h.report()
+        kinds = {d["type"]: d["count"] for d in rep["degraded"]}
+        self.assertEqual(kinds.get(D.UNVOICED_PREVIEW), 1,
+                         f"报告没记下 unvoiced_preview：{rep['degraded']}")
 
 
 class HappyPath(unittest.TestCase):

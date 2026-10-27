@@ -47,7 +47,7 @@ class Items(unittest.TestCase):
             "sentences": [{"synth_failed": True}, {}],
             "degraded": {
                 D.LOST_SENTENCE_COUNT: 2, D.SEGMENTS_DROPPED: ["seg2", "seg3"],
-                D.AUDIO_SHORTER_THAN_TIMELINE: 0.8,
+                D.AUDIO_SHORTER_THAN_TIMELINE: 0.8, D.UNVOICED_PREVIEW: True,
             },
         }
         got = {t: (n, msg) for t, n, msg in D.items(tm)}

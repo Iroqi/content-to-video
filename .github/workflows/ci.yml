@@ -6,6 +6,8 @@ on:
   pull_request:
 
 jobs:
+  # 快档：单元测试 + 文档契约（7 秒级）。它是"改坏了哪条判据"的速查表，
+  # 但它**不能**证明这条链路能出片——所以它不是唯一的 job。
   test:
     strategy:
       fail-fast: false
@@ -17,6 +19,9 @@ jobs:
     env:
       # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError
       PYTHONIOENCODING: utf-8
+      # 这一档不渲染（矩阵里没有 Chrome）。端到端用例显式跳过——它在 e2e job
+      # 里必须跑，见下方 CTV_E2E_REQUIRED。
+      CTV_SKIP_E2E: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +38,8 @@ jobs:
 
       # 技能脚本只依赖标准库；Pillow 是可选的"多认几种图片格式"依赖
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        working-directory: tests
+        run: python -m unittest discover -s . -v
         timeout-minutes: 5
 
       # 三道文档契约检查（cross-refs · numbers · examples）都是"文档与代码
@@ -47,3 +53,60 @@ jobs:
           python tests/check_docs.py
           python tests/check_numbers.py
           python tests/check_examples.py
+
+  # 出片档：真的渲染一支 mp4，并且真的看那支片子的像素。
+  #
+  # 这一档存在的唯一理由：其余用例全部用假进程替掉了 Node、Chrome 和 ffmpeg，
+  # 所以"HTML → 帧 → MP4"这一段在自动化里是盲区。盲区里的失败（GSAP 没加载、
+  # 末段没渲进去、首帧是纯背景）本地门禁一条都看不见。
+  #
+  # 判据只有三条，都在 tests/test_e2e_render.py 里：成片存在且体积合理、
+  # 时长等于时间轴（容差同交付闸门）、逐段取帧没有空页且整片确有变化。
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      # 缺依赖 = 失败，不是跳过。"悄悄跳过"正是过去全绿却从未出过片的原因。
+      CTV_E2E_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Pillow + ffmpeg
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      # 渲染要 headless Chrome。chrome-headless-shell 是 hyperframes 推荐的那条
+      # 抓帧路径（比完整 Chrome 的 screenshot 模式快一个数量级）。
+      - name: Install chrome-headless-shell
+        run: |
+          npx --yes @puppeteer/browsers install chrome-headless-shell@stable
+          echo "HYPERFRAMES_BROWSER_PATH=$(find "$PWD" -path '*chrome-headless-shell/*' -name chrome-headless-shell -type f | head -1)" >> "$GITHUB_ENV"
+        timeout-minutes: 10
+
+      - name: Render smoke test (build → render → look at frames)
+        working-directory: tests
+        run: python -m unittest test_e2e_render -v
+        timeout-minutes: 25
+
+      - name: Upload rendered sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-sample
+          path: |
+            **/out.mp4
+            **/frames/**
+          if-no-files-found: warn
+          retention-days: 7

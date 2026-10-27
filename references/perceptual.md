@@ -30,10 +30,13 @@ python scripts/perceptual.py -m OUT/timing_manifest.json --project hf-project --
 - `contact-sheet.jpg` —— 每段若干帧拼一张，**这张要人看**；
 - `perceptual_report.json` —— 每段的采样数、覆盖率区间、图槽墨水占比，加逐条判词。
 
-**只报不拦**：默认退出 0。`perceptual.py --strict` 才以退出码 5 结束（CI 交付档）——
-且**只认 error 档**：`dead_seconds` / `empty_page` / `canvas_thin` / `switch_skew` 判红，
-`temporal_budget`（"这一页一共变了多少次"）只 warn。节奏舒缓是创作决定，不是缺陷；
-把 warn 也算进 --strict，CI 会逼人删掉 `--strict`，那时这道门禁就整体失效了。
+**只报不拦**：默认退出 0。`perceptual.py --strict` 才以退出码 5 结束（CI 交付档）。
+现行四条判据**全是 error 档**（见下节表），所以 `--strict` 下"有判词"即"非零退出"。
+severity 字段照样写进每条判词——将来若真加一条 warn 档（例如"这一页一共变了
+多少次"这类节奏问题：节奏舒缓是创作决定、不是缺陷），`--strict` 只认 error，
+不会因为片子舒缓就把 CI 判红；判红逼人删参数，这道门禁就整体失效了。
+加 warn 档时必须连同**实现**一起加：登记一个没人发射的 kind，读者会以为那里
+有判据，测试还得造假数据来验分流。
 
 取帧层面的失败（`--project` 没取到帧、snapshot 非 0 退出、缺 Pillow）一律走
 `{"error": ...}` 与退出码 6，**不会**把已经渲染完的成片判成失败；`--project` 取回的

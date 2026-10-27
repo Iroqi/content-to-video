@@ -14,6 +14,10 @@
 顺带量一次 SKILL.md 的行数：它是每次调用必然整份进上下文的那一份，超出上限
 说明细节又爬回主文档了，该下沉到 references/。
 
+还有一道「钉固包名对账」：文档里的命令示例写死了 `hyperframes@<版本>`，那是
+`_render_backend.DEFAULT_HYPERFRAMES_SPEC` 的第二份——升级时不带着改，读者
+敲的就是一个已经弃用的版本。
+
 还有一道「官方门禁噪声表对账」：`_render_backend.GATE_NOISE_CODES` 是判读的真源，
 `references/rendering.md` 是给人看的那份复制品。复制品会漂——代码登记了、文档没写，
 读者就以为那是新错误；文档写了、代码漏了，那条会被当成 error 拦下来。两边逐码对账。
@@ -105,6 +109,39 @@ def noise_codes():
     return set(re.findall(r'"([a-z0-9_]+)":', m.group(1)))
 
 
+def pinned_package_drift():
+    """文档里写死的 `hyperframes@<版本>` 必须与代码钉固的那一份一致。
+
+    与噪声表同形：命令示例要能直接复制粘贴，所以文档里写版本号是必要的
+    （不写就得让读者去猜 `CTV_HYPERFRAMES_PACKAGE`）；但它是第二份，升级
+    `DEFAULT_HYPERFRAMES_SPEC` 时不带着改，读者敲的就是一个已经被弃用的版本。
+    """
+    with open(os.path.join(ROOT, NOISE_SOURCE), encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r'^DEFAULT_HYPERFRAMES_SPEC = "hyperframes@([\d.]+)"',
+                  src, re.M)
+    if not m:
+        return [(NOISE_SOURCE, "DEFAULT_HYPERFRAMES_SPEC", "?", "读不到钉固版本")]
+    want = m.group(1)
+    docs = [os.path.join(ROOT, "SKILL.md"), os.path.join(ROOT, "README.md")]
+    docs += glob.glob(os.path.join(ROOT, "references", "*.md"))
+    bad = []
+    for doc in sorted(docs):
+        with open(doc, encoding="utf-8") as f:
+            text = f.read()
+        # 两种写法都要抓：`npx -y hyperframes@0.8.185 …`（命令）与
+        # 「口径对着 v0.8.185 实测」（行文）。
+        for got in re.findall(r"hyperframes@([\d.]+)", text):
+            if got != want:
+                bad.append((doc, NOISE_SOURCE, f"hyperframes@{got}",
+                            f"文档写的是 {got}，代码钉固的是 {want}"))
+        for got in re.findall(r"\bv(\d+\.\d+\.\d+)\b", text):
+            if got != want:
+                bad.append((doc, NOISE_SOURCE, f"v{got}",
+                            f"文档写的是 v{got}，代码钉固的是 {want}"))
+    return bad
+
+
 def noise_table_drift():
     """返回噪声表两边的差异说明（[] = 一致）。"""
     code = noise_codes()
@@ -154,6 +191,7 @@ def main():
             bad.append((ref, os.path.relpath(ref, ROOT), first,
                         "H1 不是 `第 N 步 · 主题` 模板，改标题或改检查"))
     bad += noise_table_drift()
+    bad += pinned_package_drift()
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
     n = skill_md_lines()

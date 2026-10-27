@@ -906,6 +906,13 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
     return total_dur
 
 
+# 段落级可选字段：从 source 原样搬进 manifest 的 segments[]。上游
+# build_from_structured 把它们收进 Block.extra，这里决定哪些真的落进 manifest。
+# 加新字段只改这一行——漏在这里的键不报错，只会让下游那道闸门悄悄读不到输入。
+PASSTHROUGH_SEG_KEYS = ("speed", "layout", "voice_id", "voice_style",
+                        "takeaway", "turns", "beats")
+
+
 def _group_segments(seg_config, manifest_sentences, degraded):
     """段落分组：manifest 的 segments 逐段构造；没有任何可用音频的段剔除并记降级。"""
     # _source_schema 保证至少一段且每段都能分句出内容，无条件执行；
@@ -939,19 +946,14 @@ def _group_segments(seg_config, manifest_sentences, degraded):
             "accent": seg["accent"],
             "sentences": seg_sentences,
         }
-        # 可选字段原样带走（段落级 speed / 音色、layout）。
-        if seg.get("speed") is not None:
-            seg_out["speed"] = seg["speed"]
-        if seg.get("layout") is not None:
-            seg_out["layout"] = seg["layout"]
-        if seg.get("voice_id") is not None:
-            seg_out["voice_id"] = seg["voice_id"]
-        if seg.get("voice_style") is not None:
-            seg_out["voice_style"] = seg["voice_style"]
-        if seg.get("takeaway") is not None:
-            seg_out["takeaway"] = seg["takeaway"]
-        if seg.get("turns"):
-            seg_out["turns"] = seg["turns"]
+        # 可选字段原样带走。清单式搬运而不是逐个 if：漏一个键在这里不会报错，
+        # 只会让下游那一道闸门永远读不到输入（beats 就这样空转过一整轮——
+        # SKILL.md 承诺"越界 exit 2"，而 manifest 里从来没有 beats 这个键）。
+        for _k in PASSTHROUGH_SEG_KEYS:
+            _v = seg.get(_k)
+            if _v is None or _v == "" or _v == [] or _v == {}:
+                continue
+            seg_out[_k] = _v
         grouped.append(seg_out)
     if dropped:
         # 整段消失是最重的降级，只打 [warn] 不够——下游只看 manifest 状态。

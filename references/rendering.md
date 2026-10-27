@@ -92,10 +92,3 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 - **固定开销**：每调用一次约白付 8.5s，冷跑多约 6s。先 `--until html` 看够再整片渲一次。
 - **低配机器**：`--low-memory-mode` 把 worker 钉成 1（总内存 ≤8GB 自判），与 `--workers` 冲突时 CLI 赢。**容器读的是宿主机总内存**，小限额容器要显式 `PRODUCER_LOW_MEMORY_MODE=1`。Chrome 超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 
-## 跑起来之后调什么
-
-默认值以 `run.py --help-all` 为准（`--fps 24`、`--workers 4`、`--quality looks`），本文件不抄第二份。只留三条实测结论：
-
-- **`fps` 是一阶杠杆**：抓帧耗时与帧数线性。快速看画面用 `--fps 12 --quality draft`。
-- **`workers` 8 之前有效、之后饱和**，`run.py` 恒显式传（拿不到 CLI 的自动校准）。低配机器遇 V8 堆崩溃或配图体积大时降到 2；偏慢先去 `out.render.log` 找 `Parallel capture timed out`。
-- **每次调用有固定开销**（约 8.5s，冷跑再加约 6s），所以先 `--until html` 看够，再整片渲一次。

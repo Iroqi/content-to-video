@@ -74,6 +74,11 @@ import sys
 # 版式判据的唯一真源在 _segments（scripts/ 已由 run_gate 的调用方放进
 # sys.path）；这里只借用"哪些版式是满幅图"这一件事，不另抄一份 ("canvas","plate")。
 from _segments import FULL_BLEED_LAYOUTS, is_full_bleed  # noqa: E402
+# 取帧命令的构造与渲染侧同一份：包名回落、npx 定位、Windows .cmd shim 处理
+# 都只在 _render_backend 里写过一遍，这里不另抄（抄的那版已经在 Windows 上
+# 拉不起 npx，且 CTV_HYPERFRAMES_PACKAGE 设成空串时会把 "" 传给 npx）。
+from _render_backend import (hyperframes_command,  # noqa: E402
+                             hyperframes_spec, resolve_command)
 
 # ── 判据（全部是"成片可读性"的直接翻译，不是手感）─────────────────────
 # 整页画布段的"空页"下限：低于它判空页。0.6% 相当于 1080×1440 上一块约
@@ -533,18 +538,24 @@ def _snapshot(project, times, outdir, command):
     if not times:
         return []
     ts = ",".join(f"{t:.2f}" for t in times)
-    cmd = list(command) + ["snapshot", project, "--at", ts, "-o", outdir]
+    # 先清空，再取帧：上一次跑留下的帧如果还在，`_scan_frames` 会把**旧帧**当成
+    # 这次的产出收下——判词看着有、量的是上一次的编排，而且没有任何一处会报错。
+    # 官方 snapshot 默认就清目录，这里再清一次是防止 CLI 换语义 / --keep 类
+    # 参数被将来接进来。清在 run 之后会把这一次刚写出来的帧一起删掉。
+    shutil.rmtree(outdir, ignore_errors=True)
+    # 先拼全参数、**再** resolve，顺序不能反：Windows 上 resolve_command 命中
+    # .cmd 时会把整条命令包进 `cmd /c "…"` 字符串，先解析再往后面接子命令，
+    # 那些参数就落在 cmd.exe 自己的 argv 里、进不了 /c 的命令体——症状是
+    # snapshot 的 --at/-o 整批丢失，取帧按默认值跑（同 `_render_backend
+    # .snapshot_frames`，那里踩过一次）。
+    cmd = resolve_command(list(command) + ["snapshot", project, "--at", ts,
+                                           "-o", outdir])
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except FileNotFoundError:
         raise RuntimeError("找不到 npx：本门禁要 Node.js 才能取帧（见 SKILL.md「环境」）")
     except subprocess.TimeoutExpired:
         raise RuntimeError("hyperframes snapshot 超时（900s）")
-    # 先清空：上一次跑留下的帧如果还在，`_scan_frames` 会把**旧帧**当成这次
-    # 的产出收下——判词看着有、量的是上一次的编排，而且没有任何一处会报错。
-    # 官方 snapshot 默认就清目录，这里再清一次是防止 CLI 换语义 / --keep 类
-    # 参数被将来接进来。
-    shutil.rmtree(outdir, ignore_errors=True)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "").strip()[-2000:])
     pairs = _scan_frames(outdir)
@@ -577,8 +588,7 @@ def run_gate(project, manifest, out_dir, aspect="portrait", command=None):
     # 判据还是当场的判据，所以"改判据→重判"这条迭代路仍然走得通。
     pairs = _scan_frames(frames_dir) if os.path.isdir(frames_dir) else []
     if [round(t, 2) for t, _ in pairs] != [round(t, 2) for t in all_t]:
-        cmd = command or ["npx", "-y", os.environ.get("CTV_HYPERFRAMES_PACKAGE",
-                                                      "hyperframes@0.8.185")]
+        cmd = command or hyperframes_command()
         try:
             pairs = _snapshot(project, all_t, frames_dir, cmd)
         except RuntimeError as e:
@@ -618,8 +628,7 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default=None, help="报告输出目录（默认 <帧目录>/perceptual）")
     ap.add_argument("--step", type=float, default=None,
                     help="采样步长（秒）；默认按段长自适应，整页画布段更密")
-    ap.add_argument("--package", default=os.environ.get("CTV_HYPERFRAMES_PACKAGE",
-                                                        "hyperframes@0.8.185"),
+    ap.add_argument("--package", default=hyperframes_spec(),
                     help="取帧用的 hyperframes 包（默认与渲染同版本）")
     ap.add_argument("--strict", action="store_true",
                     help="有 error 级判词时以退出码 5 结束（交付前用）；默认只报不拦")
@@ -647,7 +656,7 @@ def main(argv=None):
             _out = args.out or os.path.join(args.project, "perceptual")
             os.makedirs(_out, exist_ok=True)
             pairs = _snapshot(args.project, all_t, os.path.join(_out, "frames"),
-                              ["npx", "-y", args.package])
+                              ["npx", "--yes", args.package])
         else:
             ap.error("要 --frames 或 --project 之一")
     except RuntimeError as e:

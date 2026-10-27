@@ -324,6 +324,35 @@ class RenderEndToEnd(unittest.TestCase):
                            f"每一帧的墨迹占比几乎一样（{[round(i, 4) for i in inks]}），"
                            "整片可能根本没动——GSAP 时间线没跑起来")
 
+    def test_04_perceptual_gate_actually_sees_frames(self):
+        """观感门禁的**成功路径**：取帧 → 判词 → contact sheet，一条都不能空。
+
+        这条用例存在的理由是一个真实的失明期：`_snapshot` 把"先清空帧目录"
+        写在了 `subprocess.run` 之后，于是官方 snapshot 刚写出的帧被自己删掉，
+        `--perceptual` 恒抛"没有产出任何帧"——contact sheet、空页、死帧、换页
+        时序这三条判词**从未执行过**。而 1500+ 条单测全绿：它们用 mock 顶掉了
+        subprocess，只覆盖了 returncode != 0 的失败路径，成功路径无人测。
+
+        所以这里必须真跑一次，且断言的是"帧真的落盘了"——不是"没报错"。
+        """
+        import _render_backend as RB
+        import perceptual as P
+        out_dir = os.path.join(self.tmp.name, "perceptual")
+        res = P.run_gate(self.project, self.manifest, out_dir,
+                         aspect="portrait", command=RB.hyperframes_command())
+        self.assertNotIn("error", res, f"观感门禁没跑完：{res.get('error')}")
+        frames = list(_walk(os.path.join(out_dir, "frames")))
+        self.assertGreaterEqual(len(frames), len(self.manifest["segments"]),
+                                f"只取到 {len(frames)} 帧，少于段落数——"
+                                "判据看着在跑，其实量的是空气")
+        self.assertGreater(res.get("frames", 0), 0)
+        self.assertTrue(res.get("contact_sheet") and
+                        os.path.getsize(res["contact_sheet"]) > 1024,
+                        "没有产出 contact sheet（判词没法被人复核）")
+        # 这份 fixture 是"画面合格"的参照：不要求零判词，但不允许"帧都取不到"
+        # 这种结构性空转被记成通过。
+        self.assertIsInstance(res.get("issues"), list)
+
 
 def _walk(root):
     for dirpath, _dirnames, filenames in os.walk(root):

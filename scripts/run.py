@@ -746,8 +746,7 @@ def main():
         if args.perceptual:
             _perc_dir = os.path.join(project, "perceptual")
             _r = perceptual.run_gate(project, _tm, _perc_dir, aspect=args.aspect,
-                                     command=["npx", "-y", os.environ.get(
-                                         "CTV_HYPERFRAMES_PACKAGE", "hyperframes@0.8.185")])
+                                     command=_HF_COMMAND)
             _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
             if _r.get("error"):
                 print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)

@@ -78,11 +78,13 @@ class TestAssembly(unittest.TestCase):
         self.assertIn("seg-card seg-plate", self.card)
 
     def test_caption_layer_not_verse(self):
-        """句子流层（`.verse`）不生成——生成器那套滚动/焦点衰减在图版上是错的。"""
+        """句子流层（`.verse`）不生成——图版不排一墙句子在场上等。"""
         self.assertNotIn('class="verse"', self.card)
         self.assertIn('class="plate-caption"', self.card)
-        # 每一句各占一行，运行时只显示当前那句
+        # 每一句各占一格：列（.plate-lines）里 N 个等高槽，槽里一句
+        self.assertEqual(self.card.count('class="plate-slot"'), 2)
         self.assertEqual(self.card.count('class="plate-line"'), 2)
+        self.assertIn('id="pl-seg-a"', self.card)
 
     def test_no_tagline(self):
         """图版的文字层只有标题 + 一句字幕：tagline 不入 DOM。"""
@@ -140,14 +142,24 @@ class TestTimeline(unittest.TestCase):
 
 
 class TestRuntimeHook(unittest.TestCase):
+    """运行时在图版字幕上只管颜色，不管"哪一句在屏幕上"。
+
+    "哪一句在屏幕上"归时间线（列位移）与窗口（overflow）。运行时再插一手
+    visibility，位移还在路上的那几帧就会被"还没到开口"给藏掉——滚动读起来
+    变成"先空一下、再啪一下"。
+    """
+
     def setUp(self):
         self.html = _render()
 
     def test_runtime_syncs_plate_caption(self):
-        """运行时必须真有那条归位逻辑，否则一摞行全叠在屏幕上。"""
         self.assertIn("const plateSync", self.html)
         self.assertIn("plateSync(tt)", self.html)
-        self.assertIn(".plate-line.plate-on", self.html)
+        self.assertIn(".plate-line.plate-accent", self.html)
+
+    def test_visibility_switch_is_gone(self):
+        """换灯那一条必须消失：.plate-on 回来一次，滚动就被它切掉半截。"""
+        self.assertNotIn("plate-on", self.html)
 
 
 class TestGate(unittest.TestCase):

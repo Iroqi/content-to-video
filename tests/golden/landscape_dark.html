@@ -387,16 +387,24 @@ body{font-family:var(--ctv-font-family)}
    往 .plate-head 自己身上写背景——标题盒的高度随字数变，背景跟着算就永远差一截。 */
 [data-aspect] .seg-plate .plate-head::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-title-x));right:calc(-1 * var(--ctv-pl-title-x));top:calc(-1 * var(--ctv-pl-title-t));height:var(--ctv-pl-title-scrim);z-index:-1;pointer-events:none;background:linear-gradient(180deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
 [data-aspect] .seg-plate .plate-title{line-height:var(--ctv-pl-title-lh);text-wrap:balance}
-/* 一句字幕：钉在页底、只显示当前句。行是绝对定位的一摞，运行时每帧只让一句
-   可见（见 runtime.js 的 plateSync）——**不做焦点衰减**（屏幕上只有一句，没有
-   "离焦多远"可言），也**不滚动**（滚动是句子流的事：一屏一摞句子的产物）。
-   2 行钳制是给长句兜底的：图版不滚，第 3 行会直接压到安全边距外面去。 */
+/* 一句字幕：钉在页底，**换句是滚动不是换灯**。
+   `.plate-clip` 是一个固定高度（= 槽高）的窗口，句子在 `.plate-lines` 里排成一
+   列、每句占一个等高槽（`.plate-slot`），换句时整列上移一个槽高——字滑过窗口
+   那条**固定的边**（见 html_renderer._plate_scroll_lines）。与句子流（`.verse-clip`）
+   同一套机制，所以这里不需要 clip-path：边是容器自己的边。
+   行不做焦点衰减（亮度/尺寸/模糊）：屏幕上只有一句，没有"离焦多远"可言。
+   2 行钳制是给长句兜底的：第 3 行会直接压到安全边距外面去。 */
 [data-aspect] .seg-plate .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
 [data-aspect] .seg-plate .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
-[data-aspect] .seg-plate .plate-clip{position:relative}
-[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;visibility:hidden;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
-[data-aspect] .seg-plate .plate-line.plate-on{visibility:visible}
-[data-aspect] .seg-plate .plate-line.plate-on.plate-accent{color:var(--seg-accent-text)}
+/* 窗口：高度就是槽高（--ctv-pl-slot，与补间位移同源），多出来的句子被它裁掉。
+   位移的目标 `.plate-lines` 用绝对定位 + top:0 定住（CSS 不给它声明 transform，
+   GSAP 才能独占那一维——见 _css_guard）。 */
+[data-aspect] .seg-plate .plate-clip{position:relative;height:var(--ctv-pl-slot);overflow:hidden}
+[data-aspect] .seg-plate .plate-lines{position:absolute;left:0;right:0;top:0}
+/* 一格：等高，句在格内**贴底**——短句上方留白，字仍停在页底同一个高度上 */
+[data-aspect] .seg-plate .plate-slot{position:relative;height:var(--ctv-pl-slot)}
+[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
+[data-aspect] .seg-plate .plate-line.plate-accent{color:var(--seg-accent-text)}
 
 /* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
    与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何
@@ -547,6 +555,7 @@ body{font-family:var(--ctv-font-family)}
   --ctv-pl-cap-lines:2;--ctv-pl-cap-fs:36px;
   --ctv-pl-cap-lh:1.34;--ctv-pl-cap-weight:600;
   --ctv-pl-cap-scrim:220px;
+  --ctv-pl-slot:113.4px;
   --ctv-ved-settle:0.00s;
   --ctv-relay-s:0.32;
   --ctv-scroll-ease:sine.out;
@@ -1465,16 +1474,22 @@ const verseTick = (t) => {
     verseScroll(c, t, curT0, curSi);
   }
 };
-// ── 图版（layout:"plate"）：一屏一句 ────────────────────────────────────
-// 图版的字幕层不是句子流：DOM 里是这一段的**全部句子各占一行**（绝对定位叠在
-// 同一处，见 html_renderer._plate_caption_html），运行时每帧只让"当前这一句"
-// 可见。为什么不做成"只放当前句、换句时改 textContent"：那样每帧都要写文本，
-// 而写文本会重排、打乱卡拉OK覆盖物的逐字命中；更重要的一条是整个仓库的纪律
-// ——**同一时刻的画面必须是时间 t 的纯函数**，DOM 里预先摆好全部的句子，
-// 归位就只剩一个 class 的开关，乱序 seek 幂等。
+// ── 图版（layout:"plate"）：一屏一句，换句是滚动 ──────────────────────────
+// 图版的字幕层不是句子流：DOM 里是这一段的全部句子排成一列、每句一格（见
+// html_renderer._plate_caption_html），**"哪一格在窗口里"由时间线上的位移决定**
+// ——运行时不搬画面，只搬颜色。
+//
+// 为什么不做成"只放当前句、换句时改 textContent"：那样每帧都要写文本，而写
+// 文本会重排、打乱卡拉OK覆盖物的逐字命中；更重要的一条是整个仓库的纪律——
+// **同一时刻的画面必须是时间 t 的纯函数**，DOM 里预先摆好全部的句子，乱序
+// seek 幂等。
+//
+// 换句那一下为什么不在运行时算位移：位移在生成期就已经是时间线上的一条补间
+// （一句一步，位移恒等于槽高），运行时再算一遍就是两套时钟——成片抓帧靠
+// 时间线，预览靠 ticker，两套各算一次必然在某一帧对不上。
 //
 // 句子区间取 data-t0 / data-t1（生成期按 start_time + onset 到下一句开口写的，
-// 与 cue 轨同源），所以"哪一句在屏幕上"与"字幕该是谁"是同一个答案，不会分家。
+// 与 cue 轨同源），所以"该吃 accent 的是哪一句"与"滚动到哪了"是同一个答案。
 const plates = Array.from(document.querySelectorAll(".plate-caption"));
 const plateState = new Map();
 const plateCache = new Map();
@@ -1484,7 +1499,10 @@ const plateShow = (cap, i) => {
   plateState.set(cap, i);
   for (const el of cap.querySelectorAll(".plate-line")) {
     const on = i >= 0 && parseInt(el.getAttribute("data-i"), 10) === i;
-    el.classList.toggle("plate-on", on);
+    // 只搬颜色，不搬可见性：可见性归窗口（.plate-clip 的 overflow）与位移
+    // （时间线上那条滚动补间）。运行时再开一次 visibility 就与滚动分家了——
+    // 位移还在路上的那几帧，窗口里那半行字会被"还没到开口"给藏掉。
+    //
     // 当前句吃本段 accent（与句子流的活动行同一个读法：色值来自卡上的
     // --seg-accent-text，已过文本对比度保底）。换色是**瞬时**的，不加过渡——
     // 每一帧必须等于时间线时刻的选择，过渡会让颜色滞后于换句。

@@ -470,7 +470,8 @@ _TEMPLATE_JSON = r'''
       "captionFontSize": 42,
       "captionLineHeight": 1.34,
       "captionWeight": 600,
-      "captionScrimHeight": 300
+      "captionScrimHeight": 300,
+      "captionSlotGapFrac": 0.35
     },
     "landscape": {
       "titleSize": 58,
@@ -488,7 +489,8 @@ _TEMPLATE_JSON = r'''
       "captionFontSize": 36,
       "captionLineHeight": 1.34,
       "captionWeight": 600,
-      "captionScrimHeight": 220
+      "captionScrimHeight": 220,
+      "captionSlotGapFrac": 0.35
     }
   },
   "animation": {

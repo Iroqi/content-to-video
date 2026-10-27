@@ -180,6 +180,51 @@ class TestPerceptual(unittest.TestCase):
         r = self._run([before, after], [3.9, 4.3], segs=segs)
         self.assertEqual([x for x in r["issues"] if x["kind"] == "switch_skew"], [])
 
+    # ── 严重度与退出码：--strict 不许被"节奏舒缓"的片子打红 ─────────
+    def test_every_issue_carries_severity(self):
+        """判词自带 severity，且是登记表里的取值——不在报告里留一个空位。"""
+        def paint(img, d):
+            _title(img, d); _thin_slot(img, d); _verse(img, d)
+        r = self._run([paint] * 4, [0.6, 2.6, 4.6, 5.6])
+        self.assertTrue(r["issues"])
+        for it in r["issues"]:
+            self.assertIn(it["severity"], (P.ISSUE_ERROR, P.ISSUE_WARN), it)
+
+    def test_strict_gate_counts_errors_only(self):
+        """`--strict` 的判据是 error 档，不是"有任何判词"。"""
+        warn_only = [{"kind": "temporal_budget", "seg": "seg1"}]
+        err = [{"kind": "canvas_thin", "seg": "seg1"}]
+        self.assertEqual(P._error_issues(warn_only), [])
+        self.assertEqual(P._error_issues(warn_only + err), err)
+        # 未登记的判定按 error：新判据要人当真，不能因为忘了登记就静默放行
+        self.assertEqual(len(P._error_issues([{"kind": "brand_new"}])), 1)
+
+    def test_switch_before_first_segment_is_not_skew(self):
+        """开屏页还挂着时的换页读数不许算到第一段头上。
+
+        读数早于首段口播起点时，最近 span 恒为第一段、偏移是一大截负数，旧判据
+        会写成"第一段声画不同步"——而那一刻第一段一秒都还没开始。开屏页的
+        agenda 就是这种"先挂着"的页（结构性页不带 sentences，不在 spans 里）。
+        """
+        segs = [{"id": "seg1", "layout": None,
+                 "sentences": [{"start_time": 5.0, "duration": 3.0}]}]
+
+        def opening(img, d):
+            _title(img, d); _rich_slot(img, d); _verse(img, d)
+
+        def first(img, d):
+            img.paste((90, 120, 150), (0, 0, W, H))
+            _title(img, d); _verse(img, d)
+
+        # 1.0s 开屏页取样，2.4s 换成第一段（第一段 5.0s 才开口）：偏移 2.6s
+        # 远大于 1.4s 采样间隔 + 0.5s 容差，旧判据必然报 seg1 声画不同步。
+        r = self._run([opening, first, first, first], [1.0, 2.4, 6.0, 7.4],
+                      segs=segs)
+        self.assertEqual(
+            [x for x in r["issues"]
+             if x["kind"] == "switch_skew" and x["seg"] == "seg1"], [],
+            r["issues"])
+
     def test_contact_sheet_written(self):
         """拼图要落盘且格数够——交付前那一遍人工看的正是它。"""
         def paint(img, d):
@@ -190,6 +235,66 @@ class TestPerceptual(unittest.TestCase):
         im = Image.open(out)
         self.assertGreaterEqual(im.size[0], 360 * 3)
         self.assertGreater(im.size[1], 100)
+
+
+
+class TestGateIsolation(unittest.TestCase):
+    """取帧层的失败不许把整个编排层带崩，也不许把旧帧当成新帧。
+
+    这两条都不看像素，只钉 run_gate/_snapshot 的**失败语义**：
+    `run_gate` 的契约是"不阻断、不 sys.exit"，而成片已渲染完之后才抛
+    SystemExit，在日志里长得像渲染失败。
+    """
+
+    def test_missing_pillow_returns_error_not_systemexit(self):
+        """缺 Pillow → 返回 {"error": ...}，而不是 SystemExit。"""
+        import builtins
+        tmp = tempfile.mkdtemp(prefix="perc-nopil-")
+        try:
+            _frame(os.path.join(tmp, "frame-00-at-1.00s.png"),
+                   lambda img, d: _title(img, d))
+            man = {"segments": [{"id": "seg1",
+                                 "sentences": [{"start_time": 1.0, "duration": 3.0}]}]}
+            real = builtins.__import__
+
+            def guard(name, *a, **k):
+                if name == "PIL" or name.startswith("PIL."):
+                    raise ImportError("No module named 'PIL'")
+                return real(name, *a, **k)
+
+            builtins.__import__ = guard
+            try:
+                # 帧目录固定是 <out_dir>/frames，且要**逐点对齐**采样时刻才会
+                # 被复用（复用逻辑见 run_gate）——用它在逻辑上等价于 --frames。
+                fdir = os.path.join(tmp, "out", "frames")
+                os.makedirs(fdir)
+                for t in P.sample_times(man["segments"])["seg1"]:
+                    _frame(os.path.join(fdir, f"frame-00-at-{t:.2f}s.png"),
+                           lambda img, d: _title(img, d))
+                r = P.run_gate("", man, os.path.join(tmp, "out"))
+            finally:
+                builtins.__import__ = real
+            self.assertIn("error", r)
+            self.assertIn("Pillow", r["error"])
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_snapshot_failure_is_not_masked_by_old_frames(self):
+        """snapshot 非 0 退出、目录里还躺着上一次的帧 → 必须报错，不许拿旧帧充数。"""
+        old = os.path.join(tempfile.mkdtemp(prefix="perc-old-"), "p")
+        try:
+            os.makedirs(old)
+            _frame(os.path.join(old, "frame-00-at-1.00s.png"),
+                   lambda img, d: _title(img, d))
+            with self.assertRaises(RuntimeError):
+                P._snapshot(".", [1.0], old,
+                            [sys.executable, "-c", "import sys;sys.exit(3)"])
+            self.assertFalse(os.path.isdir(old),
+                             "取帧前必须先清空目录，否则旧帧会被当成这次的产出")
+        finally:
+            import shutil
+            shutil.rmtree(os.path.dirname(old), ignore_errors=True)
 
 
 if __name__ == "__main__":

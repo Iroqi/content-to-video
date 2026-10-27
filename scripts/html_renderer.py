@@ -441,6 +441,61 @@ def slot_verse_geometry(tpl, aspect, no_image):
     return int(room), bottom
 
 
+def _plate_slot_px(pl):
+    """图版字幕一格的高度（px）= 滚动一步的距离 = 裁切窗口的高度。
+
+    **单一真源**：CSS 的窗口高度（`.plate-clip`）与补间位移（每句一步）都读它，
+    两处各推一遍公式的后果是"窗矮了一点、字还按老槽高滚"，最后一句滚出去半个字。
+
+    **每句占一个等高槽**是刻意的：句子在格内**贴底**，槽等高于是无论一句是
+    1 行还是 2 行，字都停在页底同一个高度上。按句子实际行高给槽的话，短句的
+    槽矮、字就停得比长句高，页底那行字幕会随句长上下跳——图版字幕是钉在页底的，
+    这个跳比"滚动中有空带"难看得多。
+
+    代价：短句滚动到中途，窗口里会经过一段空带（短句上方那一行的留白 + 槽隙）。
+    那是两句字幕之间的呼吸，不是空镜——长句（占满钳制行数）滚动时没有这段空带。
+
+    槽隙本身为什么要在：不留槽隙，上一句的末行与下一句的首行会在滚动中贴着
+    窗口边互相咬住，两句的字挤在一条边上。
+    """
+    line = float(pl["captionFontSize"]) * float(pl["captionLineHeight"])
+    slot = (int(pl["captionMaxLines"]) + float(pl["captionSlotGapFrac"])) * line
+    return round(slot, 1)
+
+
+def _plate_scroll_lines(rc, card):
+    """图版字幕的换句：整列滚过窗口那条固定的边，一句一步。
+
+    一条补间管一句的"到来"，位移**恒等于槽高**（`_plate_slot_px`）、方向恒向上。
+    位移只写在列容器 `#pl-{sid}` 上——**行自己一条补间都没有**：两句若各有各的
+    位移，交叠期两条位移在画面上互相穿过，读到的是"两句独立的字在飞"。
+
+    **第一句不滚**：图版是满幅页，`wipe` 归零走硬切（见 `is_full_bleed_card`），
+    页面第一帧就必须是完成态——给首句也排一条滚动，成片里这一段开头就是空字幕。
+    末句之后也不再滚（没有下一句），窗口停在末句上。
+
+    锚点是新句**开口**（`_subtitle_cue_spans` 的 `start_time + onset`），与句子流
+    换句同一个时刻；时长与缓动直接读 `subtitle.relay` / `subtitle.scroll.ease`
+    ——与 `.verse` 的滚动同源，两种版式的换句手感不各存一份。
+    """
+    if not getattr(card, "is_plate", False):
+        return []
+    relay = float(rc.relay_s)
+    if relay <= 0.0:                 # relay 0 = 明确不要接力，也不滚
+        return []
+    slot = rc.plate_slot
+    lines = []
+    for i, (t, _end, _si) in enumerate(
+            _subtitle_cue_spans(card.seg.get("sentences") or [])):
+        if not i:
+            continue                 # 首句：页面擦开就在位（见上）
+        lines.append(
+            f'tl.to("#pl-{card.sid}",{{y:{-i * slot:.1f},'
+            f'duration:{relay:.2f},ease:"{rc.scroll_ease}"}},{t:.2f})'
+        )
+    return lines
+
+
 def _build_render_context(tpl, aspect, width, height, theme, images,
                           fps=DEFAULT_FPS, film_span=None, no_image=False):
     """派生渲染端消费的一切：主题配色、分画幅几何（含模板一致性护栏）与
@@ -476,6 +531,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _ag = rc.ag = tpl_layout["agenda"]
     # 图版（layout:"plate"）的字号/几何各画幅一份，挂在模板顶层 `plate`
     rc.plate = tpl["plate"][aspect]
+    # 图版字幕的槽高：滚动距离的**唯一真源**（CSS 窗口高度与补间位移同读它）。
+    rc.plate_slot = _plate_slot_px(rc.plate)
     _vv = tpl_layout["verse"]
     _il = tpl_layout["image"]
     _tgl = tpl_layout["tagline"]
@@ -572,6 +629,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _amb = tpl_layout["ambience"]
     _camb = tpl["canvasAmbience"]
     _pl = rc.plate
+    _plate_slot = rc.plate_slot
     # 句尾收束时长：这里先落 0（= 不演，CSS 规则自动失效），generate_html 的
     # 卡片循环里拿到全片 cue 之后再覆写成真值（那边才有句子表）。
     _settle_now = 0.0
@@ -624,6 +682,8 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _scroll_ease = str(tpl["subtitle"]["scroll"]["ease"]).strip()
     ease_validate(_scroll_ease, "[template] subtitle.scroll.ease")
     ease_reject_overshoot(_scroll_ease, "[template] subtitle.scroll.ease")
+    # 图版字幕的滚动读同一条（滚动只有一种手感，两种版式不各存一条曲线）
+    rc.scroll_ease = _scroll_ease
     # 入场浮出的起点（焦点换档的第五维：时间，见 runtime.js 的 verseRelay）。
     # 它**只作用于当前行**——其余行走的是"档位插值"（从上一句那档柔和走到这一句那
     # 档），不该跟着一起从低处浮起，否则每次换句整墙字幕都会闪一下。
@@ -690,6 +750,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-pl-cap-lines:{_pl["captionMaxLines"]};--ctv-pl-cap-fs:{_pl["captionFontSize"]}px;
   --ctv-pl-cap-lh:{_pl["captionLineHeight"]};--ctv-pl-cap-weight:{_pl["captionWeight"]};
   --ctv-pl-cap-scrim:{_pl["captionScrimHeight"]}px;
+  --ctv-pl-slot:{_plate_slot}px;
   --ctv-ved-settle:{_settle_now:.2f}s;
   --ctv-relay-s:{num_fmt(_relay_s)};
   --ctv-scroll-ease:{_scroll_ease};
@@ -1349,16 +1410,24 @@ def _plate_title_wrap(rc, seg, sid, title_size, ac):
 
 
 def _plate_caption_html(seg, sid, ac_text_attr):
-    """图版的一句字幕：**只有当前句**，不滚动、不带历史。
+    """图版的一句字幕：**一列滚过一个固定窗口**，不是"换句时换掉那一行"。
 
-    句子流（`.verse`）那套在这里是错的：它把整段句子排成一列、按焦点滚动，读起来
-    是"一页上有 5 句在等"。图版要的是 3b1b 那种"一屏一句"——当前句出现在底部，
-    换句时整行换掉。所以 DOM 结构与句子流不同（`.plate-caption` 而不是 `.verse`），
-    运行时按 `.plate-line` 的 data-t0/data-t1 判"这一帧该显示哪一句"，词级强调
-    （`.verse-em` / `.verse-ved`）与说话人标签照旧可用——它们是**句内**的事，与
-    "一屏几句"无关。
+    图版要的是 3b1b 那种"一屏一句"，所以不排成句子流那一墙（几十句都在场上）；
+    但"一屏一句"不等于"换句时把那一行啪一下换掉"。换句是全片次数最多的动作
+    （图版页一句 2 秒），它若是 `visibility` 的开关，观众看到的就是每两秒闪一下。
+
+    结构：`.plate-clip` 是一个**固定高度、overflow:hidden 的窗口**，全部句子在
+    `.plate-lines` 里排成一列、每句占一个等高槽（`.plate-slot`，句在槽内贴底）。
+    换句时**只动整列**（位移 = 槽高，`_plate_scroll_lines`），字跟着列滑过窗口
+    那条固定的边——与句子流（`.verse-clip`）同一套机制，滚动的那一维只有一条
+    补间，行自己一条都不进时间线。
+
+    与"每句各挂一条揭示边"的分野：那一版两句各有各的边，交叠期两条位移互相
+    穿过，读到的是"两句独立的字在飞"；滚动列读到的是"一条字幕在走"。
 
     行不做焦点衰减（亮度/尺寸/模糊）：屏幕上只有一句，没有"离焦多远"可言。
+    词级强调（`.verse-em` / `.verse-ved`）与说话人标签照旧可用——它们是**句内**
+    的事，与"一屏几句"无关。
     """
     lines = []
     for s2 in seg["sentences"]:
@@ -1368,19 +1437,25 @@ def _plate_caption_html(seg, sid, ac_text_attr):
         voiced = s2.get("voiced")
         voiced_attr = ("" if voiced is None
                        else f' data-voiced="{max(0.01, float(voiced)):.2f}"')
+        # `.plate-slot` 是列里的一格（等高），`.plate-line` 在格内贴底：短句上方
+        # 留白，字仍钉在页底同一个高度。行本身不带高度（高度在格上），否则短句
+        # 的槽跟着变矮，字就停得比长句高。
         lines.append(
-            f'<div class="plate-line" data-i="{s2.get("index", -1)}"'
+            f'<div class="plate-slot"><div class="plate-line" '
+            f'data-i="{s2.get("index", -1)}"'
             f' data-t0="{t0 + onset:.2f}" data-t1="{max(t0 + 0.01, t1):.2f}"'
             f'{voiced_attr}'
             f' data-layout-allow-overlap data-layout-allow-occlusion>'
-            f'{esc(s2["text"])}{_em_marker()}{_ved_layer(s2["text"])}</div>'
+            f'{esc(s2["text"])}{_em_marker()}{_ved_layer(s2["text"])}'
+            f'</div></div>'
         )
     return (
         f'\n    <div class="plate-caption" id="cap-{sid}" '
         f'data-layout-allow-overflow data-layout-allow-overlap '
         f'data-layout-allow-occlusion>'
         f'<div class="plate-clip" data-accent="{ac_text_attr}">'
-        f'{"".join(lines)}</div></div>'
+        f'<div class="plate-lines" id="pl-{sid}">'
+        f'{"".join(lines)}</div></div></div>'
     )
 
 
@@ -2722,6 +2797,9 @@ def _card_timeline_lines(rc, card):
         # 顺序不可换——运镜末尾那条钉住补间必须最后落地（见 _image_settle_lines）。
         lines.extend(_image_settle_lines(rc, card, lead))
         lines.extend(_image_drift_lines(rc, card))
+    # 图版字幕的换句：整列滚过窗口那条固定的边（一句一步）。放在配图之后是因为
+    # 它管的也是"跟着旁白走"的那一层，作用域却是独立的列容器。
+    lines.extend(_plate_scroll_lines(rc, card))
     lines.append(
         f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
     )

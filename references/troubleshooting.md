@@ -37,8 +37,9 @@
 | 上一句"啪"地暗下去 | 退场没走插值 | 同上 |
 | 没挪档的行也跟着暗一下再亮回来 | 入场浮出叠给了所有行 | `subtitles.md`「换句与浮出」 |
 | 离焦行糊成一团 | 景深档太大；先 `--set subtitle.focus.blur=0` 对照 | `subtitles.md`「焦点衰减五维」 |
-| 图版字幕一直空、或几句叠在一起 | 运行时没接上 `.plate-caption` | `canvas.md`「图版」；`plateSync(t)` |
-| 图版一句话念一半就没了 | 图版不滚，超 `captionMaxLines` 本该 error | `canvas_layout_errors`；压短那句 |
+| 图版字幕换句时整行硬跳 | 换灯回来了：列没滚（`#pl-{sid}` 那条没生成，或 `subtitle.relay` 是 0） | `rendering.md`「动画：实现要点」的图版字幕一条 |
+| 图版字幕一直停在首句 | 滚动补间没进时间线——首句不滚是对的，别把首句也排上 | 同上 |
+| 图版一句话念一半就没了 | 超 `captionMaxLines` 本该 error（图版不滚，第三行被钳掉） | `canvas_layout_errors`；压短那句 |
 | 图版标题压主体、字幕顶标题 | 页顶标题带 + 页底字幕带超过页高 | `canvas_layout_errors`；`--set plate.<画幅>.captionFontSize=…` |
 
 ## 画面（SVG 与配图）

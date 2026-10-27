@@ -798,16 +798,22 @@ const verseTick = (t) => {
     verseScroll(c, t, curT0, curSi);
   }
 };
-// ── 图版（layout:"plate"）：一屏一句 ────────────────────────────────────
-// 图版的字幕层不是句子流：DOM 里是这一段的**全部句子各占一行**（绝对定位叠在
-// 同一处，见 html_renderer._plate_caption_html），运行时每帧只让"当前这一句"
-// 可见。为什么不做成"只放当前句、换句时改 textContent"：那样每帧都要写文本，
-// 而写文本会重排、打乱卡拉OK覆盖物的逐字命中；更重要的一条是整个仓库的纪律
-// ——**同一时刻的画面必须是时间 t 的纯函数**，DOM 里预先摆好全部的句子，
-// 归位就只剩一个 class 的开关，乱序 seek 幂等。
+// ── 图版（layout:"plate"）：一屏一句，换句是滚动 ──────────────────────────
+// 图版的字幕层不是句子流：DOM 里是这一段的全部句子排成一列、每句一格（见
+// html_renderer._plate_caption_html），**"哪一格在窗口里"由时间线上的位移决定**
+// ——运行时不搬画面，只搬颜色。
+//
+// 为什么不做成"只放当前句、换句时改 textContent"：那样每帧都要写文本，而写
+// 文本会重排、打乱卡拉OK覆盖物的逐字命中；更重要的一条是整个仓库的纪律——
+// **同一时刻的画面必须是时间 t 的纯函数**，DOM 里预先摆好全部的句子，乱序
+// seek 幂等。
+//
+// 换句那一下为什么不在运行时算位移：位移在生成期就已经是时间线上的一条补间
+// （一句一步，位移恒等于槽高），运行时再算一遍就是两套时钟——成片抓帧靠
+// 时间线，预览靠 ticker，两套各算一次必然在某一帧对不上。
 //
 // 句子区间取 data-t0 / data-t1（生成期按 start_time + onset 到下一句开口写的，
-// 与 cue 轨同源），所以"哪一句在屏幕上"与"字幕该是谁"是同一个答案，不会分家。
+// 与 cue 轨同源），所以"该吃 accent 的是哪一句"与"滚动到哪了"是同一个答案。
 const plates = Array.from(document.querySelectorAll(".plate-caption"));
 const plateState = new Map();
 const plateCache = new Map();
@@ -817,7 +823,10 @@ const plateShow = (cap, i) => {
   plateState.set(cap, i);
   for (const el of cap.querySelectorAll(".plate-line")) {
     const on = i >= 0 && parseInt(el.getAttribute("data-i"), 10) === i;
-    el.classList.toggle("plate-on", on);
+    // 只搬颜色，不搬可见性：可见性归窗口（.plate-clip 的 overflow）与位移
+    // （时间线上那条滚动补间）。运行时再开一次 visibility 就与滚动分家了——
+    // 位移还在路上的那几帧，窗口里那半行字会被"还没到开口"给藏掉。
+    //
     // 当前句吃本段 accent（与句子流的活动行同一个读法：色值来自卡上的
     // --seg-accent-text，已过文本对比度保底）。换色是**瞬时**的，不加过渡——
     // 每一帧必须等于时间线时刻的选择，过渡会让颜色滞后于换句。

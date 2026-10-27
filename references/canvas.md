@@ -130,7 +130,7 @@
 
 1. **必须有配图**（缺图在装配层 `raise ValueError`、生成期按 `error` 拒）——没图就只剩两行字压在空页上。
 2. **标题带不钳行数、只降字号**：降档走模板 `plate.<画幅>` 的 `guardChars1/guardSize1/guardChars2/guardSize2`，下限 `MIN_READABLE_FONT_PX`（26px），压在顶部 scrim（`titleScrimHeight`）上；**一行优先**，越长字越小，两行是上限不是目标。
-3. **字幕一屏一句，页底居中**：DOM 是 `.plate-caption > .plate-clip > N × .plate-line`，每行带 `data-i` / `data-t0` / `data-t1`，运行时 `plateSync(t)` 只给当前那句加 `.plate-on`，当前句里的 emphasis 片段加 `.plate-accent`。**没有句子历史、没有滚动、没有焦点衰减**——整页画布那套"一页上 5 句在等"的语义在这里是错的。
+3. **字幕一屏一句，页底、换句靠滚动**：DOM 是 `.plate-caption > .plate-clip（固定高窗口）> .plate-lines（列）> N × .plate-slot（等高槽）> .plate-line`，每行带 `data-i` / `data-t0` / `data-t1`；换句时整列上移一个槽高、首句不滚（口径见 `rendering.md`「动画：实现要点」的图版字幕一条）。运行时 `plateSync(t)` 只给当前那句加 `.plate-accent`——可见性归窗口与位移。**没有句子历史、没有焦点衰减**——整页画布那套"一页上 5 句在等"的语义在这里是错的。
 4. **字幕两行是硬上限**（`captionMaxLines: 2`），超了报错而不是缩字号（第三行被钳掉＝一句念了一半的话）。生成期 `canvas_layout_errors` 按 `每行字数 = (画幅宽 − 2×captionInsetX) ÷ captionFontSize` 估行数，超限就点名该段该句要压到多少字以内；页顶标题带 + 页底字幕带超页高另报"两层文字会叠着画"。**两条都只能靠压短句子解决**——这正是图版的写稿节奏：一句一个事实。
 
 **写稿侧**：按"一句一屏"写，单句 ≤ `每行字数 × captionMaxLines`（竖屏 42px 字号下约 44 字）。图要撑满整幅，**别在四周留大边距**——那块边距会被 `cover` 拉成 0，像构图偏了。**预览体检**：`npx -y hyperframes snapshot --at <秒>` 挑"第 2 句正在说"和"换句那一帧"各截一张，确认字幕只有一句、在页底、没被钳，标题在 scrim 上不压主体。

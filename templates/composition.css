@@ -380,16 +380,24 @@ body{font-family:var(--ctv-font-family)}
    往 .plate-head 自己身上写背景——标题盒的高度随字数变，背景跟着算就永远差一截。 */
 [data-aspect] .seg-plate .plate-head::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-title-x));right:calc(-1 * var(--ctv-pl-title-x));top:calc(-1 * var(--ctv-pl-title-t));height:var(--ctv-pl-title-scrim);z-index:-1;pointer-events:none;background:linear-gradient(180deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
 [data-aspect] .seg-plate .plate-title{line-height:var(--ctv-pl-title-lh);text-wrap:balance}
-/* 一句字幕：钉在页底、只显示当前句。行是绝对定位的一摞，运行时每帧只让一句
-   可见（见 runtime.js 的 plateSync）——**不做焦点衰减**（屏幕上只有一句，没有
-   "离焦多远"可言），也**不滚动**（滚动是句子流的事：一屏一摞句子的产物）。
-   2 行钳制是给长句兜底的：图版不滚，第 3 行会直接压到安全边距外面去。 */
+/* 一句字幕：钉在页底，**换句是滚动不是换灯**。
+   `.plate-clip` 是一个固定高度（= 槽高）的窗口，句子在 `.plate-lines` 里排成一
+   列、每句占一个等高槽（`.plate-slot`），换句时整列上移一个槽高——字滑过窗口
+   那条**固定的边**（见 html_renderer._plate_scroll_lines）。与句子流（`.verse-clip`）
+   同一套机制，所以这里不需要 clip-path：边是容器自己的边。
+   行不做焦点衰减（亮度/尺寸/模糊）：屏幕上只有一句，没有"离焦多远"可言。
+   2 行钳制是给长句兜底的：第 3 行会直接压到安全边距外面去。 */
 [data-aspect] .seg-plate .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
 [data-aspect] .seg-plate .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
-[data-aspect] .seg-plate .plate-clip{position:relative}
-[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;visibility:hidden;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
-[data-aspect] .seg-plate .plate-line.plate-on{visibility:visible}
-[data-aspect] .seg-plate .plate-line.plate-on.plate-accent{color:var(--seg-accent-text)}
+/* 窗口：高度就是槽高（--ctv-pl-slot，与补间位移同源），多出来的句子被它裁掉。
+   位移的目标 `.plate-lines` 用绝对定位 + top:0 定住（CSS 不给它声明 transform，
+   GSAP 才能独占那一维——见 _css_guard）。 */
+[data-aspect] .seg-plate .plate-clip{position:relative;height:var(--ctv-pl-slot);overflow:hidden}
+[data-aspect] .seg-plate .plate-lines{position:absolute;left:0;right:0;top:0}
+/* 一格：等高，句在格内**贴底**——短句上方留白，字仍停在页底同一个高度上 */
+[data-aspect] .seg-plate .plate-slot{position:relative;height:var(--ctv-pl-slot)}
+[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
+[data-aspect] .seg-plate .plate-line.plate-accent{color:var(--seg-accent-text)}
 
 /* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
    与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何

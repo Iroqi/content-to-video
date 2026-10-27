@@ -30,7 +30,14 @@ python scripts/perceptual.py -m OUT/timing_manifest.json --project hf-project --
 - `contact-sheet.jpg` —— 每段若干帧拼一张，**这张要人看**；
 - `perceptual_report.json` —— 每段的采样数、覆盖率区间、图槽墨水占比，加逐条判词。
 
-**只报不拦**：默认退出 0。`perceptual.py --strict` 才以退出码 5 结束（CI 交付档）。
+**只报不拦**：默认退出 0。`perceptual.py --strict` 才以退出码 5 结束（CI 交付档）——
+且**只认 error 档**：`dead_seconds` / `empty_page` / `canvas_thin` / `switch_skew` 判红，
+`temporal_budget`（"这一页一共变了多少次"）只 warn。节奏舒缓是创作决定，不是缺陷；
+把 warn 也算进 --strict，CI 会逼人删掉 `--strict`，那时这道门禁就整体失效了。
+
+取帧层面的失败（`--project` 没取到帧、snapshot 非 0 退出、缺 Pillow）一律走
+`{"error": ...}` 与退出码 6，**不会**把已经渲染完的成片判成失败；`--project` 取回的
+帧数少于采样点数时会另打一条 warn——判词变少不等于通过。
 
 ## 四条判据
 

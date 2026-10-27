@@ -67,6 +67,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -108,6 +109,42 @@ SWITCH_TOLERANCE = 0.5
 # 每段最少采样数（段很短时按段长均分，但至少要这么多点才判得动"死帧"）。
 MIN_SAMPLES_PER_SEG = 3
 
+# 判词的严重度。**只有** `temporal_budget` 是 warn 档：它量的是"这一页一共
+# 变了多少次"，而变了多少次该不该变是创作决定（一段 25 秒的推导，画面慢慢
+# 推一个参数，本来就该是低事件密度）。其余四条量的都是"这一页坏了"：图槽里
+# 没东西、整页是空的、`--project` 指定的帧实际上一帧没取到、声画对不上。
+# `--strict` 只让 error 档判非零退出；把它写成"有任何判词就 5"会让一份合格
+# 但节奏舒缓的片子过不了 CI——那时人会做的不是改画面，是删掉 --strict。
+ISSUE_ERROR = "error"
+ISSUE_WARN = "warn"
+ISSUE_SEVERITY = {
+    "canvas_thin": ISSUE_ERROR,
+    "empty_page": ISSUE_ERROR,
+    "dead_seconds": ISSUE_ERROR,
+    "switch_skew": ISSUE_ERROR,
+    "temporal_budget": ISSUE_WARN,
+    # 取帧/读帧层面的问题不是"画面坏了"，是"这一眼没看成"
+    "no_frames": ISSUE_ERROR,
+}
+
+
+def severity(kind):
+    """判词类型 → 严重度；未登记的按 error（新判据默认要人当真）。"""
+    return ISSUE_SEVERITY.get(kind, ISSUE_ERROR)
+
+
+def _error_issues(issues):
+    return [it for it in issues if severity(it.get("kind")) == ISSUE_ERROR]
+
+
+class PillowMissing(RuntimeError):
+    """缺 Pillow。**不能是 SystemExit**：本模块的编排入口 `run_gate` 承诺
+    "不阻断、不 sys.exit"，而 SystemExit 不是 Exception 子类，run.py 里
+    `except Exception` 接不住它——成片已渲染完、报告已写一半，进程却以
+    "Pillow 没装"的退出码收场，读起来像渲染失败。RuntimeError 能被现有
+    `except RuntimeError` 接成一条 `{"error": ...}` 判词，走"门禁未完成"那条路。
+    """
+
 
 def _load_pil():
     """Pillow 是可选依赖（见 SKILL.md「环境」）。缺了就说清楚缺什么、怎么装。"""
@@ -115,9 +152,9 @@ def _load_pil():
         from PIL import Image, ImageChops  # noqa: F401
         return Image, ImageChops
     except ImportError:
-        raise SystemExit(
+        raise PillowMissing(
             "[error] 观感门禁需要 Pillow（它要吃帧的像素）：pip install pillow。"
-            "本门禁是可选的一道验收，缺依赖不影响出片。")
+            "本门禁是可选的一道验收，缺依赖不影响出片。") from None
 
 
 def sample_times(segments):
@@ -202,7 +239,8 @@ def _diff_ratio(a, b, delta=CONTENT_DELTA):
 
 
 def _issue(kind, sid, msg, **extra):
-    d = {"kind": kind, "seg": sid, "msg": msg}
+    """一条判词。`severity` 是派生量，不让调用方自己传：传了就会有两处各说一套。"""
+    d = {"kind": kind, "severity": severity(kind), "seg": sid, "msg": msg}
     d.update(extra)
     return d
 
@@ -409,7 +447,14 @@ def analyze(frames, segments, aspect="portrait"):
         # 不存在，而成片里换页与旁白错开两三秒是能一眼看出来的。
         near = min(spans, key=lambda s: abs(s[2] - t))
         off = t - near[2]
-        if abs(off) > gap + SWITCH_TOLERANCE:
+        # "这次换页属于谁"的判据是**这一页从下一段口播起点起才算数**：读数 t
+        # 早于任何一个段起点时（开屏页在容器里先挂着、第一段还没开播），
+        # `near` 一定是第一段，`off` 是个大负值，判词会写成"第一段声画不同步"
+        # ——而画面上此刻是开屏页，第一段一秒都还没开始。两端都把读数钳回
+        # [首段起点, 末段起点]，只有"页内错位"才可能是真的声画不同步。
+        if spans and not (spans[0][2] <= t <= spans[-1][2]):
+            near, off = None, None
+        if near is not None and abs(off) > gap + SWITCH_TOLERANCE:
             issues.append(_issue(
                 "switch_skew", near[0],
                 f"换页读数在 {t:.2f}s（上一次采样 {c['t0']:.2f}s），而该段口播从 "
@@ -484,7 +529,12 @@ def _snapshot(project, times, outdir, command):
         raise RuntimeError("找不到 npx：本门禁要 Node.js 才能取帧（见 SKILL.md「环境」）")
     except subprocess.TimeoutExpired:
         raise RuntimeError("hyperframes snapshot 超时（900s）")
-    if proc.returncode != 0 and not os.path.isdir(outdir):
+    # 先清空：上一次跑留下的帧如果还在，`_scan_frames` 会把**旧帧**当成这次
+    # 的产出收下——判词看着有、量的是上一次的编排，而且没有任何一处会报错。
+    # 官方 snapshot 默认就清目录，这里再清一次是防止 CLI 换语义 / --keep 类
+    # 参数被将来接进来。
+    shutil.rmtree(outdir, ignore_errors=True)
+    if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "").strip()[-2000:])
     pairs = _scan_frames(outdir)
     if not pairs:
@@ -523,8 +573,13 @@ def run_gate(project, manifest, out_dir, aspect="portrait", command=None):
         except RuntimeError as e:
             return {"error": str(e)}
     frames = [{"t": t, "path": p} for t, p in pairs]
-    result = analyze(frames, manifest["segments"], aspect=aspect)
-    sheet = contact_sheet(frames, os.path.join(out_dir, "contact-sheet.jpg"))
+    try:
+        result = analyze(frames, manifest["segments"], aspect=aspect)
+        sheet = contact_sheet(frames, os.path.join(out_dir, "contact-sheet.jpg"))
+    except PillowMissing as e:
+        # 帧已经取到了，判不了只是缺依赖：返回 error 让编排层记"门禁未完成"，
+        # 不要把它升级成一次失败退出（见 PillowMissing 的 docstring）。
+        return {"error": str(e)}
     report = {"manifest": manifest.get("_path"),
               "aspect": aspect, "slot_box": result.get("slot_box"),
               "frames": len(pairs), "contact_sheet": sheet,
@@ -588,6 +643,14 @@ def main(argv=None):
         print(f"[error] 取帧失败：{e}", file=sys.stderr)
         return 6
 
+    if args.project and len(pairs) < len(all_t):
+        # snapshot 少给帧不会自报失败：它按能抓到的时刻交差，于是"20 个采样点
+        # 只回来 3 帧"在报告里长得像"整片只有 3 个采样点"，死帧与换页两条判据
+        # 因为样本不够而静默失效——判词越少，越像通过。
+        print(f"[perceptual][warn] 采样 {len(all_t)} 个时刻，只取回 {len(pairs)} 帧"
+              f"——死帧与换页时序两条判据的覆盖会变稀，别把『无判词』读成通过。",
+              file=sys.stderr)
+
     result = analyze([{"t": t, "path": p} for t, p in pairs], segments,
                      aspect=args.aspect)
     out = args.out or os.path.join(args.frames or args.project, "perceptual")
@@ -616,7 +679,12 @@ def main(argv=None):
         print("[perceptual] 无判词：空页、死帧、换页时序三项都过")
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=1))
-    if args.strict and result["issues"]:
+    # --strict 只让 error 档判失败（口径见 ISSUE_SEVERITY）：把 warn 也算进来，
+    # 一份合格但节奏舒缓的片子会被 CI 判红，而那时人做的不是改画面、是删参数。
+    errs = _error_issues(result["issues"])
+    if args.strict and errs:
+        print(f"[perceptual][strict] {len(errs)} 条 error 级判词（另有 "
+              f"{len(result['issues']) - len(errs)} 条 warn）", file=sys.stderr)
         return 5
     return 0
 

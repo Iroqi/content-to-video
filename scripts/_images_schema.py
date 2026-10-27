@@ -66,10 +66,10 @@ MEDIA_ENTRY_KEYS = frozenset({
     "source_url", "license", "attribution", "query", "provider",
     # director / derive：写了才走净化内联（见 references/motion.md「SVG 动画：两档」）。
     "director",
-    # evolve：槽位版式里的"同一元素演进"（见 references/canvas.md「槽位版式的演进」）。
+    # evolve：槽位版式里的"同一元素演进"（见 references/director.md「槽位版式的演进」）。
     # 与 director 同一套 steps 写法，但不接管整页编排、不调机位（镜头归模板）。
     "evolve",
-    # derive：一条参数驱动的几何演绎（见 references/canvas.md「参数演绎」）。一拍只写
+    # derive：一条参数驱动的几何演绎（见 references/director.md「参数演绎」）。一拍只写
     # "参数推到多少"，图内几何由表达式逐帧重算——同步与中间态都是真几何，不靠抄参数。
     "derive",
     # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
@@ -904,7 +904,7 @@ DERIVE_BIND_KEYS = ("target", "attr", "expr")
 
 
 def validate_derive(key, block):
-    """`derive`：一条参数驱动的几何演绎（见 `_derive` 与 canvas.md「参数演绎」）。
+    """`derive`：一条参数驱动的几何演绎（见 `_derive` 与 director.md「参数演绎」）。
 
     与 director 的分界：director 写"什么时候哪个元素变成什么"（属性级，一个元素
     一条）；derive 写"这个参数走到多少，几何自己算"（参数级，一拍驱动一组元素）。

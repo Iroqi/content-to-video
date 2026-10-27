@@ -116,6 +116,12 @@ class Harness:
         mapping[sid]["evolve"] = {"steps": steps}
         write_json_atomic(path, mapping)
 
+    def drop_manifest(self):
+        """把假 pipeline 写下的 manifest 删掉——复现"还没走到 TTS 那一步"。"""
+        path = os.path.join(self.out, "timing_manifest.json")
+        if os.path.isfile(path):
+            os.remove(path)
+
     def invoke(self, extra_argv, pipeline_main=None):
         """跑一次 run.main()，返回 (stdout, stderr)；SystemExit 原样上抛。
 
@@ -181,7 +187,60 @@ class FlagPassthrough(unittest.TestCase):
         --speed 跟着变。
         """
         from _timeline import DEFAULT_GAP
-        self.assertIn("默认 {:g}".format(DEFAULT_GAP), R._build_parser().format_help())
+        # --gap 归在"调参"一类，默认 help 里不列（见 _HIDDEN_OPTIONS），
+        # 所以这条契约要在 --help-all 那一份上验。
+        self.assertIn("默认 {:g}".format(DEFAULT_GAP),
+                      R._build_parser(show_all=True).format_help())
+
+    def test_short_help_stays_one_screen(self):
+        """默认 help 必须一屏读完：常用参数 ≤ 15 条、总行数 ≤ 45。
+
+        证伪：加 --help-all 之前，`run.py --help` 有 72 行，usage 本身占 7 行，
+        读的人要先扫完 25 个旗标才知道从哪开始——而其中 14 个是调参与逃生口。
+        """
+        text = R._build_parser().format_help()
+        self.assertLessEqual(len(text.splitlines()), 45)
+        self.assertLessEqual(text.count("\n  --") + text.count("\n  -h"), 15)
+        self.assertIn("--help-all", text)          # 指针要在，否则等于藏起来
+
+    def test_escape_hatches_hidden_but_still_parse(self):
+        """藏起来的旗标一条都不能少：还要能解析，只是不列在默认 help 里。
+
+        隐藏的判据是"第一次用要不要知道"，不是"重不重要"——把它们从 parser
+        里删掉会让既有用法静默失效，那是另一回事。
+        """
+        short = R._build_parser().format_help()
+        full = R._build_parser(show_all=True).format_help()
+        for opt in sorted(R._HIDDEN_OPTIONS):
+            self.assertNotIn(opt, short, opt)
+            self.assertIn(opt, full, opt)
+        args = R._build_parser().parse_args(
+            ["--source", "s.json", "--workers", "2", "--allow-degraded",
+             "--gap", "0.7", "--drift", "subtle"])
+        self.assertEqual(args.workers, 2)
+        self.assertTrue(args.allow_degraded)
+        self.assertEqual(args.gap, 0.7)
+
+    def test_drift_preset_warns_when_it_overwrites_an_explicit_set(self):
+        """--drift 会覆盖 --set 里同名的键，且必须说出来。
+
+        两条路都写 animation.imageEntrance.drift.*，后写（档）赢；不给提示就是
+        "我明明 --set 了 0.02，成片还是 0.009"。逐段微调仍走 images.json。
+        """
+        import contextlib
+        import io as _io
+        import argparse as _ap
+        import gen_hyperframes as G
+        parser = _ap.ArgumentParser()
+        args = _ap.Namespace(set=["animation.imageEntrance.drift.ratePerSec=0.02"],
+                             drift="boring")
+        err = _io.StringIO()
+        with contextlib.redirect_stderr(err):
+            G._init_visual_knobs(parser, args)
+        self.assertIn("被 --drift boring 覆盖", err.getvalue())
+        from _template import overrides
+        self.assertAlmostEqual(
+            overrides()["animation.imageEntrance.drift.ratePerSec"], 0.003)
 
     def test_fps_default_has_one_source_across_three_entrypoints(self):
         """默认帧率只有一份：run --fps / gen --fps / generate_html(fps=)。
@@ -502,6 +561,87 @@ class FailurePropagation(unittest.TestCase):
             self.h.invoke(["--until", "html"], pipeline_main=write_broken)
         # 进程内 code 就是那句人话（解释器代打时才映射成退出码 1）
         self.assertIn("timing_manifest.json 无法读取", str(cm.exception.code))
+
+
+class PreviewWithoutKey(unittest.TestCase):
+    """预览档没 key 时自动降级到 `--no-tts`；定稿路径不降级。
+
+    这条行为的分界线是"要不要交付成片"：预览是纯本地编译，定稿要的是成片，
+    无声片不是成片。两边搞反的后果都很糟——预览档硬停等于把画面迭代抵押给
+    账户余额，定稿档静默降级等于交付一支没有声音的片子。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def _no_key(self):
+        return mock.patch.object(R.pipeline, "has_tts_key", lambda: False)
+
+    def test_preview_without_key_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "html"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+        self.assertTrue(any("TTS" in s for s in self.h.report()["skipped"]),
+                        "报告里没记「跳过了 TTS」，读者会以为这次是真配了音")
+
+    def test_check_stage_also_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "check"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+
+    def test_render_path_never_falls_back(self):
+        """不给 --until 就等于"要成片"：没 key 必须让 pipeline 自己硬停，
+        run.py 不许替它降级，也不许替它决定"无声也能交"。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke([])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_with_key_preview_does_not_fall_back(self):
+        self.h.make_images_complete()
+        with mock.patch.object(R.pipeline, "has_tts_key", lambda: True):
+            self.h.invoke(["--until", "html"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_dry_run_is_left_alone(self):
+        """--dry-run 本来就不碰网络，没必要给它加 --no-tts（两者语义不同：
+        一个「只看分句」，一个「产出一份 degraded 时间轴自检」）。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke(["--until", "html", "--dry-run"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+
+class ReportBackfillsDegraded(unittest.TestCase):
+    """`production_report.json` 的降级明细不许漏——预览档提前 return 会漏。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_unvoiced_preview_lands_in_report_even_on_early_return(self):
+        """无配音档在 `--until html` 的最后一步才落 manifest，而报告在
+        finally 里写——不回填的话报告恒为 `degraded: []`，读者看到的是
+        "这一次干干净净"，实际整片无声。"""
+        manifest = dict(self.h.manifest)
+        manifest["status"] = "degraded"
+        manifest["degraded"] = {D.UNVOICED_PREVIEW: True,
+                                D.SILENCE_FALLBACK_COUNT: 3}
+        self.h.manifest = manifest
+
+        def fake_gen(argv):
+            self.h.gen_argv = list(argv)
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"], pipeline_main=self.h.fake_pipeline)
+        rep = self.h.report()
+        kinds = {d["type"]: d["count"] for d in rep["degraded"]}
+        self.assertEqual(kinds.get(D.UNVOICED_PREVIEW), 1,
+                         f"报告没记下 unvoiced_preview：{rep['degraded']}")
 
 
 class HappyPath(unittest.TestCase):

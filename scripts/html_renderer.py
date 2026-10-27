@@ -1607,7 +1607,7 @@ def _canvas_first_beat(card, director, beats):
 
 
 def _derive_timeline_lines(rc, card):
-    """`derive`：一条参数驱动的几何演绎（见 `_derive`、canvas.md「参数演绎」）。
+    """`derive`：一条参数驱动的几何演绎（见 `_derive`、director.md「参数演绎」）。
 
     与 `evolve` / `director` 的根本差别：那边一拍写"哪个元素变成什么"，这边一拍只写
     **参数被推到多少**，图内的几何由 `bind` 里的表达式**逐帧重算**。好处有三，

@@ -1556,7 +1556,7 @@ def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
                 f"{where} 的 derive：{b['target']} 在 SVG 里写死 {b['attr']}={have:g}，"
                 f"而表达式在 params 初值（{_fmt_params(derived.params)}）处算出 "
                 f"{want_v:g}——第一帧落地时会跳 {abs(have - want_v):g}。要么改 SVG 的静态值，"
-                f"要么改 params 初值，让两者对齐（见 references/canvas.md「参数演绎」）")
+                f"要么改 params 初值，让两者对齐（见 references/director.md「参数演绎」）")
 
     # ⑥ 端点处仍算不出来（除零 / 定义域外 / 越界到 inf）：成片里那一帧会抛异常，
     #    GSAP 的 onUpdate 一抛就断在那一帧，后面的拍全部不演。
@@ -1885,14 +1885,23 @@ def _init_visual_knobs(parser, args):
     为什么不让渲染端在生成之后各自再读一遍：模板的消费面有 5 个模块，多一个
     "只在渲染端生效"的层，预览与成片就会分家。
     """
+    typed = set()
     for pair in args.set or ():
         try:
             put_override(pair)
         except ValueError as e:
             parser.error(str(e))
+        typed.add(pair.partition("=")[0].strip())
     if args.drift:
         for key, value in DRIFT_PRESETS[args.drift].items():
-            put_override(f"animation.imageEntrance.drift.{key}={json.dumps(value)}")
+            path = f"animation.imageEntrance.drift.{key}"
+            if path in typed:
+                # 两条路都通向同一个键，后写的赢。--set 是"我明确要这个数"，
+                # --drift 是"给我一个档"，被档悄悄盖掉就是"以为改了、其实没改"。
+                print(f"[gen][warn] --set {path} 被 --drift {args.drift} 覆盖（档后写）。"
+                      f"要保住你那个数就只留 --set；逐段微调写 images.json 的 drift 字段",
+                      file=sys.stderr)
+            put_override(f"{path}={json.dumps(value)}")
         print(f"[gen] 运镜档 --drift {args.drift}："
               + "、".join(f"{k}={v}" for k, v in DRIFT_PRESETS[args.drift].items())
               + "（逐段可用 images.json 的 drift 覆盖）", file=sys.stderr)

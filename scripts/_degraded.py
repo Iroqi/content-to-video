@@ -16,6 +16,7 @@ SILENCE_FALLBACK_COUNT = "tts_silence_fallback_count"
 LOST_SENTENCE_COUNT = "tts_lost_sentence_count"
 SEGMENTS_DROPPED = "segments_dropped"
 AUDIO_SHORTER_THAN_TIMELINE = "audio_shorter_than_timeline"
+UNVOICED_PREVIEW = "unvoiced_preview"
 
 
 class Kind(NamedTuple):
@@ -62,12 +63,20 @@ def _read_audio_short(_tm, deg):
     return None
 
 
+def _read_unvoiced(_tm, deg):
+    # --no-tts：整条片子没有配音，时长全按字数估算。它能出 HTML 预览，
+    # 但绝不能当成交付物渲染出去（run.py 的降级闸门拦这一项）。
+    return (1, "整片无配音（--no-tts 档案：时长按字数估算）") \
+        if deg.get(UNVOICED_PREVIEW) else None
+
+
 # 顺序即 production_report.degraded 的顺序，也是 manifest 校验报错时词汇的列出顺序。
 KINDS = (
     Kind("tts_silence_fallback", SILENCE_FALLBACK_COUNT, _read_synth_failed),
     Kind("tts_lost_sentences", LOST_SENTENCE_COUNT, _read_lost),
     Kind("segments_dropped", SEGMENTS_DROPPED, _read_dropped),
     Kind("audio_shorter_than_timeline", AUDIO_SHORTER_THAN_TIMELINE, _read_audio_short),
+    Kind("unvoiced_preview", UNVOICED_PREVIEW, _read_unvoiced),
 )
 
 # 封闭词汇表：_manifest_schema.validate_timing_manifest 用它拦未知键

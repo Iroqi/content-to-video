@@ -157,6 +157,24 @@ def load_env():
     return merged
 
 
+def has_tts_key():
+    """当前环境有没有配音所需的 key（与 main() 的闸门读同一处合并结果）。
+
+    run.py 的预览档用它决定"要不要自动走 --no-tts"；两处各写一套"从哪读
+    key"（一个读 load_env()，另一个只读 os.environ）会让"配了用户级 .env
+    却被判成没 key"这种哑巴故障重新出现。
+    """
+    env = load_env()
+    provider = env.get("CTV_TTS_PROVIDER") or DEFAULT_PROVIDER
+    try:
+        client = make_client(provider, env.get("MIMO_API_KEY"),
+                             env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL)
+    except ValueError:
+        return False
+    return bool(api_key_for_provider(
+        type("A", (), {"api_key": None})(), env, client))
+
+
 # ===================================================================
 # 单句合成（网络请求经 _tts.py 的 provider 协议，本函数只管落盘/重试/变速）
 # ===================================================================
@@ -597,8 +615,8 @@ def _build_parser():
                         help="Voice style description")
     parser.add_argument("--gap", type=float, default=DEFAULT_GAP,
                         help="Silence gap between sentences (seconds)。拼接音频与 "
-                             "manifest 时间轴同步插入；它同时决定转场宽度（见 "
-                             "references/rendering.md「动画」）")
+                             "manifest 时间轴同步插入；它同时给段落转场封顶"
+                             "（wipe = min(基准时长, gap)）")
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED,
                         help="Speech speed multiplier via ffmpeg atempo "
                              "(1.0=normal, 1.5=faster). Default follows "
@@ -623,6 +641,12 @@ def _build_parser():
                         help="Only split sentences + detect segments; print preview "
                              "without calling TTS API or writing audio. Useful for "
                              "verifying script formatting without spending credits.")
+    parser.add_argument("--no-tts", action="store_true", dest="no_tts",
+                        help="无配音档：不调 TTS、不查 API key，按估算时长产出"
+                             "status=degraded 的 timing_manifest.json（--on-fail "
+                             "silence 同款静音占位），供 --until html 离线预览。"
+                             "该产物不能直接渲染（run.py 的降级闸门会拦），"
+                             "补上 key 后重跑即自动重合成。")
     parser.add_argument("--workers", type=int, default=4,
                         help="并行 TTS 调用数（default 4）；大量 [retry] 日志时调小")
     parser.add_argument("--on-fail", choices=["abort", "silence"], default="abort",
@@ -672,6 +696,120 @@ def api_key_for_provider(args, env, probe_client):
     if not provider_needs_api_key(probe_client):
         return ""
     return args.api_key or env.get("MIMO_API_KEY") or ""
+
+
+def _run_without_tts(args):
+    """`--no-tts`：不调 TTS、不查 key，按估算时长产出一份 degraded manifest。
+
+    为什么要有这条路径：把稿件（JSON）编译成 HTML 预览是纯本地 CPU 工作，
+    不该被一个付费 TTS 账户挡在门口。预览阶段本来就要被人反复看十几次，
+    每次都先付配音钱是荒唐的。
+
+    产出的东西必须自称 degraded（`D.UNVOICED_PREVIEW`）：合成一段与各句
+    估算时长等长的静音 combined.wav 只为让预览页的播放按钮不 404，绝不能被
+    当成交付物——run.py 的降级闸门会拦住它，`--allow-degraded` 也不掩盖
+    "整片无声"这个事实。补上 key 后重跑同一条命令，缓存指纹对不上（没有
+    .sha），会自然走真合成，不需要手动清理。
+    """
+    if not args.source:
+        print("[error] --no-tts 需要 --source", file=sys.stderr)
+        sys.exit(2)
+    if os.path.isfile(args.output):
+        print(f"[error] 输出路径 {args.output} 是一个已存在的文件，"
+              f"--output 需要的是目录路径", file=sys.stderr)
+        sys.exit(1)
+    try:
+        source_data = load_segments_source(args.source)
+        sentences, seg_config = build_parts(source_data)
+    except ValueError as e:
+        print(f"[error] 结构化稿件无效：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(args.output, exist_ok=True)
+    sentences_dir = os.path.join(args.output, "sentences")
+    os.makedirs(sentences_dir, exist_ok=True)
+    ffmpeg_path = get_ffmpeg()
+
+    print("[no-tts] 无配音档：不调用 TTS、不消耗额度；时长按字数估算，"
+          "产物标记 status=degraded，只可用于 HTML 预览", flush=True)
+
+    sentence_data = []
+    cumulative = 0.0
+    for i, text in enumerate(sentences):
+        speed = _sentence_speed_for(seg_config, i, args.speed)
+        dur = round(max(0.05, estimate_sentence_seconds(
+            text, DEFAULT_CHARS_PER_SEC, speed)), 3)
+        out_path = os.path.join(sentences_dir, f"s{i+1:03d}.wav")
+        # 静音占位走与 --on-fail silence 同一条生成路径（ffmpeg lavfi → wave
+        # 兜底），预览页的 <audio> 才不会 404。写失败不算致命：预览只在乎
+        # 时间轴与画面。
+        try:
+            generate_silence(ffmpeg_path, dur, out_path)
+        except Exception as e:
+            print(f"  [s{i+1:03d}][warn] 静音占位生成失败（{type(e).__name__}: {e}）"
+                  f"，预览页该句无音频", file=sys.stderr)
+        sentence_data.append({"index": i, "text": text,
+                              "start_time": round(cumulative, 3),
+                              "duration": dur, "synth_failed": True})
+        cumulative += dur + args.gap
+        print(f"  [s{i+1:03d}] {text[:32]}  {dur:.2f}s（估算）", flush=True)
+
+    total_dur = round(max(0.0, cumulative - args.gap), 3)
+
+    # 母带：把各句静音按时间轴拼起来。这里直接用静音覆盖整段，不依赖
+    # concat 成功——预览要的只是"有文件、长度对"。
+    combined_path = os.path.join(args.output, COMBINED_AUDIO_NAME)
+    try:
+        generate_silence(ffmpeg_path, max(0.1, total_dur), combined_path)
+    except Exception as e:
+        print(f"[warn] 母带静音生成失败（{type(e).__name__}: {e}）", file=sys.stderr)
+
+    # 覆盖本次涉及句子的 .failed / .spd 边车：无配音档产出的 wav 是静音，
+    # 留着上次真合成的 .sha 会让补上 key 后重跑时被 --resume 误判成"同一个
+    # 稿件的同一段音频"（文件在、指纹在，只是内容被换成了静音）。
+    for i in range(len(sentences)):
+        base = os.path.join(sentences_dir, f"s{i+1:03d}.wav")
+        for _s in (".sha", ".spd", _FAILED_SUFFIX):
+            remove_if_exists(base + _s)
+
+    manifest_sentences = [
+        {"index": s["index"], "text": s["text"],
+         "start_time": s["start_time"], "duration": s["duration"],
+         "synth_failed": True}
+        for s in sentence_data
+    ]
+    degraded = {}
+    degraded[D.UNVOICED_PREVIEW] = True
+    if manifest_sentences:
+        degraded[D.SILENCE_FALLBACK_COUNT] = len(manifest_sentences)
+    manifest = {
+        "schema_version": 2,
+        "status": "degraded",
+        "degraded": degraded,
+        "sentences": manifest_sentences,
+        "segments": _group_segments(seg_config, manifest_sentences, degraded),
+        "total_duration": total_dur,
+        "gap": args.gap,
+        "voice_id": args.voice_id,
+        "combined_audio": os.path.abspath(combined_path),
+    }
+    _val = str(source_data.get("cta") or "").strip()
+    if _val:
+        manifest["closing_cta"] = _val
+    # _group_segments 可能追加 SEGMENTS_DROPPED，status 由它统一收口
+    manifest["status"] = "degraded"
+    _validate_and_write_manifest(args, manifest, manifest["degraded"])
+    print(f"[no-tts] 完成：{len(sentences)} 句按估算时长排好时间轴，"
+          f"总长 {total_dur:.2f}s。下一步：run.py --source ... --until html 出预览。",
+          flush=True)
+
+
+def _sentence_speed_for(seg_config, index, default_speed):
+    """第 index 句生效的语速：段级 speed 覆盖全局，与主路径同一口径。"""
+    for seg in seg_config:
+        if seg["start"] <= index < seg["end"] and seg.get("speed") is not None:
+            return seg["speed"]
+    return default_speed
 
 
 def _concat_voice_audio(args, ffmpeg_path, sentence_data):
@@ -932,7 +1070,11 @@ def _finalize_audio_and_manifest(args, ffmpeg_path, sentence_data, source_data, 
 
 def main(argv=None):
     """argv=None 走 sys.argv；run.py 进程内直调时传入参数列表，
-    参数校验只有本文件这一份 parser，run.py 不再复制。"""
+    参数校验只有本文件这一份 parser，run.py 不再复制。
+
+    `--no-tts` 分支（见 `run_without_tts`）：不合成、不查 key，只按估算时长
+    产出一份 `status=degraded` 的 manifest，让 HTML 预览能离线跑通。
+    """
     setup_stdio()
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -959,14 +1101,27 @@ def main(argv=None):
     # 先造一次只为"问元信息"（要不要 key / 认不认 base_url）：key 与端点
     # 都按最终值传，别传 None——MimoTtsClient 的 __init__ 就对 base_url
     # 做 rstrip，传 None 只会在解析阶段换成一条指向 __init__ 的报错。
+    # ── 无配音档（--no-tts）────────────────────────────────────────
+    # 在造 client **之前**分流：这一档不查 key、不建 client、不碰网络。纯 CPU
+    # 的"稿件 → 时间轴 → HTML 预览"整条路径不该被一个付费 TTS 账户挡住，
+    # 也不该为了问一句"这家要不要 key"就先构造一个网络客户端。
+    if args.no_tts:
+        return _run_without_tts(args)
+
+    # 先造一次只为"问元信息"（要不要 key / 认不认 base_url）：key 与端点
+    # 都按最终值传，别传 None——MimoTtsClient 的 __init__ 就对 base_url
+    # 做 rstrip，传 None 只会在解析阶段换成一条指向 __init__ 的报错。
     try:
         probe = make_client(provider, args.api_key or env.get("MIMO_API_KEY"),
                             base_url, factory=TTS_CLIENT_FACTORY)
     except ValueError as e:
         parser.error(str(e))
+
     if not args.dry_run and not api_key_for_provider(args, env, probe):
         print(f"[error] No API key for provider '{provider_label(probe)}'. "
-              f"Use --api-key or set MIMO_API_KEY in .env", file=sys.stderr)
+              f"Use --api-key or set MIMO_API_KEY in .env。\n"
+              f"       只想先出 HTML 预览（不出片、不花额度）加 --no-tts；"
+              f"run.py 在 --until html/check 档下会自动用它。", file=sys.stderr)
         sys.exit(1)
     # 只解析一次：下面构造真 client 与写缓存指纹（_sentence_hash 覆盖
     # base_url）都必须用同一个值，两处各算一遍迟早漂开。

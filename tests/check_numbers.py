@@ -134,40 +134,40 @@ FACTS = [
     (
         "focus-future",
         ("json", "scripts/_template.py", "subtitle.focus.future"), 0.62,
-        [("references/rendering.md", r"d=1→0\.62")],
+        [("references/subtitles.md", r"d=1→0\.62")],
         "未念档的亮度；衰减曲线的锚点，composition.css 的兜底字面量与它必须一致",
     ),
     (
         "focus-past",
         ("json", "scripts/_template.py", "subtitle.focus.past"), 0.45,
-        [("references/rendering.md", r"d=-1→0\.45")],
+        [("references/subtitles.md", r"d=-1→0\.45")],
         "已念档的亮度；必须是 future×ratio（同一条曲线多走一档）",
     ),
     (
         "focus-ratio",
         ("json", "scripts/_template.py", "subtitle.focus.ratio"), 0.726,
-        [("references/rendering.md", r"ratio 0\.726")],
+        [("references/subtitles.md", r"ratio 0\.726")],
         "每远一档的衰减比；0.62×0.726≈0.45 是「曲线本来就在那里」的证据",
     ),
     (
         "focus-scale",
         ("json", "scripts/_template.py", "subtitle.focus.scale"), 0.94,
-        [("references/rendering.md", r"subtitle\.focus\.scale.{0,12}默认\s*`0\.94`"),
-         ("references/rendering.md", r"0\.94³=0\.8306")],
+        [("references/subtitles.md", r"subtitle\.focus\.scale.{0,12}默认\s*`0\.94`"),
+         ("references/subtitles.md", r"0\.94³=0\.8306")],
         "离焦的第二个维度（尺寸）每远一档的缩放比；封两档是守住 26px 可读下限，"
         "改大改小都会动到「远处的行还读不读得出来」",
     ),
     (
         "focus-blur",
         ("json", "scripts/_template.py", "subtitle.focus.blur"), 0.02,
-        [("references/rendering.md", r"subtitle\.focus\.blur.{0,12}默认\s*`0\.02`")],
+        [("references/subtitles.md", r"subtitle\.focus\.blur.{0,12}默认\s*`0\.02`")],
         "离焦的第四个维度（景深）每远一档加多少模糊（em）；最深档 = 2 × 它，"
         "改大改小都会动到「远处的行还认不认得出字」",
     ),
     (
         "focus-blur-max",
         ("const", "scripts/_template.py", "FOCUS_BLUR_MAX_EM"), 0.05,
-        [("references/rendering.md", r"FOCUS_BLUR_MAX_EM`（`0\.05em")],
+        [("references/subtitles.md", r"FOCUS_BLUR_MAX_EM`（`0\.05em")],
         "景深的糊掉线（em）：封顶档的模糊半径不得越过它，半径逼近笔画宽度"
         "（≈0.07em）时相邻笔画并成一片",
     ),
@@ -263,14 +263,14 @@ FACTS = [
     (
         "subtitle-scroll-ease",
         ("json", "scripts/_template.py", "subtitle.scroll.ease"), "sine.out",
-        [("references/rendering.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],
+        [("references/subtitles.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],
         "字幕滚动的缓动档：作者改了它，成片里滚动的手感就换了——"
         "文档必须跟着说清当前是哪一档",
     ),
     (
         "subtitle-relay-from",
         ("json", "scripts/_template.py", "subtitle.relay.from"), 0.35,
-        [("references/rendering.md",
+        [("references/subtitles.md",
           r"模板 `subtitle\.relay\.from`，默认 `0\.35`")],
         "入场浮出的起点：只叠给当前行。作者调它等于调换句那一下的强弱，"
         "文档必须跟着说清当前是哪一档",

@@ -55,7 +55,7 @@
 `at` 与 `on` 是同一个句序，写的时候逐条对上。两者的分工不是重复：`on` 进 manifest
 给机器核，`at` 进 GSAP 给渲染器用。
 
-## 每一条补间都要能说出它的职务
+## 四职务：每一条补间都要能说出它的职务
 
 写动画之前先问一句：**这条补间在替观众做什么？** 答案只允许是下面四件之一；
 说不出来的，就是该删掉的那一条。
@@ -79,57 +79,6 @@
    变的图内元素、一条背景）。多出来的不是"丰富"，是让眼睛没有落点。
 3. **不一次铺满**：入场按"最想让人先看到的那件"排在最先，其余的往后错峰。所有
    东西在第 0 帧一起到位，等于什么都没强调。
-
-## 官方校验命令（优先于手搓探针）
-
-```bash
-npx -y hyperframes@0.8.185 check <项目目录>          # lint + runtime + layout + motion + contrast，一个门禁
-npx -y hyperframes@0.8.185 lint <项目目录>           # 只跑静态那一阶段（不开浏览器）：改 HTML 的迭代期用它
-npx -y hyperframes@0.8.185 snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
-npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
-```
-
-`check` = lint + browser 五阶段（Runtime / Layout / Motion / Contrast / Craft），**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
-
-**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_NOISE_CODES`（预期噪声）之外的新 code 当真——`GATE_STRICT_CODES` 里的码即使只以 warning 出现也照样点名，Lint 有 error 时额外点一条 `browser_stages_skipped`。阶段按结构认（顶层带 `findings` 的块都判读），CLI 新增阶段不用改这张表。
-
-本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_NOISE_CODES` 与下面这张噪声表一起复核。
-
-- 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
-- **Lint 有 error ⇒ browser 五阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast/Craft 显示 0 项不是通过，是失明**。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
-- 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
-  - 噪声（**全表以 `scripts/_render_backend.py` 的 `GATE_NOISE_CODES` 为准**，`tests/check_docs.py` 逐码对账，改一边不改另一边会报错）：
-    `gsap_callback_dom_measurement`（补间回调里量字宽）、`timeline_track_too_dense`（字幕时钟轨按帧打点）、`composition_file_too_large`（HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）、`css_transition_used`（模板兜底 CSS 的过渡，运行时由 GSAP 接管）、`overlapping_gsap_tweens`（入场与运镜在交接处碰同一属性）、`gsap_repeated_fromto_without_baseline`（同一 `fromTo` 先后落在不同元素上）、`gsap_infinite_repeat`（**开屏页才有**，默认强绑定）、`gsap_timeline_set_initial_hide`（开场前显式藏层）。
-  - 误报：`negative_z_index`（**恒 5 条**＝ CSS 里负 z-index 规则的条数：`.seg-card::after`、`.apple-halo`、`.apple-glow`、`.seg-card>.bg/.grid`、`.verse::before`），Fix 是 `isolation: isolate`（已加在各层的直接父元素上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
-  - 于是条数≈`5 + 卡片数 + 6`（candidate 与整条链实测：竖屏 3 卡 14 条、横屏 3 卡 14 条，类型逐条相同）；**条数随卡片数走，别拿任何一个样本当固定值**。
-  - `container_overflow` **不该再出现**：入场收拢（settle 起手 `scale` 1.05~1.08）与 Ken Burns 全程以 `scale≥1` 铺满槽位，子元素 bbox 每帧都比容器大几像素——配图容器 `#img-*` 带 `data-layout-allow-overflow` 把这条豁免掉。真出现就是**有人拿掉了那个标记**或**槽位里塞了比例不对的 SVG**（后者由生成期槽位比例护栏拦，见 `references/imagery.md`）。
-  - **判据**：`GATE_NOISE_CODES` 之外的新增条目一律当真（`run.py` 会以 `unregistered:<code>` 点名）。**类型多出一类就要查**——条数随卡片数变，类型本该恒定。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
-- `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
-- Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，判成"文字藏在不透明元素下"。做法是打豁免属性，而**三个属性的继承规则不同，别按一套打**：
-  - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：只认元素**自己身上**、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带。
-  - `data-layout-allow-overflow`：**继承到子树**，打在 `.verse`（`overflow:hidden` 所在层）一处即可。别撤 `overflow`：撤掉后长段滚动会刷出一批 info 级 `text_box_overflow`，随段落长度线性增长。
-  - **同一属性在两个阶段规则不同**：Layout 阶段（`layout-audit`）用元素自己身上的 `hasAttribute`，豁免就打报出来的那一层；Contrast 阶段（`contrast-audit`）走 `closest()`，打祖先即可。补 `overflow` 对 Layout 的 `text_occluded` 不管用。
-  - **调 `proseCoverageFloor` 优于层层打标**：成句长文本要被盖住超过 15% 才报，可压：`--layout "proseCoverageFloor=0.05"`。单词级短 label 不受保护，沾到就算。
-  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式，画面正常就是某层漏打了豁免，按 `check` 报的选择器补。
-  - **横屏的段落标题**（`#title-*`）会在**段落入场附近**多出 info 级 `text_occluded`（竖屏没有）：检查器恰在擦除进行中采样。`snapshot --at` 看标题好好在那儿就是这条，info 不进退出码，确认画面正常即可忽略。
-- `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
-- 渲染前用 `npx -y hyperframes@0.8.185 doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
-- **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`doctor` 不支持 `--strict`，要 warning 也阻断的是 `check --strict`。
-
-### Craft 阶段：三条"模板自己会犯"的 warning
-
-`craft` 阶段不属于上面那张噪声表，也不在 `GATE_NOISE_CODES` 里——它报的每一条都是**成片质量**问题，与"这页结构对不对"无关。当前模板会稳定触发其中三类，**它们不是噪声，是待办**：
-
-| code | 它到底在说 | 模板为什么会有 | 怎么消 |
-|---|---|---|---|
-| `first_frame_empty` | 第 0 帧只有背景。**第 0 帧就是社交平台的分享封面**——观众在信息流里先看到它 | 开屏页的标题/光斑/agenda 行都从 `y`/`opacity` 的零态进场，`t=0` 那一刻什么都还没落定 | 开屏页写 `opening_layout: "canvas"` 出一张静态海报；或给开屏标题一条 `from` 起点非零的编排（苹果开场的 `filter:blur` 就是从"可见的虚焦"起，不是从空气里长出来） |
-| `line_unread` | 某句字幕在画面上停留的时间**低于可读下限**（约 `0.5s + 0.3s × 词数`，片尾最后一句另要 ≥ 2s） | 句子时长来自 TTS 音频，**短句配长片**时它就那么短；模板只负责把它照实渲染 | 回到写稿：把短句并进相邻句、给这段加内容，或**拆段**让每段句子数变少而单句变长（`writing.md`「一句多长」） |
-| `text_below_floor` | 某处正文渲染后小于 28px（短边的 2.6%，手机上的可读下限） | **模板自身**：agenda 行的时长标记 `.ag-dur` 在模板里是 26px（竖屏）/24px（横屏） | 改模板 `agenda.durSize`（`scripts/_template.py`）到 ≥28；或那处字确实只是装饰时打 `data-layout-ignore` |
-
-三者的共同点：**`check` 不会因为它们失败**（都是 warning、不进退出码），但成片确实有毛病。判读顺序是"先看 `run.py` 有没有把它们当未登记码点名"——`GATE_NOISE_CODES` 之外的 code 会被以 `unregistered:<code>` 报出来，这三条都在其列，所以默认就会出声。**别把它们登记进 `GATE_NOISE_CODES` 来消停**：那等于承认"封面是黑的、字幕读不完"可以接受。
-
-`line_unread` 的实测口径（竖屏 3 句稿）：一句 10 个词的旁白停 1.97s，下限 2.63s——差 0.66s 就是观众来不及读完的那 0.66s。片子总长由内容决定时，唯一的解是**让每句都更长**，不是让引擎跑慢点。
-- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes@0.8.185 preview --background`。
 
 ## 快慢、停顿、缓动按内容定
 
@@ -333,3 +282,58 @@ npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chro
 - **相机绕的那一点是渲染器钉的**（"页界不跳"的前提，不是可选项）：作者整页没写 `svgOrigin`/`transformOrigin` 时，渲染器给相机步注入**本页 `#cam` 内容并集中心**当 `svgOrigin`（`_cam_crop.cam_default_origin`），跨段烘焙与出画 warn 用同一个点。**写了原点的页面以你写的为准**。
 
 接续页附带两处渲染端行为：**不走擦除**（wipe 强制归零，与整页画布同一条硬切路径），**不生成配图入场补间**（`#img-{sid}` 的淡入+上移正是"页界回弹"的本体）。
+
+## 官方校验命令（优先于手搓探针）
+
+前面讲的是"该不该动、动多快"——判断题。这一节讲"写完怎么验"——执行题。
+**先做完上面所有判断再翻到这里**：校验只能证明"没坏"，证明不了"该不该动"。
+
+```bash
+npx -y hyperframes@0.8.185 check <项目目录>          # lint + runtime + layout + motion + contrast，一个门禁
+npx -y hyperframes@0.8.185 lint <项目目录>           # 只跑静态那一阶段（不开浏览器）：改 HTML 的迭代期用它
+npx -y hyperframes@0.8.185 snapshot <项目目录> --at 1.0,4.0,8.0 -o snap   # 按时刻取 PNG + contact-sheet.jpg，约 12s
+npx -y hyperframes@0.8.185 doctor                    # 渲染依赖体检（Chrome headless shell / ffmpeg）
+```
+
+`check` = lint + browser 五阶段（Runtime / Layout / Motion / Contrast / Craft），**迭代期跑 `lint`、定稿跑 `check`**。`lint` 默认只报 error/warning，`--verbose` 带 info 级，`--json` 给机器可读输出（errorCount / warningCount / infoCount + findings）。
+
+**`run.py` 已经接上它，不用手敲**：出 HTML 后 `--until check` 档跑完门禁就停；不给 `--until` 时渲染前也会自动跑一次，有 error 直接 `[run][error] 官方门禁 …` 停住、不进渲染。判读口径在 `_render_backend.check_verdict`：error 一律当真，warning 只把 `GATE_NOISE_CODES`（预期噪声）之外的新 code 当真——`GATE_STRICT_CODES` 里的码即使只以 warning 出现也照样点名，Lint 有 error 时额外点一条 `browser_stages_skipped`。阶段按结构认（顶层带 `findings` 的块都判读），CLI 新增阶段不用改这张表。
+
+本节口径对着 **v0.8.185** 实测过（竖屏 2 段 / 横屏 2 段 / 竖屏 6 段，findings 类型逐条一致）。升级后先看 `--help` 再照这里改写法，并把 `GATE_NOISE_CODES` 与下面这张噪声表一起复核。
+
+- 字体栈出现未声明 `@font-face` 的家族名判 **error**（`font_family_without_font_face`）；家族名要用映射表认识的写法（认 `"SF Mono"` 不认 `SFMono-Regular`），否则只打 `[WARN] No deterministic font mapping`。
+- **Lint 有 error ⇒ browser 五阶段整个不跑**（`shouldBlockRender(strictErrors=true,…)` 直接返回空结果）。所以 **Runtime/Layout/Motion/Contrast/Craft 显示 0 项不是通过，是失明**。判读顺序永远是先看 Lint 0 error；`check` 退出码由**持久** findings 决定，browser 没跑时也可能非 0，别以为是渲染炸了。
+- 干净产物的 `check` 基线：**Lint 0 error**，Runtime / Motion / Contrast 全 0，**Layout 0 error**。warning 条数**随稿子规模走**，只看类型不看条数：
+  - 噪声（**全表以 `scripts/_render_backend.py` 的 `GATE_NOISE_CODES` 为准**，`tests/check_docs.py` 逐码对账，改一边不改另一边会报错）：
+    `gsap_callback_dom_measurement`（补间回调里量字宽）、`timeline_track_too_dense`（字幕时钟轨按帧打点）、`composition_file_too_large`（HTML 够大才有）、`nested_structure_needs_subcomposition`（**每张卡一条**：opening + 内容段 + closing）、`css_transition_used`（模板兜底 CSS 的过渡，运行时由 GSAP 接管）、`overlapping_gsap_tweens`（入场与运镜在交接处碰同一属性）、`gsap_repeated_fromto_without_baseline`（同一 `fromTo` 先后落在不同元素上）、`gsap_infinite_repeat`（**开屏页才有**，默认强绑定）、`gsap_timeline_set_initial_hide`（开场前显式藏层）。
+  - 误报：`negative_z_index`（**恒 5 条**＝ CSS 里负 z-index 规则的条数：`.seg-card::after`、`.apple-halo`、`.apple-glow`、`.seg-card>.bg/.grid`、`.verse::before`），Fix 是 `isolation: isolate`（已加在各层的直接父元素上，但 lint 是静态扫 CSS、不看 isolation，所以照样报）。
+  - 于是条数≈`5 + 卡片数 + 6`（candidate 与整条链实测：竖屏 3 卡 14 条、横屏 3 卡 14 条，类型逐条相同）；**条数随卡片数走，别拿任何一个样本当固定值**。
+  - `container_overflow` **不该再出现**：入场收拢（settle 起手 `scale` 1.05~1.08）与 Ken Burns 全程以 `scale≥1` 铺满槽位，子元素 bbox 每帧都比容器大几像素——配图容器 `#img-*` 带 `data-layout-allow-overflow` 把这条豁免掉。真出现就是**有人拿掉了那个标记**或**槽位里塞了比例不对的 SVG**（后者由生成期槽位比例护栏拦，见 `references/imagery.md`）。
+  - **判据**：`GATE_NOISE_CODES` 之外的新增条目一律当真（`run.py` 会以 `unregistered:<code>` 点名）。**类型多出一类就要查**——条数随卡片数变，类型本该恒定。Layout 的 `✗` 要当真，例外只有 `text_occluded`。
+- `clip_media_fit`（Runtime）与 `clipped_text`（Layout）**不在噪声之列**：前者是音频短于 `data-duration`，手写/裁剪 manifest 时是"manifest 与音频不同步"的唯一信号；后者是文本被自己的盒子裁掉（`nameTrim` 只挡字数）。
+- Layout 的 `text_occluded`：句子流滚出窗口的行被裁掉但静态 rect 仍在原位，判成"文字藏在不透明元素下"。做法是打豁免属性，而**三个属性的继承规则不同，别按一套打**：
+  - `data-layout-allow-occlusion` / `data-layout-allow-overlap`：只认元素**自己身上**、**不继承祖先**——`.verse-line` 与 `.verse-who` 每层都得自带。
+  - `data-layout-allow-overflow`：**继承到子树**，打在 `.verse`（`overflow:hidden` 所在层）一处即可。别撤 `overflow`：撤掉后长段滚动会刷出一批 info 级 `text_box_overflow`，随段落长度线性增长。
+  - **同一属性在两个阶段规则不同**：Layout 阶段（`layout-audit`）用元素自己身上的 `hasAttribute`，豁免就打报出来的那一层；Contrast 阶段（`contrast-audit`）走 `closest()`，打祖先即可。补 `overflow` 对 Layout 的 `text_occluded` 不管用。
+  - **调 `proseCoverageFloor` 优于层层打标**：成句长文本要被盖住超过 15% 才报，可压：`--layout "proseCoverageFloor=0.05"`。单词级短 label 不受保护，沾到就算。
+  - **再见到 `text_occluded`**：先 `snapshot --at <时刻>` 看画面；真被遮就调版式，画面正常就是某层漏打了豁免，按 `check` 报的选择器补。
+  - **横屏的段落标题**（`#title-*`）会在**段落入场附近**多出 info 级 `text_occluded`（竖屏没有）：检查器恰在擦除进行中采样。`snapshot --at` 看标题好好在那儿就是这条，info 不进退出码，确认画面正常即可忽略。
+- `snapshot --at` 取时刻帧并自动拼 contact sheet；手搓探针只在需同页多帧或 `snapshot` 不可用时作后备。
+- 渲染前用 `npx -y hyperframes@0.8.185 doctor` 判依赖：全绿直接跑真渲染（Chrome 缓存在 `~/.cache/hyperframes/chrome/`）。
+- **CLI 写明、踩上不报错的几条**：`validate` / `inspect` / `layout` 都是**废弃别名**，用 `check`；`doctor --json` **恒退出 0**，当门禁必须读 `.ok`（`hyperframes doctor --json | jq -e '.ok'`）；`doctor` 不支持 `--strict`，要 warning 也阻断的是 `check --strict`。
+
+### Craft 阶段：三条"模板自己会犯"的 warning
+
+`craft` 阶段不属于上面那张噪声表，也不在 `GATE_NOISE_CODES` 里——它报的每一条都是**成片质量**问题，与"这页结构对不对"无关。当前模板会稳定触发其中三类，**它们不是噪声，是待办**：
+
+| code | 它到底在说 | 模板为什么会有 | 怎么消 |
+|---|---|---|---|
+| `first_frame_empty` | 第 0 帧只有背景。**第 0 帧就是社交平台的分享封面**——观众在信息流里先看到它 | 开屏页的标题/光斑/agenda 行都从 `y`/`opacity` 的零态进场，`t=0` 那一刻什么都还没落定 | 开屏页写 `opening_layout: "canvas"` 出一张静态海报；或给开屏标题一条 `from` 起点非零的编排（苹果开场的 `filter:blur` 就是从"可见的虚焦"起，不是从空气里长出来） |
+| `line_unread` | 某句字幕在画面上停留的时间**低于可读下限**（约 `0.5s + 0.3s × 词数`，片尾最后一句另要 ≥ 2s） | 句子时长来自 TTS 音频，**短句配长片**时它就那么短；模板只负责把它照实渲染 | 回到写稿：把短句并进相邻句、给这段加内容，或**拆段**让每段句子数变少而单句变长（`writing.md`「一句多长」） |
+| `text_below_floor` | 某处正文渲染后小于 28px（短边的 2.6%，手机上的可读下限） | **模板自身**：agenda 行的时长标记 `.ag-dur` 在模板里是 26px（竖屏）/24px（横屏） | 改模板 `agenda.durSize`（`scripts/_template.py`）到 ≥28；或那处字确实只是装饰时打 `data-layout-ignore` |
+
+三者的共同点：**`check` 不会因为它们失败**（都是 warning、不进退出码），但成片确实有毛病。判读顺序是"先看 `run.py` 有没有把它们当未登记码点名"——`GATE_NOISE_CODES` 之外的 code 会被以 `unregistered:<code>` 报出来，这三条都在其列，所以默认就会出声。**别把它们登记进 `GATE_NOISE_CODES` 来消停**：那等于承认"封面是黑的、字幕读不完"可以接受。
+
+`line_unread` 的实测口径（竖屏 3 句稿）：一句 10 个词的旁白停 1.97s，下限 2.63s——差 0.66s 就是观众来不及读完的那 0.66s。片子总长由内容决定时，唯一的解是**让每句都更长**，不是让引擎跑慢点。
+
+- 要**跨机逐帧一致**用 `render --docker`（钉住 Chromium、字体集与编码器）；本机迭代不必付。核对时间轴用 `hyperframes timeline --json`；起预览服务用 `npx hyperframes@0.8.185 preview --background`。

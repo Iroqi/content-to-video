@@ -109,20 +109,23 @@ SWITCH_TOLERANCE = 0.5
 # 每段最少采样数（段很短时按段长均分，但至少要这么多点才判得动"死帧"）。
 MIN_SAMPLES_PER_SEG = 3
 
-# 判词的严重度。**只有** `temporal_budget` 是 warn 档：它量的是"这一页一共
-# 变了多少次"，而变了多少次该不该变是创作决定（一段 25 秒的推导，画面慢慢
-# 推一个参数，本来就该是低事件密度）。其余四条量的都是"这一页坏了"：图槽里
-# 没东西、整页是空的、`--project` 指定的帧实际上一帧没取到、声画对不上。
-# `--strict` 只让 error 档判非零退出；把它写成"有任何判词就 5"会让一份合格
-# 但节奏舒缓的片子过不了 CI——那时人会做的不是改画面，是删掉 --strict。
+# 判词的严重度。**全部是 error 档**：四条判据量的都是"这一页坏了"——图槽里
+# 没东西、整页是空的、一段里画面没替旁白做任何事、声画对不上；`no_frames`
+# 量的是"这一眼没看成"。
+#
+# 为什么没有 warn 档，也没有预留给"节奏舒缓"的那一档（曾登记过一个
+# `temporal_budget` 却从未实现）：判据的 kind 必须**有人发射**才有意义。
+# 登记一个不会产生的 kind，读者（和 agent）会以为那里有一条判据——测试里
+# 还得造一条假判词来验分流，等于拿假数据证明真契约。真要引入"事件密度"
+# 这条，先跑够真实片子取到基线、连同实现一起加，不要在表里先占位。
+# `--strict` 只让 error 判非零；将来若真有 warn 档，按 `_error_issues` 分流即可。
 ISSUE_ERROR = "error"
-ISSUE_WARN = "warn"
+ISSUE_WARN = "warn"          # 档位留给将来；当前没有任何判据用
 ISSUE_SEVERITY = {
     "canvas_thin": ISSUE_ERROR,
     "empty_page": ISSUE_ERROR,
     "dead_seconds": ISSUE_ERROR,
     "switch_skew": ISSUE_ERROR,
-    "temporal_budget": ISSUE_WARN,
     # 取帧/读帧层面的问题不是"画面坏了"，是"这一眼没看成"
     "no_frames": ISSUE_ERROR,
 }
@@ -134,7 +137,15 @@ def severity(kind):
 
 
 def _error_issues(issues):
-    return [it for it in issues if severity(it.get("kind")) == ISSUE_ERROR]
+    """筛出 error 档判词。
+
+    优先读判词自带的 `severity`（`_issue` 写进去的那一份），只有老报告/
+    外部造的判词没有这个字段时才回查 kind 登记表。不能反过来——那样判词上的
+    severity 就是个装饰：`_issue` 写了 warn、这里按名字一查又算成 error，
+    两处各说一套而只有一处生效，将来真要加 warn 档会踩到。
+    """
+    return [it for it in issues
+            if (it.get("severity") or severity(it.get("kind"))) == ISSUE_ERROR]
 
 
 class PillowMissing(RuntimeError):

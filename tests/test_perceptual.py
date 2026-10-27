@@ -191,13 +191,33 @@ class TestPerceptual(unittest.TestCase):
             self.assertIn(it["severity"], (P.ISSUE_ERROR, P.ISSUE_WARN), it)
 
     def test_strict_gate_counts_errors_only(self):
-        """`--strict` 的判据是 error 档，不是"有任何判词"。"""
-        warn_only = [{"kind": "temporal_budget", "seg": "seg1"}]
-        err = [{"kind": "canvas_thin", "seg": "seg1"}]
+        """`--strict` 的判据是 error 档，不是"有任何判词"。
+
+        warn 档现在没有判据在用，所以这里自己造一条假的来验分流——但
+        **不能**拿一个真实判据的名字当假数据（前一版用 `temporal_budget`，
+        那是登记了却从不发射的 kind，等于拿假数据证明真契约）。
+        """
+        warn_only = [dict(P._issue("_x", "seg1", "假 warn"), severity=P.ISSUE_WARN)]
+        err = [P._issue("canvas_thin", "seg1", "真 error")]
         self.assertEqual(P._error_issues(warn_only), [])
-        self.assertEqual(P._error_issues(warn_only + err), err)
+        self.assertEqual([i["kind"] for i in P._error_issues(warn_only + err)],
+                         ["canvas_thin"])
         # 未登记的判定按 error：新判据要人当真，不能因为忘了登记就静默放行
         self.assertEqual(len(P._error_issues([{"kind": "brand_new"}])), 1)
+
+    def test_every_registered_kind_is_emitted(self):
+        """登记表里的每个 kind 都必须有代码真的会发射它。
+
+        反过来的漏洞更隐蔽：登记了、文档写了、测试造了假数据验分流——
+        一切看着正常，唯独生产里没有这条判据。读者和 agent 都会以为它在。
+        """
+        import inspect
+        src = inspect.getsource(P)
+        for kind in P.ISSUE_SEVERITY:
+            # 必须出现在 _issue(...) 的调用位置，而不是只出现在登记表里
+            self.assertRegex(
+                src, r'_issue\(\s*\n?\s*"' + kind + r'"',
+                f"{kind} 只登记了、没有任何一处 _issue 发射它")
 
     def test_switch_before_first_segment_is_not_skew(self):
         """开屏页还挂着时的换页读数不许算到第一段头上。

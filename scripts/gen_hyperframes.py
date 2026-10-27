@@ -1885,14 +1885,23 @@ def _init_visual_knobs(parser, args):
     为什么不让渲染端在生成之后各自再读一遍：模板的消费面有 5 个模块，多一个
     "只在渲染端生效"的层，预览与成片就会分家。
     """
+    typed = set()
     for pair in args.set or ():
         try:
             put_override(pair)
         except ValueError as e:
             parser.error(str(e))
+        typed.add(pair.partition("=")[0].strip())
     if args.drift:
         for key, value in DRIFT_PRESETS[args.drift].items():
-            put_override(f"animation.imageEntrance.drift.{key}={json.dumps(value)}")
+            path = f"animation.imageEntrance.drift.{key}"
+            if path in typed:
+                # 两条路都通向同一个键，后写的赢。--set 是"我明确要这个数"，
+                # --drift 是"给我一个档"，被档悄悄盖掉就是"以为改了、其实没改"。
+                print(f"[gen][warn] --set {path} 被 --drift {args.drift} 覆盖（档后写）。"
+                      f"要保住你那个数就只留 --set；逐段微调写 images.json 的 drift 字段",
+                      file=sys.stderr)
+            put_override(f"{path}={json.dumps(value)}")
         print(f"[gen] 运镜档 --drift {args.drift}："
               + "、".join(f"{k}={v}" for k, v in DRIFT_PRESETS[args.drift].items())
               + "（逐段可用 images.json 的 drift 覆盖）", file=sys.stderr)

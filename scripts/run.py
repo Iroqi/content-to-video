@@ -22,7 +22,7 @@ import time
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # 导入同目录模块别往 scripts/__pycache__ 落 .pyc（技能目录不留制作残渣）
 sys.path.insert(0, SCRIPTS_DIR)
-from _template import get_canvas  # noqa: E402  画幅 → 画布尺寸（生产报告 params.canvas 用）
+from _template import get_canvas, overrides  # noqa: E402  画幅/生效覆写（生产报告用）
 from _timeline import (DEFAULT_FPS, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
                        duration_tolerance, validate_speed)
 from _voices import list_voice_ids  # noqa: E402
@@ -275,14 +275,33 @@ def _image_coverage(manifest_path, images_json):
     return manifest, sids, missing_keys, missing_files
 
 
+# 默认 help 里不出现的参数：调参、低配兜底、以及"关掉某道闸"的逃生口。
+#
+# 判据是"第一次用要不要知道它"——不是"重不重要"。--workers 与 --allow-degraded
+# 都很重要，但前者只在机器拖不动时才有意义，后者是明知有降级还要出片的例外路径；
+# 把它们摆在 --source/--until 旁边，等于让每个新读者先读完 25 个旗标才能开始。
+# 隐藏≠删除：仍然能解析、仍然进报告，只是要 --help-all 才列出来。
+_HIDDEN_OPTIONS = frozenset({
+    "--project", "--workers", "--low-memory-mode", "--no-low-memory-mode",
+    "--allow-degraded", "--allow-best-effort", "--placeholder-missing",
+    "--on-fail", "--drift", "--allow-ease", "--allow-infinite-loop",
+    "--voice-style", "--gap", "--check-frames",
+})
+
+
 # 只作用于 TTS 步骤的旗标集中定义在这里；render 侧参数（--fps/--quality/--workers）
 # 走 hyperframes 字面透传，不复制第二份默认值。
-def _build_parser():
+def _build_parser(show_all=False):
     parser = argparse.ArgumentParser(
-        description="信源转视频一键编排（薄组合层）",
+        prog="run.py",
+        usage="run.py --source <segments_source.json> [选项]",
+        description="信源转视频一键编排（薄组合层）。默认只列常用参数，"
+                    "调参与逃生口用 --help-all。",
         epilog="TTS 凭据不从本 CLI 传入，由 pipeline 从环境/用户级 .env 读取："
                "MIMO_API_KEY（必需）、MIMO_BASE_URL、MIMO_TTS_MODEL。"
-               "完整取值与优先级见 pipeline.py --help 与 references/tts_pipeline.md。")
+               "完整取值与优先级见 pipeline.py --help 与 references/tts_pipeline.md。\n"
+               "全部 25 个参数（渲染调参 / 低配兜底 / 四个 --allow-* 逃生口）"
+               "见：run.py --help-all")
     parser.add_argument("--source", required=True, help="segments_source.json 路径")
     parser.add_argument("-o", "--output", default="audio_output",
                         help="音频/中间产物输出目录（默认 audio_output）")
@@ -390,12 +409,22 @@ def _build_parser():
                         help="用官方 `hyperframes snapshot` 在成片上取几帧（含首末帧，"
                              "拼一张 contact sheet）落进 hf-project/snapshots/，交付前"
                              "就能翻看成片长什么样。默认关闭；取帧失败只 warn 不阻断")
+    if not show_all:
+        # help=SUPPRESS 同时把它们从 usage 与列表里摘掉；解析行为一个字没变
+        for _action in parser._actions:
+            if _HIDDEN_OPTIONS & set(_action.option_strings):
+                _action.help = argparse.SUPPRESS
     return parser
 
 
 
 def main():
     setup_stdio()
+    # --help-all 要在 argparse 之前拦：它和 --source 的 required 检查无关，
+    # 也不该为了看文档被要求先给一份稿子。
+    if "--help-all" in sys.argv[1:]:
+        _build_parser(show_all=True).print_help()
+        return
     global _REPORT_DIR, _REPORT, _DRY_RUN, _RUN_T0
     # 同一进程里重复调用 main()（import run 后直接调用的测试/嵌入式用法）
     # 时，模块级 _REPORT 不能累积上一次的 steps/skipped——每次都从空白
@@ -698,6 +727,10 @@ def main():
         html_args.append("--allow-infinite-loop")
         _REPORT["skipped"].append("无限循环拒收（--allow-infinite-loop，预览档）")
     _run_step(gen_hyperframes.main, html_args, "生成 HTML")
+    # 生效的视觉覆写进报告：--set 打错、被 --drift 覆盖、写了个对本片无效的键，
+    # 事后都能在 production_report 里核对，不用靠"我明明改了啊"。
+    if overrides():
+        _REPORT["params"]["template_overrides"] = dict(sorted(overrides().items()))
 
     # 不设自动版式检查：一条 Chrome 度量链实测一次 25-50s，换不来人工预览 3s
     # 就能给出的信息（--until html 就是给人工预览收口的）。

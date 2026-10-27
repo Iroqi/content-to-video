@@ -118,7 +118,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 ## 常用参数
 
-参数只认一处真源：`python scripts/run.py --help`（取值、默认值、用途都在那里）。这里只留两条 `--help` 看不出来的：
+参数只认一处真源：`python scripts/run.py --help`（常用十来条；调参与逃生口在 `--help-all`）。这里只留两条 `--help` 看不出来的：
 
 - `--workers` 同名不同义：`run.py` 的是**渲染抓帧**并行度，`pipeline.py` 的是 **TTS 并发**数。
 - `--until html` 是迭代档（出 HTML 即停、人工预览），`--until check` 停在官方门禁之后，`--until render`（默认）才出成片。这两档没 key 时**自动加 `--no-tts`**（报告记 skipped、产物标 degraded）；不给 `--until` 的定稿路径绝不降级——无声片不是成片。

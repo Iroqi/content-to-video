@@ -24,7 +24,7 @@
 ## 测试
 
 ```bash
-cd tests && python3 -m unittest discover -s .     # 1497 条，约 24 秒（含真渲染一支片）
+cd tests && python3 -m unittest discover -s .     # 1500 条，约 24 秒（含真渲染一支片）
 ```
 
 其中 `test_e2e_render.py` 是**唯一真的出一支 mp4 并看它一眼**的用例：造一份小项目 → 生成 HTML → `npx hyperframes render` → 断言文件存在、时长与时间轴对得上、抽出来的每一帧都不是纯色。它需要 Node 22+、headless Chrome 与带 libx264 的 ffmpeg；缺依赖时**跳过并打印原因**（`CTV_SKIP_E2E=1` 显式跳过，`CTV_E2E_REQUIRED=1` 缺依赖即失败）——CI 的 `e2e` job 就用后者，防止"全绿"再次只证明字符串拼得对。

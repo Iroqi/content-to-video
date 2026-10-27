@@ -187,7 +187,60 @@ class FlagPassthrough(unittest.TestCase):
         --speed 跟着变。
         """
         from _timeline import DEFAULT_GAP
-        self.assertIn("默认 {:g}".format(DEFAULT_GAP), R._build_parser().format_help())
+        # --gap 归在"调参"一类，默认 help 里不列（见 _HIDDEN_OPTIONS），
+        # 所以这条契约要在 --help-all 那一份上验。
+        self.assertIn("默认 {:g}".format(DEFAULT_GAP),
+                      R._build_parser(show_all=True).format_help())
+
+    def test_short_help_stays_one_screen(self):
+        """默认 help 必须一屏读完：常用参数 ≤ 15 条、总行数 ≤ 45。
+
+        证伪：加 --help-all 之前，`run.py --help` 有 72 行，usage 本身占 7 行，
+        读的人要先扫完 25 个旗标才知道从哪开始——而其中 14 个是调参与逃生口。
+        """
+        text = R._build_parser().format_help()
+        self.assertLessEqual(len(text.splitlines()), 45)
+        self.assertLessEqual(text.count("\n  --") + text.count("\n  -h"), 15)
+        self.assertIn("--help-all", text)          # 指针要在，否则等于藏起来
+
+    def test_escape_hatches_hidden_but_still_parse(self):
+        """藏起来的旗标一条都不能少：还要能解析，只是不列在默认 help 里。
+
+        隐藏的判据是"第一次用要不要知道"，不是"重不重要"——把它们从 parser
+        里删掉会让既有用法静默失效，那是另一回事。
+        """
+        short = R._build_parser().format_help()
+        full = R._build_parser(show_all=True).format_help()
+        for opt in sorted(R._HIDDEN_OPTIONS):
+            self.assertNotIn(opt, short, opt)
+            self.assertIn(opt, full, opt)
+        args = R._build_parser().parse_args(
+            ["--source", "s.json", "--workers", "2", "--allow-degraded",
+             "--gap", "0.7", "--drift", "subtle"])
+        self.assertEqual(args.workers, 2)
+        self.assertTrue(args.allow_degraded)
+        self.assertEqual(args.gap, 0.7)
+
+    def test_drift_preset_warns_when_it_overwrites_an_explicit_set(self):
+        """--drift 会覆盖 --set 里同名的键，且必须说出来。
+
+        两条路都写 animation.imageEntrance.drift.*，后写（档）赢；不给提示就是
+        "我明明 --set 了 0.02，成片还是 0.009"。逐段微调仍走 images.json。
+        """
+        import contextlib
+        import io as _io
+        import argparse as _ap
+        import gen_hyperframes as G
+        parser = _ap.ArgumentParser()
+        args = _ap.Namespace(set=["animation.imageEntrance.drift.ratePerSec=0.02"],
+                             drift="boring")
+        err = _io.StringIO()
+        with contextlib.redirect_stderr(err):
+            G._init_visual_knobs(parser, args)
+        self.assertIn("被 --drift boring 覆盖", err.getvalue())
+        from _template import overrides
+        self.assertAlmostEqual(
+            overrides()["animation.imageEntrance.drift.ratePerSec"], 0.003)
 
     def test_fps_default_has_one_source_across_three_entrypoints(self):
         """默认帧率只有一份：run --fps / gen --fps / generate_html(fps=)。

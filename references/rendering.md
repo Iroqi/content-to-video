@@ -106,7 +106,7 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 
 ## 渲染性能：什么时候该动这几个参数
 
-默认值见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写什么时候该动它。
+默认值见 `run.py --help-all`（`--fps 24`、`--workers 4`、`--quality looks`），这里只写什么时候该动它。
 
 - **最优组合别猜，让机器量**：`npx -y hyperframes@0.8.185 benchmark <项目> --runs 3 --json`。下面的经验值换机器、换稿件规模就该重跑。
 - `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
@@ -160,7 +160,7 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 
 ## 渲染性能：什么时候该动这几个参数
 
-默认值见 `run.py --help`（`--fps 24`、`--workers 4`、`--quality looks`）。`--set 键=值`（可重复）改一个模板视觉参数，`--drift off|subtle|boring` 换全片运镜档——**都只在本次进程生效**，定下来的值写回 `scripts/_template.py`。
+默认值见 `run.py --help-all`（`--fps 24`、`--workers 4`、`--quality looks`）。`--set 键=值`（可重复）改一个模板视觉参数，`--drift off|subtle|boring` 换全片运镜档——**都只在本次进程生效**，定下来的值写回 `scripts/_template.py`。
 
 - **最优组合别猜，让机器量**：`npx -y hyperframes@0.8.185 benchmark <项目> --runs 3 --json`。下面的经验值换机器、换稿件规模就该重跑。
 - `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
@@ -171,7 +171,7 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 
 ## 跑起来之后调什么
 
-默认值以 `run.py --help` 为准（`--fps 24`、`--workers 4`、`--quality looks`），本文件不抄第二份。只留三条实测结论：
+默认值以 `run.py --help-all` 为准（`--fps 24`、`--workers 4`、`--quality looks`），本文件不抄第二份。只留三条实测结论：
 
 - **`fps` 是一阶杠杆**：抓帧耗时与帧数线性。快速看画面用 `--fps 12 --quality draft`。
 - **`workers` 8 之前有效、之后饱和**，`run.py` 恒显式传（拿不到 CLI 的自动校准）。低配机器遇 V8 堆崩溃或配图体积大时降到 2；偏慢先去 `out.render.log` 找 `Parallel capture timed out`。

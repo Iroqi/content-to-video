@@ -261,8 +261,3 @@ def _declares_motion(images, sid):
     return False
 
 
-def print_audit(errs, warns, where="台词板"):
-    for e in errs:
-        print(f"[error] {where}：{e}", file=sys.stderr)
-    for w in warns:
-        print(f"[warn] {where}：{w}", file=sys.stderr)

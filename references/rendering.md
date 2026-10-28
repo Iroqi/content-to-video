@@ -90,5 +90,5 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 - `workers`：`run.py` **恒显式传**，拿不到 CLI 的自动校准。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
 - `quality`：五档透传，底层只有三档——`looks` = standard + CRF 16（默认），**`delivery` 就是 high**；`draft` 省约 15%。
 - **固定开销**：每调用一次约白付 8.5s，冷跑多约 6s。先 `--until html` 看够再整片渲一次。
-- **低配机器**：`--low-memory-mode` 把 worker 钉成 1（总内存 ≤8GB 自判），与 `--workers` 冲突时 CLI 赢。**容器读的是宿主机总内存**，小限额容器要显式 `PRODUCER_LOW_MEMORY_MODE=1`。Chrome 超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
+- **低配机器**：`--low-memory-mode` 把 worker 钉成 1（总内存 ≤8GB 自判），与 `--workers` 冲突时 CLI 赢。**容器读的是宿主机总内存**，小限额容器要显式 `PRODUCER_LOW_MEMORY_MODE=true`（CLI 的环境变量，取值是 `true`/`false`，写 `1` 不认）。Chrome 超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 

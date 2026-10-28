@@ -481,8 +481,10 @@ class SnapshotCommandAssembly(unittest.TestCase):
             self.assertIsInstance(run.call_args[0][0], str)
             line = run.call_args[0][0]
             self.assertIn("/c", line)
+            # `"0,3.5"` 同时是命令体里最后一个参数：末帧由官方 `--end`（默认 true）
+            # 补，命令行里不再有 --no-end，收尾引号必须紧贴它。
             for token in ('"snapshot"', '"proj"', '"--against"', '"out.mp4"',
-                          '"--at"', '"0,3.5"', '"--no-end"'):
+                          '"--at"', '"0,3.5"'):
                 self.assertIn(token, line)
             # 字符串收尾于命令体引号：后面不再拖任何参数
             self.assertTrue(line.endswith('"'))

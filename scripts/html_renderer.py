@@ -2599,6 +2599,62 @@ def _settle_rhythm(a_img, ordinal):
                        a_img.get("rhythm"), ordinal)
 
 
+def _frame_arc_lines(rc, card, frame_sel, at, duration):
+    """容器入场的**副轴**：与主轴同起点、同时长，只换一条缓动。
+
+    前沿动效的位移不沿坐标轴走直线——迪士尼十二条里那条 *Arcs*，现代 UI（Apple 的
+    widget 位移、Framer 的 layout animation、Material 的 container transform）也全是
+    弧线：有机体的运动没有一个是笔直的，直线位移读出来是"被程序挪过去的"。
+
+    怎么造弧不用 `MotionPath` 插件：**两条轴各配一条缓动**。位移写成
+
+        P(t) = (A·(1 − f_main(t)), B·(1 − f_sub(t)))
+
+    两轴同缓动时 `f_main ≡ f_sub`，P(t) 退化成起点到终点的直线（弯曲度恒为 0）；
+    换一条缓动，合成路径立刻离开那条弦。主轴吃"重"的那条（`.out`：前段猛冲、后段
+    落定），副轴吃中段最快的那条（`sine.inOut`：两端慢、中段快）——于是起手先沿主轴
+    冲、中段横向扫过、末段沿主轴落定，一条 C 形弧。
+
+    两条补间**同 `at` 同 `duration`**，不是"先挪过去再挪回来"的两拍：那是折线，弧顶
+    会贴到端点上（`tests/test_motion_design.py` 的 `FrameArcPath` 按 GSAP 实采样钉住
+    弧顶必须落在行程中段）。
+
+    **哪些地方不走弧**（写在这里是因为"加了弧"比"没加弧"更容易被当成进步）：
+
+    - 标题与副标题：揭示边的语义要求**文字盒的左缘站定不动**，加横向分量就把它
+      自己拆了（`_title_rhythm` 里"缩放档为什么被删"是同一条理由）。
+    - 字幕换句：位移只写在列容器上，行自己一条补间都没有，加副轴就是给每句加一条
+      独立的飞行动作（`references/motion.md`「换句是滚动」判据一）。
+    - Ken Burns：匀速是硬约束，缓动会被读成有意图的镜头调度（`_image_drift_lines`）。
+
+    **幅度只有一个真源**（`arc.x`），`arc.rhythm` 只轮换向（连续两张图不朝同一侧
+    弯，理由见 `_image_drift_lines._aim` 的"四张一轮走遍四个象限"）。幅度也轮换一份
+    的话，`arc.x = 0` 就关不掉这层——"关不掉"的旋钮等于没有旋钮（同样的理由让
+    `_title_rhythm` 的行程可以分档：标题每一档的"多重"本身就是意图的一部分，弧的
+    幅度不是）。
+
+    `x` 为 0（或模板没写 `arc`）时整条不生成——那是"明确不要这层"，不是退化。
+    """
+    a_img = rc.anim["imageEntrance"]
+    arc = a_img.get("arc")
+    if not arc:
+        return []
+    amp = float(arc.get("x") or 0.0)
+    if abs(amp) < 1e-9:
+        return []
+    pick = _cycle_pick({"dir": 1.0}, arc.get("rhythm"),
+                       getattr(card, "image_ordinal", 0))
+    x = amp * float(pick.get("dir") or 1.0)
+    if abs(x) < 1e-9:
+        return []
+    # 缺 `ease` 时用模板声明的缺省；写了就用写的那份——**不替作者改**：副轴缓动若与
+    # 主轴相同，弯曲度恒为 0（写了个 arc 却什么也没改），静默换成另一条曲线正是
+    # 「以为改了其实没改」，让 `tests/test_motion_design.py` 那边红出来才是对的。
+    ease = arc.get("ease") or "sine.inOut"
+    return [f'tl.from("{frame_sel}",{{x:{num_fmt(x)},'
+            f'duration:{duration:.2f},ease:"{ease}"}},{at:.2f})']
+
+
 def _image_settle_lines(rc, card, lead):
     """内容层（图本体）的收拢落位：从"略大、略偏"收拢到精确位置。
 
@@ -2787,12 +2843,19 @@ def _card_timeline_lines(rc, card):
         # 两格各入各的会读成"两张无关的图先后到场"，而它们要对照着看。
         _frame_sel = (f"#cmp-{sid}" if getattr(card, "layout", None) == "compare"
                       else f"#img-{sid}")
+        # 容器层那条补间的起点与时长提出来：副轴（弧）必须与它**同一个锚、同一段
+        # 时长**，两处各算一份"起点+时长"就会漂（`_frame_arc_lines`）。
+        _frame_dur = (a_img["duration"]
+                      * max(0.0, _unit_frac(a_img.get("frameFrac", 1.0))) * _k)
+        _frame_at = s + a_img["startDelay"] * _k
         lines.append(
             f'tl.from("{_frame_sel}",{{opacity:0,y:{a_img["vert_y"]},'
-            f'duration:{a_img["duration"] * max(0.0, _unit_frac(a_img.get("frameFrac", 1.0))) * _k:.2f},'
+            f'duration:{_frame_dur:.2f},'
             f'ease:"{a_img["ease"]}"}},'
-            f'{s + a_img["startDelay"] * _k:.2f})'
+            f'{_frame_at:.2f})'
         )
+        # 副轴：同一段入场再落一条异缓动的横向补间，合成路径是弧而不是竖直直线。
+        lines.extend(_frame_arc_lines(rc, card, _frame_sel, _frame_at, _frame_dur))
         # 同一个 guard 内挂收拢与持续运镜：能配图入场的才有资格演这两层。
         # 顺序不可换——运镜末尾那条钉住补间必须最后落地（见 _image_settle_lines）。
         lines.extend(_image_settle_lines(rc, card, lead))

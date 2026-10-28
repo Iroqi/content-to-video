@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import wave
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _timeline import validate_speed, needs_speed_change  # noqa: E402
@@ -424,12 +425,10 @@ def concat_audio(ffmpeg_path, file_list, gap_sec, out_path):
     # 沿用至今：喂给串接的输入必须同格式）。
     # 目标格式取语音句里的多数派，位深一律 16-bit（apply_speed 产物与静音文件
     # 都是 16-bit）。不写死 24000：--speed 1.0 时句子保持 TTS 原生格式（如 44.1k）。
-    counts = {}
-    for fmt in (_wav_format(p) for p in file_list):
-        if fmt:
-            key = (fmt[0], fmt[1], 2)
-            counts[key] = counts.get(key, 0) + 1
-    target_fmt = (max(counts.items(), key=lambda kv: kv[1])[0]
+    counts = Counter((fmt[0], fmt[1], 2)
+                     for fmt in (_wav_format(p) for p in file_list) if fmt)
+    # most_common 与 max(items, key=计数) 同为"平票取先出现者"，换手不改判据
+    target_fmt = (counts.most_common(1)[0][0]
                   if counts else (DEFAULT_SAMPLE_RATE, 1, 2))
 
     expanded = []

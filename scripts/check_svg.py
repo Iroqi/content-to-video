@@ -80,23 +80,17 @@ def slot_sizes():
     return {"portrait": get_image_box("portrait"), "landscape": get_image_box("landscape")}
 
 
-def _margin_pair():
-    """画布页四周留白：竖屏 = segCard 左右内边距，横屏 = layout.landscape.margin。
+def safe_margins():
+    """一次取齐两画幅的安全边距 {portrait, landscape}。
 
     竖屏走 `_template.seg_card_pad_x`（与 html_renderer 算内容盒同一个函数）：
     自己 split padding 简写会在模板改成 `40px 50px` 时与渲染端错开。
-    """
-    return {"portrait": int(seg_card_pad_x()),
-            "landscape": load_template()["layout"]["landscape"]["margin"]}
-
-
-def safe_margins():
-    """一次取齐两画幅的安全边距 {portrait, landscape}。
 
     必须是函数不能是模块常量：CLI 的 `--set` 覆盖层到解析参数才生效，import 期
     定死会让"生成按新边距、门禁按旧边距"悄悄自证清白（模板读取有缓存，无开销）。
     """
-    return _margin_pair()
+    return {"portrait": int(seg_card_pad_x()),
+            "landscape": load_template()["layout"]["landscape"]["margin"]}
 
 
 # 文字填充色的唯一判据是对页底（主题渐变各档 stop）的对比度：按最坏一档算，

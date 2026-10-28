@@ -38,7 +38,10 @@ _EASE_RE = re.compile(r"^([a-zA-Z0-9]+)(?:\(([^)]*)\))?(?:\.([a-zA-Z]+))?(?:\(([
 #   小写族名 + .in/.out/.inOut   power2.in 认、Power2.in 不认（后者回落缺省缓动）
 #   规范类名 + .easeIn/.easeOut/.easeInOut   Bounce.easeOut 认、bounce.easeOut 不认
 # 方向按**大小写精确**匹配：.inOut 认、.inout 不认（后者同样回落缺省缓动）。
-_DIRS = {"in": "in", "out": "out", "inOut": "inOut"}
+# 现代后缀只这三个方向，且**大小写精确**匹配（.inOut 认、.inout 不认）；
+# 恒等映射写成 frozenset 而不是 `{"in":"in",…}`：取值就是后缀本身，字典那张
+# 表会让人以为两者可以不一样。
+_DIRS = frozenset(("in", "out", "inOut"))
 _OLD_DIRS = {"easeIn": "in", "easeOut": "out", "easeInOut": "inOut"}
 # 小写族名 → GSAP 注册的规范类名（旧类名写法只认这一套精确拼写：Back 认、BACK 不认）
 _CANONICAL = {"linear": "Linear", "power0": "Power0", "power1": "Power1",
@@ -96,7 +99,7 @@ def split_ease(spec):
     elif dir_raw in _DIRS:
         if family != family.lower():   # 现代后缀只认小写族名（Power2.in 解析不出）
             return None
-        mod = _DIRS[dir_raw]
+        mod = dir_raw
     elif _CANONICAL.get(family.lower()) == family and dir_raw in _OLD_DIRS:
         mod = _OLD_DIRS[dir_raw]       # 旧类名后缀只认规范类名（bounce.easeOut 解析不出）
     else:

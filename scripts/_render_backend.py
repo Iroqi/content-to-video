@@ -622,10 +622,12 @@ def snapshot_frames(project, video_path, times, out_dir, command=None):
     # 子命令参数，那些参数就落在 cmd.exe 自己的 argv 里、进不了 /c 的命令体——
     # 症状是 snapshot 的 --against/--at 整批丢失，取帧按默认值跑。顺序只能是
     # "拼完再解析"（build_check_command 一直是这个顺序，这里原先不是）。
+    # 不传 `--no-end`：官方 `--end` 默认 true，会额外补一张"时间线末帧"（且保证
+    # 可读——比自己猜 `dur - eps` 稳）。传 --no-end 反而只留 --at 那几张，末帧
+    # 永远不在产物里。--at 这份时刻表本身仍不踩末秒（末秒多是转场/空档）。
     args = cmd + ["snapshot", project, "-o", out_dir,
                   "--against", video_path,
-                  "--at", ",".join(f"{t:g}" for t in times),
-                  "--no-end"]
+                  "--at", ",".join(f"{t:g}" for t in times)]
     args = resolve_command(args)
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()

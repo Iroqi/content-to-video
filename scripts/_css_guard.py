@@ -69,14 +69,17 @@ def transform_rules(css):
         # `/* 说明 */\n__CTV_ROOT_VARS__\n\n.seg-title{…}`，前一行是占位符而不是选择器；
         # 真正的选择器永远紧贴 `{`，所以整段按行取末尾即可（`:is(a,\n b)` 这类跨行
         # 括号写法本模板不用，真用了也只会少认一个选择器、不会误报）。
-        head = head.splitlines()[-1].strip() if head.splitlines() else head
+        # head 非空由上方 `if not head` 保证，非空串 splitlines() 恒有末行
+        head = head.splitlines()[-1].strip()
         if not head or _PLACEHOLDER_RE.search(head):
             continue
         if not _TRANSFORM_DECL_RE.search(body):
             continue
-        # 只留 transform 那一条声明，报错时给人看的就是"这一行干了什么"
+        # 只留 transform 那一条声明，报错时给人看的就是"这一行干了什么"。
+        # 判据复用 _TRANSFORM_DECL_RE（match 只试位置 0，`^` 分支即等价于
+        # `^\s*transform`）：另写一条正则等于给"是不是 transform 声明"留两份口径。
         decl = next((d.strip() for d in body.split(";")
-                     if re.match(r"^\s*transform\s*:", d, re.I)), "")
+                     if _TRANSFORM_DECL_RE.match(d.strip())), "")
         for sel in selector_parts(head):
             out.setdefault(sel, decl)
     return out
@@ -102,9 +105,10 @@ def transform_tween_kind(sel):
     - None：SVG 内部选择器（`#img-x svg …`）不归 CSS 管（SVG 的 transform 是属性
       或 CSS transform 的另一套子集，且模板 CSS 够不着内联 SVG 副本）。
     """
-    if "svg" in sel.lower().split():
-        return None
-    if re.search(r"\bsvg\b", sel):
+    # 只留一条判据，且必须 `re.I`：原先那条 `sel.lower().split()` 是大小写不敏感
+    # 的，而裸 `\bsvg\b` 不是——删掉前者会让 `SVG` 选择器从"不归 CSS 管"变成
+    # "always"，那是悄悄改判据。带 re.I 之后它包含前者的全部命中。
+    if re.search(r"\bsvg\b", sel, re.I):
         return None
     return "maybe" if sel.rstrip().endswith("*") else "always"
 

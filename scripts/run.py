@@ -203,6 +203,32 @@ def _official_gate(project, command):
     return findings
 
 
+def _run_perceptual(project, tm, aspect, command):
+    """跑观感门禁，把判词写进制作报告并打到 stdout（只报不拦）。
+
+    `--until html` / `check` / 定稿渲染三档共用这一份。三档都调它，是因为
+    "在 html 与 render 分支各贴一段、漏了 check" 正是本轮要修的那种失效：
+    漏贴不报错，只是那一档的判词凭空消失、报告里连一条 skipped 都没有。
+    三档的帧都取自同一份已生成的 HTML，量的是编排本身。
+    """
+    _r = perceptual.run_gate(project, tm, os.path.join(project, "perceptual"),
+                             aspect=aspect, command=command)
+    _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
+    if _r.get("error"):
+        _REPORT["skipped"].append(f"观感门禁（取帧失败：{_r['error'][:120]}）")
+        print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)
+        return
+    _issues = _r["issues"]
+    print(f"[run] 观感门禁：{_r['frames']} 帧，{len(_issues)} 条判词，"
+          f"拼图 {_r['contact_sheet']}")
+    for _it in _issues:
+        print(f"[run][warn] {_it['kind']} @ {_it['seg']}: {_it['msg']}",
+              file=sys.stderr)
+    if not _issues:
+        print("[run] 空页 / 死帧 / 换页时序三项都过——但判词只说明"
+              "『没有明显坏』，好不好看仍要翻那张拼图。")
+
+
 def _load_manifest_or_exit(manifest_path):
     """读并校验 timing_manifest.json，坏文件报成人话而不是 traceback。
 
@@ -285,7 +311,7 @@ _HIDDEN_OPTIONS = frozenset({
     "--project", "--workers", "--low-memory-mode", "--no-low-memory-mode",
     "--allow-degraded", "--allow-best-effort", "--placeholder-missing",
     "--on-fail", "--drift", "--allow-ease", "--allow-infinite-loop",
-    "--voice-style", "--gap", "--check-frames",
+    "--voice-style", "--gap", "--check-frames", "--slot-no-image",
 })
 
 
@@ -398,6 +424,11 @@ def _build_parser(show_all=False):
                         help="只预检 TTS 链路（分句/段检测/稿件契约），不合成、"
                              "不写任何文件；--until 在 dry-run 下不生效（HTML/"
                              "渲染步骤整体跳过）")
+    parser.add_argument("--slot-no-image", action="store_true",
+                        help="降级档（没有生图能力时用）：槽位版式的段缺图不再空着"
+                             "一个图槽，改为句子流铺满内容区，照旧能出成片。"
+                             "只影响槽位版式——满幅页（canvas/plate）缺图没有图就没有"
+                             "画面，照旧拦下。画面会明显素一些，报告点名放行的段")
     parser.add_argument("--perceptual", action="store_true",
                         help="跑观感门禁：按段取帧，量「图槽是不是空的 / 画面有没有"
                              "长时间不动 / 换页与旁白对不对得上」，并把 contact sheet "
@@ -614,13 +645,27 @@ def main():
         _layout_by_sid = {s["id"]: seg_layout(s) for s in _tm["segments"]}
         _canvas_missing = [s for s in missing_keys
                            if _layout_by_sid.get(s) in FULL_BLEED_LAYOUTS]
-        print("[run] 以下段落还没有定稿配图："
-              + ", ".join(missing_keys) + "。\n"
-              "请按第 3 步补图：ImageGen 生图、手绘 SVG 矢量示意图"
-              "，把文件放进 "
-              f"{images_dir}。\n"
-              f"然后在 {images_json} 写好各段映射后重跑本命令。",
-              file=sys.stderr)
+        # --slot-no-image：槽位段缺图时 gen 真的不画图槽（句子流铺满内容区），
+        # 所以那些段不再算"待补图"。这里若照旧算进去，定稿路径会 exit 2 把这条
+        # 降级路整条堵死——而 SKILL.md 正是把它当成"没有生图能力时怎么出片"来
+        # 写的。满幅页（canvas/plate）缺图照旧拦：那两页没有图就没有画面。
+        # 配图覆盖率仍按缺图记（_REPORT["images"] 已在上方定稿），不放行的是
+        # 拦截，不是事实。
+        if args.slot_no_image:
+            _slot_missing = [s for s in missing_keys if s not in _canvas_missing]
+            if _slot_missing:
+                print("[run] --slot-no-image：" + ", ".join(_slot_missing)
+                      + " 缺图不阻断——槽位段改由句子流铺满内容区（画面会素一些，"
+                        "报告里点名这几段）。", file=sys.stderr)
+            missing_keys = _canvas_missing
+        if missing_keys:
+            print("[run] 以下段落还没有定稿配图："
+                  + ", ".join(missing_keys) + "。\n"
+                  "请按第 3 步补图：ImageGen 生图、手绘 SVG 矢量示意图"
+                  "，把文件放进 "
+                  f"{images_dir}。\n"
+                  f"然后在 {images_json} 写好各段映射后重跑本命令。",
+                  file=sys.stderr)
         if _canvas_missing and (args.placeholder_missing or args.draft):
             print("[run] 其中 " + ", ".join(_canvas_missing)
                   + " 是满幅图版式（canvas/plate）且还没有配图：本次用占位 SVG 先把 HTML 生成出来"
@@ -638,13 +683,13 @@ def main():
             _write_report(_report_path())
             _print_report_summary()
             sys.exit(2)
-        if args.until != "render" or args.draft:
-            print("[run] 继续生成 HTML 供预览（渲染前必须补齐上面这些段）。",
-                  file=sys.stderr)
-        else:
+        if missing_keys and args.until == "render" and not args.draft:
             _write_report(_report_path())
             _print_report_summary()
             sys.exit(2)
+        if missing_keys:
+            print("[run] 继续生成 HTML 供预览（渲染前必须补齐上面这些段）。",
+                  file=sys.stderr)
 
     # TTS 的 silence fallback 不是“渲染成功”就能掩盖的降级状态。默认阻断交付；
     # 显式 --allow-degraded 才允许继续，且 production_report 会保留可机器读取的
@@ -720,6 +765,12 @@ def main():
         html_args += ["--set", pair]
     if args.drift:
         html_args += ["--drift", args.drift]
+    # 无图降级档：判据只有 gen 那一份（它决定槽位段出不画图槽），这里只透传，
+    # 不在这里另判一次"哪些段算缺图"。
+    if args.slot_no_image:
+        html_args.append("--slot-no-image")
+        _REPORT["skipped"].append(
+            "槽位段缺图放行（--slot-no-image：句子流铺满内容区，画面更素）")
     if args.allow_ease:
         html_args.append("--allow-ease")
         _REPORT["skipped"].append("ease 钉固目录（--allow-ease，预览档）")
@@ -744,18 +795,7 @@ def main():
         # 本身而不是编码质量——迭代期"这一页根本没内容"就该在这里被发现，
         # 而不是等渲染完一支片子。
         if args.perceptual:
-            _perc_dir = os.path.join(project, "perceptual")
-            _r = perceptual.run_gate(project, _tm, _perc_dir, aspect=args.aspect,
-                                     command=_HF_COMMAND)
-            _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
-            if _r.get("error"):
-                print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)
-            else:
-                print(f"[run] 观感门禁：{_r['frames']} 帧，{len(_r['issues'])} 条判词，"
-                      f"拼图 {_r['contact_sheet']}")
-                for _it in _r["issues"]:
-                    print(f"[run][warn] {_it['kind']} @ {_it['seg']}: {_it['msg']}",
-                          file=sys.stderr)
+            _run_perceptual(project, _tm, args.aspect, _HF_COMMAND)
         _write_report(_report_path())
         print(f"[run] 已生成 {os.path.join(project, 'index.html')}。"
               "先在浏览器里打开它确认版式和配图，定稿后去掉 --until 直接渲染。",
@@ -778,6 +818,10 @@ def main():
     if args.until == "check":
         issues = _official_gate(project, _HF_COMMAND)
         _REPORT["skipped"].append("render（--until check）")
+        # --perceptual 在这一档同样成立：HTML 已生成、帧取得出来，而 check 只判
+        # "能不能渲"、判不了"页面上有东西没有"。写在落报告之前，判词才进得去。
+        if args.perceptual:
+            _run_perceptual(project, _tm, args.aspect, _HF_COMMAND)
         _write_report(_report_path())
         for sev, kind, msg in issues:
             print(f"[run][{sev}] {kind}: {msg}", file=sys.stderr)
@@ -903,27 +947,10 @@ def main():
     # ── 观感门禁（--perceptual）：唯一一道在看画面的检查 ────────────────
     # 前面所有门禁都在看结构：official check 判"能不能渲"，成片时长契约判
     # "演完没有"，`--check-frames` 只是把帧递给人。而"这一页在屏幕上到底
-    # 有没有东西、有没有替旁白动过"从来没有人量过——这正是本仓库与 3b1b 式
-    # 讲解最大的差距，也是它最不该缺的一道。默认关（要 Node + Chrome + Pillow），
-    # `--perceptual` 打开；只报不拦，报告进 production_report 的 perceptual 字段。
+    # 有没有东西"只有这一道在量。默认关（要 Node + Chrome + Pillow），
+    # `--perceptual` 打开；只报不拦。
     if args.perceptual:
-        _perc_dir = os.path.join(project, "perceptual")
-        _r = perceptual.run_gate(project, _tm, _perc_dir, aspect=args.aspect,
-                                 command=_HF_COMMAND)
-        _REPORT["perceptual"] = {k: v for k, v in _r.items() if k != "segs"}
-        if _r.get("error"):
-            _REPORT["skipped"].append(f"观感门禁（取帧失败：{_r['error'][:120]}）")
-            print(f"[run][warn] 观感门禁未完成：{_r['error']}", file=sys.stderr)
-        else:
-            _has = _r["issues"]
-            print(f"[run] 观感门禁：{_r['frames']} 帧，{len(_has)} 条判词，"
-                  f"拼图 {_r['contact_sheet']}")
-            for _it in _has:
-                print(f"[run][warn] {_it['kind']} @ {_it['seg']}: {_it['msg']}",
-                      file=sys.stderr)
-            if not _has:
-                print("[run] 空页 / 死帧 / 换页时序三项都过——但判词只说明"
-                      "『没有明显坏』，好不好看仍要翻那张拼图。")
+        _run_perceptual(project, _tm, args.aspect, _HF_COMMAND)
 
     print(f"\n[run] 完成。成片：{out_video}", flush=True)
     _write_report(_report_path())

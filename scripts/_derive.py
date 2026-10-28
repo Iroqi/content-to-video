@@ -276,24 +276,6 @@ def js_expr(src, params, where="expr"):
     return go(node)
 
 
-def js_number(v):
-    """数值 → JS 字面量。**返回数字**不是字符串：写进 JSON 后由调用方按数字拼
-    进 JS（属性值必须是有限数，契约层已保证，不需要 JSON 字符串再转一手）。"""
-    return round(float(v), 4)
-
-
-def js_css_attr_value(v):
-    """数值 → 写进 `setAttribute` 的串（四位小数足够一个像素以下的精度）。"""
-    return format_value(v)
-
-
-
-def ease_progress(spec, default="power2.out"):
-    """→ f(t01)∈[0,1]（可能过冲）。曲线真源在 `_ease.curve`，这里只补缺省。"""
-    from _ease import curve
-    return curve(spec, default)
-
-
 class Derived:
     """编译后的 `derive` 块。所有方法都是纯函数（无状态、无缓存、乱序调用幂等）。"""
 
@@ -315,14 +297,6 @@ class Derived:
                                     "ease": st.get("ease", ""),
                                     "duration": st["span"]})
                 cur = st["to"]
-
-    def keys(self):
-        return sorted(self.params)
-
-    def span(self):
-        """这个块需要的总时长（秒）：最长那一拍的起点 + 时长，供出窗自查。"""
-        return max((b["span"] for s in self._by_param.values() for b in s),
-                   default=0.0)
 
     def env_at(self, els):
         """`els` = 已过缓动的进度列表（每拍一个）→ 这一帧的 {参数名: 值}。
@@ -390,15 +364,8 @@ def compile_derive(block, dflt_duration=0.6, where="derive"):
     return Derived(params, steps, binds, dflt_duration)
 
 
-def value_at(tracks, t01, dflt_ease="power2.out"):
-    """单拍在进度 t01 处的参数值（供 `check_svg` 的自查用：它只问"端点处几何对不对"）。"""
-    e = ease_progress(tracks["ease"] or dflt_ease, dflt_ease)(t01)
-    return tracks["a"] + (tracks["b"] - tracks["a"]) * e
-
-
 def format_value(v):
-    """数值 → SVG 属性串。**不用** `num_fmt`：那个写给人读（会带千分位），
-    属性值必须是纯数字。保留 4 位小数、去掉尾零（0.0001px 以下没有意义，
-    却会让属性串长一倍）。"""
+    """数值 → SVG 属性串：保留 4 位小数、去掉尾零（0.0001px 以下没有意义，
+    却会让属性串长一倍），并把 `-0` 归一成 `0`（负零进 SVG 属性没有意义）。"""
     s = f"{v:.4f}".rstrip("0").rstrip(".")
     return "0" if s in ("", "-0") else s

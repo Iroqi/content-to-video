@@ -176,18 +176,29 @@ def raster_size(path):
     return None
 
 
+def _fit_ratios(box, size):
+    """两个方向的适配比 (bw/sw, bh/sh)；比不了返回 (None, None)。
+
+    cover 的放大倍率与被裁占比都从这两个比算出来，前置校验也就只该有一份：
+    各写一遍 `min(...) <= 0` 的代价是改一边漏一边，一个函数悄悄开始接受 (0,0)。
+    """
+    if not box or not size:
+        return None, None
+    if min(box[0], box[1], size[0], size[1]) <= 0:
+        return None, None   # 任一边为 0/负 → 没有可比的比例（(0,0) 这种哨兵值也是）
+    return (float(box[0]) / float(size[0]), float(box[1]) / float(size[1]))
+
+
 def cover_scale(box, size):
     """`object-fit: cover` 把 size 铺进 box 时的放大倍率（1.0 = 刚好铺满）。
 
     cover 取两个方向的较大者：一边刚好贴住，另一边溢出被裁。小于 1 表示素材
     比框大（缩小，不糊）。box 或 size 缺失返回 None——没得比就不比。
     """
-    if not box or not size:
+    rw, rh = _fit_ratios(box, size)
+    if rw is None:
         return None
-    if min(box[0], box[1], size[0], size[1]) <= 0:
-        return None   # 任一边为 0/负 → 没有可比的比例（(0,0) 这种哨兵值也是）
-
-    return max(float(box[0]) / float(size[0]), float(box[1]) / float(size[1]))
+    return max(rw, rh)
 
 
 def upscale_note(src, size, box):
@@ -219,12 +230,9 @@ def cover_crop_fraction(box, size):
 
     box 或 size 缺失、任一边为 0/负 返回 None——没得比就不比。
     """
-    if not box or not size:
+    r_w, r_h = _fit_ratios(box, size)
+    if r_w is None:
         return None
-    if min(box[0], box[1], size[0], size[1]) <= 0:
-        return None   # 任一边为 0/负 → 没有可比的比例（(0,0) 这种哨兵值也是）
-    r_w = float(box[0]) / float(size[0])
-    r_h = float(box[1]) / float(size[1])
     return 1.0 - min(r_w, r_h) / max(r_w, r_h)
 
 

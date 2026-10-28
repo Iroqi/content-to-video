@@ -541,6 +541,14 @@ _TEMPLATE_JSON = r'''
       "ease": "power2.out",
       "startDelay": 0.2,
       "vert_y": 40,
+      "arc": {
+        "x": 16,
+        "ease": "sine.inOut",
+        "rhythm": [
+          {"dir": 1},
+          {"dir": -1}
+        ]
+      },
       "frameFrac": 0.55,
       "settle": {
         "startFrac": 0.25,

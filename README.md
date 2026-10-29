@@ -57,7 +57,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 
 预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，模板自带入场动画，先把链路跑通。
 
-四档停止点：
+五个停止点（`--until` 的全部取值）：
 
 ```bash
 python scripts/run.py --source S -o OUT --until tts      # 只配音

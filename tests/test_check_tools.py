@@ -307,6 +307,33 @@ class SvgChecker(unittest.TestCase):
         errs, _ = self.run_check(svg)
         self.assertTrue(any("越出画布" in e for e in errs), errs)
 
+    def test_multiline_text_not_falsely_oob(self):
+        """回归：多行文字块不能把各行拼成一行估宽。
+
+        88923ec 让 `_text_oob` 用 `itertext` 拼接的整段内容估字宽，两行各 8 字的
+        tspan 块被当成"一行 16 字"（加上标签间排版空白更离谱），贴边多行块被
+        误报"越出画布右边缘"。实际每行只有 8 字、整体在画布内，必须零 error。
+        """
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 735">'
+               '<style>text{font-family:"s"}</style>'
+               '<text x="40" y="100" font-size="36" fill="#dbe6f5">'
+               '<tspan>一二三四五六七八</tspan>'
+               '<tspan x="40" y="150">一二三四五六七八</tspan>'
+               '</text></svg>')
+        errs, _ = self.run_check(svg)
+        self.assertFalse(any("越出画布" in e for e in errs), errs)
+
+    def test_multiline_text_oob_still_caught_per_line(self):
+        """多行块逐行取宽后，真正探出画布的行照样拦（不是修过头把横向判据放掉）。"""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 735">'
+               '<style>text{font-family:"s"}</style>'
+               '<text x="40" y="100" font-size="60" fill="#dbe6f5">'
+               '<tspan>一二三四五六七八九十一二三四五六</tspan>'
+               '<tspan x="40" y="180">一二三四五六七八九十一二三四五六</tspan>'
+               '</text></svg>')
+        errs, _ = self.run_check(svg)
+        self.assertTrue(any("文字越出画布" in e for e in errs), errs)
+
     def test_full_bleed_plate_is_not_oob(self):
         # 满幅背景 rect 本来就是铺满，不算越界（比例检查已另行把关）
         errs, _ = self.run_check(GOOD.replace(

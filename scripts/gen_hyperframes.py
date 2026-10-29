@@ -7,7 +7,6 @@ images.json 字段见 references/imagery.md；完整参数列表见 ``--help``�
 import argparse
 import filecmp
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -1538,7 +1537,6 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
     # 段是 manifest 段 + images.json 那份条目（判据要的三个键，见 judging_row）。
     merged = [judging_row(seg, images) for seg in segments]
     for sid, prev_sid in carry_pages(images, merged).items():
-        seg = next(x for x in segments if x["id"] == sid)
         prev = next(x for x in segments if x["id"] == prev_sid)
         entry = images[sid]
         prev_entry = images.get(prev_sid) or {}

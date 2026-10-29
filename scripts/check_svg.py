@@ -116,7 +116,8 @@ def _is_wide(ch):
 def est_text_width(content, px):
     """图内文字的估算宽度（px）：等宽字符 1em、拉丁 0.55em 的粗估。
 
-    只用于端点落点判断（多算只会少报 warn，安全方向）；越界判定刻意不用它。
+    同时供端点落点（多算只会少报 warn，安全方向）与文字越界（_text_line_spans
+    按行取宽，把多行块当一行算才真的会误报）使用。
     """
     return px * sum(1.0 if _is_wide(ch) else 0.55 for ch in content)
 
@@ -283,11 +284,64 @@ def _shape_bounds(el, tag):
     return None if box is None else (box[0], box[2], box[1], box[3])
 
 
-def _text_oob(el, inherited, vb_w, vb_h, content=""):
+def _text_line_spans(el, px, anchor, fallback_x):
+    """把 <text> 按"行"拆开后逐行估宽，返回每行的横向区间 [(left, right), ...]。
+
+    行按 **\n 与带 y 的 tspan 边界**切：整段 `itertext` join 再估宽，会把"两行
+    8 字"估成"一行 16 字"——多行块贴着画布右缘就被误报探出（88923ec 引入，
+    实测两行 8 字被估成 926px 宽）。标签之间的纯排版空白不是渲染内容，不计入
+    行宽。每行的 x 取该行 tspan 自己的 x（若有），否则继承父 <text> 的 x；
+    行拿不到 x 时跳过该行（与旧行为一致：只有纵向判据）。嵌套 tspan 按一级
+    处理：带 y 才切新行，否则并入当前行（粗估口径，够用）。
+    """
+    spans = []
+    x = fallback_x
+    cur = []
+
+    def flush():
+        s = "".join(cur)
+        cur.clear()
+        if not s.strip() or x is None:
+            return
+        w = est_text_width(s, px)
+        if anchor == "end":
+            spans.append((x - w, x))
+        elif anchor == "middle":
+            spans.append((x - w / 2, x + w / 2))
+        else:
+            spans.append((x, x + w))
+
+    def add_run(s):
+        if not s:
+            return
+        for seg in s.split("\n"):
+            cur.append(seg)
+            flush()
+
+    add_run(el.text)
+    for child in el:
+        if _local(child.tag) == "tspan" and child.get("y") is not None:
+            flush()   # 带 y 的 tspan = 新渲染行；行 x 以它自己的 x 为准
+            if child.get("x") is not None:
+                x = _parse_num(child.get("x"))
+        add_run(child.text)
+        for gc in child:
+            if _local(gc.tag) == "tspan" and gc.get("y") is not None:
+                flush()
+            add_run(gc.text)
+            if gc.tail:
+                add_run(gc.tail)
+        if child.tail:
+            add_run(child.tail)
+    flush()
+    return spans
+
+
+def _text_oob(el, inherited, vb_w, vb_h):
     """文字越界：完整包围盒（纵向基线上下 + 横向按锚点展开的字宽估算）必须落在
     viewBox 内，否则被 cover 裁切 / 出画。返回错误文案或 None。
 
-    横向三档锚点都查：
+    横向三档锚点都查（`_text_line_spans` 按行拆、逐行取宽）：
     - start  向右展开 [x, x+est_w]
     - end    向左展开 [x-est_w, x]   ← 本批日报 seg2/seg3/seg7 的条形图标签就是
                                       锚点在画布内、文字向左伸出左缘被裁，旧规则只查
@@ -316,13 +370,12 @@ def _text_oob(el, inherited, vb_w, vb_h, content=""):
     if x is not None and px is not None:
         # 字宽粗估 + 三档锚点展开：锚点进了画布、文字整体却探出去的截断也能抓到。
         anchor = inherited(el, "text-anchor") or "start"
-        est_w = est_text_width(content, px)
-        if anchor == "end":
-            left, right = x - est_w, x
-        elif anchor == "middle":
-            left, right = x - est_w / 2, x + est_w / 2
-        else:
-            left, right = x, x + est_w
+        spans = _text_line_spans(el, px, anchor, x)
+        if not spans:
+            return None   # 每行都读不到 x：横向无据可判，纵向已查过
+        left = min(l for l, _ in spans)
+        right = max(r for _, r in spans)
+        est_w = max(r - l for l, r in spans)
         if left < -1e-6 or right > vb_w + 1e-6:
             side = "左" if left < 0 else "右"
             # 旧行为分支：start 锚点坐标本身越过左缘——沿用原措辞，
@@ -629,7 +682,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             # （width/height 与 viewBox 差一个倍数的缩放写法）去比会把贴边裁掉的
             # 字放行——与图元越界那条（vb_w/vb_h）同一坐标系，不在这里另开一套。
             if vb_w and vb_h and not has_transform_ancestor(el):
-                msg = _text_oob(el, inherited, vb_w, vb_h, content)
+                msg = _text_oob(el, inherited, vb_w, vb_h)
                 if msg:
                     errors.append(msg)
                 ty = _parse_num(el.get("y")) or 0.0
@@ -637,7 +690,8 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                 if px is not None and tx is not None:
                     anchor = inherited(el, "text-anchor") or "start"
                     # 文字宽按"等宽字符≈1em、拉丁≈0.55em"粗估——只用于端点落点
-                    # （多算只会少报 warn，安全方向）；越界判定刻意不用它（会误报）。
+                    # （多算只会少报 warn，安全方向）；越界判定用 _text_line_spans
+                    # 同一把尺子（逐行取宽、取最大值），两边口径一致不打架。
                     est_w = est_text_width(content, px)
                     ty0, ty1 = svg_text_band(ty, px)
                     if anchor == "end":

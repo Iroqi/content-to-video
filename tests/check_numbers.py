@@ -268,6 +268,13 @@ FACTS = [
         "横屏左文字栏宽度；look.md「画面结构」手写同数",
     ),
     (
+        "entrance-ladder-step",
+        ("json", "scripts/_template.py", "animation.entranceLadder.step"), 0.14,
+        [("references/motion.md", r"`entranceLadder\.step`，默认 `0\.14`）")],
+        "入场阶梯的步距：题头组末拍之后画面再晚多久出发——作者调它等于调"
+        "题头组与画面的错峰幅度，文档必须跟着说清当前是哪一档",
+    ),
+    (
         "subtitle-scroll-ease",
         ("json", "scripts/_template.py", "subtitle.scroll.ease"), "sine.out",
         [("references/look.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],

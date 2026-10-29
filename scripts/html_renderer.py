@@ -2292,16 +2292,65 @@ def _entrance_k(rc, card):
                         card.d / max(1e-6, _eb["normSeconds"])))
 
 
+def _entrance_ladder_step(rc):
+    """入场阶梯的**步距**（秒）：画面层比题头组晚出发多久。
+
+    前沿动效的同一屏从来不是"一起到位"——Framer 的 `staggerChildren`、Material 的
+    staggered container transform、迪士尼十二条里的 *Overlapping Action*，说的都是
+    同一件事：**一屏里有几层，就有几个先后**。同时开始的两层在观众眼里是一层，
+    "最想让人先看到的排最先"这条就落空了。
+
+    步距**不随段长压缩**（`_entrance_k` 不参与）：压缩是为了让整段入场装得下，而
+    "看得出先后"是**感知下限**（按帧数定的，见 `tests/test_motion_design.py` 的
+    `EntranceLadder`）——把它一起压，短段上阶梯会缩到一帧以内，等于把这一层关掉。
+
+    取值 0.14s（≈4 帧 @30fps）：下限是 2 帧（"先后"与"同时"的分界），上限 0.30s
+    （之上就是逐条出现），取在中段偏下——够读得出先后，又不至于让画面迟到。
+    """
+    lad = rc.anim.get("entranceLadder") or {}
+    try:
+        return max(0.0, float(lad.get("step") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _head_beat_offset(rc, card):
+    """题头组最后一拍相对段起点的偏移（秒，已按入场预算压缩）。
+
+    题头组（标题 / kicker / 副标题）内部各拍都是"占标题那一拍的比例"，所以组的
+    最后一拍就是副标题那一拍——**有没有画副标题都不改这个数**：层序是这一页的
+    属性，不该随"这一页恰好有没有副标题"跳动（同一份稿子删掉副标题，图就提前
+    出发，那是两个稿子在比，不是一个稿子在演）。
+    """
+    a_title = rc.anim["titleEntrance"]
+    delay = max(0.0, _unit_frac((a_title.get("tagline") or {}).get("delayFrac", 0.0)))
+    return a_title["duration"] * delay * _entrance_k(rc, card)
+
+
+def _frame_entrance_offset(rc, card):
+    """配图容器入场相对段起点的偏移（秒）——题头组最后一拍 + 一个步距。
+
+    层序是**读序**：标题 → 副标题（同一题头组，共用标题那一档的行程与曲线）→
+    画面。配图是另一层（画面），排在整个题头组之后；写成"标题 → 配图 → 副标题"
+    就把题头组两行拆散了（副标题是标题行的延续，不是第三个元素）。
+
+    这个数是配图容器入场与内容层收拢两处的共同起点，**只有这一份**：两处各算一份
+    的话，改了步距就只有一处在动，成片里是"框按新步距落、图还在旧时刻收"。
+    """
+    return _head_beat_offset(rc, card) + _entrance_ladder_step(rc)
+
+
 def _entrance_lead(rc, card):
     """入场预算（秒）：入场补间收尾的时刻，也是收拢起手的时刻。
 
     容器层入场与内容层收拢都拿它当接缝，所以它必须是**一个**数：容器层在
-    `startDelay + duration` 收尾，内容层收拢的终点钉在同一刻（见
-    `_image_settle_lines`）——两处各算一份的话，改了入场时长就会有一处没跟着走，
-    成片里是"框还在落、图已经开始收"的重叠。
+    「题头组末拍 + 步距 + duration」收尾（`_frame_entrance_offset`），内容层收拢
+    的终点钉在同一刻（见 `_image_settle_lines`）——两处各算一份的话，改了入场时长
+    就会有一处没跟着走，成片里是"框还在落、图已经开始收"的重叠。
     """
     a_img = rc.anim["imageEntrance"]
-    return (a_img["startDelay"] + a_img["duration"]) * _entrance_k(rc, card)
+    return (_frame_entrance_offset(rc, card)
+            + a_img["duration"] * _entrance_k(rc, card))
 
 
 def _unit_frac(v):
@@ -2511,9 +2560,12 @@ def _image_settle_lines(rc, card, lead):
     settle = a_img.get("settle")
     if not settle:
         return []
-    # 起点占入场预算的比例 → 绝对偏移；终点恒为 lead
-    offset = (a_img["startDelay"] + a_img["duration"]
-              * max(0.0, _unit_frac(settle.get("startFrac", 0.0)))) * _entrance_k(rc, card)
+    # 起点占入场预算的比例 → 绝对偏移；终点恒为 lead。基准是配图入场那一拍
+    # （`_frame_entrance_offset`），不是另取一个"段起点 + 常数"——两处各一份的话，
+    # 改了阶梯步距就只有容器层跟着走（见 `_frame_entrance_offset`）。
+    offset = (_frame_entrance_offset(rc, card)
+              + a_img["duration"] * max(0.0, _unit_frac(settle.get("startFrac", 0.0)))
+              * _entrance_k(rc, card))
     dur = lead - offset
     if dur <= 0.01:
         return []
@@ -2630,7 +2682,11 @@ def _card_timeline_lines(rc, card):
         # 时长**，两处各算一份"起点+时长"就会漂（`_frame_arc_lines`）。
         _frame_dur = (a_img["duration"]
                       * max(0.0, _unit_frac(a_img.get("frameFrac", 1.0))) * _k)
-        _frame_at = s + a_img["startDelay"] * _k
+        # 起点取阶梯：题头组末拍 + 一个步距（单一真源，见 `_frame_entrance_offset`）。
+        # 不在这里写 `s + 常数`：那样配图与副标题各算一份起点，改了任一侧的延迟
+        # 都会让画面抢到题头组前面去（实测：0.2s 的图比 0.225s 的副标题早 25ms，
+        # 不到一帧——"错峰"那一层等于没写）。
+        _frame_at = card.s + _frame_entrance_offset(rc, card)
         lines.append(
             f'tl.from("{_frame_sel}",{{opacity:0,y:{a_img["vert_y"]},'
             f'duration:{_frame_dur:.2f},'

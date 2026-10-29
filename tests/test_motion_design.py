@@ -15,6 +15,9 @@
 - `FrameArcPath` / `FrameArcInProduct`：位移走弧线——容器入场的两条轴各配一条缓动。
   两轴**同缓动**时合成路径恒为直线（弯曲度解析式恒等于 0），写了副轴也等于没写，
   所以判据量的是"离弦的最大距离"而不是"有没有第二条补间"。
+- `EntranceLadder` / `EntranceLadderInProduct`：同一屏的多层入场有先后——层序按读序、
+  相邻层错开 ≥2 帧、后一拍压在前一拍里。三处（容器入场 / 内容层收拢 / 持续运镜）
+  的起点是**同一个阶梯**，改一个 `step` 三处一起动。
 """
 import contextlib
 import io
@@ -378,3 +381,173 @@ class FrameArcInProduct(unittest.TestCase):
             got = self._frame_tweens(self._html())
         self.assertEqual(len(got), 1, f"幅度为 0 时副轴不该出现：{got}")
         self.assertIn("y:40", got[0])
+
+
+# ── 入场阶梯：一屏几层，就有几个先后 ────────────────────────────────────────
+# 前沿动效的同一屏从来不是"一起到位"：Framer 的 staggerChildren、Material 的
+# staggered container transform、迪士尼十二条里的 Overlapping Action，说的是同一件
+# 事——层与层之间有先后。同时开始的两层在观众眼里是**一层**。
+#
+# 刻度与「首帧位移 ≥ 4px」同源，都是 30fps 下"这一帧看得出吗"：2 帧（66ms）是
+# "先后"与"同时"的分界，0.30s 之上就不再是错峰、是 PPT 的逐条出现。
+LADDER_MIN_STEP_FRAMES = 2
+LADDER_MAX_STEP = 0.30
+# 补间行的形状：`tl.from("#img-seg-a",{opacity:0,y:40,duration:0.44,ease:"…"},2.76)`
+# fromTo 多一组 `{…}`，所以第三组是可选的；`[^}]*` 够用——补间里不会出现嵌套花括号。
+_TWEEN_RE = re.compile(
+    r'tl\.(?:from|fromTo|to)\("([^"]+)",\{([^}]*)\}(?:,\{([^}]*)\})?,([\d.]+)\)')
+
+
+def _tweens(html):
+    """产物里所有补间：选择器 / 起点 / 时长。判据只认**真正写进时间线的数**。"""
+    out = []
+    for m in _TWEEN_RE.finditer(html):
+        vars_to = m.group(3) or m.group(2)
+        dm = re.search(r"duration:([\d.]+)", vars_to)
+        out.append({"sel": m.group(1), "at": float(m.group(4)),
+                    "dur": float(dm.group(1)) if dm else 0.0,
+                    "vars": vars_to})
+    return out
+
+
+def _ladder_layers(html, sid):
+    """这一页的入场层，按**读序**排：题头组·标题 → 题头组·副标题 → 画面·配图。
+
+    只取每层最早那一拍（每层可能有多条补间：标题是裁窗 + 位移两条，配图是主轴 +
+    副轴两条）。缺的层不补位——图版没有画面层，阶梯就只有题头组，那是对的。
+    """
+    tw = _tweens(html)
+    want = ((f"#rev-title-{sid}", f"#title-{sid}"),
+            (f"#rev-tag-{sid}", f"#tag-{sid}"),
+            (f"#img-{sid}", f"#cmp-{sid}"))
+    layers = []
+    for group in want:
+        hits = [t for t in tw if t["sel"] in group]
+        if hits:
+            layers.append(min(hits, key=lambda t: t["at"]))
+    return layers
+
+
+def _ladder_verdicts(layers, fps=FPS):
+    """阶梯的三条判据，返回违反项（空 = 合格）。
+
+    三条各拦一种"以为错峰了其实没有"：
+      间隔 < 2 帧   —— 打印出来差 25ms，观众看到的是同时（改版前的实况）
+      间隔 > 0.30s  —— 不是错峰，是逐条出现
+      后一层起点 ≥ 前一层终点 —— 首尾相接，Overlapping Action 反过来写着
+    """
+    bad = []
+    min_step = LADDER_MIN_STEP_FRAMES / float(fps)
+    for i in range(1, len(layers)):
+        prev, cur = layers[i - 1], layers[i]
+        step = cur["at"] - prev["at"]
+        if step < min_step - 1e-9:
+            bad.append(f"第 {i} 层只比上一层晚 {step * 1000:.0f}ms（< {min_step * 1000:.0f}ms"
+                       f" = {LADDER_MIN_STEP_FRAMES} 帧）：观众读到的是同一拍")
+        if step > LADDER_MAX_STEP + 1e-9:
+            bad.append(f"第 {i} 层比上一层晚 {step:.2f}s（> {LADDER_MAX_STEP}s）："
+                       f"那是逐条出现，不是错峰")
+        if cur["at"] >= prev["at"] + prev["dur"] - 1e-9:
+            bad.append(f"第 {i} 层（{cur['at']:.2f}）起于上一层收尾"
+                       f"（{prev['at'] + prev['dur']:.2f}）之后：首尾相接就不是一串动作")
+    return bad
+
+
+class EntranceLadder(unittest.TestCase):
+    """同屏多层入场的先后：层序按读序，相邻层错开一档，且后一拍压在前一拍里。"""
+
+    def _html(self, layout=None, dur=2.0):
+        src = H.sample_source()
+        if layout:
+            src["segments"][0]["layout"] = layout
+        m = H.make_manifest(src, dur=dur)
+        with contextlib.redirect_stderr(io.StringIO()):
+            return generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
+
+    def test_default_template_passes_the_ladder(self):
+        got = _ladder_verdicts(_ladder_layers(self._html(), "seg-a"))
+        self.assertEqual(got, [], f"默认模板的入场阶梯不合格：{got}")
+
+    def test_layer_order_follows_the_reading_order(self):
+        """标题 → 副标题 → 配图。配图是另一层（画面），排在整个题头组之后。
+
+        改版前配图（0.20s）比副标题（0.225s）早 25ms——不到一帧，画面抢在题头组
+        第二行前面到场，把题头组两行拆散了。
+        """
+        at = [round(x["at"], 3) for x in _ladder_layers(self._html(), "seg-a")]
+        self.assertEqual(len(at), 3, f"槽位页应当有三层入场，实到 {at}")
+        self.assertEqual(at, sorted(at), f"层序不是读序：{at}")
+
+    def test_ladder_catches_a_sub_frame_gap(self):
+        """判据自己要能红：把步距写成 1 帧，同一套函数必须报出来。"""
+        layers = _ladder_layers(self._html(), "seg-a")
+        layers[-1] = dict(layers[-1], at=layers[-2]["at"] + 1.0 / FPS)
+        self.assertTrue(_ladder_verdicts(layers),
+                        "1 帧的间隔被判据放过：这条判据等于没写")
+
+    def test_ladder_catches_tail_to_tail(self):
+        """后一拍压在前一拍里；首尾相接（PPT 的逐条出现）要被报出来。"""
+        layers = _ladder_layers(self._html(), "seg-a")
+        layers[-1] = dict(layers[-1], at=layers[-2]["at"] + layers[-2]["dur"] + 0.2)
+        self.assertTrue(_ladder_verdicts(layers), "首尾相接被判据放过")
+
+    def test_full_bleed_has_no_picture_rung(self):
+        """满幅页没有画面层：那一页第一帧就必须是完成态。
+
+        图版与整页画布都不生成 HTML 标题层（图版的标题画进图里、画布的标题由
+        作者在 SVG 里画），也不生成配图入场——两种"没有"都该被认出来，否则把
+        "全空"读成"题头组正常"也是错的。
+        """
+        for layout in ("plate", "canvas"):
+            self.assertEqual(_ladder_layers(self._html(layout), "seg-a"), [],
+                             f"{layout} 页不该有任何入场阶梯层")
+            tw = _tweens(self._html(layout))
+            self.assertFalse([t for t in tw if t["sel"].startswith(("#img-", "#cmp-"))],
+                             f"{layout} 页出现了配图入场")
+
+    def test_step_is_not_compressed_away_on_a_short_segment(self):
+        """步距不随段长压缩：它是"看得出先后"的感知下限，压缩等于把这一层关掉。"""
+        short = _ladder_layers(self._html(dur=1.0), "seg-a")
+        self.assertEqual(len(short), 3, f"短段仍应有三层：{short}")
+        gap = short[-1]["at"] - short[-2]["at"]
+        self.assertGreaterEqual(
+            gap, LADDER_MIN_STEP_FRAMES / FPS - 1e-9,
+            f"短段上画面层只比副标题晚 {gap * 1000:.0f}ms：阶梯被段长压缩掉了")
+
+    def test_one_knob_moves_both_consumers(self):
+        """步距只有一个真源：容器入场与内容层收拢两处一起动。
+
+        两处各算一份起点的老样子是"改了 knob 只有一处在动"，成片里读作框已经到位、
+        图还在旧时刻收。
+        """
+        def times():
+            tw = _tweens(self._html())
+            settle = min((t for t in tw if t["sel"] == "#img-seg-a > img"),
+                         key=lambda t: t["at"])
+            frame = min((t for t in tw if t["sel"] == "#img-seg-a"),
+                        key=lambda t: t["at"])
+            return {"frame": frame["at"], "settle": settle["at"]}
+
+        base = times()
+        with T.override_layer(["animation.entranceLadder.step=0.24"]):
+            got = times()
+        for key in ("frame", "settle"):
+            self.assertAlmostEqual(got[key] - base[key], 0.24 - 0.14, places=2,
+                                   msg=f"{key} 没跟着步距走：阶梯在两处不是同一个数")
+
+
+class EntranceLadderInProduct(unittest.TestCase):
+    """golden 那一头：四个画幅/版式样本里的阶梯同样成立。"""
+
+    def test_every_golden_passes_the_ladder(self):
+        for name in sorted(os.listdir(H.GOLDEN_DIR)):
+            if not name.endswith(".html"):
+                continue
+            with open(os.path.join(H.GOLDEN_DIR, name), encoding="utf-8") as fh:
+                html = fh.read()
+            layers = _ladder_layers(html, "seg-a")
+            self.assertTrue(layers, f"{name}: 没解析到入场层")
+            self.assertEqual(_ladder_verdicts(layers), [],
+                             f"{name}: 入场阶梯不合格 {[round(x['at'], 2) for x in layers]}")

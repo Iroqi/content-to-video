@@ -36,9 +36,8 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
 | 第 3 步选形式、素材落 `images.json`；缺图 / 图糊 / 被裁 / 生图崩字 | `references/imagery.md` | 全片都是手绘 SVG 时 |
 | 第 3 步 SVG 画什么（几何、对比度、字号、数据自查） | `references/canvas.md` | 不画 SVG 就不用读 |
-| 第 3 步 动效：该不该动、动多快 | `motion.md`「四职务」 | 从不（写任何补间之前都要过） |
-| 第 3 步 编排：`animate` 怎么写、镜头归谁、参数怎么推 | `references/svg-motion.md` | 全片不写 `animate` 时 |
-| 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md`、`motion.md`「官方校验命令」 | 从不（第 4 步就要用） |
+| 第 3 步 动效与编排：该不该动、动多快、`animate` 怎么写 | `references/motion.md` | 从不（写任何补间之前都要过） |
+| 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 字幕怎么跟着念（焦点、换句、时钟） | `references/subtitles.md` | 全走默认模板时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |
 | 想知道"这一页在屏幕上到底有没有东西" | [perceptual.md](references/perceptual.md) | 要 Node+Chrome+Pillow |
@@ -75,7 +74,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |
 | **带 libx264 的 FFmpeg**（渲染侧，与上面那个 ffmpeg 是同一个二进制） | 编码 mp4 | 渲染跑到编码那步才失败，日志是一句 `✗ MP4 H.264 encoder unavailable`；`doctor` 与 `tests/test_e2e_render.py` 会先替你问一句 |
 
-其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本，默认 `hyperframes@0.8.185`）。跨机逐帧一致用 `render --docker`，口径见 `references/motion.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
+其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本，默认 `hyperframes@0.8.185`）。跨机逐帧一致用 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
 
 GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~/.cache/content-to-video/vendor/`、CDN 取用（sha256 钉固），**新机器首次生成需联网**，之后离线；取不到 CDN 用 `--gsap-src` 指定本地文件。
 
@@ -99,7 +98,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - 只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`，动笔前先读它开头点名的那几节——**画错了没有任何报错**。要它跟着旁白逐拍演，写 `animate`（`references/svg-motion.md`）；图内要有一个**连续量**驱动多个元素时用参数演绎（同文件「参数演绎」）。画完跑 `check_svg.py images/`。
+- **画 SVG**：`references/canvas.md`，动笔前先读它开头点名的那几节——**画错了没有任何报错**。要它跟着旁白逐拍演，写 `animate`（`references/motion.md`「契约」）；图内要有一个**连续量**驱动多个元素时用参数演绎（同文件「参数演绎」）。画完跑 `check_svg.py images/`。
 
 **4. 生成 HTML、预览、检查、渲染**
 
@@ -111,7 +110,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 
 用浏览器打开 `hf-project/index.html` 预览。每个内容段和 agenda 卡都要滚到，看画布是否贴合、文字是否溢出、标题层级是否一致。日志里的 `[warn]`（行数截断、`nameTrim` 硬切、横屏标题降字号、配图不够大/比例不贴合、视频不够这一段长）都要回头处理。
 
-`hyperframes check` 已接进 `run.py`：不给 `--until` 时渲染前自动跑一次，有 error 直接停下；单独验收版式用 `--until check`。已知噪声与必须当真的条目见 `references/motion.md`「官方校验命令」——**Lint 有 error 时 browser 五阶段整个不跑，全 0 项不是通过、是失明**。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG（**是取帧工具，不是门禁**）。按症状定位走 `references/troubleshooting.md`。改文案、换配图、调结构一律 `--until html`，人工确认后再整片渲一次（固定开销与调参见 `rendering.md`「渲染性能：什么时候该动这几个参数」）。
+`hyperframes check` 已接进 `run.py`：不给 `--until` 时渲染前自动跑一次，有 error 直接停下；单独验收版式用 `--until check`。已知噪声与必须当真的条目见 `references/rendering.md`「官方校验命令」——**Lint 有 error 时 browser 五阶段整个不跑，全 0 项不是通过、是失明**。另两条各管一件事：`doctor` 体检渲染依赖，`snapshot --at <秒>` 按时刻取 PNG（**是取帧工具，不是门禁**）。按症状定位走 `references/troubleshooting.md`。改文案、换配图、调结构一律 `--until html`，人工确认后再整片渲一次（固定开销与调参见 `rendering.md`「渲染性能：什么时候该动这几个参数」）。
 
 ## 常用参数
 

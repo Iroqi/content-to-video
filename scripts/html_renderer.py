@@ -760,7 +760,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
         # line-clamp + overflow:hidden，CJK 墨迹必须装进行盒。微软雅黑度量盒
         # ≈1.32em 刚好不裁，但 Linux headless 回退 Noto Sans CJK Black 时墨迹
         # ≈1.39em，1.32 会被官方门禁 hyperframes check 报 clipped_text
-        # （references/motion.md「官方校验命令」：不在噪声之列）。64×1.45
+        # （references/rendering.md「官方校验命令」：不在噪声之列）。64×1.45
         # 两行 + tagline 一行的预算 = 原 72×1.32 几乎不变，两画幅都够装。
         _v_title_area = (_tl["maxLines"] * _tl["fontSize"] * css_title_lh
                          + _tgl["marginTop"]
@@ -1109,7 +1109,7 @@ def _verse_html(seg, sid, ac_text_attr):
     说话人连着说三句不刷三遍标签（那会让字幕行首变成一列复读的抬头）。
     """
     # 三个豁免属性的继承规则不同，别按一套打（详见 references/rendering.md
-    # 「官方校验命令」的 text_occluded 一条）：
+    # rendering.md「官方校验命令」的 text_occluded 一条）：
     #   · allow-occlusion / allow-overlap —— 只认元素自己身上，**不继承祖先**，
     #     每行 .verse-line 与 .verse-who span 都得自带。
     #   · allow-overflow —— **继承到子树**，只打在 .verse 一处即可（顺带压掉长段
@@ -2420,7 +2420,7 @@ def _frame_arc_lines(rc, card, frame_sel, at, duration):
     - 标题与副标题：揭示边的语义要求**文字盒的左缘站定不动**，加横向分量就把它
       自己拆了（`_title_rhythm` 里"缩放档为什么被删"是同一条理由）。
     - 字幕换句：位移只写在列容器上，行自己一条补间都没有，加副轴就是给每句加一条
-      独立的飞行动作（`references/motion.md`「换句是滚动」判据一）。
+      独立的飞行动作（`references/rendering.md`「三条换版式时会坏的」第一条）。
     **幅度只有一个真源**（`arc.x`），`arc.rhythm` 只轮换向。幅度也轮换一份的话，
     `arc.x = 0` 就关不掉这层——"关不掉"的旋钮等于没有旋钮。
 

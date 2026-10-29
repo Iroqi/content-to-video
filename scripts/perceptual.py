@@ -61,7 +61,7 @@ SVG 源码里的坐标。这三四道加起来仍然回答不了一个最简单�
 
 两条：`--frames`（已有 PNG 目录，CI 里可以缓存复用）或现取（调
 `hyperframes snapshot`，需要 Node + Chrome）。取帧命令与口径见
-`references/motion.md`「官方校验命令」——本模块只是把它的产物变成判词。
+`references/rendering.md`「官方校验命令」——本模块只是把它的产物变成判词。
 """
 import argparse
 import json

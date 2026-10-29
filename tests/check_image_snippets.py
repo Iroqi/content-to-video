@@ -24,12 +24,12 @@ from _images_schema import validate_images_json  # noqa: E402
 
 # (文档相对路径, 锚点串, 说明)
 SNIPPETS = [
-    (os.path.join("references", "svg-motion.md"),
-     '"target": "#node-a"', "svg-motion.md「契约」的完整示例"),
-    (os.path.join("references", "svg-motion.md"),
-     '"param": "theta"', "svg-motion.md「参数演绎」的最小示例"),
-    (os.path.join("references", "svg-motion.md"),
-     '"param": "theta", "to": 180', "svg-motion.md「参数演绎」的多拍累进示例"),
+    (os.path.join("references", "motion.md"),
+     '"target": "#node-a"', "motion.md「契约」的完整示例"),
+    (os.path.join("references", "motion.md"),
+     '"param": "theta"', "motion.md「参数演绎」的最小示例"),
+    (os.path.join("references", "motion.md"),
+     '"param": "theta", "to": 180', "motion.md「参数演绎」的多拍累进示例"),
 ]
 
 

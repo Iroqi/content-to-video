@@ -386,7 +386,7 @@ def _validate_steps(key, block, what="steps"):
                              f"{sorted(_DIRECTOR_STEP_KEYS)}")
         # 锚点二选一：at（句序）或 at_time（段落绝对秒）。两者都写或都不写都是歧义，
         # 一律拒。at_time 让导演档脱离"句子分桶"：整页画布的自由编排可以直接按秒排
-        # 补间，不必迁就旁白句边界（见 references/svg-motion.md「拍级键」）。
+        # 补间，不必迁就旁白句边界（见 references/motion.md「拍级键」）。
         has_at, has_time = "at" in step, "at_time" in step
         if has_at == has_time:
             raise ValueError(

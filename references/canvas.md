@@ -1,6 +1,6 @@
 # 第 3 步 · SVG：把画面画对
 
-**怎么画**（几何、密度、对比度、字号、数据自查）→ 本文件。**怎么让它跟着话变**（`animate` 的拍法、镜头、参数演绎、跨段接续）→ `references/svg-motion.md`。
+**怎么画**（几何、密度、对比度、字号、数据自查）→ 本文件。**怎么让它跟着话变**（`animate` 的拍法、镜头、参数演绎、跨段接续）→ `references/motion.md`。
 
 > **动笔前先读这五节**：「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」——画错不会有任何报错，只在成片上看出来。整页画布（`layout:"canvas"`）再加「整页画布的密度与层次」。选不选 SVG 见 `references/writing.md`「哪些段值得交给 canvas」与 `references/imagery.md`；画面出问题按 `references/troubleshooting.md`查。
 
@@ -12,7 +12,7 @@
 
 来源三条，手绘优先：**手绘 `.svg` 放进 `images/`**；**官方 registry 现成块**（`npx hyperframes catalog --query "<英文效果>"`——查询必须英文，中文返回空且不提示——再 `hyperframes add <name>` 装，进导演档要重写成补间驱动，不许墙钟动画与 `Math.random`）；**SVG 图库**（logo/图标用 simple-icons、lucide、tabler，同一期同一套、统一线宽，来源与 license 记进 provenance）。
 
-要不要动、怎么动是**独立决策**：判据见 `references/motion.md`「让图跟着旁白动」，拍法见 `references/svg-motion.md`。映射走 `{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行）。
+要不要动、怎么动是**独立决策**：判据与拍法都在 `references/motion.md`（该不该动看「四职务」，怎么写看「契约」）。映射走 `{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行）。
 
 ### 画布几何：根节点尺寸按版式分两种
 
@@ -53,7 +53,7 @@
 
 **SVG 以 `<img>` 载入，内部文字不属于 HTML 文本流，没有任何一道检查会量它**，所以取色表放在自查之前。
 
-要机器量对比度/压字：把该 SVG **内容**临时内联成 DOM 副本跑 `hyperframes check`。**副本只用来问门禁，绝不能当产物**——交付的 `index.html` 必须保持 `<img>` 形态。**唯一例外**是写了 `animate` 的那张：交付时就是内联活 DOM，内联前必过 `scripts/_svg_sanitize.py` 净化（见 `references/svg-motion.md`「契约」）。
+要机器量对比度/压字：把该 SVG **内容**临时内联成 DOM 副本跑 `hyperframes check`。**副本只用来问门禁，绝不能当产物**——交付的 `index.html` 必须保持 `<img>` 形态。**唯一例外**是写了 `animate` 的那张：交付时就是内联活 DOM，内联前必过 `scripts/_svg_sanitize.py` 净化（见 `references/motion.md`「契约」）。
 
 **判定线**（WCAG）：正文与标签 ≥ 4.5:1；最大字号档（≥24px，或 ≥18.66px 加粗）≥ 3:1，低于 3:1 重画；次要文字按 ≥ 7:1 取色。
 
@@ -141,7 +141,7 @@
 
 - **先定标尺，再画图形**：映射写成一行线性式（`y = y0 - (v - vmin) * (h / (vmax - vmin))`）放进 SVG 注释，所有柱高/点位由它反算，不凭手感调。刻度取整档（1/2/5×10ⁿ），别为了对齐图形改数据。
 - **用两端点回算验证每一档**：最大值柱顶减最小值柱顶应等于"量程 × 标尺"，对不上是映射写错。**pie / 环形先查总和**：各扇区角度相加必须等于 360（`占比 × 3.6`）。
-- **量文字，不数文字**：定宽元素（刻度、数值标签、图例）按实测宽度排版——`text-anchor="end"` 的落点倒推字宽。两条量法：浏览器 `getBBox()` 读左右缘，或 `npx -y hyperframes snapshot` 按时刻截一帧（命令见 `references/motion.md`「官方校验命令」）。整页画布安全边距（竖屏 50px / 横屏 96px）同样按量出来的右缘判。
+- **量文字，不数文字**：定宽元素（刻度、数值标签、图例）按实测宽度排版——`text-anchor="end"` 的落点倒推字宽。两条量法：浏览器 `getBBox()` 读左右缘，或 `npx -y hyperframes snapshot` 按时刻截一帧（命令见 `references/rendering.md`「官方校验命令」）。整页画布安全边距（竖屏 50px / 横屏 96px）同样按量出来的右缘判。
 - **公式就是图内文字**：`E = mc^2` 这类本体用 `<text>` 画——上下标靠 `baseline-shift` 或两个 `<tspan dy>`，字体栈照「文字与尺寸」，下标字号同样受 26px 下限约束。
 
 ### 文字与尺寸
@@ -154,4 +154,4 @@ SVG 以 `<img>` 载入时是独立文档，页面 `--ctv-font-family` 渗不进�
 
 ---
 
-**要让它动**：给该段写 `animate`——留在槽位只让图内元素跟着话变、或者把这段换成整页画布连镜头一起演；拍法、参数演绎、跨段接续都在 `references/svg-motion.md`。那是"演"的那一侧，本文件只到"图长什么样"为止。
+**要让它动**：给该段写 `animate`——留在槽位只让图内元素跟着话变、或者把这段换成整页画布连镜头一起演；拍法、参数演绎、跨段接续都在 `references/motion.md`。那是"演"的那一侧，本文件只到"图长什么样"为止。

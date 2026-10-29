@@ -31,9 +31,11 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = re.compile(
-    # 文件名里允许连字符（`svg-motion.md`）：`\w` 不含 `-`，收窄成 `[\w.]` 会让
-    # 「`references/svg-motion.md`「契约」」整条匹配不上，退化成匹配末段
-    # `motion.md` 这个**另一个文件**——检查器于是对着错误的文件报悬空。
+    # 文件名里允许连字符：`\w` 不含 `-`，收窄成 `[\w.]` 会让
+    # 「`references/tts-pipeline.md`「契约」」这类引用整条匹配不上，退化成
+    # 匹配末段 `pipeline.md` 这个**另一个文件**——检查器于是对着错误的文件
+    # 报悬空。现网没有带连字符的文档了（`svg-motion.md` 已并入 `motion.md`），
+    # 但字符类照旧放宽，免得下一份带连字符的文档又踩同一个坑。
     r"(SKILL\.md|references/[\w.-]+\.md|[\w.-]+\.md)`?"
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
@@ -96,10 +98,10 @@ REFERENCE_MAX_BYTES = 20_000
 
 
 # 官方门禁噪声表的对账真源：代码里的码 → 文档里必须出现 `` `码` ``。
-# 表在「官方校验命令」那一节，那一节连同噪声表一起在 motion.md（rendering.md 顶到
-# 单文件上限后按主题下沉：验的是"怎么验动作"，与"该不该动"同一个决策时刻）。
+# 表在「官方校验命令」那一节，与它一并落在 rendering.md（第 4 步的执行题）。
+# motion.md 只答"该不该动、这一拍怎么写"，答完就到上限了。
 NOISE_SOURCE = os.path.join("scripts", "_render_backend.py")
-NOISE_DOC = os.path.join("references", "motion.md")
+NOISE_DOC = os.path.join("references", "rendering.md")
 
 
 def noise_codes():

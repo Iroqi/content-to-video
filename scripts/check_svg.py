@@ -742,7 +742,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
         warns.append("含墙钟动画（SMIL <animate*> / CSS animation / transition）：这类动画按页面墙上时钟自走，"
                      "无法与口播时间轴同步，只适合氛围循环。要"
                      "「随某句话变化」的时间轴同步动画，改用 images.json 的 animate（净化内联后由 GSAP 补间驱动；"
-                     "内联时这些墙钟动画会被剥离，见 references/svg-motion.md「契约」）")
+                     "内联时这些墙钟动画会被剥离，见 references/motion.md「契约」）")
     if layout in FULL_BLEED:
         warns.append(("整页画布" if layout == "canvas" else "图版") + "：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
                      "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"

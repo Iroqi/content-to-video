@@ -133,8 +133,7 @@ tests/       契约测试 ＋ 五道检查脚本
 | 第 2 步配音、音色表、降级行为 | [`references/tts_pipeline.md`](references/tts_pipeline.md) |
 | 第 3 步选形式、素材落 `images.json`、生图崩字 | [`references/imagery.md`](references/imagery.md) |
 | 第 3 步画 SVG：几何、对比度、字号、数据自查 | [`references/canvas.md`](references/canvas.md) |
-| 动效该不该有、动多快 | [`references/motion.md`](references/motion.md) |
-| `animate` 怎么写、镜头归谁、参数怎么推 | [`references/svg-motion.md`](references/svg-motion.md) |
+| 动效该不该有、动多快；`animate` 怎么写、镜头归谁、参数怎么推 | [`references/motion.md`](references/motion.md) |
 | 第 4 步预览、渲染、调性能、官方门禁 | [`references/rendering.md`](references/rendering.md) |
 | 字幕怎么跟着念 | [`references/subtitles.md`](references/subtitles.md) |
 | 画面空 / 不动 / 换页没东西 | [`references/troubleshooting.md`](references/troubleshooting.md) |

@@ -1437,7 +1437,7 @@ def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
                 f"{where}：{b['target']} 在 SVG 里写死 {b['attr']}={have:g}，"
                 f"而表达式在 params 初值（{_fmt_params(derived.params)}）处算出 "
                 f"{want_v:g}——第一帧落地时会跳 {abs(have - want_v):g}。要么改 SVG 的静态值，"
-                f"要么改 params 初值，让两者对齐（见 references/svg-motion.md「参数演绎」）")
+                f"要么改 params 初值，让两者对齐（见 references/motion.md「参数演绎」）")
 
     # ⑥ 端点处仍算不出来（除零 / 定义域外 / 越界到 inf）：成片里那一帧会抛异常，
     #    GSAP 的 onUpdate 一抛就断在那一帧，后面的拍全部不演。

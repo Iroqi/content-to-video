@@ -48,7 +48,7 @@
   | `"canvas"` 整页画布 | 一张满幅配图，标题层与句子流层都不生成 | 必须有配图（没图直接报错）；`title` 只喂 agenda 行、不上画面；**没有字幕层**——关键句要画进 SVG，否则静音观看时只剩画面 |
   | `"plate"` 图版 | 满幅图 + 一行标题 + 页底一句字幕 | 必须有配图；`tagline` 不上画面；单句超 2 行报错（竖屏约 44 字） |
 
-  选型判据在 `references/canvas.md`「整页画布」「图版」；双人对话别放进 canvas（轮次信息只剩声音）。取值只有 `"canvas"` / `"plate"` 给内容段：`"agenda"` 是结构性页那一档，内容段手写它契约层直接报错（那页的行是从全片其它段投影出来的）；大小写或空格写错同样报错——静默退回槽位版式会让画里的标题和 HTML 标题同框。两者都属**满幅版式**（`FULL_BLEED_LAYOUTS`，同一个判据管几何/转场/运镜/门禁），区别只在文字层留几层；结构性页换版式用顶层 `opening_layout` / `closing_layout`（不写 = pipeline 盖 `"agenda"`）。
+  选型判据在 `references/canvas.md`「整页画布」「图版」；双人对话别放进 canvas（轮次信息只剩声音）。取值只有 `"canvas"` / `"plate"` 给内容段：`"agenda"` 是结构性页那一档，内容段手写它契约层直接报错（那页的行是从全片其它段投影出来的）；大小写或空格写错同样报错——静默退回槽位版式会让画里的标题和 HTML 标题同框。两者都属**满幅版式**（`FULL_BLEED_LAYOUTS`，同一个判据管几何/转场/入场/门禁），区别只在文字层留几层；结构性页换版式用顶层 `opening_layout` / `closing_layout`（不写 = pipeline 盖 `"agenda"`）。
 - `speed`（可选）：段落级语速，覆盖全局 `--speed`。
 - `voice_id` / `voice_style`（可选）：内容段音色与语气，覆盖全局；正文换音色靠它。`voice_id` 必须取预置音色表里的 ID（见 `references/tts_pipeline.md`），写错直接报错；两者都参与句子音频指纹，改音色后 `--resume` 重合成受影响句子。对话段落在 `speakers` 里指定；opening/closing 是自动造的结构性页，**不支持**这两个字段（换开场音色用全局 `--voice-id`）。
 - `text` / `dialogue`（**二选一，必填其一**）：

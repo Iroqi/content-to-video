@@ -216,31 +216,10 @@ class FlagPassthrough(unittest.TestCase):
             self.assertIn(opt, full, opt)
         args = R._build_parser().parse_args(
             ["--source", "s.json", "--workers", "2", "--allow-degraded",
-             "--gap", "0.7", "--drift", "subtle"])
+             "--gap", "0.7"])
         self.assertEqual(args.workers, 2)
         self.assertTrue(args.allow_degraded)
         self.assertEqual(args.gap, 0.7)
-
-    def test_drift_preset_warns_when_it_overwrites_an_explicit_set(self):
-        """--drift 会覆盖 --set 里同名的键，且必须说出来。
-
-        两条路都写 animation.imageEntrance.drift.*，后写（档）赢；不给提示就是
-        "我明明 --set 了 0.02，成片还是 0.009"。逐段微调仍走 images.json。
-        """
-        import contextlib
-        import io as _io
-        import argparse as _ap
-        import gen_hyperframes as G
-        parser = _ap.ArgumentParser()
-        args = _ap.Namespace(set=["animation.imageEntrance.drift.ratePerSec=0.02"],
-                             drift="boring")
-        err = _io.StringIO()
-        with contextlib.redirect_stderr(err):
-            G._init_visual_knobs(parser, args)
-        self.assertIn("被 --drift boring 覆盖", err.getvalue())
-        from _template import overrides
-        self.assertAlmostEqual(
-            overrides()["animation.imageEntrance.drift.ratePerSec"], 0.003)
 
     def test_fps_default_has_one_source_across_three_entrypoints(self):
         """默认帧率只有一份：run --fps / gen --fps / generate_html(fps=)。
@@ -357,23 +336,20 @@ class Gates(unittest.TestCase):
         self.assertNotIn("--placeholder-missing", self.h.gen_argv)
 
     def test_visual_knobs_reach_the_generator(self):
-        """--set / --drift 原样转给生成器：取值校验只有 gen 那份 parser 一份。"""
+        """--set 原样转给生成器：取值校验只有 gen 那份 parser 一份。"""
         self.h.make_images_complete()
         self.h.invoke(["--until", "html",
                        "--set", "animation.director.duration=0.9",
-                       "--set", "layout.vertical.title.fontSize=72",
-                       "--drift", "off"])
+                       "--set", "layout.vertical.title.fontSize=72"])
         argv = self.h.gen_argv
         i = argv.index("--set")
         self.assertEqual(argv[i + 1], "animation.director.duration=0.9")
         self.assertEqual(argv.count("--set"), 2, "可重复的旗标要全部转过去")
-        self.assertEqual(argv[argv.index("--drift") + 1], "off")
 
     def test_visual_knobs_absent_unless_asked(self):
         self.h.make_images_complete()
         self.h.invoke(["--until", "html"])
         self.assertNotIn("--set", self.h.gen_argv)
-        self.assertNotIn("--drift", self.h.gen_argv)
 
     def test_allow_ease_is_preview_only(self):
         """core 之外的 ease 渲染时会静默退回缺省——带它渲染等于交一支不是你要的片。"""

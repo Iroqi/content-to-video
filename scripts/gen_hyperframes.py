@@ -1867,44 +1867,18 @@ def audio_fallback_check(audio_path, want_total):
     return None
 
 
-# ── 运镜档：三种"省心选择"而不是自由参数 ──────────────────────────────
-# 三档具名组合取代自由参数（逐项填没人知道填多少，还互相打架）；逐段微调写
-# images.json 的 drift。三档都在"不露底"的安全区（推近 < 1.1、pan ≤ 1）。
-DRIFT_PRESETS = {
-    "off": {"ratePerSec": 0.0, "maxScale": 1.0, "panX": 0.0, "panY": 0.0},
-    "subtle": {"ratePerSec": 0.009, "maxScale": 1.10, "panX": 0.45, "panY": 0.75},
-    "boring": {"ratePerSec": 0.003, "maxScale": 1.04, "panX": 0.15, "panY": 0.25},
-}
-
-
 def _init_visual_knobs(parser, args):
-    """把 --set / --drift 落进各自的生效层（视觉参数的入口只有这一处）。
+    """把 --set 落进生效层（视觉参数的入口只有这一处）。
 
-    --set 是"改一个模板数"，--drift 是"给全片选一个运镜档"——两者最终都变成
-    模板覆写：drift 档展开成 animation.imageEntrance.drift 下的四个数。
-    为什么不让渲染端在生成之后各自再读一遍：模板的消费面有 5 个模块，多一个
-    "只在渲染端生效"的层，预览与成片就会分家。
+    --set 是"临时改一个模板数"，最终变成模板覆写。为什么不让渲染端在生成之后
+    各自再读一遍：模板的消费面有 5 个模块，多一个"只在渲染端生效"的层，预览与
+    成片就会分家。
     """
-    typed = set()
     for pair in args.set or ():
         try:
             put_override(pair)
         except ValueError as e:
             parser.error(str(e))
-        typed.add(pair.partition("=")[0].strip())
-    if args.drift:
-        for key, value in DRIFT_PRESETS[args.drift].items():
-            path = f"animation.imageEntrance.drift.{key}"
-            if path in typed:
-                # 两条路都通向同一个键，后写的赢。--set 是"我明确要这个数"，
-                # --drift 是"给我一个档"，被档悄悄盖掉就是"以为改了、其实没改"。
-                print(f"[gen][warn] --set {path} 被 --drift {args.drift} 覆盖（档后写）。"
-                      f"要保住你那个数就只留 --set；逐段微调写 images.json 的 drift 字段",
-                      file=sys.stderr)
-            put_override(f"{path}={json.dumps(value)}")
-        print(f"[gen] 运镜档 --drift {args.drift}："
-              + "、".join(f"{k}={v}" for k, v in DRIFT_PRESETS[args.drift].items())
-              + "（逐段可用 images.json 的 drift 覆盖）", file=sys.stderr)
 
 
 def _epilog():
@@ -1990,10 +1964,6 @@ def main(argv=None):
                              "--set animation.director.duration=0.8。键是 "
                              "scripts/_template.py 的叶子路径，值照 JSON 写。只在本次"
                              "进程生效、不落盘；定稿的取值请写回模板。")
-    parser.add_argument("--drift", default=None, choices=["off", "subtle", "boring"],
-                        help="本片所有静态图运镜档：off=关掉 / subtle=1.5× 时长且推得近 / "
-                             "boring=推得慢而短。不给走模板缺省；逐段微调用 images.json "
-                             "的 drift 字段（优先级更高）。")
     parser.add_argument("--allow-ease", action="store_true",
                         help="把钉固 GSAP core 之外的 ease 也放行，只为预览。core 没有的档"
                              "在渲染里会静默退回缺省缓动，成片与预览看到的不一样，所以"

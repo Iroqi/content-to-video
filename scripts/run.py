@@ -310,7 +310,7 @@ def _image_coverage(manifest_path, images_json):
 _HIDDEN_OPTIONS = frozenset({
     "--project", "--workers", "--low-memory-mode", "--no-low-memory-mode",
     "--allow-degraded", "--allow-best-effort", "--placeholder-missing",
-    "--on-fail", "--drift", "--allow-ease", "--allow-infinite-loop",
+    "--on-fail", "--allow-ease", "--allow-infinite-loop",
     "--voice-style", "--gap", "--check-frames", "--slot-no-image",
 })
 
@@ -392,9 +392,6 @@ def _build_parser(show_all=False):
                         help="临时改一个模板视觉参数（可重复），透传给 gen_hyperframes，"
                              "如 --set layout.vertical.title.fontSize=100。只在本次进程"
                              "生效、不落盘；定稿的取值请写回 scripts/_template.py")
-    parser.add_argument("--drift", default=None, choices=["off", "subtle", "boring"],
-                        help="全片静态图运镜档：off=关 / subtle=更长更近 / boring=更短更轻。"
-                             "不给走模板缺省；逐段微调写 images.json 的 drift 字段")
     parser.add_argument("--allow-ease", action="store_true",
                         help="预览档（只配 --until html）：放行 GSAP core 之外的 ease 档名。"
                              "带它跑渲染会在入口报错——那些档在渲染里会静默退回缺省缓动")
@@ -763,8 +760,6 @@ def main():
     # 视觉旋钮原样转给生成器：口径与取值校验只有 gen 那一份 parser，这里不复制。
     for pair in args.set or ():
         html_args += ["--set", pair]
-    if args.drift:
-        html_args += ["--drift", args.drift]
     # 无图降级档：判据只有 gen 那一份（它决定槽位段出不画图槽），这里只透传，
     # 不在这里另判一次"哪些段算缺图"。
     if args.slot_no_image:
@@ -778,7 +773,7 @@ def main():
         html_args.append("--allow-infinite-loop")
         _REPORT["skipped"].append("无限循环拒收（--allow-infinite-loop，预览档）")
     _run_step(gen_hyperframes.main, html_args, "生成 HTML")
-    # 生效的视觉覆写进报告：--set 打错、被 --drift 覆盖、写了个对本片无效的键，
+    # 生效的视觉覆写进报告：--set 打错、写了个对本片无效的键，
     # 事后都能在 production_report 里核对，不用靠"我明明改了啊"。
     if overrides():
         _REPORT["params"]["template_overrides"] = dict(sorted(overrides().items()))

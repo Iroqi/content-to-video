@@ -271,8 +271,7 @@ def guard_not_in_skill_dir(*labeled_paths):
 def seeded_wobble(seed_key, i):
     """seed_key 派生的第 i 个 [-1, 1] 抖动值（同一个输入重跑逐字节一致）。
 
-    手绘抖动（canvas_kit 的 roughness）与 Ken Burns 的取景方向（html_renderer
-    的 imageEntrance.drift）都要"看起来随机、实则可复现"这一件事——渲染期的确定性
+    手绘抖动（canvas_kit 的 roughness）要"看起来随机、实则可复现"这一件事——渲染期的确定性
     契约禁的是墙钟与未播种随机，所以要从同一个 seed 出一批抖动时只能用这一类
     无状态派生。
 

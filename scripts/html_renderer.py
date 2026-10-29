@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
 
-from _script_utils import num_fmt, seeded_wobble  # noqa: E402  数值字面形态的单一实现
+from _script_utils import num_fmt  # noqa: E402  数值字面形态的单一实现
 from _theme import (
     get_theme_colors, get_default_accent, mix, normalize_accent,
     theme_bg_stops, ensure_text_contrast, DEFAULT_THEME,
@@ -375,11 +375,6 @@ def _ved_settle_seconds(sentences, page_last_si, relay_seconds):
 
 
 _DEFAULT_GSAP_SRC = "vendor/gsap.min.js"
-
-# Ken Burns 的单轴取景幅度下限：低于这个值观众读不出方向，这一拍就退化成纯推近
-# （等于白丢一次"每段各有取景"的机会）。用法见 `_image_drift_lines` 的 `_aim`。
-# 不登记进 check_numbers——它不改变作者写法，改了也不需要重算别的数。
-AIM_FLOOR = 0.35
 
 # 句尾收束（verse settle）的时长上限（秒）。收束只能演在"这句已经念完、下一句
 # 还没开口"的那段留白里（见 `_ved_settle_seconds`）。留白 = 下一句开口 − 本句
@@ -1036,8 +1031,8 @@ def _media_html(rc, sid, s, d):
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
     # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
-    # 容器带 `data-layout-allow-overflow`：入场收拢（settle 起手 scale 1.05~1.08）与
-    # Ken Burns 全程都在以 scale≥1 铺满槽位，子元素 bbox 每帧都比容器大几像素。
+    # 容器带 `data-layout-allow-overflow`：入场收拢（settle 起手 scale 1.05~1.08）
+    # 以 scale≥1 铺满槽位，子元素 bbox 每帧都比容器大几像素。
     # 这是设计，不是版式错——不打标的话 Layout 阶段每段报一条 container_overflow，
     # 而它真挡住的（SVG 比例失配）由 gen_hyperframes 的槽位比例护栏在生成期拦。
     _bare = " bare-media" if is_svg_path(media_path) else ""
@@ -1212,7 +1207,7 @@ def is_full_bleed_card(card):
     与 `_segments.is_full_bleed(seg)` 是同一个判据的两种入口：那边吃 manifest 段，
     这边吃已装配的卡（渲染器的时间线各处只有卡）。版式名单仍只由 _segments 持有，
     这里不复制一份字面量——复制之后加第三档满幅版式时，漏掉的那一处会静默按
-    槽位页处理（配图入场、Ken Burns、擦除转场全回来一遍）。
+    槽位页处理（配图入场收拢、擦除转场全回来一遍）。
     """
     return card.layout in FULL_BLEED_LAYOUTS
 
@@ -1829,8 +1824,8 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
     # bbox 的左上角（实测，见 _cam_crop.cam_default_origin 的 docstring），那个角还跟着
     # 别的步的 from 瞬态飘 —— 出画 warn 与跨段烘焙算的取景就和成片不是一幅画。
     # 槽位版式的 evolve 不调机位（契约层已拒相机属性），原点注入这件事对它没有意义：
-    # 槽位里的镜头由模板的入场收拢与运镜负责，再钉一个原点只会让"图内原点"与
-    # "CSS transform-origin"两个中心打架。
+    # 槽位里的镜头由模板的入场收拢负责（配图不做持续推近，见 references/rendering.md），
+    # 再钉一个原点只会让"图内原点"与 "CSS transform-origin"两个中心打架。
     pin = (cam_default_origin(entry.get("opts", {}).get("inline_svg"), block["steps"])
            if pin_cam else None)
 
@@ -1997,7 +1992,7 @@ def _evolve_timeline_lines(rc, card):
     与 `_director_timeline_lines` 共用全部的"怎么演"（锚点、draw、morph、count、
     type、stagger、repeat/yoyo），区别只在**它不接管编排**：
 
-    - 版面仍是槽位版式：标题层、句子流层、配图入场收拢、Ken Burns 运镜都照旧；
+    - 版面仍是槽位版式：标题层、句子流层、配图入场收拢都照旧；
       这条补间只是叠在图内元素上，让"讲到的那个状态"真的出现在画面里。
     - **不注入相机原点**：槽位里的镜头归模板，`evolve` 已在契约层拒掉相机属性，
       这里也就不做 `cam_default_origin` 那一套（对槽位图算出来的中心没有意义）。
@@ -2293,24 +2288,17 @@ def _apple_opening_lines(rc, card):
 
 
 def _still_image_carrier_sid(rc, card):
-    """这张卡有没有可独立运镜的静态图载体（有则返回 sid，否则 None）。
+    """这张卡有没有可独立收拢的静态图载体（有则返回 sid，否则 None）。
 
-    判据收成一份是因为它有三个消费者——`_image_drift_lines` 问"该不该漂"、
-    `_image_settle_lines` 问"该不该收拢"、generate_html 的卡片循环问"轮到第几张"
-    给方向编号。写两遍的话，第二次一定把某类载体算漏，于是编号跳号、相邻两段
-    漂向同一侧（正是编号要防的事）。
-
-    入场收拢与持续运镜作用在**同一个元素**（`#img-{sid} > img`）上，所以"哪些
-    载体能独立运镜"只能有一个答案——不是两处巧合地一致。
+    判据收成一份是因为它有两个消费者——`_image_settle_lines` 问"该不该收拢"、
+    generate_html 的卡片循环问"轮到第几张"给来向编号。
     """
-    # 图版与整页画布同一口径：画面主导的页，配图要"揭开即在位"，不收拢、不漂；
+    # 图版与整页画布同一口径：画面主导的页，配图要"揭开即在位"，不收拢；
     # 运镜交给作者（图版本来就是给 SVG director / compare 用的档）。
     if not card.has_image or is_full_bleed_card(card) or card.is_keep:
         return None
     if getattr(card, "layout", None) == "compare":
-        # 并置对比：两格里只要有一格是可漂的静态图就算"有载体"（逐格判在
-        # `_pane_carriers`，那一格不该漂就自然不在结果里）。若两格都是内联 SVG
-        # 或视频，`_pane_carriers` 会返回空列表，两个函数都自然不生成补间。
+        # 并置对比：两格里只要有一格接受收拢就算"有载体"（逐格判在 `_pane_carriers`）。
         return card.sid if _pane_carriers(rc, card) else None
     media = rc.images.get(card.sid) or {}
     if media.get("type") == "video" or (media.get("opts") or {}).get("inline_svg"):
@@ -2321,9 +2309,9 @@ def _still_image_carrier_sid(rc, card):
 def _entrance_k(rc, card):
     """入场动效预算的压缩系数：短段整体压缩，长段维持原速。
 
-    容器层入场、内容层收拢、持续运镜三处**都**按它压缩——三处各写一遍
+    容器层入场、内容层收拢两处**都**按它压缩——两处各写一遍
     `min(1, max(minFactor, d/normSeconds))` 的话，改了归一化口径就会有一处没跟着
-    走：那一段的图"框已经到位了、镜头还在按旧速度收"，而它看起来只是有点不对劲。
+    走：那一段的图"框已经到位了、图还在按旧速度收"，而它看起来只是有点不对劲。
     """
     _eb = rc.anim["entranceBudget"]
     # 归一化分母同样可能被 --set 写成 0（同 _title_font_px 那条理由）。分母失
@@ -2334,12 +2322,12 @@ def _entrance_k(rc, card):
 
 
 def _entrance_lead(rc, card):
-    """入场预算（秒）：入场补间收尾的时刻，也是持续运镜的起点。
+    """入场预算（秒）：入场补间收尾的时刻，也是收拢起手的时刻。
 
-    容器层入场、内容层收拢、持续运镜三处都拿它当接缝，所以它必须是**一个**数：
-    容器层在 `startDelay + duration` 收尾，运镜从那一刻起接手，内容层收拢的终点
-    也钉在同一刻（见 `_image_settle_lines`）——三处各算一份的话，改了入场时长
-    就会有一处没跟着走，成片里是"图还在收、运镜已经开始推"的重叠。
+    容器层入场与内容层收拢都拿它当接缝，所以它必须是**一个**数：容器层在
+    `startDelay + duration` 收尾，内容层收拢的终点钉在同一刻（见
+    `_image_settle_lines`）——两处各算一份的话，改了入场时长就会有一处没跟着走，
+    成片里是"框还在落、图已经开始收"的重叠。
     """
     a_img = rc.anim["imageEntrance"]
     return (a_img["startDelay"] + a_img["duration"]) * _entrance_k(rc, card)
@@ -2351,8 +2339,7 @@ def _unit_frac(v):
     这类量一律写比例、不写绝对值：上限本身随画幅与段长变，写绝对值的一份在竖屏长段
     安全的输入，换到横屏短段就越界。同一件事只该有一份钳制。
 
-    保号：入场收拢把符号当来向（`-0.6` = 从左侧来）；持续运镜的符号由 `_aim` 按段序
-    给，传进来的只带幅度。
+    保号：入场收拢把符号当来向（`-0.6` = 从左侧来）。
     """
     try:
         f = float(v)
@@ -2361,125 +2348,6 @@ def _unit_frac(v):
     if f != f:
         return 0.0
     return max(-1.0, min(1.0, f))
-
-
-def _drift_for(rc, card, tpl_drift):
-    """模板运镜档 + 本段 images.json 的 drift 覆盖 → 这一段真正用的四个数。
-
-    覆盖是"逐项替换"而不是整块替换：作者写 `{"ratePerSec": 0.01}` 的意思是
-    "只把推近推快些"，不该顺带把 panX/panY 归零。`minSeconds` 不在覆盖项里——
-    它是"短段不值得起运镜"的判据，与取景手感无关。
-    """
-    raw = ((rc.images.get(card.sid) or {}).get("opts") or {}).get("drift")
-    if raw is None:
-        return tpl_drift
-    if raw is False:
-        return None
-    merged = dict(tpl_drift)
-    merged.update({k: v for k, v in raw.items() if k in merged})
-    return merged
-
-
-def _image_drift_lines(rc, card):
-    """静态图在画面上的持续缓慢运镜（Ken Burns）。
-
-    入场演完之后这张图还有 8~20 秒完全静止，一段里在动的只剩句子流——画面成了钉死
-    的海报。这里给它叠一层**恒定速率**的缓慢推近，只为维持呼吸感。
-
-    三条约束由 `object-fit:cover` 直接推出，不是审美：
-
-    1. **只推近、不拉远**：载体已是 cover 铺满槽位，`scale < 1` 会被槽位的
-       `overflow:hidden` 切出露背景的边（是露底，不是"图小了"），所以区间只在
-       [1, maxScale] 上单调推进。
-    2. **位移落在推近让出的盈余里**：放大 s 倍单侧多 `(s−1)/2 × 槽位边长`，越过同样
-       露底。所以 panX/panY 写"最多用掉多少盈余"（[0,1]）而不是绝对 px，换画幅、
-       改槽位几何都不会让一份安全的输入变成露底。方向不写在这里，由 `_aim` 轮换。
-    3. **匀速**：ease 恒为 `none` 且不开放成旋钮——任何缓动都会被读成有意图的镜头
-       调度。呼吸档（`breathe`）的进度系数单调不减但不均匀。
-
-    作用点是图载体 `#img-{sid} > img` 而非槽位盒：盒上挂圆角、外发光与 `::after`
-    内描边，对盒 scale 会把它们一起放大，且盒的 transform 已被入场补间的 `y` 独占。
-
-    三类载体不漂（判据在 `_still_image_carrier_sid`）：`<video>`（自己在放）、写了
-    `director` 的内联 SVG（作者已手写编排）、整页画布与 `stage:"keep"` 接续页。
-    """
-    if _still_image_carrier_sid(rc, card) is None:
-        return []
-    a_img = rc.anim["imageEntrance"]
-    tpl_drift = a_img.get("drift")
-    if tpl_drift is None:
-        return []
-    drift = _drift_for(rc, card, tpl_drift)
-    if drift is None:
-        return []                     # 这一段写了 drift:false
-    # 起点 = 入场补间收尾的时刻（入场段长同样吃了入场预算那份压缩，两处同一式）。
-    # 错开不是怕两个补间打架（它们作用在不同元素上），是不要"一边滑进来一边放大"。
-    lead = _entrance_lead(rc, card)
-    # 终点 = 本段口播收尾，与进度条同一口径（不取可见窗口：往后那点 gap 里画面
-    # 马上被下一页擦走，继续补只是在切页邻域多留一拍没人看的运动）。
-    avail = card.d - lead
-    if avail < float(drift["minSeconds"]):
-        return []                     # 短段：还没展开就被切走，读成抖动
-    scale_to = min(1.0 + float(drift["ratePerSec"]) * avail, float(drift["maxScale"]))
-    if scale_to <= 1.0:
-        return []                     # 速率与封顶都给 0 = 明确不要这层
-    bw, bh = get_image_box(rc.aspect)
-
-    def _aim(axis):
-        """第 axis 轴的取景方向：[-1,-AIM_FLOOR] ∪ [AIM_FLOOR,1] 上的值。
-
-        符号**由段序严格交替**（y 轴按奇偶翻、x 轴每两张翻一张，四张一轮走遍四个
-        象限），幅度交给 `seeded_wobble`（与 canvas_kit 的手绘抖动同源，重跑逐字节
-        一致）。别改成哈希取符号：实测 seg-a…seg-f 连续六张会落在同一侧，而"所有段
-        朝同一侧漂"正是要防的模式。
-        """
-        ordinal = getattr(card, "drift_ordinal", 0)
-        flip = ordinal % 2 if axis == 1 else (ordinal // 2) % 2
-        magnitude = (AIM_FLOOR + (1.0 - AIM_FLOOR) * abs(seeded_wobble(card.sid, axis)))
-        return (-magnitude) if flip else magnitude
-
-    slack_x = (scale_to - 1.0) * bw / 2.0
-    slack_y = (scale_to - 1.0) * bh / 2.0
-    x = _unit_frac(drift["panX"]) * slack_x * _aim(0)   # axis 0 = x
-    y = _unit_frac(drift["panY"]) * slack_y * _aim(1)   # axis 1 = y
-    xf, yf = num_fmt(x), num_fmt(y)
-    breath = _breath_segments(drift.get("breathe"), avail, scale_to)
-    # 段起点之前先钉住起点态。**这不是保险，是必需的**：GSAP 建时间线时会把每个
-    # `fromTo` 的**终点值**预渲染一遍（immediateRender），于是最后一条运镜补间
-    # 的终点（本例 scale 1.06 / x 3.859）在 t=0 就已经写在元素上了——成片里是
-    # "切页第一秒图比后面大一圈，到 1.0s 又缩回去"（实测 t=0…0.98 恒为 1.06，
-    # t=1.0 才跳到 1）。终点值按语句顺序互相覆盖，所以只要**最后**一条把起点写
-    # 回去就行：0.01s 的 fromTo，与段擦除同一条口径（真 tween、回退 seek 也回滚）。
-    # 载体按格展开（并置对比两张图各一条，单图版式就一条）。
-    carriers = _pane_carriers(rc, card)
-    pins = [(f'tl.fromTo("{_sel}",{{scale:1,x:0,y:0}},'
-             f'{{scale:1,x:0,y:0,duration:0.01,ease:"none"}},'
-             f'{max(0.0, card.s + lead - 0.01):.2f})') for _sel in carriers]
-    if not breath:
-        return ([f'tl.fromTo("{_sel}",{{scale:1,x:0,y:0}},'
-                 f'{{scale:{num_fmt(scale_to, 4)},x:{xf},y:{yf},'
-                 f'duration:{avail:.2f},ease:"none"}},{card.s + lead:.2f})'
-                 for _sel in carriers] + pins)
-    # 呼吸：把"匀速推到顶"换成"快 / 缓 / 快"的分段推进。每段仍写成 fromTo
-    # 并显式给出**自己的起点值**（= 上一段的终值），所以乱序 seek 依然幂等
-    # ——任何时候 seek 到第 i 段，GSAP 都能从写死的起点直接算出该帧，不依赖
-    # 上一帧留下的状态。首段的起点就是 (1, 0, 0)，与不呼吸时逐像素一致。
-    out = []
-    # 每一格各自一条完整的呼吸链（各自的起点态、各自的终止钉值）。两格共用一条
-    # 链就会变成"两格同步缩放"，读起来像整块图在呼吸，而不是两张图各自有镜头。
-    for _sel in carriers:
-        t0 = card.s + lead
-        prev = (1.0, 0.0, 0.0)
-        for dt, sc, xr, yr, ease in breath:
-            cur = (sc, x * xr, y * yr)
-            out.append(
-                f'tl.fromTo("{_sel}",'
-                f'{{scale:{num_fmt(prev[0], 5)},x:{num_fmt(prev[1])},y:{num_fmt(prev[2])}}},'
-                f'{{scale:{num_fmt(cur[0], 5)},x:{num_fmt(cur[1])},y:{num_fmt(cur[2])},'
-                f'duration:{dt:.2f},ease:"none"}},{t0:.2f})')
-            prev = cur
-            t0 += dt
-    return out + pins
 
 
 def _cycle_pick(base, rhythm, ordinal):
@@ -2625,13 +2493,8 @@ def _frame_arc_lines(rc, card, frame_sel, at, duration):
       自己拆了（`_title_rhythm` 里"缩放档为什么被删"是同一条理由）。
     - 字幕换句：位移只写在列容器上，行自己一条补间都没有，加副轴就是给每句加一条
       独立的飞行动作（`references/motion.md`「换句是滚动」判据一）。
-    - Ken Burns：匀速是硬约束，缓动会被读成有意图的镜头调度（`_image_drift_lines`）。
-
-    **幅度只有一个真源**（`arc.x`），`arc.rhythm` 只轮换向（连续两张图不朝同一侧
-    弯，理由见 `_image_drift_lines._aim` 的"四张一轮走遍四个象限"）。幅度也轮换一份
-    的话，`arc.x = 0` 就关不掉这层——"关不掉"的旋钮等于没有旋钮（同样的理由让
-    `_title_rhythm` 的行程可以分档：标题每一档的"多重"本身就是意图的一部分，弧的
-    幅度不是）。
+    **幅度只有一个真源**（`arc.x`），`arc.rhythm` 只轮换向。幅度也轮换一份的话，
+    `arc.x = 0` 就关不掉这层——"关不掉"的旋钮等于没有旋钮。
 
     `x` 为 0（或模板没写 `arc`）时整条不生成——那是"明确不要这层"，不是退化。
     """
@@ -2667,12 +2530,9 @@ def _image_settle_lines(rc, card, lead):
     改槽位几何都不会变成露底（GSAP 的 transform 是 `translate(x,y) scale(s)`，平移是
     未缩放的屏幕 px，算式不用再乘 s）。
 
-    **终点恒等于运镜起点 `lead`**：duration 由 `lead − 起点` 推出，不独立配置——
-    写死会出现"没收完就开始推"或"收完了干等"，成片里都是速度突变。`startFrac` 是
+    **终点恒等于入场收尾 `lead`**：duration 由 `lead − 起点` 推出，不独立配置——
+    写死会出现"没收完就开始走"或"收完了干等"，成片里都是速度突变。`startFrac` 是
     唯一旋钮，占入场预算的比例。
-
-    返回的补间必须排在运镜补间**之前**：运镜末尾钉住补间的终值（`scale:1,x:0,y:0`）
-    要最后落地，见 `_image_drift_lines` 的 pin。
     """
     if _still_image_carrier_sid(rc, card) is None:
         return []
@@ -2701,11 +2561,9 @@ def _image_settle_lines(rc, card, lead):
 
 
 def _pane_carriers(rc, card):
-    """这一页"能独立承载运镜"的图载体选择器列表。
+    """这一页"能独立承载入场收拢"的图载体选择器列表。
 
     单图版式返回一条（`#img-{sid} > img`）；并置对比返回两条，逐格一条。
-    逐格而不是放弃：两格图整段完全静止，这一页就只剩"两张钉死的海报"——
-    正是 Ken Burns 要解决的那个问题，而且并置对比页往往还更长（要让人来回看）。
 
     哪一格不参与也在这里判：写着 director/evolve/derive 的那格是作者已手写编排的
     内联 SVG（`> svg` 不是 `> img`，选择器本来就落空），视频同理。
@@ -2723,54 +2581,8 @@ def _pane_carriers(rc, card):
     return [f"#img-{card.sid} > img"]
 
 
-def _breath_segments(breathe, avail, scale_to):
-    """把单调推近切成"推 → 缓 → 推"的小段，让长段落后半程不再死住。
-
-    起伏的是**进度系数** A ∈ [1−depthFrac, 1]（`depthFrac` 上限 0.5），所以
-    s(t) = 1 + A(t)·(scale_to−1) 恒 ≥ 1 且不越过峰值——回弹落在推近让出的盈余里，
-    不缩到 1 以下（cover 语义，见 `_image_drift_lines`）。位移按同一比例缩放。
-
-    返回 [(duration, scale, xRatio, yRatio, ease), …]，空列表 = 走单段匀速。
-    不足两个周期（`avail < period×2`）不分段：切三段只会读成卡顿。
-    """
-    if not breathe or avail <= 0 or scale_to <= 1.0:
-        return []
-    try:
-        period = float(breathe.get("periodSeconds", 0))
-        depth = float(breathe.get("depthFrac", 0))
-    except (TypeError, ValueError):
-        return []
-    if not (period > 0.8) or not (0 < depth <= 0.5):
-        return []
-    # 段数：按周期切，至少三段（推 / 缓 / 推），最多 6 段——再多就碎成抖动。
-    # 不足两个周期的段不分段：那点长度装不下一次完整的"推—缓—推"，切了只会
-    # 读成卡顿，不如老老实实匀速推完（也就退化成加这个旋钮之前的行为）。
-    if avail < period * 2:
-        return []
-    n = int(max(3, min(6, round(avail / period) + 1)))
-    dt = avail / n
-    span = scale_to - 1.0
-    out = []
-    for i in range(n):
-        # 进度系数 A **单调不减**、但增量不均匀：一段推得多、一段推得少，于是
-        # 曲线是"快 → 缓 → 快"，读起来是呼吸而不是匀速直线。退步只体现在
-        # "这一段几乎没动"（增量被压到 depth 倍），绝不出现"往回退"——回退会让
-        # 观众以为画面在缩，且段与段之间的可读性反而更差。
-        # 末段固定落在 1.0（= scale_to），保证终点与不呼吸时完全一致。
-        if i == n - 1:
-            a = 1.0
-        else:
-            # 前 n-1 段走到"还剩最后一步"的位置；偶数段推进多、奇数段推进少
-            share = (i + 1) / n
-            if i % 2 == 1:
-                share = share - depth / n
-            a = max(0.0, min(1.0, share))
-        out.append((dt, 1.0 + span * a, a, a, "none"))
-    return out
-
-
 def _card_timeline_lines(rc, card):
-    """本卡的 GSAP 时间线：遮罩擦除入场、标题/配图入场、配图漂移、进度条。"""
+    """本卡的 GSAP 时间线：遮罩擦除入场、标题/配图入场、进度条。"""
     sid, s, d = card.sid, card.s, card.d
     # 动画参数快捷引用
     a_ = rc.anim
@@ -2856,10 +2668,8 @@ def _card_timeline_lines(rc, card):
         )
         # 副轴：同一段入场再落一条异缓动的横向补间，合成路径是弧而不是竖直直线。
         lines.extend(_frame_arc_lines(rc, card, _frame_sel, _frame_at, _frame_dur))
-        # 同一个 guard 内挂收拢与持续运镜：能配图入场的才有资格演这两层。
-        # 顺序不可换——运镜末尾那条钉住补间必须最后落地（见 _image_settle_lines）。
+        # 同一个 guard 内挂收拢：能配图入场的才有资格演这一层。
         lines.extend(_image_settle_lines(rc, card, lead))
-        lines.extend(_image_drift_lines(rc, card))
     # 图版字幕的换句：整列滚过窗口那条固定的边（一句一步）。放在配图之后是因为
     # 它管的也是"跟着旁白走"的那一层，作用域却是独立的列容器。
     lines.extend(_plate_scroll_lines(rc, card))
@@ -3000,12 +2810,8 @@ def generate_html(manifest, audio_src, images=None,
 
     seg_cards = []
     gsap_lines = []
-    # Ken Burns 的方向轮换序号：只对**真的会漂**的那些段编号（判据在
-    # _still_image_carrier_sid，与 _image_drift_lines 同一份），所以整页画布段/
-    # video 段不会占掉一个号、让两张相邻静态图撞到同一侧。
-    _drift_ordinal = 0
-    # 入场收拢的轮换序号：与上面同源——只对**真的会收拢**的那些段编号（判据同样
-    # 是 `_still_image_carrier_sid`），整页画布段/video 段不占号，相邻两张静态图
+    # 入场收拢的轮换序号：只对**真的会收拢**的那些段编号（判据是
+    # `_still_image_carrier_sid`），整页画布段/video 段不占号，相邻两张静态图
     # 不会撞到同一个来向。
     _image_ordinal = 0
     _title_ordinal = 0
@@ -3019,8 +2825,6 @@ def generate_html(manifest, audio_src, images=None,
         card = _prepare_card(rc, clip)
         card.settle_s = _settle_s
         if _still_image_carrier_sid(rc, card) is not None:
-            card.drift_ordinal = _drift_ordinal
-            _drift_ordinal += 1
             card.image_ordinal = _image_ordinal
             _image_ordinal += 1
         # 标题入场节奏的轮换序号：按**所有**卡片的段序编号（含画布/接续页），

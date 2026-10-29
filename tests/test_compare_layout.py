@@ -61,11 +61,11 @@ class TestPairContract(unittest.TestCase):
                 self.assertIn("正好 2 项", str(cm.exception))
 
     def test_single_image_keys_are_rejected_on_a_pair(self):
-        # 单图那套键（director/type/drift…）在一对图上是"写了不生效"，
+        # 单图那套键（director/type/stage…）在一对图上是"写了不生效"，
         # 这一类静默丢弃正是契约层要拦的。
         for key, val in (("director", {"steps": [{"at": 0, "target": "#a",
                                                  "to": {"opacity": 1}}]}),
-                         ("type", "image"), ("drift", False), ("stage", "keep")):
+                         ("type", "image"), ("stage", "keep")):
             with self.subTest(key=key):
                 with self.assertRaises(ValueError) as cm:
                     validate_images_json({"seg-a": {"src": list(PAIR), key: val}})
@@ -98,7 +98,7 @@ class TestPairContract(unittest.TestCase):
     def test_unknown_pane_key_is_rejected(self):
         with self.assertRaises(ValueError):
             validate_images_json({"seg-a": {"src": list(PAIR),
-                                            "panes": [{"drift": False}, {}]}})
+                                            "panes": [{"bogus": 1}, {}]}})
 
 
 class TestAssembly(unittest.TestCase):
@@ -140,12 +140,6 @@ class TestAssembly(unittest.TestCase):
         self.assertIn('#img-seg-a-0 #dot', html)
         self.assertIn('#img-seg-a-1 #dot', html)
         self.assertNotIn('"#img-seg-a #dot"', html)
-
-    def test_drift_is_generated_per_pane(self):
-        # 两格图整段静止 = 两张钉死的海报，正是 Ken Burns 要治的。
-        html = self._html()
-        self.assertIn('"#img-seg-a-0 > img"', html)
-        self.assertIn('"#img-seg-a-1 > img"', html)
 
     def test_missing_pair_raises_instead_of_empty_slot(self):
         # 单图映射喂给 compare 段：必须当场报错，不能渲染出空槽。

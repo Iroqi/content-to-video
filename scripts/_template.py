@@ -562,19 +562,7 @@ _TEMPLATE_JSON = r'''
         {"scale": 1.05, "panX": 0.7, "panY": 0.15, "ease": "power2.out"},
         {"scale": 1.08, "panX": 0.1, "panY": 0.1, "ease": "power1.out"},
         {"scale": 1.05, "panX": -0.6, "panY": 0.25, "ease": "power3.out"}
-      ],
-      "drift": {
-        "minSeconds": 2.5,
-        "ratePerSec": 0.006,
-        "maxScale": 1.08,
-        "panX": 0.25,
-        "panY": 0.6,
-        "ease": "none",
-        "breathe": {
-          "periodSeconds": 7.0,
-          "depthFrac": 0.35
-        }
-      }
+      ]
     },
     "director": {
       "duration": 0.5,

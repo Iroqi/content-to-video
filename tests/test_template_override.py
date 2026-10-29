@@ -1,4 +1,4 @@
-"""视觉模板的临时覆写层（CLI `--set` / `--drift`）。
+"""视觉模板的临时覆写层（CLI `--set`）。
 
 覆写层只有两条契约值得锁：
 
@@ -91,47 +91,6 @@ class ConsumersSeeTheOverride(unittest.TestCase):
         import html_renderer as HR
         T.put_override("animation.director.duration=0.77")
         self.assertEqual(HR.load_template()["animation"]["director"]["duration"], 0.77)
-
-
-class DriftPresets(unittest.TestCase):
-    """运镜三档：两端都得在"不露底"的安全区里，off 必须真的是 0。"""
-
-    def tearDown(self):
-        T._OVERRIDES.clear()
-
-    def test_off_means_no_motion(self):
-        import gen_hyperframes as G
-        preset = G.DRIFT_PRESETS["off"]
-        self.assertEqual(preset["ratePerSec"], 0.0)
-        self.assertEqual(preset["panX"], 0.0)
-        self.assertEqual(preset["panY"], 0.0)
-
-    def test_every_preset_stays_inside_the_cover_slack(self):
-        import gen_hyperframes as G
-        for name, preset in G.DRIFT_PRESETS.items():
-            with self.subTest(preset=name):
-                self.assertGreaterEqual(preset["maxScale"], 1.0)
-                self.assertLess(preset["maxScale"], 1.2,
-                                "推得太近，一张 4:3 的图会被裁成特写")
-                self.assertLessEqual(preset["panX"], 1.0)
-                self.assertLessEqual(preset["panY"], 1.0)
-
-    def test_preset_becomes_template_overrides(self):
-        import gen_hyperframes as G
-
-        class _Args:
-            set = []
-            drift = "boring"
-
-        class _Parser:
-            def error(self, msg):  # pragma: no cover - 不该走到
-                raise AssertionError(msg)
-
-        with contextlib.redirect_stderr(io.StringIO()):
-            G._init_visual_knobs(_Parser(), _Args())
-        drift = T.load_template()["animation"]["imageEntrance"]["drift"]
-        self.assertEqual(drift["ratePerSec"], G.DRIFT_PRESETS["boring"]["ratePerSec"])
-        self.assertEqual(drift["maxScale"], G.DRIFT_PRESETS["boring"]["maxScale"])
 
 
 class PlaceholderFontStack(unittest.TestCase):

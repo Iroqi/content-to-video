@@ -876,7 +876,7 @@ class AppleOpeningBudget(unittest.TestCase):
         self.assertLess(k_seven, k_one)
         self.assertEqual(k_one, 1.0)
 
-    def test_breathe_and_drift_cycles_are_not_compressed(self):
+    def test_breathe_and_glow_drift_cycles_are_not_compressed(self):
         """主光呼吸与副光漂移的**时长**不参与压缩：它们是淡入之后的稳态循环，
         压它们等于让开场一直喘，而且它们不参与"舞演完没有"的判定。压缩只落
         在淡入与其起点。"""

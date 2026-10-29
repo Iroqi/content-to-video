@@ -89,9 +89,6 @@ MEDIA_ENTRY_KEYS = frozenset({
     # duck：让路开关，默认开。volume 压整条轨的响度，duck 只压人声占住的频段。
     # 要原声当主体（采访、同期声）显式写 duck:false。
     "duck",
-    # drift：逐段覆盖静态图运镜（见 html_renderer._image_drift_lines）。
-    # false = 这段完全不动；对象 = 只改写的几项，其余走模板 drift。
-    "drift",
 })
 
 # Hyperframes 的音轨增益上限（+12dB），抄自官方 html-schema 契约，不另立数。
@@ -633,7 +630,6 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_director(key, value, src))
     _collect(errs, lambda: _check_evolve(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
-    _collect(errs, lambda: _check_drift(key, value))
 
 
 def _check_pair(key, value, src):
@@ -676,7 +672,7 @@ def _check_pair(key, value, src):
     for _opt in ("type", "poster", "loop", "muted", "autoplay", "playsinline",
                  "volume", "fade_in", "fade_out", "media_start", "duck",
                  "source_url", "license", "attribution", "query", "provider",
-                 "drift", "stage", "director", "evolve", "derive"):
+                 "stage", "director", "evolve", "derive"):
         if _opt in value:
             raise ValueError(
                 f"images.json 的 '{key}' 是并置对比（src 为一对图），不接受 "
@@ -1090,43 +1086,6 @@ def _check_stage(key, value, src):
             "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")
     if _errs:
         raise ValueError("\n".join(_errs))
-
-
-_DRIFT_KEYS = {"ratePerSec": (0.0, None, "每秒推近的比例（0.006 = 每 10 秒推 6%）"),
-               "maxScale": (1.0, None, "推近封顶倍数（1.08 = 最多放大 8%）"),
-               "panX": (0.0, 1.0, "横向用掉多少推近盈余（1 = 边缘刚好贴住槽位边）"),
-               "panY": (0.0, 1.0, "纵向用掉多少推近盈余")}
-
-
-def _check_drift(key, value):
-    """drift：逐段覆盖静态图的运镜。false 关掉，或只写要改的那几个数。
-
-    区间与模板同一套语义（见 html_renderer._image_drift_lines 的三条约束）：
-    速率与 pan 非负、pan ≤ 1——pan > 1 不是"再推远"，而是把图边缘拖进槽位（露底）。
-    """
-    if "drift" not in value:
-        return
-    raw = value["drift"]
-    if raw is False:
-        return
-    if not isinstance(raw, dict):
-        raise ValueError(
-            f"images.json 的 '{key}' 的 drift 只认 false（这一段不要运镜）或对象"
-            f"（要改的那几项），实际: {raw!r}")
-    unknown = sorted(set(raw) - set(_DRIFT_KEYS))
-    if unknown:
-        raise ValueError(
-            f"images.json 的 '{key}' 的 drift 含未知键 {unknown}——只认 "
-            f"{'、'.join(_DRIFT_KEYS)}")
-    for name, val in raw.items():
-        lo, hi, why = _DRIFT_KEYS[name]
-        if not is_finite_number(val):
-            raise ValueError(f"images.json 的 '{key}' 的 drift.{name} 必须是数值"
-                             f"（NaN/Infinity 不算数；实际: {val!r}）")
-        if float(val) < lo or (hi is not None and float(val) > hi):
-            bound = f"不小于 {lo:g}" if hi is None else f"在 {lo:g}~{hi:g} 之间"
-            raise ValueError(f"images.json 的 '{key}' 的 drift.{name} 要{bound}"
-                             f"（{why}；实际: {val!r}）")
 
 
 def load_images_json(path):

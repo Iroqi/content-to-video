@@ -1,6 +1,6 @@
 # 第 4 步 · 字幕：焦点、换句、时钟
 
-**怎么让字幕跟着念**在本文件：焦点五维怎么衰减、换句那一下做什么、念到第几个字靠什么读。**页面怎么渲**（转场、入场、运镜、性能）在 `references/rendering.md`；**出问题按症状查** `references/troubleshooting.md`。
+**怎么让字幕跟着念**在本文件：焦点五维怎么衰减、换句那一下做什么、念到第几个字靠什么读。**页面怎么渲**（转场、入场、性能）在 `references/rendering.md`；**出问题按症状查** `references/troubleshooting.md`。
 
 ## 句子流：当前句贵、其余退后
 

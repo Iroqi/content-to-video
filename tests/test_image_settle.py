@@ -1,18 +1,15 @@
 """素材入场「收拢落位」的行为锁。
 
-容器层（框）与内容层（图本体）分开演之后，出现了一条新的越界通道：内容层一旦
-离开 `scale:1`，任何 x/y 都可能让 cover 的图露出槽位背景——正是持续运镜那条
-"位移必须落在推近让出来的盈余里"的同一条线，只是发生在入场那 0.8 秒里。
+容器层（框）与内容层（图本体）分开演之后，出现了一条越界通道：内容层一旦
+离开 `scale:1`，任何 x/y 都可能让 cover 的图露出槽位背景。
 
-所以这份文件按第一性原理验三件事（不验实现细节）：
+按第一性原理验三件事（不验实现细节）：
 
 1. **不露底** —— |x| ≤ (scale−1)·槽位宽/2、|y| ≤ (scale−1)·槽位高/2，两个画幅
    各按自己的槽位盒量一遍；
-2. **终点恒等于运镜起点** —— 收拢结束的那一刻必须正好是持续运镜开始的那一刻。
-   早了是"收完了干等"，晚了是"还在收、运镜已经开始推"，两者在成片里都是速度突变；
-3. **补间顺序** —— 收拢的 fromTo 必须排在运镜末尾那条钉住补间**之前**，让钉住
-   补间的终值（scale:1,x:0,y:0）最后落地，否则 GSAP 建时间线时的预渲染会把
-   `scale:1.06` 留在元素上（"切页第一秒图比后面大一圈"）。
+2. **框先落位** —— 容器层的入场不能比内容层的收拢更晚收尾，否则读成"图在框外";
+3. **收拢之后不再动** —— 载体上没有贯穿整段的长补间（配图不做持续推近，
+   见 `tests/test_image_drift.py`）。
 
 外加两条结构锁：轮换档位连续四段不重样、不演的载体（video / 整页画布 / 接续页）
 一条补间都不生成。
@@ -36,15 +33,6 @@ _SETTLE_RE = re.compile(
     r'\{scale:(?P<scale>-?[\d.]+),x:(?P<x>-?[\d.]+),y:(?P<y>-?[\d.]+)\},'
     r'\{scale:1,x:0,y:0,duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
-# 持续运镜（含钉住补间）：起点恒为 {1,0,0} 的那一批。
-# **起点 scale 必须收进分组**：收拢补间的形状与它同型（都是
-# `{scale,x,y}→{scale,x,y,duration,ease}`），只按 dur 过滤的话会把收拢自己算成
-# 运镜，"收拢终点 == 运镜起点"就退化成"自己等于自己"的恒真断言。
-_DRIFT_RE = re.compile(
-    r'tl\.fromTo\("#img-(?P<sid>[A-Za-z0-9_-]+) > img",'
-    r'\{scale:(?P<from>-?[\d.]+),x:-?[\d.]+,y:-?[\d.]+\},'
-    r'\{scale:(?P<scale>-?[\d.]+),x:(?P<x>-?[\d.]+),y:(?P<y>-?[\d.]+),'
-    r'duration:(?P<dur>[\d.]+),ease:"(?P<ease>[a-z.]+)"\},(?P<at>[\d.]+)\)')
 # 容器层入场：tl.from("#img-seg-a",{opacity:0,y:40,duration:0.44,ease:"…"},2.60)
 _FRAME_RE = re.compile(
     r'tl\.from\("#img-(?P<sid>[A-Za-z0-9_-]+)",\{opacity:0,y:-?[\d.]+,'
@@ -78,13 +66,6 @@ def settles(html):
     "哪几段有收拢"会每条多算一次，而"不演的载体不该有收拢"这类断言直接假阴性。
     """
     return [h for h in _SETTLE_RE.finditer(html) if float(h.group('dur')) > _PIN_MAX_DUR]
-
-
-def drift_hits(html, sid=None):
-    """真运镜补间（含钉住补间），滤掉形状同型的收拢补间——判据见 _DRIFT_RE。"""
-    return [h for h in _DRIFT_RE.finditer(html)
-            if (sid is None or h.group("sid") == sid)
-            and abs(float(h.group("from")) - 1.0) < 1e-9]
 
 
 class UnitFrac(unittest.TestCase):
@@ -161,41 +142,16 @@ class NoBareEdge(unittest.TestCase):
             self.assertGreater(float(s.group("dur")), 0)
 
 
-class HandoffToDrift(unittest.TestCase):
-    """收拢终点 == 运镜起点，且框先落位。"""
-
-    def test_settle_ends_exactly_where_drift_starts(self):
-        _, html = render()
-        for sid in ("seg-a", "seg-b", "seg-c", "seg-d"):
-            st = next(x for x in settles(html) if x.group("sid") == sid)
-            drifts = [x for x in drift_hits(html, sid)
-                      if float(x.group("dur")) > _PIN_MAX_DUR]
-            self.assertTrue(drifts, f"{sid}: 长段应当有持续运镜")
-            first = min(drifts, key=lambda x: float(x.group("at")))
-            end = float(st.group("at")) + float(st.group("dur"))
-            self.assertAlmostEqual(end, float(first.group("at")), places=2,
-                                   msg=f"{sid}: 收拢终点与运镜起点错位（成片里是速度突变）")
+class FrameBeforeContent(unittest.TestCase):
+    """框先落位、内容后到位——四样东西同时到位就只是一块东西浮上来。"""
 
     def test_frame_lands_before_the_content_settles(self):
-        """容器层（框）先落位——四样东西同时到位就只是一块东西浮上来。"""
         _, html = render()
         for sid in ("seg-a", "seg-b", "seg-c", "seg-d"):
             fr = next(x for x in _FRAME_RE.finditer(html) if x.group("sid") == sid)
             st = next(x for x in settles(html) if x.group("sid") == sid)
             self.assertLessEqual(float(fr.group("at")) + float(fr.group("dur")),
                                  float(st.group("at")) + float(st.group("dur")))
-
-    def test_pin_is_the_last_tween_on_the_carrier(self):
-        """钉住补间必须最后落地，否则预渲染把 scale>1 留在元素上。"""
-        _, html = render()
-        for sid in ("seg-a", "seg-b", "seg-c", "seg-d"):
-            hits = drift_hits(html, sid)
-            pins = [x for x in hits if float(x.group("dur")) <= _PIN_MAX_DUR]
-            self.assertTrue(pins, f"{sid}: 运镜末尾应当有钉住补间")
-            last = max(hits, key=lambda x: x.start())
-            self.assertIn(last, pins,
-                          msg=f"{sid}: 载体上最后一条补间不是钉住补间——"
-                              "GSAP 建时间线时预渲染的终值会留在元素上")
 
 
 class RhythmRotates(unittest.TestCase):
@@ -236,7 +192,7 @@ class RhythmRotates(unittest.TestCase):
 
 
 class WhoDoesNotSettle(unittest.TestCase):
-    """不该演的载体一条补间都不生成（与持续运镜同一份判据）。"""
+    """不该演的载体（video / 整页画布 / 接续页）一条收拢补间都不生成。"""
 
     def test_video_has_no_settle(self):
         images = {"seg-a": {"src": "images/a.mp4", "type": "video"},

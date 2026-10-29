@@ -282,6 +282,20 @@ class SvgChecker(unittest.TestCase):
         errs, _ = self.run_check(GOOD.replace('x="40"', 'x="-20"'))
         self.assertTrue(any("画布左缘" in e for e in errs), errs)
 
+    def test_text_oob_end_anchor_left_of_canvas_is_error(self):
+        """回归：end 锚点画在画布内、但文字向左伸出左缘（x - est_w < 0）必须报 error。
+
+        本批日报 seg2/seg3/seg7 的条形图标签正是锚点在画布内、文字整体向左探出被
+        cover 裁掉——旧 `_text_oob` 只查 `end 锚点 x > vb_w`（越过右缘）这一种，漏掉。
+        这里用一条必然触发左缘越界的 end 锚点文字断言它报错。
+        """
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+               'viewBox="0 0 980 735"><style>text{font-family:sans-serif}</style>'
+               '<text x="120" y="285" font-size="26" fill="#dbe6f5" '
+               'text-anchor="end" font-weight="700">SEC-bench Pro</text></svg>')
+        errs, _ = self.run_check(svg)
+        self.assertTrue(any("文字越出画布" in e for e in errs), errs)
+
     def test_text_oob_judged_in_viewbox_units(self):
         """缩放写法（width/height 与 viewBox 差一个倍数）：文字坐标写在 viewBox
         系里，越界判定必须按 viewBox 量——拿固有像素尺寸去比会把贴边被裁掉的字

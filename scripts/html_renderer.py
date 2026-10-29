@@ -39,17 +39,57 @@ DEFAULT_ACCENT = get_default_accent()
 
 # 合成 ID：根元素 data-composition-id 与 runtime 注册时间线用的键**同一个值**
 # （hyperframes 契约要求两者一致）。它是本项目唯一的合成 ID 真源，经
-# __CTV_COMPOSITION_ID__ 注进 composition.html 与 runtime.js；templates/preview.js
-# 不走占位符装配，改为从根元素的 data-composition-id 现读。三处曾经各自硬编码
-# "main"——改一处漏两处时，注册键与根 ID 不匹配：只有一条时间线时 runtime 仍能
-# 兜住绑定，两条以上则渲染**静默冻结在 t=0**（无报错）。
+# __CTV_COMPOSITION_ID__ 注进页面骨架（本模块的 _COMPOSITION_HTML）与
+# runtime.js；templates/preview.js 不走占位符装配，改为从根元素的
+# data-composition-id 现读。三处曾经各自硬编码 "main"——改一处漏两处时，
+# 注册键与根 ID 不匹配：只有一条时间线时 runtime 仍能兜住绑定，两条以上则渲染
+# **静默冻结在 t=0**（无报错）。
 COMPOSITION_ID = "main"
 
 # ── 模板资产：版式的静态骨架 ────────────────────────────────────────────
-# CSS / JS / HTML 骨架是 templates/ 下的真实文件：结构与选择器写死，数值一律
+# CSS / JS 是 templates/ 下的真实文件：结构与选择器写死，数值一律
 # 走 var(--ctv-*)——由本模块从 _template 内联的版式数据派生后注入 :root。
 # 缺模板文件即硬失败：静默产出无样式页面比立刻报错难排查得多。
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+# 页面骨架（`<head>`/`<audio>`/两张 script 的次序）写在这里、不单独成文件：
+# 它只有 31 行、11 个占位符，且**每个占位符都只有一个消费者**——`_fill` 的对账
+# 在它身上永远全绿，等于没有门禁；`_load_asset` 的"文件缺失"分支对它也永远走不到。
+# 留着它的唯一后果是"改骨架"要跨两个文件对账。
+# 反过来，CSS 与 runtime.js 是真资产：几百行、要按语法看、要给 `_css_guard` 扫，
+# 它们继续留在 templates/。
+_COMPOSITION_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=__CTV_WIDTH__,height=__CTV_HEIGHT__">
+<script src="__CTV_GSAP_SRC__"></script>
+<style>
+__CTV_STYLE__
+</style>
+</head>
+<body>
+<!-- 预览逻辑在独立的 templates/preview.js（生成 HTML 时原样复制到输出目录，
+     不走占位符装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
+     尖括号"字面量（会被当作脚本结束标签），否则 hyperframes 打包单文件
+     HTML 内联脚本时会在此处截断，导致页面报错。 -->
+<div id="root" data-composition-id="__CTV_COMPOSITION_ID__" data-aspect="__CTV_ASPECT__" data-start="0" data-duration="__CTV_DURATION__" data-width="__CTV_WIDTH__" data-height="__CTV_HEIGHT__" data-fps="__CTV_FPS__">
+  <div class="bg"></div>
+  <div class="grid"></div>
+
+__CTV_SEG_CARDS__
+
+
+  <audio id="main-audio" data-start="0" data-duration="__CTV_DURATION__" data-track-index="10" src="__CTV_AUDIO_SRC__"></audio>
+</div>
+
+<script>
+__CTV_SCRIPT__
+</script>
+<script src="preview.js"></script>
+</body>
+</html>
+"""
 
 
 def _load_asset(name):
@@ -72,8 +112,9 @@ def _fill(template, mapping, name):
     一起死掉，而构建过程一行报错都没有。按本技能"信源只是数据"的边界，注入值
     永远不该成为下一次替换的输入。
 
-    顺带把骨架与本次映射对账：骨架里冒出没人填的占位符、或映射里有骨架不认的
-    名字（改名/拼错），立刻报错——不留一份缺内容的半成品 HTML 等人工预览去发现。
+    顺带把骨架与本次映射对账（`name` 只用于报错定位）：骨架里冒出没人填的
+    占位符、或映射里有骨架不认的名字（改名/拼错），立刻报错——不留一份缺内容的
+    半成品 HTML 等人工预览去发现。CSS 骨架也走这里，所以它不只是 HTML 的规矩。
     """
     found = set(_CTV_PH_RE.findall(template))
     unfilled = sorted(found - set(mapping))
@@ -2793,7 +2834,7 @@ def generate_html(manifest, audio_src, images=None,
         # 也正是循环被下一张卡盖住的时刻——两件事同一个数。
         "__CTV_DURATION__": f"{total_dur:.2f}",
     }, "runtime.js")
-    html = _fill(_load_asset("composition.html"), {
+    html = _fill(_COMPOSITION_HTML, {
         "__CTV_GSAP_SRC__": gsap_src_attr,
         "__CTV_STYLE__": style,
         "__CTV_SCRIPT__": script,

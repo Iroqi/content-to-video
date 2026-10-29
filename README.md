@@ -116,12 +116,12 @@ scripts/     全部 Python（只依赖标准库）
   check_svg.py        画好的 SVG 过一遍几何/对比度/字号/数据自查
   _template.py        视觉真源：版式、字体、动画参数的**唯一**来源
   _theme.py           配色真源
-templates/   结构与选择器（CSS/HTML/运行时 JS），不放观感常量
+templates/   结构与选择器（CSS + 运行时/预览 JS），不放观感常量
 references/  分步文档，见下节
 tests/       契约测试 ＋ 五道检查脚本
 ```
 
-**两条不许破的规则**：随画幅变的观感常量写 `_template.py`，别在 CSS 里存第二份；配色写 `_theme.py`，别散在各处。
+**三条不许破的规则**：随画幅变的观感常量写 `_template.py`，别在 CSS 里存第二份；配色写 `_theme.py`，别散在各处；`--ctv-*` 令牌的注入与消费两侧必须对得上（`var()` 取不到值时是静默失效，页面照样生成、门禁照样全绿——由 `test_every_consumed_token_is_injected` 钉住）。
 
 ## 7. 文档索引
 

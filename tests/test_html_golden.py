@@ -148,16 +148,21 @@ class Structure(unittest.TestCase):
         根元素的 data-composition-id 与 runtime 注册时间线用的键**必须是同一个值**
         （hyperframes 契约）。它曾经在三处模板里各自硬编码 "main"：改一处漏两处
         时两者不匹配——只注册一条时间线时 runtime 仍能兜住绑定，两条以上则渲染
-        **静默冻结在 t=0**（不报错，只是画面定格）。现在 composition.html 与
-        runtime.js 走占位符注入；preview.js 不走装配，改为从根元素现读。
+        **静默冻结在 t=0**（不报错，只是画面定格）。现在页面骨架
+        （html_renderer._COMPOSITION_HTML）与 runtime.js 走占位符注入；
+        preview.js 不走装配，改为从根元素现读。
         """
         import html_renderer as hr
         tpl_dir = os.path.join(H.SKILL_DIR, "templates")
 
-        # 走装配的两个模板：必须是占位符，不许再出现字面量 ID
-        for name in ("composition.html", "runtime.js"):
-            with open(os.path.join(tpl_dir, name), encoding="utf-8") as f:
-                src = f.read()
+        # 走装配的两处骨架：必须是占位符，不许再出现字面量 ID
+        with open(os.path.join(tpl_dir, "runtime.js"), encoding="utf-8") as f:
+            runtime_src = f.read()
+        assembled = {
+            "html_renderer._COMPOSITION_HTML": hr._COMPOSITION_HTML,
+            "runtime.js": runtime_src,
+        }
+        for name, src in assembled.items():
             self.assertIn("__CTV_COMPOSITION_ID__", src,
                           f"{name} 没有走 __CTV_COMPOSITION_ID__ 占位符")
             self.assertNotIn('"main"', src,
@@ -419,6 +424,93 @@ class Structure(unittest.TestCase):
         # .seg-card::after 提供（几何走 --ctv-amb-*），它一撤本条就变成不渲染的声明
         self.assertIn('.seg-card::after{content:"";position:absolute;inset:0;z-index:-1',
                       html)
+
+    def test_every_consumed_token_is_injected(self):
+        """产物的 `:root` 必须覆盖所有被消费的 --ctv-* 令牌。
+
+        `var()` 取不到值时是**静默失效**：声明被浏览器丢掉，元素退回初始值，
+        页面照样生成、门禁照样全绿，只有肉眼看得出错位。而令牌名是散在
+        `html_renderer.py` 的一堆 f-string 里手写的，拼错一个没有任何报错——
+        这正是"数据驱动"最容易漏的那一侧（数据永远对，键名可能不对）。
+
+        三种消费方，一个都不能少：
+          · CSS 的 var()（含带兜底的 var(--x, 0.62)）；
+          · runtime.js 的 getPropertyValue / setProperty 与注释里的读写口径；
+          · 运行时**写**在元素内联样式上的派生量（--ctv-line-op / --ctv-line-scale
+            / --ctv-relay-* / --ctv-ved-dx 等）：它们由 CSS 或 JS 自己产生，
+            不该出现在 `:root`，登记在 RUNTIME_WRITTEN 里。
+        """
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        used = set()
+        for name in ("composition.css", "runtime.js", "preview.js"):
+            with open(os.path.join(root_dir, "templates", name), encoding="utf-8") as f:
+                src = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
+            # 调用可能跨行（getPropertyValue(\n  "getComputedStyle(...)")
+            # .getPropertyValue("--x")），压平空白再扫，否则会漏报成"没人用"。
+            src = re.sub(r"\s+", " ", src)
+            # 两种写法都要收：`var(--x)` 与带兜底的 `var(--x, .62)`
+            used |= set(re.findall(r"var\(\s*(--ctv-[a-z0-9-]+)", src))
+            # 运行时读写：`getPropertyValue("--x")` / `setProperty("--x", v)` /
+            # `removeProperty("--x")`。只认"括号后紧跟引号+键名"——键名是这两个
+            # 接口的第一个实参，别的位置出现 `"--x"` 不算消费方。
+            used |= set(re.findall(
+                r"Property[A-Za-z]*\(\s*[\"'](--ctv-[a-z0-9-]+)", src))
+
+        # 运行时**写**在元素内联样式上的派生量：由 CSS 档位或 JS 自己产生，
+        # 本来就不该出现在 :root。
+        RUNTIME_WRITTEN = {
+            "--ctv-line-op",          # CSS 的 .active/.past 档位 + 运行时内联覆盖
+            "--ctv-line-scale",       # runtime 焦点尺寸
+            "--ctv-line-blur",        # runtime 焦点景深
+            "--ctv-line-filter",      # runtime 合成的整条 filter 值
+            "--ctv-relay",            # runtime 换句接力的透明度
+            "--ctv-relay-scale",      # 同上，尺寸
+            "--ctv-relay-blur",
+            "--ctv-tm-top",           # tagline 上缘微调（CSS 自带兜底，按段可选）
+            "--ctv-ved-dx",           # runtime 实测的 VED 覆盖层偏移
+            "--ctv-verse-who-color",  # 渲染器按段写在 .verse-clip 上
+        }
+
+        # 两画幅各有专属几何令牌（--ctv-v-* / --ctv-l-*），只注进自己那份产物：
+        # 竖屏是固定标题区 + 钉底句子流，横屏是左右两栏，互不通用。
+        FOREIGN = {"portrait": "--ctv-l-", "landscape": "--ctv-v-"}
+
+        for case in ("portrait_dark", "landscape_dark"):
+            with self.subTest(case=case):
+                html = render(**CASES[case])
+                root = re.search(r":root\{(.*?)\}", html, re.S)
+                injected = set(re.findall(r"(--ctv-[a-z0-9-]+)\s*:", root.group(1)))
+                foreign = FOREIGN[case.split("_")[0]]
+                used_here = {t for t in used if not t.startswith(foreign)}
+                missing = sorted(used_here - injected - RUNTIME_WRITTEN)
+                self.assertEqual(
+                    missing, [],
+                    f"{case}：这些令牌被 CSS/JS 消费，但产物 :root 里没有——"
+                    "var() 会静默失效、页面照样生成、门禁照样全绿：" + ", ".join(missing))
+                # 反方向：注入了却没人读，改模板不会有任何效果（也会让人以为改得动）。
+                dead = sorted(injected - used)
+                self.assertEqual(
+                    dead, [],
+                    f"{case}：这些令牌注入了却没有消费方：" + ", ".join(dead))
+
+    def test_css_declares_no_template_token_outside_root(self):
+        """CSS 不许自己声明 --ctv-*，唯一的例外是运行时读写的那个空档。
+
+        这条与上一条互补：上一条防"注入了没人读"，这条防"CSS 自己存了第二份"。
+        真踩过——`.verse-line` 里写了 `opacity:...var(--ctv-focus-future,.62)`，
+        兜底字面量 0.62 就是模板 `subtitle.focus.future` 的第二份真源，改模板时
+        它不动，而成片里 future 档的亮度从此只跟 CSS 走。
+        """
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root_dir, "templates", "composition.css"),
+                  encoding="utf-8") as f:
+            css = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
+        declared = set(re.findall(r"(--ctv-[a-z0-9-]+)\s*:", css))
+        # 运行时按行写的档位变量，CSS 需要一条 `--ctv-line-op:1` 做 active 态
+        allowed = {"--ctv-line-op"}
+        self.assertEqual(sorted(declared - allowed), [],
+                         "templates/composition.css 里声明了模板令牌——数值该由 "
+                         "_template.py 注入，CSS 存第二份会让改模板不带着它走")
 
 
 class Injection(unittest.TestCase):

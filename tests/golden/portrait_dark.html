@@ -6,21 +6,38 @@
 <script src="vendor/gsap.min.js"></script>
 <style>
 /* ── Content-to-Video composition stylesheet ──────────────────────────────
-   本文件是版式的**静态骨架**：结构与选择器写死，数值一律走 var(--ctv-*)。
-   变量由 html_renderer.py 从 _template.py 内联的版式数据派生后注入本文件末尾的
-   :root 块。
+   本文件是版式的**静态骨架**：结构与选择器写死，随画幅/主题变的数值一律走
+   var(--ctv-*)——变量由 html_renderer.py 从 _template.py 内联的版式数据派生后
+   注入本文件末尾的 :root 块。
    注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
    字符串也会被替换（会把整份变量表塞进注释里）。
-   纪律：**版式数值**（随画幅/主题取不同值的几何与字号）在本文件内不得
-   硬编码，一律走 --ctv-* 令牌、改版式只改 _template.py 内联的版式数据；
-   与画幅无关、单值即终态的结构常数（1px 描边、em 相对字距、字重、mask
-   渐隐百分比等）允许直接写在本文件里——给它们各配一枚令牌只会把一份
-   JSON 变成两份。
+
+   数值分三档，读规则时先分清是哪一档：
+     1. **随画幅/主题变** → 必须走 --ctv-*，真源在 _template.py。CSS 里写第二份
+        会让改模板不带着它走（门禁：test_no_aspect_scoped_geometry_in_css、
+        test_css_declares_no_template_token_outside_root）。
+     2. **单值即终态的结构常数**（描边宽度、mask 渐隐百分比、字形相对偏移、
+        装饰线的透明度）→ 直接写在规则里。它们与画幅无关、也不会因为换主题而变，
+        给每枚配一个令牌只会把一份 JSON 变成两份。
+     3. **运行时逐帧写进去的派生量**（--ctv-line-op / --ctv-line-scale /
+        --ctv-relay-* / --ctv-line-filter）→ 由 CSS 给稳态档、runtime.js 内联覆盖。
+        它们不在 :root 里，也不该出现。
 
    双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
    layout.vertical / layout.landscape 块）。画面结构与三档版式行为以
    references/look.md「画面结构」为准，这里不复述。
    ────────────────────────────────────────────────────────────────────── */
+
+/* ── 第 2 档：结构常数（不随画幅/主题变，改这里就是改版式本身）──────────
+   集中登记，免得下一屏的规则里又冒出"看起来像能调"的字面量。每条都写明理由：
+   没有理由的常数就是漏抽的令牌。
+     1px         描边与网格线宽（.grid / .seg-image::after / .agenda-row 分隔线）
+     .5          剥页遮罩的黑色透明度——它是"盖住"的深度，不是主题色
+     14% / 86%   句子流上下 mask 渐隐区（不变量：clipPad ≥ 14% × windowHeight，
+                 见下方 .verse 注释；改这里要同步改 clipPad 的推导）
+     34%         边框内描边、光晕里 accent 的稀释比例
+     em 单位      字形相对偏移（tagline 上缘微调、VED 覆盖层补边）——跟字号走，
+                 所以不能是 px */
 
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:var(--ctv-w);height:var(--ctv-h);overflow:hidden;background:var(--ctv-bg-gradient)}
@@ -251,14 +268,14 @@ body{font-family:var(--ctv-font-family)}
    本来就要虚，无所谓；**当前行**是画面上最该锐利的那一句，为一个 0 半径的滤镜
    把它整句字形换一遍是纯视觉漂移，而成片里看不出是谁干的。所以“不需要模糊”必须
    是 `filter:none`（var 缺省即 none），合成改在 runtime.js 的 verseBlurSet 里做。 */
-.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,var(--ctv-focus-future,.62)),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,var(--ctv-focus-future)),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
 .verse-line.active{--ctv-line-op:1}
 /* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
    的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
 .verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
 /* 两档兜底都先问生成期注入的 --ctv-focus-*（真源 _template.subtitle.focus），
    最后那个字面量只在"变量全缺"时兜——不再抄第二份模板值。 */
-.verse-line.past{--ctv-line-op:var(--ctv-focus-past,.45)}
+.verse-line.past{--ctv-line-op:var(--ctv-focus-past)}
 /* 词级强调（karaoke，运行时见 runtime.js 的 verseEmUpdate）──────────────────
    当前句已经"念到哪儿"，用一层**真实元素**的覆盖物画出来。
    为什么要覆盖物、不直接把正文切成两段 span：切成两个含文字的叶子，Layout 门禁

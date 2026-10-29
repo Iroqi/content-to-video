@@ -249,6 +249,13 @@ FACTS = [
         "渲染前置条件：Hyperframes CLI 的 engines 写死 node>=22",
     ),
     (
+        "min-ffmpeg-render-major",
+        ("const", "scripts/_render_backend.py", "MIN_FFMPEG_RENDER_MAJOR"), 5,
+        [("README.md", r"FFmpeg.*5\.0|ffmpeg.*5\.0"),
+         ("SKILL.md", r"FFmpeg.*5\.0|ffmpeg.*5\.0")],
+        "渲染前置条件：hyperframes 0.8.185 音频封装用 setts bsf 的 duration 选项（ffmpeg>=5.0）",
+    ),
+    (
         "tts-default-model",
         ("const", "scripts/_tts.py", "DEFAULT_MODEL"), "mimo-v2.5-tts",
         [("SKILL.md", r"mimo-v2\.5-tts")],

@@ -72,7 +72,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | **`MIMO_API_KEY`（出片必需）** | TTS（仅支持 MiMo） | 定稿路径第 2 步失败（全部句子命中 `--resume` 缓存也要先有 key）；`--until html/check` 自动降级成无配音预览（`--no-tts`，产物标 degraded），`--dry-run` 不需要 |
 | FFmpeg（仅 `ffmpeg`，不需要 `ffprobe`） | 时长测量兜底、变速、混格式归一、配图完整性探测 | 第 2 步失败；配图探测降级为仅查存在性 |
 | **Node.js 22+**（CLI 的 `engines` 写死 `>=22`）+ `npx hyperframes` 及其 headless Chrome | 仅第 4 步渲染 | 版本不够在渲染前直接拦下（CLI 侧失败看不出是版本问题）；没装 Node 则出不了 MP4，前三步照常 |
-| **带 libx264 的 FFmpeg**（渲染侧，与上面那个 ffmpeg 是同一个二进制） | 编码 mp4 | 渲染跑到编码那步才失败，日志是一句 `✗ MP4 H.264 encoder unavailable`；`doctor` 与 `tests/test_e2e_render.py` 会先替你问一句 |
+| **带 libx264 的 FFmpeg**（渲染侧需 **≥ 5.0**，与上面那个 ffmpeg 是同一个二进制） | 编码 mp4；音频封装（hyperframes 0.8.185 用 setts bsf 的 `duration` 选项，4.x 不支持） | 渲染跑到编码/混流那步才失败，日志是 `✗ MP4 H.264 encoder unavailable` 或 `Option 'duration' not found`；`doctor` 与 `tests/test_e2e_render.py` 会先替你问一句 |
 
 其它环境变量：`MIMO_TTS_MODEL`（默认 `mimo-v2.5-tts`）、`MIMO_BASE_URL`、`CTV_HYPERFRAMES_PACKAGE`（覆盖包名/版本，默认 `hyperframes@0.8.185`）。跨机逐帧一致用 `render --docker`，口径见 `references/rendering.md`「官方校验命令」。密钥优先级：命令行 > 环境变量 > `~/.config/ai-video/.env`，技能目录内 `.env` 不参与读取。
 

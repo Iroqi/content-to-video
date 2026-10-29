@@ -47,6 +47,8 @@ npx -y hyperframes@0.8.185 doctor              # 依赖体检（Chrome / ffmpeg�
 
 `run.py` 已接上：`--until check` 跑到门禁为止；不给 `--until` 时渲染前自动跑，有 error 就停。
 
+**ffmpeg ≥ 5.0**：0.8.185 的音频封装用 setts bsf 的 `duration` 选项，4.x 没有——版本不够时渲染在混流阶段报 `Option 'duration' not found`（`run.py` 与 `tests/test_e2e_render.py` 的预检会先拦，判定在 `_render_backend.ffmpeg_render_gate`，认 `HYPERFRAMES_FFMPEG_PATH` 优先、其次 PATH）。
+
 口径对着 **v0.8.185** 实测，判读在 `_render_backend.check_verdict`：error 一律当真；warning 只有 `GATE_NOISE_CODES` 之外的 code 当真（`GATE_STRICT_CODES` 的码即使只是 warning 也点名）；Lint 有 error 时点一条 `browser_stages_skipped`，且**浏览器五阶段整个不跑**——那五项显示 0 不是通过，是失明。阶段按结构认，CLI 加阶段不用改表。升级后先看 `--help`，并把噪声表与下表一起复核。
 
 - 字体栈出现未声明 `@font-face` 的家族判 **error**（家族名要用映射表认的写法，认 `"SF Mono"`）。

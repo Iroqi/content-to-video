@@ -388,6 +388,92 @@ class NodeVersionGate(unittest.TestCase):
             self.assertEqual(RB.node_version_gate()[0], "ok")
 
 
+class FfmpegRenderGate(unittest.TestCase):
+    """渲染前的 ffmpeg 版本闸。
+
+    hyperframes 0.8.185 的音频封装用 setts bsf 的 `duration` 选项（ffmpeg ≥ 5.0
+    才有，4.x 只有 ts/pts/dts）。版本不够时渲染不报"版本低"，只在混流阶段丢
+    `Option 'duration' not found`——与 Node 版本闸同一种"已知前提别等失败才猜"。
+    只认渲染侧 CLI 会用的那个二进制（HYPERFRAMES_FFMPEG_PATH 优先，其次 PATH）。
+    """
+    SETTS_OK = b"Bit stream filter setts\nsetts_bsf AVOptions:\n  -ts ...\n  -duration ...\n  -pts ...\n"
+    SETTS_OLD = b"Bit stream filter setts\nsetts_bsf AVOptions:\n  -ts ...\n  -pts ...\n  -dts ...\n"
+
+    def _run(self, outputs):
+        """把 subprocess.run 换成按 args 给结果的函数。
+
+        outputs: {关键字片段: (stdout, stderr, returncode)}；`-h bsf=setts` 与
+        `-version` 分两条 mock，别让一条 stdio 同时伺候两个探测。returncode
+        默认 0，探测判读按它区分"查不到"（非零/空输出）与"确认不支持"。
+        """
+        def fake_run(args, *a, **k):
+            joined = " ".join(args)
+            for key, (out, err, rc) in outputs.items():
+                if key in joined:
+                    return mock.Mock(stdout=out, stderr=err, returncode=rc)
+            raise AssertionError(f"未预期的 ffmpeg 调用: {args}")
+        return mock.patch.object(RB.subprocess, "run", side_effect=fake_run)
+
+    def _which(self, path="/usr/bin/ffmpeg"):
+        return mock.patch.object(RB.shutil, "which", lambda _n: path)
+
+    def test_modern_ffmpeg_passes_silently(self):
+        with self._which(), self._run({
+            "bsf=setts": (b"", self.SETTS_OK, 0),
+            "-version": (b"ffmpeg version 6.1.1", b"", 0),
+        }):
+            self.assertEqual(RB.ffmpeg_render_gate(), ("ok", ""))
+
+    def test_old_ffmpeg_blocks_with_the_required_version(self):
+        with self._which(), self._run({
+            "bsf=setts": (b"", self.SETTS_OLD, 0),
+            "-version": (b"ffmpeg version 4.4.2", b"", 0),
+        }):
+            verdict, msg = RB.ffmpeg_render_gate()
+        self.assertEqual(verdict, "block")
+        self.assertIn("4.4.2", msg)
+        self.assertIn(str(RB.MIN_FFMPEG_RENDER_MAJOR), msg)
+
+    def test_no_ffmpeg_only_warns(self):
+        # 没装 ffmpeg 时 Popen 本就会报人话；这里再阻断只是说两遍
+        with self._which(None):
+            verdict, msg = RB.ffmpeg_render_gate()
+        self.assertEqual(verdict, "warn")
+        self.assertIn(str(RB.MIN_FFMPEG_RENDER_MAJOR), msg)
+
+    def test_probe_failure_only_warns(self):
+        # 探测抛异常 ≠ "确认不支持"，按查不到处理，不误杀
+        with self._which(), \
+             mock.patch.object(RB.subprocess, "run",
+                               side_effect=OSError("exec failed")):
+            self.assertEqual(RB.ffmpeg_render_gate()[0], "warn")
+
+    def test_unreadable_bsf_output_only_warns(self):
+        # 命令没跑成（非零退出 / 空输出）都是"查不到"，不是"确认不支持"
+        for out, rc in ((b"", 0), (b"", 1), (b"no such bsf", 1)):
+            with self._which(), self._run({"bsf=setts": (b"", out, rc)}):
+                self.assertEqual(RB.ffmpeg_render_gate()[0], "warn")
+
+    def test_explicit_ffmpeg_path_wins(self):
+        # HYPERFRAMES_FFMPEG_PATH 是 CLI 的覆盖开关，探测必须认它不认 PATH
+        with mock.patch.dict(os.environ, {"HYPERFRAMES_FFMPEG_PATH": "/opt/ff6/ffmpeg"}), \
+             self._run({
+                 "bsf=setts": (b"", self.SETTS_OK, 0),
+                 "-version": (b"ffmpeg version 6.1.1", b"", 0),
+             }):
+            self.assertEqual(RB.ffmpeg_render_gate(), ("ok", ""))
+
+    def test_boundary_is_inclusive(self):
+        # setts 带 duration 即放行，不带即拦下；版本号只进报错文案不进判定
+        with self._which(), self._run({"bsf=setts": (b"", self.SETTS_OK, 0)}):
+            self.assertEqual(RB.ffmpeg_render_gate()[0], "ok")
+        with self._which(), self._run({
+            "bsf=setts": (b"", self.SETTS_OLD, 0),
+            "-version": (b"ffmpeg version 4.4.2", b"", 0),
+        }):
+            self.assertEqual(RB.ffmpeg_render_gate()[0], "block")
+
+
 if __name__ == "__main__":
     unittest.main()
 

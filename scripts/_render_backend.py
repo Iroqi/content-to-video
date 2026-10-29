@@ -104,6 +104,98 @@ def node_version_gate():
     return ("ok", "")
 
 
+# Hyperframes 0.8.185 的音频封装用 setts bitstream filter 的 `duration` 选项
+# （`-bsf:a setts=duration=…`）给 AAC 段补齐时长，该选项 FFmpeg 5.0 才进主分支
+# （4.x 只有 ts/pts/dts）。版本不够时渲染不在这里直接报"版本低"——它只会在音频
+# 混流阶段丢一句 `Option 'duration' not found`（exit 1），与 Node 版本不够是同一
+# 类"渲染前已知的前提，别等渲染失败才猜"。技能自己的 `_audio.get_ffmpeg()` 供
+# TTS 侧用（4.x 足够），这条闸只管渲染侧 CLI 实际会用的那个二进制。
+MIN_FFMPEG_RENDER_MAJOR = 5
+
+
+def _render_ffmpeg_path():
+    """hyperframes 渲染实际会用的 ffmpeg 路径（与 CLI 的解析口径一致）。
+
+    先认 HYPERFRAMES_FFMPEG_PATH（CLI 文档里的覆盖开关），其次 PATH 上的
+    ffmpeg（CLI findFfBinary 的默认行为）。不认 `_audio.get_ffmpeg()` 的
+    imageio-ffmpeg 兜底——那是技能自己 TTS 侧的解析，渲染侧 CLI 看不到。
+    """
+    explicit = os.environ.get("HYPERFRAMES_FFMPEG_PATH", "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("ffmpeg")
+
+
+def ffmpeg_setts_bsf_ok(ffmpeg_path):
+    """探测该 ffmpeg 的 setts bsf 是否带 `duration` 选项（渲染音频封装必需）。
+
+    `ffmpeg -h bsf=setts` 的输出里有没有 `duration`：4.x 只有 ts/pts/dts，
+    5.0+ 才有 duration。判读口径与 node 闸一致——**量不到不是"确认不支持"**：
+    命令本身失败（非零退出，如没有 setts 这个 bsf）、或输出为空，都返回 None
+    （调用方按 warn 处理）；只有命令成功跑完、输出里确实没有 duration，才返回
+    False（确认是 4.x 那类旧构建，可以拦）。
+    """
+    if not ffmpeg_path:
+        return None
+    try:
+        r = subprocess.run([ffmpeg_path, "-hide_banner", "-h", "bsf=setts"],
+                           capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    out = ((r.stdout or b"") + (r.stderr or b"")).decode("utf-8", "replace")
+    if not out.strip():
+        return None
+    return bool(re.search(r"(?im)^\s*-duration\b", out))
+
+
+def ffmpeg_render_version():
+    """渲染侧 ffmpeg 的版本串（如 "4.4.2"）；读不到返回 None。"""
+    ff = _render_ffmpeg_path()
+    if not ff:
+        return None
+    try:
+        r = subprocess.run([ff, "-version"], capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = ((r.stdout or b"") + (r.stderr or b"")).decode("utf-8", "replace")
+    m = re.search(r"ffmpeg version\s+([0-9.]+)", out)
+    return m.group(1) if m else None
+
+
+def ffmpeg_render_gate():
+    """渲染前的 ffmpeg 版本闸，返回 (判定, 说给人听的话)。
+
+    判定 "ok"（setts bsf 带 duration）/ "warn"（查不到：交给既有路径报
+    "请确认 ffmpeg 已安装"）/ "block"（明确不够：setts bsf 缺 duration，
+    渲染必在音频封装阶段失败）。与 node 闸同一原则：只有**量到了**才配当门禁。
+    """
+    ff = _render_ffmpeg_path()
+    if not ff:
+        return ("warn",
+                f"查不到 ffmpeg（PATH 与 HYPERFRAMES_FFMPEG_PATH 都没有）：Hyperframes "
+                f"{DEFAULT_HYPERFRAMES_SPEC} 渲染需要 ffmpeg ≥ {MIN_FFMPEG_RENDER_MAJOR}，"
+                f"缺失会在 CLI 侧以难懂的形态失败。")
+    ok = ffmpeg_setts_bsf_ok(ff)
+    if ok is None:
+        return ("warn",
+                f"探测不到 ffmpeg（{ff}）的 setts bsf 能力：Hyperframes "
+                f"{DEFAULT_HYPERFRAMES_SPEC} 渲染需要 ffmpeg ≥ {MIN_FFMPEG_RENDER_MAJOR}"
+                f"（音频封装用 setts 的 duration 选项），版本不够会在音频混流阶段失败。")
+    if not ok:
+        ver = ffmpeg_render_version()
+        detail = (f"本机 ffmpeg 是 v{ver}（{ff}）" if ver is not None
+                  else f"本机 ffmpeg（{ff}）")
+        return ("block",
+                f"{detail}，其 setts bsf 没有 `duration` 选项（FFmpeg 4.x 只有 "
+                f"ts/pts/dts）——Hyperframes {DEFAULT_HYPERFRAMES_SPEC} 的音频封装用它给 "
+                f"AAC 段补齐时长，版本不够渲染会在音频混流阶段报 `Option 'duration' "
+                f"not found`。装 ffmpeg ≥ {MIN_FFMPEG_RENDER_MAJOR}"
+                f"（或设 HYPERFRAMES_FFMPEG_PATH 指向新版二进制）。")
+    return ("ok", "")
+
+
 def _resolve_npx_shim(shim_path):
     shim_dir = os.path.dirname(os.path.abspath(shim_path))
     node_exe = os.path.join(shim_dir, "node.exe")

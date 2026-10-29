@@ -35,6 +35,7 @@ from _render_backend import (hyperframes_command,  # noqa: E402
                              build_render_command, run_check,
                              DEFAULT_MAX_WAIT, render_wait,
                              probe_video_duration, node_version_gate,
+                             ffmpeg_render_gate,
                              sample_snapshot_times, snapshot_frames)
 from _script_utils import (setup_stdio, write_json_atomic,  # noqa: E402  重定向 UTF-8 + 报告原子写
                            guard_not_in_skill_dir,  # noqa: E402  产物落技能目录的守卫（与 pipeline/gen 共用同一实现）
@@ -805,6 +806,20 @@ def main():
         raise SystemExit(f"[run] {_node_msg}")
     if _verdict == "warn":
         print(f"[run][warn] {_node_msg}", file=sys.stderr)
+
+    # 渲染侧的 ffmpeg 闸：hyperframes 0.8.185 的音频封装用 setts bsf 的 duration
+    # 选项（ffmpeg ≥ 5.0 才有）。check 不混音、4.x 也能跑，所以 check 档只出声
+    # 不拦；进渲染档才把"明确不够"当硬伤拦下（版本是渲染前已知的前提，不是
+    # 渲染失败后才猜的病因）。
+    _ff_verdict, _ff_msg = ffmpeg_render_gate()
+    if args.until == "check":
+        if _ff_verdict in ("block", "warn"):
+            print(f"[run][warn] {_ff_msg}", file=sys.stderr)
+    else:
+        if _ff_verdict == "block":
+            raise SystemExit(f"[run] {_ff_msg}")
+        if _ff_verdict == "warn":
+            print(f"[run][warn] {_ff_msg}", file=sys.stderr)
 
     # ── 第 4 步 a'：官方门禁 ─────────────────────────────────────
     # 与 --until html 同一类"迭代档"：只跑 check，不进渲染。

@@ -43,6 +43,9 @@ class Harness:
         # 官方门禁（每次定稿渲染前都会跑）：默认"干净通过"，个别用例注入 findings。
         self.gate_findings = []
         self.gate_calls = 0
+        # ffmpeg 环境闸的返回值：编排测试不关心宿主机 ffmpeg 版本（≥5 才放行），
+        # invoke 里按这个属性打桩，接线用例改它验证"拦/不拦"两条分支。
+        self.ffmpeg_gate_result = ("ok", "")
 
     def fake_check(self, project, command=None):
         self.gate_calls += 1
@@ -142,6 +145,11 @@ class Harness:
                 mock.patch.object(R, "hyperframes_command", lambda: ["fakehf"]),
                 mock.patch.object(R, "run_check", self.fake_check),
                 mock.patch.object(R, "probe_video_duration", self.fake_probe),
+                # 环境闸（Node/ffmpeg 版本）不归编排测试管：node 闸在多数机器上
+                # 自然通过所以没 patch，ffmpeg 闸却随机器版本（≥5 才放行）摇摆
+                # ——统一中和，编排逻辑与宿主机 ffmpeg 解耦。接线本身有专门用例。
+                mock.patch.object(R, "ffmpeg_render_gate",
+                                  lambda: self.ffmpeg_gate_result),
                 contextlib.redirect_stdout(out),
                 contextlib.redirect_stderr(err),
             ):
@@ -831,6 +839,27 @@ class OfficialGateWiring(unittest.TestCase):
                 self.h.invoke(["--until", "check"])
         self.assertIn("Node 版本过旧", str(cm.exception))
         self.assertEqual(self.h.gate_calls, 0)
+
+    def test_render_path_rejects_old_ffmpeg_before_cli(self):
+        """渲染要混音，ffmpeg < 5.0（setts bsf 缺 duration）必须在 CLI 前拦下。
+
+        与 node 闸同一条原则：版本是渲染前已知的前提，不是渲染失败后才猜的
+        病因。mock 成 block 时连 check 都不该跑到。
+        """
+        self.h.ffmpeg_gate_result = ("block", "ffmpeg 过旧")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke([])
+        self.assertIn("ffmpeg 过旧", str(cm.exception))
+        self.assertEqual(self.h.gate_calls, 0)
+        self.assertEqual(self.h.render_calls, [])
+
+    def test_until_check_warns_but_does_not_block_old_ffmpeg(self):
+        """check 不混音，ffmpeg 4.x 也能跑：只出声提示渲染会被拦，不放倒它。"""
+        self.h.ffmpeg_gate_result = ("block", "ffmpeg 过旧")
+        out, err = self.h.invoke(["--until", "check"])
+        self.assertIn("ffmpeg 过旧", err)
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(self.h.render_calls, [])
 
     def test_until_check_with_error_exits_nonzero(self):
         """门禁有 error 就停，且把条目写进报告——否则报告看起来像通过。"""

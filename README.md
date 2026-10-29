@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Python 3.9+ | 全部脚本（**只依赖标准库**） | — |
 | **`MIMO_API_KEY`** | 配音（外部付费 TTS，整条链唯一的付费依赖） | 出片路径硬停在第 2 步；`--until html/check` 自动降级为无配音预览，见下节 |
-| **ffmpeg**（**要带 libx264**） | 音频处理、时长测量、编码 mp4 | 第 2 步失败；缺编码器时渲染跑到最后一跳才报 `✗ MP4 H.264 encoder unavailable` |
+| **ffmpeg**（**要带 libx264**；渲染侧还需 **≥ 5.0**） | 音频处理、时长测量、编码 mp4 | 第 2 步失败；缺编码器时渲染跑到最后一跳才报 `✗ MP4 H.264 encoder unavailable`；ffmpeg 4.x 会在音频封装阶段报 `Option 'duration' not found`（hyperframes 0.8.185 的 setts bsf 需要 5.0+） |
 | **Node.js 22+** ＋ headless Chrome | 仅第 4 步渲染（默认 `hyperframes@0.8.185`） | 出不了 MP4，前三步照常 |
 | Pillow（可选，建议装） | 判"配图够不够大、会被裁掉多少" | 退回内置头解析，只认 PNG/JPEG/WebP/GIF；AVIF/HEIC/TIFF 跳过这两道告警 |
 
@@ -89,7 +89,7 @@ python tests/check_examples.py && python tests/check_image_snippets.py
 # 测试套件（约 8 秒，不含真渲染）
 cd tests && python3 -m unittest discover -s .
 
-# 真的出一支 mp4 并看它一眼（需 Node 22+ / headless Chrome / 带 libx264 的 ffmpeg）
+# 真的出一支 mp4 并看它一眼（需 Node 22+ / headless Chrome / 带 libx264 且 ≥ 5.0 的 ffmpeg）
 cd tests && python3 -m unittest test_e2e_render -v
 ```
 

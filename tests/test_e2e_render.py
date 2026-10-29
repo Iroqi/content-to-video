@@ -80,6 +80,14 @@ def _missing_deps():
         miss.append("ffmpeg")
     if not _has_h264_encoder():
         miss.append("带 libx264 的 ffmpeg")
+    # 渲染侧的版本闸：技能自己的 ffmpeg_usable/libx264 查的是 `_audio.get_ffmpeg()`
+    # （TTS 侧解析），而渲染由 hyperframes CLI 用**它自己**解析的 ffmpeg（PATH /
+    # HYPERFRAMES_FFMPEG_PATH）混流。0.8.185 的音频封装用 setts bsf 的 duration
+    # 选项（ffmpeg ≥ 5.0 才有），版本不够会卡在混流阶段报 Option not found。
+    _ff_verdict, _ = RB.ffmpeg_render_gate()
+    if _ff_verdict == "block":
+        miss.append(f"ffmpeg>={RB.MIN_FFMPEG_RENDER_MAJOR}（渲染音频封装需要 setts "
+                    f"bsf 的 duration 选项）")
     return miss
 
 
@@ -241,7 +249,10 @@ def _gray_frame(path, size=(160, 200)):
 
 def _ink_ratio(im):
     """墨迹占比：与背景色（左上角取样）差异显著的像素比例。"""
-    px = list(im.getdata())
+    try:  # Pillow ≥13 有 get_flattened_data；14 起 getdata 移除（2027-10）
+        px = list(im.get_flattened_data())
+    except AttributeError:
+        px = list(im.getdata())
     bg = px[0]
     n = sum(1 for p in px if abs(p - bg) > 18)
     return n / len(px)

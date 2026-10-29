@@ -195,6 +195,22 @@ class Prepare(unittest.TestCase):
             self.assertTrue(any("#ghost" in e for e in errs))
 
 
+    def test_mixed_tween_and_param_steps_survive_prepare(self):
+        """同一块 animate 里两种拍：内联一次、两种都留着（编译器只吃 param 那几条）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = _write_svg(tmp, "seg-a", SEG_A_SVG)
+            images = {"seg-a": {"src": src, "animate": {
+                "steps": [{"at": 0, "target": "#base", "set": {"opacity": 1}},
+                          {"at": 1, "param": "theta", "to": 90, "duration": 1.2}],
+                "params": {"theta": 0},
+                "bind": [{"target": "#dot", "attr": "cx",
+                          "expr": "200 + 100*cos(theta*pi/180)"}]}}}
+            m = H.make_manifest()
+            errs, _warns = G.animate_prepare(images, m["segments"], tmp)
+            self.assertEqual(errs, [])
+            self.assertIn("inline_svg", images["seg-a"])
+
+
 class Renderer(unittest.TestCase):
     """槽位版式：内联、作用域都在，但不生成整页画布那一套。"""
 
@@ -231,6 +247,21 @@ class Renderer(unittest.TestCase):
         self.assertIn('class="seg-title"', html)
         self.assertIn('<div class="verse" id="verse-seg-a"', html)
         self.assertIn('<div class="verse-line"', html)
+
+    def test_tween_and_param_lines_coexist(self):
+        """一块 animate 里两种拍各出一条时间线：属性补间 + 参数代理补间。"""
+        m = H.make_manifest()
+        images = self._images()
+        images["seg-a"]["animate"] = {
+            "steps": [{"at": 0, "target": "#base", "set": {"opacity": 1}},
+                      {"at": 1, "param": "theta", "to": 90, "duration": 1.2}],
+            "params": {"theta": 0},
+            "bind": [{"target": "#dot", "attr": "cx",
+                      "expr": "200 + 100*cos(theta*pi/180)"}]}
+        html = HR.generate_html(m, "audio/combined.wav", images=images,
+                                aspect="portrait")
+        self.assertIn('tl.set("#img-seg-a #base"', html)
+        self.assertIn("onUpdate:draw", html)      # 参数拍 → 代理补间
 
     def test_no_animate_means_plain_img(self):
         m = H.make_manifest()

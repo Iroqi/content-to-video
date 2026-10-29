@@ -176,7 +176,7 @@ from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
                        beat_cycles, duration_tolerance)
 
 from html_renderer import (  # noqa: E402
-    segment_duration, TEMPLATES_DIR, generate_html, _DEFAULT_GSAP_SRC,
+    segment_duration, ASSETS_DIR, generate_html, _DEFAULT_GSAP_SRC,
 )
 
 
@@ -1471,12 +1471,12 @@ def _fmt_params(params):
 def _composition_css_text():
     """模板样式表的原文（CSS ↔ GSAP 抢 transform 那道门禁的一侧）。
 
-    只读**模板文件**，不读产物里的内联副本：产物已经把 `var(--ctv-*)` 与占位符替换
-    过一遍，选择器却是同一条；读模板省掉"从 HTML 里切 <style> 再反解"的一段脆逻辑。
-    文件不在（自定义模板目录）时返回空串——门禁退化成不判，而不是崩。
+    只读**源文件**，不读产物里的内联副本：产物已经把 `var(--ctv-*)` 与占位符替换
+    过一遍，选择器却是同一条；读源文件省掉"从 HTML 里切 <style> 再反解"的一段脆逻辑。
+    文件不在时返回空串——门禁退化成不判，而不是崩。
     """
     try:
-        with open(TEMPLATES_DIR / "composition.css", encoding="utf-8") as f:
+        with open(ASSETS_DIR / "composition.css", encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""
@@ -2080,8 +2080,8 @@ def main(argv=None):
         sys.exit(1)
 
     # 复制预览脚本到 HTML 输出目录（index.html 引用同目录 preview.js）
-    # 路径复用 html_renderer.TEMPLATES_DIR：模板资产的位置只认一处，别在这再拼一遍
-    preview_js = str(TEMPLATES_DIR / "preview.js")
+    # 路径复用 html_renderer.ASSETS_DIR：资产位置只认一处，别在这再拼一遍
+    preview_js = str(ASSETS_DIR / "preview.js")
     if os.path.isfile(preview_js):
         _dst_preview = os.path.join(out_dir, "preview.js")
         # Windows 上 copy2 会沿用源文件的只读属性，而 copy 到已存在的只读文件
@@ -2092,7 +2092,7 @@ def main(argv=None):
         shutil.copy2(preview_js, _dst_preview)
         os.chmod(_dst_preview, 0o644)
     else:
-        print("[warn] 未找到 templates/preview.js，浏览器预览不可用"
+        print(f"[warn] 未找到 {preview_js}，浏览器预览不可用"
               "（渲染不受影响）", file=sys.stderr)
 
     seg_count = len(manifest["segments"])

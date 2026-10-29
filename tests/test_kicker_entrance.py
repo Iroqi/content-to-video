@@ -167,7 +167,7 @@ class RowWidthIsStable(unittest.TestCase):
 
     def test_css_consumes_the_token(self):
         """CSS 里必须真的读那个令牌——算对了但不挂，等于没有。"""
-        with open(H.SKILL_DIR + "/templates/composition.css", encoding="utf-8") as f:
+        with open(H.SKILL_DIR + "/scripts/_assets/composition.css", encoding="utf-8") as f:
             css = f.read()
         self.assertIn(".agenda-kicker[data-kern]{padding-right:var(--ctv-ag-kern-pad)}", css)
 

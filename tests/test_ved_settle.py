@@ -112,7 +112,7 @@ class RuntimeContract(unittest.TestCase):
 
     def test_runtime_reads_relay_from_the_template(self):
         """运行期不许再抄一份数字：接力时长从 --ctv-relay-s 读，与生成期同一真源。"""
-        src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
+        src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         self.assertIn('getPropertyValue("--ctv-relay-s")', src)
         self.assertIsNone(re.search(r"^const RELAY_SECONDS = [\d.]+;", src, re.MULTILINE),
                           "runtime.js 里又出现了写死的 RELAY_SECONDS")
@@ -124,7 +124,7 @@ class RuntimeContract(unittest.TestCase):
 
     def test_settle_var_is_read_from_root(self):
         """运行期只读一个 CSS 变量、不做第二次判断（"要不要演"只在生成期决定）。"""
-        src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
+        src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         self.assertIn('getPropertyValue("--ctv-ved-settle")', src)
         self.assertIn("const verseEmSettle", src)
         self.assertIn("verse-ved-settled", src)
@@ -135,7 +135,7 @@ class RuntimeContract(unittest.TestCase):
         k 是取整后的字序号，最后不足一个字的行程里 k 已经停在 n 不动；门一关，这条
         判据就被整个跳过，收束永远不触发且没有任何报错（踩过）。
         """
-        src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
+        src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         body = src.split("const verseEmUpdate = ", 1)[1].split("\n};", 1)[0]
         self.assertIn("verseEmSettle(L)", body)
         self.assertLess(body.index("verseEmSettle(L)"), body.index("L.lastK = k"))
@@ -152,7 +152,7 @@ class RuntimeContract(unittest.TestCase):
         用"源码里不许出现"来锁：一旦有人为了修某个次序问题把它加回来，症状会以
         "卡拉OK偶发失效"的形式复现，而不是以测试失败的形式。
         """
-        src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
+        src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         body = src.split("const verseSync = ", 1)[1].split("\n};", 1)[0]
         code = "\n".join(ln for ln in body.splitlines()
                          if not ln.strip().startswith("//"))
@@ -164,7 +164,7 @@ class RuntimeContract(unittest.TestCase):
         `t1` 是"下一句开口"，两者之间的留白正是收束要占的那段。早于 `t0+voiced`
         触发会把逐字回落盖在还没念到的字上。
         """
-        src = (SKILL / "templates" / "runtime.js").read_text(encoding="utf-8")
+        src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         self.assertIn(
             "const verseEmEnd = (L) => (L.voiced > 0 ? Math.min(L.t1, L.t0 + L.voiced) : L.t1);",
             src)

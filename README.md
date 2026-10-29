@@ -55,7 +55,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 没有 key 也能跑：自动降级成无配音预览。打开 hf-project/index.html 看版式。
 ```
 
-预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，模板自带入场动画，先把链路跑通。
+预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，版式自带入场动画，先把链路跑通。
 
 五个停止点（`--until` 的全部取值）：
 
@@ -107,7 +107,7 @@ HYPERFRAMES_BROWSER_PATH=$(command -v google-chrome) \
 ## 6. 目录
 
 ```
-scripts/     全部 Python（只依赖标准库）
+scripts/     脚本与页面资产（只依赖标准库）
   run.py         编排层：TTS → 配图 → HTML → check → render
   pipeline.py    第 2 步：逐句配音与时间轴
   gen_hyperframes.py  第 3–4 步：配图校验、项目生成
@@ -116,7 +116,8 @@ scripts/     全部 Python（只依赖标准库）
   check_svg.py        画好的 SVG 过一遍几何/对比度/字号/数据自查
   _template.py        视觉真源：版式、字体、动画参数的**唯一**来源
   _theme.py           配色真源
-templates/   结构与选择器（CSS + 运行时/预览 JS），不放观感常量
+  _assets/            页面资产：composition.css / runtime.js / preview.js
+                      只放结构与选择器，不放观感常量
 references/  分步文档，见下节
 tests/       契约测试 ＋ 五道检查脚本
 ```

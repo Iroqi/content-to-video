@@ -2,8 +2,8 @@
 """维护者工具：检查文档里的「章节」交叉引用是否真实存在（只依赖标准库）。
 
 形如 `SKILL.md「环境」`、`references/writing.md「字段规范」` 的引用，目标文件里
-必须有一个标题（# 开头的行）包含该章节名；另外扫描 scripts/*.py 与 templates/*
-里的同类引用（references 前缀可省略，裸文件名按 references/ → 根目录解析）。
+必须有一个标题（# 开头的行）包含该章节名；另外扫描 scripts/*.py 与 scripts/_assets/
+下的同类引用（references 前缀可省略，裸文件名按 references/ → 根目录解析）。
 改标题、瘦身 SKILL.md 之后跑一次，能抓住"引用了已经不存在的章节"。
 
 术语表锁：别称清单**内联**在这里（曾用 references/glossary.md 登记，术语表
@@ -167,7 +167,7 @@ def main():
     sources = [os.path.join(ROOT, "SKILL.md")]
     sources += glob.glob(os.path.join(ROOT, "references", "*.md"))
     sources += glob.glob(os.path.join(ROOT, "scripts", "*.py"))
-    sources += glob.glob(os.path.join(ROOT, "templates", "*"))
+    sources += glob.glob(os.path.join(ROOT, "scripts", "_assets", "*"))
     for src in sorted(sources):
         with open(src, encoding="utf-8") as f:
             text = f.read()

@@ -236,7 +236,7 @@ class SvgChecker(unittest.TestCase):
         errs, _ = self.run_check(self._canvas_svg(body), layout="slot")
         self.assertTrue(any("对比度" in e for e in errs))
 
-    def test_canvas_full_bleed_plate_hides_the_templates_three_layers(self):
+    def test_canvas_full_bleed_hides_the_three_template_layers(self):
         # 模板本来就在画布页底下画了渐变/网格/氛围光三层，满幅 rect 把它们整个盖掉
         body = ('<rect width="1080" height="1440" fill="#0b1020"/>'
                 '<circle cx="540" cy="700" r="300" fill="#38bdf8"/>'

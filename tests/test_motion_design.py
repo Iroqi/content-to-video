@@ -29,11 +29,12 @@ import _template as T
 from html_renderer import generate_html, _cycle_pick
 
 FPS = 30
-# 模板样式表的真实路径。必须走 os.path 拼绝对路径：Windows 上
-# `"D:/a/x/scripts/_template.py" + "/../templates/…"` 会被当成字面量目录名
-# （`_template.py` 被当作一个**文件夹**），`..` 不参与归一，open 直接 ENOENT。
-TEMPLATE_CSS = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(T.__file__))), "templates", "composition.css")
+# 样式表的真实路径。必须走 os.path 拼绝对路径：Windows 上
+# `"D:/a/x/scripts/_template.py" + "/…"` 会被当成字面量目录名（`_template.py`
+# 被当作一个**文件夹**），`..` 不参与归一，open 直接 ENOENT。
+# `_assets/` 与 `_template.py` 同在 scripts/ 下，所以只往上取一层目录。
+TEMPLATE_CSS = os.path.join(os.path.dirname(os.path.abspath(T.__file__)),
+                            "_assets", "composition.css")
 # 30fps 下"这一帧的位移看得出吗"的分界：4px 约为画面上一条 1px 描边的 4 倍，
 # 也是本仓库标题最小可读字号（26px）的 1/6 字身。低于它，位移会被读成抗锯齿变化。
 MIN_FIRST_FRAME_PX = 4.0

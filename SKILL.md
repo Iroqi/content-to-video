@@ -24,7 +24,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 产物标 degraded）。打开 hf-project/index.html 看版式；配音后去掉 --until 才是出片。
 ```
 
-只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（模板自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
+只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
 
 ## 这份文档怎么用
 
@@ -38,7 +38,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3b 步画 SVG：几何、对比度、字号、数据自查 | `references/canvas.md` | 不画 SVG 就不用读 |
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、每一拍怎么写 | `references/motion.md` | 该段不演时就跳过（演什么已在第 1 步定完） |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
-| 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认模板时 |
+| 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认版式时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |
 | 能不能交付（四道验收）、"这一页在屏幕上到底有没有东西" | `look.md`「交付前四道」 | 交付前必过（第 4 道要人看 contact sheet） |
 
@@ -55,7 +55,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 - **TTS 降级显式化**：默认单句失败即 abort；`--on-fail silence` 才允许静音兜底，且渲染必须再加 `--allow-degraded`。
 
 **③ 视觉契约**（违反则画面就散）
-- **视觉真源**：版式/字体/动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`templates/` 只放结构与选择器。随画幅变的观感常量写那两个 py，别在 CSS 里存第二份。令牌两侧必须对得上：CSS/JS 用到的每一枚都得注进 `:root`，注进去的每一枚都得有人读——`var()` 取不到值是静默失效，页面照样生成、门禁照样全绿。
+- **视觉真源**：版式/字体/动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`scripts/_assets/` 只放样式表与运行时脚本。随画幅变的观感常量写那两个 py，别在 CSS 里存第二份。令牌两侧必须对得上：CSS/JS 用到的每一枚都得注进 `:root`，注进去的每一枚都得有人读——`var()` 取不到值是静默失效，页面照样生成、门禁照样全绿。
 - **双画幅**：`--aspect portrait|landscape`，默认 portrait（1080×1440），landscape 为 1920×1080。画幅在生成 HTML 时一次性确定。
 - **先定编排，再选版式**：`canvas` = 整页一张 SVG 按旁白逐拍演；不写 `layout` = 槽位版式（标题区 + 配图槽 + 句子流），agenda 卡兜开局与收尾。选型见 `references/writing.md`「哪些段值得交给 canvas」。
 
@@ -120,7 +120,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 - `--until html` 是迭代档（出 HTML 即停、人工预览），`--until check` 停在官方门禁之后，`--until render`（默认）才出成片。前两档没 key 时**自动加 `--no-tts`**（报告记 skipped、产物标 degraded）；不给 `--until` 的定稿路径绝不降级——无声片不是成片。
 - **调试旗标一律不进交付，`--draft` 是它们的总开关**：一次放行占位 / ease / 缺 src 降级 / 槽位比例·对比度与画布字号降 warn / 渲染 best-effort。`--until html` 之外带它们跑渲染在入口 exit 2；安全类与画布档判据在 draft 下照旧拦截。差异由 `production_report` 的 `draft` 标记与 skipped 清单点名。`check_svg.py` 同样吃 `--draft`。
 
-探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.animate.duration=0.8`，键是 `scripts/_template.py` 的叶子路径）。它只在本次进程生效，定稿的取值写回模板。
+探索期改观感不必动版式常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.animate.duration=0.8`，键是 `scripts/_template.py` 的叶子路径）。它只在本次进程生效，定稿的取值写回 `_template.py`。
 
 缺图处理：段落在 images.json 里没有映射键时只在真要渲染时拦（exit 2），`--until html` 只警告；**满幅版式（`layout:"canvas"`）除外**，那几页缺图连预览 HTML 都出不来，一律 exit 2。想在图没画完之前先看编排用 `--until html --placeholder-missing`（占位 SVG 顶一张）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（报告留痕）；`--until images` 只看覆盖率、不拦。**没有生图能力**（连 SVG 也画不出）时加 `--slot-no-image`：槽位段缺图不再留空图槽，改由句子流铺满内容区，照旧能出成片（日志 `[notice]` 点名哪几段降级，见 `imagery.md`「无图降级档」）。
 

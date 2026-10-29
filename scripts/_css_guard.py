@@ -7,21 +7,21 @@ GSAP 把它们合成一条 inline `transform` 写进元素的 `style`。只要 C
 的"起点"也会跟着变。症状是**静默的**：那一页的标题/配图不进场，或者从半路弹出来，
 没有任何报错，`hyperframes check` 也看不见（它只判布局与可读性）。
 
-所以这条约束一直是文档里的红线（`references/look.md`「动画：实现要点」、`templates/
-composition.css` 里三处注释都在说"别声明 transform，居中走 auto 外边距"）。写成门禁
-只需要一次静态解析：**CSS 里声明 transform 的选择器** ∩ **这一版 HTML 真会补间到的
-元素选择器**。
+所以这条约束一直是文档里的红线（`references/look.md`「动画：实现要点」，
+`_assets/composition.css` 里三处注释都在说"别声明 transform，居中走 auto 外边距"）。
+写成门禁只需要一次静态解析：**CSS 里声明 transform 的选择器** ∩ **这一版 HTML
+真会补间到的元素选择器**。
 
 两类选择器分开求：
 
-- CSS 侧：扫 `templates/composition.css`（以及运行期注入的任何同源样式串）里的规则，
-  取声明块中带 `transform:` 的那些，`@media` 里的也一并收（本模板按 `[data-aspect]`
+- CSS 侧：扫 `_assets/composition.css`（以及运行期注入的任何同源样式串）里的规则，
+  取声明块中带 `transform:` 的那些，`@media` 里的也一并收（本样式表按 `[data-aspect]`
   前缀区分画幅，不用媒体查询；收进来只是为了让"以后有人加了一个 @media"也不漏）。
 - 补间侧：从**生成好的 HTML** 里读 GSAP 选择器字符串（`tl.fromTo("#x",…)`
   / `tl.from("#x",…)` / `tl.set("#x",…)` / `tl.to("#x",…)`），标出来源是哪个函数。
 
 白名单只有一类：伪元素（`::before` / `::after`）。`content:""` 的伪元素不是 DOM 节点，
-GSAP 永远不会补间它，模板里那几条（`.seg-card::after` 的高光边）是安全的。
+GSAP 永远不会补间它，样式表里那几条（`.seg-card::after` 的高光边）是安全的。
 
 **故意不开"豁免标记"**：没有一个"我知道我在干什么"的开关。因为这条约束的正确修法
 永远是"换个元素承载 CSS 动效"，而不是"豁免一次"——开了口子，下一个 agent 就会用它。
@@ -65,10 +65,10 @@ def transform_rules(css):
         head, body = m.group(1).strip(), m.group(2)
         if not head or _CSS_AT_RULE_RE.match(head):
             continue
-        # 选择器列表取**最后一个换行之后**的那一段：模板里的样式串常写成
+        # 选择器列表取**最后一个换行之后**的那一段：样式表里的规则常写成
         # `/* 说明 */\n__CTV_ROOT_VARS__\n\n.seg-title{…}`，前一行是占位符而不是选择器；
         # 真正的选择器永远紧贴 `{`，所以整段按行取末尾即可（`:is(a,\n b)` 这类跨行
-        # 括号写法本模板不用，真用了也只会少认一个选择器、不会误报）。
+        # 括号写法本样式表不用，真用了也只会少认一个选择器、不会误报）。
         # head 非空由上方 `if not head` 保证，非空串 splitlines() 恒有末行
         head = head.splitlines()[-1].strip()
         if not head or _PLACEHOLDER_RE.search(head):
@@ -103,7 +103,7 @@ def transform_tween_kind(sel):
       都合成到 transform，只要这条补间打到了元素身上就写。
     - `maybe`：`*` 结尾的组选择器（`.row *`）等无法静态定论的，按 may-be 报。
     - None：SVG 内部选择器（`#img-x svg …`）不归 CSS 管（SVG 的 transform 是属性
-      或 CSS transform 的另一套子集，且模板 CSS 够不着内联 SVG 副本）。
+      或 CSS transform 的另一套子集，且样式表够不着内联 SVG 副本）。
     """
     # 只留一条判据，且必须 `re.I`：原先那条 `sel.lower().split()` 是大小写不敏感
     # 的，而裸 `\bsvg\b` 不是——删掉前者会让 `SVG` 选择器从"不归 CSS 管"变成
@@ -160,7 +160,7 @@ def css_transform_leaks(css, html):
     return leaks
 
 
-def leak_message(leaks, where="templates/composition.css"):
+def leak_message(leaks, where="scripts/_assets/composition.css"):
     """把泄漏点写成一条人话的 error（点名到选择器与修补办法）。"""
     lines = []
     for css_sel, decl, tween_sel, fn in leaks:

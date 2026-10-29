@@ -40,24 +40,26 @@ DEFAULT_ACCENT = get_default_accent()
 # 合成 ID：根元素 data-composition-id 与 runtime 注册时间线用的键**同一个值**
 # （hyperframes 契约要求两者一致）。它是本项目唯一的合成 ID 真源，经
 # __CTV_COMPOSITION_ID__ 注进页面骨架（本模块的 _COMPOSITION_HTML）与
-# runtime.js；templates/preview.js 不走占位符装配，改为从根元素的
-# data-composition-id 现读。三处曾经各自硬编码 "main"——改一处漏两处时，
+# runtime.js；preview.js 不走占位符装配，改为从根元素的 data-composition-id
+# 现读。三处曾经各自硬编码 "main"——改一处漏两处时，
 # 注册键与根 ID 不匹配：只有一条时间线时 runtime 仍能兜住绑定，两条以上则渲染
 # **静默冻结在 t=0**（无报错）。
 COMPOSITION_ID = "main"
 
-# ── 模板资产：版式的静态骨架 ────────────────────────────────────────────
-# CSS / JS 是 templates/ 下的真实文件：结构与选择器写死，数值一律
-# 走 var(--ctv-*)——由本模块从 _template 内联的版式数据派生后注入 :root。
-# 缺模板文件即硬失败：静默产出无样式页面比立刻报错难排查得多。
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+# ── 页面资产：版式的静态骨架 ────────────────────────────────────────────
+# composition.css / runtime.js / preview.js 是 _assets/ 下的真实文件：结构与
+# 选择器写死，数值一律走 var(--ctv-*)——由本模块从 _template 内联的版式数据
+# 派生后注入 :root。缺文件即硬失败：静默产出无样式页面比立刻报错难排查得多。
+# 路径相对本模块解析（不是相对仓库根）：三份资产与读它们的代码同处 scripts/，
+# 整目录被搬走或换个 cwd 都不断。
+ASSETS_DIR = Path(__file__).resolve().parent / "_assets"
 
 # 页面骨架（`<head>`/`<audio>`/两张 script 的次序）写在这里、不单独成文件：
 # 它只有 31 行、11 个占位符，且**每个占位符都只有一个消费者**——`_fill` 的对账
 # 在它身上永远全绿，等于没有门禁；`_load_asset` 的"文件缺失"分支对它也永远走不到。
 # 留着它的唯一后果是"改骨架"要跨两个文件对账。
 # 反过来，CSS 与 runtime.js 是真资产：几百行、要按语法看、要给 `_css_guard` 扫，
-# 它们继续留在 templates/。
+# 它们继续留在 _assets/。
 _COMPOSITION_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -69,8 +71,8 @@ __CTV_STYLE__
 </style>
 </head>
 <body>
-<!-- 预览逻辑在独立的 templates/preview.js（生成 HTML 时原样复制到输出目录，
-     不走占位符装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
+<!-- 预览逻辑在独立的 preview.js（生成 HTML 时原样复制到输出目录，不走占位符
+     装配），这里只做外部引用。注意：任何注释/文案中都不能出现"尖括号斜杠 script
      尖括号"字面量（会被当作脚本结束标签），否则 hyperframes 打包单文件
      HTML 内联脚本时会在此处截断，导致页面报错。 -->
 <div id="root" data-composition-id="__CTV_COMPOSITION_ID__" data-aspect="__CTV_ASPECT__" data-start="0" data-duration="__CTV_DURATION__" data-width="__CTV_WIDTH__" data-height="__CTV_HEIGHT__" data-fps="__CTV_FPS__">
@@ -93,10 +95,10 @@ __CTV_SCRIPT__
 
 
 def _load_asset(name):
-    """读取 templates/ 下的模板资产（CSS / JS / HTML 骨架）。"""
-    p = TEMPLATES_DIR / name
+    """读取 _assets/ 下的页面资产（CSS / 运行时 JS）。"""
+    p = ASSETS_DIR / name
     if not p.is_file():
-        raise FileNotFoundError(f"[renderer] 模板资产缺失: {p}")
+        raise FileNotFoundError(f"[renderer] 页面资产缺失: {p}")
     return p.read_text(encoding="utf-8")
 
 
@@ -742,7 +744,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     css_tagline_mt = _tgl["marginTop"]
 
     # ── :root 变量表 ──────────────────────────────────────────────────────
-    # templates/*.css 不写硬编码尺寸，一律 var(--ctv-*)。前缀：无后缀 = 两画幅
+    # _assets/*.css 不写硬编码尺寸，一律 var(--ctv-*)。前缀：无后缀 = 两画幅
     # 同名各取各块，-v- 仅竖屏，-l- 仅横屏，-ag- agenda 同名取各自 layout。
     # 压暗覆盖层要**实色**底：文本色按 0.62 混到主底色（渐变第一个色标，无则纯黑）。
     _bg_flat = rc.bgs[0] if rc.bgs else "#000000"

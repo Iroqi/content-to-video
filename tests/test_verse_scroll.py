@@ -21,9 +21,9 @@ import _helpers as H  # noqa: F401  副作用：把 scripts/ 放进 sys.path
 import _template as _T
 
 REPO = pathlib.Path(H.SKILL_DIR)
-RUNTIME = (REPO / "templates" / "runtime.js").read_text(encoding="utf-8")
-CSS = (REPO / "templates" / "composition.css").read_text(encoding="utf-8")
-PREVIEW = (REPO / "templates" / "preview.js").read_text(encoding="utf-8")
+RUNTIME = (REPO / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
+CSS = (REPO / "scripts" / "_assets" / "composition.css").read_text(encoding="utf-8")
+PREVIEW = (REPO / "scripts" / "_assets" / "preview.js").read_text(encoding="utf-8")
 
 
 def _render():

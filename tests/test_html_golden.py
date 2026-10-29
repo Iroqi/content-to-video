@@ -117,7 +117,7 @@ class Structure(unittest.TestCase):
             r"box-shadow|text-shadow|border-radius|opacity|font-weight|"
             r"letter-spacing|filter|backdrop)", re.S)
 
-        css_path = os.path.join(H.SKILL_DIR, "templates", "composition.css")
+        css_path = os.path.join(H.SKILL_DIR, "scripts", "_assets", "composition.css")
         with open(css_path, encoding="utf-8") as f:
             css = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
 
@@ -138,7 +138,7 @@ class Structure(unittest.TestCase):
                     offenders.append(f"{prop}: {value[:70]}")
         self.assertEqual(
             offenders, [],
-            "templates/composition.css 的 [data-aspect] 块里出现了观感值——"
+            "scripts/_assets/composition.css 的 [data-aspect] 块里出现了观感值——"
             "这些随画幅变的量属于 scripts/_template.py（经 --ctv-* 注入），"
             "CSS 存第二份会让改模板不带着它们走：\n  " + "\n  ".join(offenders))
 
@@ -153,7 +153,7 @@ class Structure(unittest.TestCase):
         preview.js 不走装配，改为从根元素现读。
         """
         import html_renderer as hr
-        tpl_dir = os.path.join(H.SKILL_DIR, "templates")
+        tpl_dir = os.path.join(H.SKILL_DIR, "scripts", "_assets")
 
         # 走装配的两处骨架：必须是占位符，不许再出现字面量 ID
         with open(os.path.join(tpl_dir, "runtime.js"), encoding="utf-8") as f:
@@ -386,7 +386,7 @@ class Structure(unittest.TestCase):
         self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.28,ease:"expo.out"},2.12)',
                       vertical)
 
-    def test_canvas_page_keeps_the_templates_three_background_layers(self):
+    def test_canvas_page_keeps_the_three_background_layers(self):
         """C1：画布页的背景交回模板，所以这三层必须真的在。
 
         门禁现在会 warn"画布 SVG 别自铺满幅底板"，判据是模板本来就在这一页底下画好
@@ -443,7 +443,7 @@ class Structure(unittest.TestCase):
         root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         used = set()
         for name in ("composition.css", "runtime.js", "preview.js"):
-            with open(os.path.join(root_dir, "templates", name), encoding="utf-8") as f:
+            with open(os.path.join(root_dir, "scripts", "_assets", name), encoding="utf-8") as f:
                 src = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
             # 调用可能跨行（getPropertyValue(\n  "getComputedStyle(...)")
             # .getPropertyValue("--x")），压平空白再扫，否则会漏报成"没人用"。
@@ -502,14 +502,14 @@ class Structure(unittest.TestCase):
         它不动，而成片里 future 档的亮度从此只跟 CSS 走。
         """
         root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root_dir, "templates", "composition.css"),
+        with open(os.path.join(root_dir, "scripts", "_assets", "composition.css"),
                   encoding="utf-8") as f:
             css = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
         declared = set(re.findall(r"(--ctv-[a-z0-9-]+)\s*:", css))
         # 运行时按行写的档位变量，CSS 需要一条 `--ctv-line-op:1` 做 active 态
         allowed = {"--ctv-line-op"}
         self.assertEqual(sorted(declared - allowed), [],
-                         "templates/composition.css 里声明了模板令牌——数值该由 "
+                         "scripts/_assets/composition.css 里声明了令牌——数值该由 "
                          "_template.py 注入，CSS 存第二份会让改模板不带着它走")
 
 
@@ -689,7 +689,7 @@ class AppleOpening(unittest.TestCase):
         "收拢"落到的不是设计的那个字距，且没有任何报错。两个真源之间这条
         对账是唯一的绳子。
         """
-        css_path = os.path.join(H.SKILL_DIR, "templates", "composition.css")
+        css_path = os.path.join(H.SKILL_DIR, "scripts", "_assets", "composition.css")
         with open(css_path, encoding="utf-8") as f:
             css = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
         m = re.search(r"\.agenda-kicker\{[^}]*letter-spacing:([\d.]+)em", css)

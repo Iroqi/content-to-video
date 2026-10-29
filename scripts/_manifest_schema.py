@@ -297,6 +297,17 @@ def validate_timing_manifest(data):
         _validate_layout(sg.get("layout"),
                          f"timing_manifest.json 的段落 '{sg.get('id', '?')}'",
                          content=is_content_sid(sid))
+        # 页底字幕开关（整页画布）：只认布尔，写 "false" 会静默当真值。
+        if sg.get("subtitle") is not None and not isinstance(sg["subtitle"], bool):
+            raise ValueError(
+                f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 'subtitle' "
+                f"必须是 JSON 布尔 true/false（实际: {sg['subtitle']!r}）")
+        for _retired in ("layout",):
+            if sg.get(_retired) == "plate":
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 写了 "
+                    "layout=\"plate\"：它已并入 \"canvas\"（字幕层默认打开），"
+                    "改成 \"canvas\" 即可；不要字幕就加 \"subtitle\": false")
         # 台词板（可选，由 pipeline 从 source 透传；manifest 明写可手写，所以这里
         # 也要认）。只做形状校验，句序是否落在真实句子上由 _beats.audit 拿本
         # 文件已校验的 sentences 去核——那时才知道最终分成了几句。

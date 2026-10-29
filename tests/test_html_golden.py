@@ -1013,8 +1013,14 @@ class CanvasPageAndVideoAttrs(unittest.TestCase):
             card = _prepare_card(rc, clip)
         self.assertTrue(card.is_canvas)
         self.assertEqual(card.title_wrap, "")
-        self.assertEqual(card.verse_html, "")
         self.assertEqual(card.tagline_html, "")
+        # 字幕层是画布上唯一允许出现的一层文字：默认开时它就在 verse_html 里，
+        # 关掉（subtitle:false）才是空串
+        self.assertTrue(card.is_caption)
+        self.assertIn("plate-caption", card.verse_html)
+        off = dict(clip, seg=dict(by_id["seg-b"], subtitle=False))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(_prepare_card(rc, off).verse_html, "")
         # 反向证明不是"整个函数对画布页失灵"：同一条链上槽位段照旧算得出这些层
         clip2 = dict(clip, seg=by_id["seg-a"])
         with contextlib.redirect_stderr(io.StringIO()):

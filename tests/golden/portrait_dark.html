@@ -356,8 +356,8 @@ body{font-family:var(--ctv-font-family)}
    需要遮罩层；文字对比度由画布自己负责（见 references/rendering.md）。
    选择器用 [data-aspect] 抬到 0,3,0，与两条画幅各自的 .seg-image 定位规则
    （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
-[data-aspect] .seg-canvas .seg-image,[data-aspect] .seg-plate .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
-[data-aspect] .seg-canvas .seg-image::after,[data-aspect] .seg-plate .seg-image::after{display:none}
+[data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
+[data-aspect] .seg-canvas .seg-image::after{display:none}
 /* 画布页的氛围光要比槽位那枚**大得多、软得多**：画布页不画满幅底板，主题渐变 + 网格 +
    这团光就是它全部的景深来源。槽位那枚 58%×42% 的光斑放到整屏上只盖住中间一小块，
    边缘仍是平的，而且它的椭圆边界在深色页底上看得出来——读作糊在主视觉后面的一块色斑而不是
@@ -366,45 +366,33 @@ body{font-family:var(--ctv-font-family)}
    网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
 [data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
 /* 底轨（卡上的 ::before）抬到媒体之上：槽位版式里媒体永远够不到页底，被 img/video
-   的 z-index:1 压着也看不出差别；画布与图版拉满全屏后，一张铺到页底的照片就会
-   把它整个盖掉。进度条本身的层高在基规则里一次定死（z-index:3）——图版的字幕
-   层是 z-index:2，进度条压不过去就会被字幕的暗垫吃掉最后一条。 */
-[data-aspect] .seg-canvas::before,[data-aspect] .seg-plate::before{z-index:2}
+   的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把它整个
+   盖掉。进度条本身的层高在基规则里一次定死（z-index:3）——字幕层是 z-index:2，
+   进度条压不过去就会被字幕的暗垫吃掉最后一条。 */
+[data-aspect] .seg-canvas::before{z-index:2}
 
-/* ── 图版（段落 layout: "plate"，两画幅同一份结构）──────────────────────
-   图主导，但保留一层最小的文字：标题压在顶部、一句字幕压在底部。它填的是槽位
-   版式（文字主导 + 一张配图）与整页画布（一个字都没有）之间的空档——3b1b 的
-   每一帧就是这个样子。句子流层由渲染器**不生成**（只挂当前句，见
-   html_renderer._plate_caption_html），tagline 也不画。
-   图槽盒与整页画布同一套几何（拉满整幅、撤掉圆角/外发光/内描边），所以那条
-   规则一条两用；这里只补两层文字。
-   两层文字都必须自己带暗垫（scrim）：满幅图可以是任何亮度，白字直接落在浅色
-   照片上就读不出来——这是画布版式交给作者、而图版必须由模板兜住的一件事
-   （画布页没有 HTML 文字，图版有）。渐变从透明到 78% 页底色，边界看不见，
-   只把字托起来。 */
-[data-aspect] .seg-plate .plate-head{position:absolute;left:var(--ctv-pl-title-x);right:var(--ctv-pl-title-x);top:var(--ctv-pl-title-t);z-index:2}
-/* 标题带的暗垫：从页顶一路淡到标题带下方，盖住标题那一块。挂在伪元素上而不是
-   往 .plate-head 自己身上写背景——标题盒的高度随字数变，背景跟着算就永远差一截。 */
-[data-aspect] .seg-plate .plate-head::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-title-x));right:calc(-1 * var(--ctv-pl-title-x));top:calc(-1 * var(--ctv-pl-title-t));height:var(--ctv-pl-title-scrim);z-index:-1;pointer-events:none;background:linear-gradient(180deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
-[data-aspect] .seg-plate .plate-title{line-height:var(--ctv-pl-title-lh);text-wrap:balance}
-/* 一句字幕：钉在页底，**换句是滚动不是换灯**。
-   `.plate-clip` 是一个固定高度（= 槽高）的窗口，句子在 `.plate-lines` 里排成一
-   列、每句占一个等高槽（`.plate-slot`），换句时整列上移一个槽高——字滑过窗口
-   那条**固定的边**（见 html_renderer._plate_scroll_lines）。与句子流（`.verse-clip`）
-   同一套机制，所以这里不需要 clip-path：边是容器自己的边。
-   行不做焦点衰减（亮度/尺寸/模糊）：屏幕上只有一句，没有"离焦多远"可言。
-   2 行钳制是给长句兜底的：第 3 行会直接压到安全边距外面去。 */
-[data-aspect] .seg-plate .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
-[data-aspect] .seg-plate .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
+/* ── 页底字幕层（整页画布 + subtitle:true，两画幅同一份结构）──────────
+   整页画布把版面全交给作者，代价是屏幕上原本一个字都没有。这一层把"跟着念"补
+   回来：一句钉在页底、一屏一句、换句靠整列滚动（html_renderer._plate_caption_html
+   / _plate_scroll_lines）。它**不改构图**——不进 SVG、不生成标题层、不画 tagline；
+   作者只要保证页底那一条留白（竖屏 216px、横屏 177px）是空的，字就落得下。
+   不写 subtitle 就默认开（整页画布的字幕默认要有），写 subtitle:false 才关。
+   图槽盒与整页画布同一套几何（拉满整幅、撤掉圆角/外发光/内描边），所以上面那条
+   规则只管图；这里只补这一层文字。
+   字幕必须自己带暗垫（scrim）：满幅图可以是任何亮度，白字直接落在浅色照片上就
+   读不出来——这是画布版式交给作者、而这一层必须由模板兜住的一件事。渐变从透明
+   到 78% 页底色，边界看不见，只把字托起来。 */
+[data-aspect] .seg-canvas .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
+[data-aspect] .seg-canvas .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
 /* 窗口：高度就是槽高（--ctv-pl-slot，与补间位移同源），多出来的句子被它裁掉。
    位移的目标 `.plate-lines` 用绝对定位 + top:0 定住（CSS 不给它声明 transform，
    GSAP 才能独占那一维——见 _css_guard）。 */
-[data-aspect] .seg-plate .plate-clip{position:relative;height:var(--ctv-pl-slot);overflow:hidden}
-[data-aspect] .seg-plate .plate-lines{position:absolute;left:0;right:0;top:0}
+[data-aspect] .seg-canvas .plate-clip{position:relative;height:var(--ctv-pl-slot);overflow:hidden}
+[data-aspect] .seg-canvas .plate-lines{position:absolute;left:0;right:0;top:0}
 /* 一格：等高，句在格内**贴底**——短句上方留白，字仍停在页底同一个高度上 */
-[data-aspect] .seg-plate .plate-slot{position:relative;height:var(--ctv-pl-slot)}
-[data-aspect] .seg-plate .plate-line{position:absolute;left:0;right:0;bottom:0;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
-[data-aspect] .seg-plate .plate-line.plate-accent{color:var(--seg-accent-text)}
+[data-aspect] .seg-canvas .plate-slot{position:relative;height:var(--ctv-pl-slot)}
+[data-aspect] .seg-canvas .plate-line{position:absolute;left:0;right:0;bottom:0;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
+[data-aspect] .seg-canvas .plate-line.plate-accent{color:var(--seg-accent-text)}
 
 /* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
    与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何
@@ -549,8 +537,6 @@ body{font-family:var(--ctv-font-family)}
   --ctv-camb-rx:135%;--ctv-camb-ry:85%;
   --ctv-camb-cx:50%;--ctv-camb-cy:42%;
   --ctv-camb-alpha:13%;--ctv-camb-edge:82%;
-  --ctv-pl-title-lh:1.18;--ctv-pl-title-x:64px;
-  --ctv-pl-title-t:72px;--ctv-pl-title-scrim:340px;
   --ctv-pl-cap-x:64px;--ctv-pl-cap-b:84px;
   --ctv-pl-cap-lines:2;--ctv-pl-cap-fs:42px;
   --ctv-pl-cap-lh:1.34;--ctv-pl-cap-weight:600;
@@ -619,6 +605,8 @@ body{font-family:var(--ctv-font-family)}
       <img src="images/seg-b.svg" alt="">
     </div>
     <div class="seg-progress" id="prog-seg-b" style="background:#f59e0b;width:0"></div>
+    
+    <div class="plate-caption" id="cap-seg-b" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="plate-clip" data-accent="#f59e0b"><div class="plate-lines" id="pl-seg-b"><div class="plate-slot"><div class="plate-line" data-i="3" data-t0="7.20" data-t1="9.20" data-layout-allow-overlap data-layout-allow-occlusion>这一段是整页画布。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="这一段是整页画布。"></div></div></div><div class="plate-slot"><div class="plate-line" data-i="4" data-t0="9.60" data-t1="11.60" data-layout-allow-overlap data-layout-allow-occlusion>它没有字幕。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="它没有字幕。"></div></div></div></div></div></div>
   </div>
   <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="clip-path:inset(100% 0 0 0);--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf">
     <div class="bg"></div>
@@ -671,6 +659,7 @@ tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",
   tl.fromTo("#img-seg-a > img",{scale:1.06,x:0,y:13.23},{scale:1,x:0,y:0,duration:0.60,ease:"power2.out"},2.80)
   tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
   tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.01,ease:"power2.inOut"},7.20)
+  tl.to("#pl-seg-b",{y:-132.3,duration:0.32,ease:"sine.out"},9.60)
   tl.to("#prog-seg-b",{width:"100%",duration:4.40,ease:"none"},7.20)
   tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.40,ease:"power2.inOut"},11.60)
   tl.fromTo("#line-closing",{y:1440.0},{y:-6.0,duration:0.40,ease:"power2.inOut"},11.60)

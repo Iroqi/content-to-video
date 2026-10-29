@@ -190,6 +190,10 @@ def _collect_blocks(source):
         # 不写就不进 extra，下游按槽位版式渲染。
         if seg.get("layout") is not None:
             extra["layout"] = seg["layout"]
+        # 页底字幕开关（整页画布那一层）：不写就不进 extra，渲染端按"默认开"处理。
+        # 必须透传——丢了它，`subtitle:false` 只在稿件里有效、出口就悄悄变成开。
+        if seg.get("subtitle") is not None:
+            extra["subtitle"] = seg["subtitle"]
         # 台词板（归一后的 [{on, change}]，形状由 _beats.validate_beats 把关）：
         # 透传进 manifest，好让 run.py 在真实时间轴上核对句序是否越界。它**不进
         # HTML**——台词板是意图层，渲染端只认 images.json 里的 animate。

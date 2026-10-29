@@ -157,7 +157,7 @@ from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path,
                             allow_infinite_loop as infinite_loop_allow)  # noqa: E402  宽松档开关
 from _segments import (is_full_bleed, sids_needing_image,  # noqa: E402
-                       seg_layout, STRUCTURAL_SIDS)
+                       seg_layout, seg_subtitle, STRUCTURAL_SIDS)
 from _css_guard import css_transform_leaks, leak_message  # noqa: E402  CSS↔GSAP 抢 transform
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir,
@@ -790,18 +790,19 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
         sid = seg["id"]
         entry = images.get(sid)
         if not entry:
-            errs.append(f"段落 '{sid}' 声明了 layout=\"{seg_layout(seg)}\"（满幅图版式），"
-                        f"images.json 里却没有它的配图——这一页的配图铺满整个画幅"
-                        f"（canvas 连标题层都没有，plate 只剩标题与一句字幕悬在空页上）")
+            errs.append(f"段落 '{sid}' 声明了 layout=\"{seg_layout(seg)}\"（整页画布），"
+                        f"images.json 里却没有它的配图——这一页的配图铺满整个画幅，"
+                        f"标题层与句子流层都不生成，缺图就只剩一条进度条")
             continue
         src = entry["src"]
         path = os.path.join(out_dir, src)
         n_sent = len(seg["sentences"])
         if not is_svg_path(src):
             warns.append(f"段落 '{sid}' 的整页画布配图是 {src}（不是 SVG）——"
-                         f"画布版式不生成标题层与句子流层，照片/视频里也没有"
-                         f"图内文字，这一整段画面上不会出现任何文字。"
-                         "若这就是要的效果可忽略本条；想留标题就把这一段的要点"
+                         f"画布版式不生成标题层，照片/视频里也没有图内文字，"
+                         + ("页面上只有页底那条字幕。" if seg_subtitle(seg)
+                            else "这一整段画面上不会出现任何文字（字幕层也关了）。")
+                         + "若这就是要的效果可忽略本条；想留标题就把这一段的要点"
                          "画成 SVG")
             continue
         size = _svg_intrinsic_size(path)
@@ -845,13 +846,12 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
                          f"读不到 px 字号（写成 class / em / 相对单位了）——"
                          f"折算后是否还够 {MIN_READABLE_FONT_PX}px 下限没人验得了，"
                          f"按画幅原尺寸画就不用猜")
-        if seg_layout(seg) == "plate":
-            # 图版有 HTML 文字层（标题 + 一句字幕），所以"旁白全都不上画面"这条
-            # 不成立；但那一层只占页顶与页底两条窄带，中段仍然是"图里有没有字"
-            # 的问题——一条点名而不是照抄画布那条错误的说法。
-            warns.append(f"段落 '{sid}' 图版：{n_sent} 句旁白只有**当前一句**轮流"
-                         f"出现在页底，中段画面全靠这张 SVG（图内 {n_text} 个"
-                         f" <text>）——请确认主视觉自己说清了这一页的点")
+        if seg_subtitle(seg):
+            # 字幕层只占页底一条窄带，中段仍是"图里有没有字"的问题——一条点名，
+            # 而不是照抄"旁白全都不上画面"那句已经不对的说法。
+            warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白只有**当前一句**"
+                         f"轮流出现在页底字幕层，中段画面全靠这张 SVG（图内 "
+                         f"{n_text} 个 <text>）——请确认主视觉自己说清了这一页的点")
         else:
             warns.append(f"段落 '{sid}' 整页画布：{n_sent} 句旁白不会出现在画面上"
                          f"（标题层与句子流层都不生成），这张 SVG 里有 {n_text} 个"
@@ -862,52 +862,34 @@ def canvas_layout_errors(images, segments, out_dir, canvas_w, canvas_h, draft=Fa
 
 
 def _plate_overlap_errors(segments, canvas_w, canvas_h, aspect):
-    """图版的两层文字会不会撞在一起：页底字幕往上长、页顶标题往下长。
+    """页底字幕层会不会顶进页顶：字幕按 `captionMaxLines` 行折行之后还剩多少画面。
 
-    **画面上唯一一处"静态算得出、成片才暴露"的溢出**：图版的字幕层钉在页底、
-    最多 `captionMaxLines` 行、字号取自模板；一个长句按每行 `可用宽 ÷ 字号` 个字
-    折行之后占了 n 行，n 行的高度 + 标题带的高度一旦超过页高，字幕就顶进标题——
-    两行字叠着画，`hyperframes check` 只报"文字溢出容器"（info 级），作者看不出
-    该删字还是该改模板。这里按 CJK 字宽 ≈ 字号 估行数，直接拦。
-
-    估算口径与 `_title_font_px` 里 agenda 那条守卫同一条（整行离散打包，不按面积
-    猜），所以除数、行距、边距全部从模板同一处取；两处各拍一个系数，就会"一个说
-    放得下、一个说完蛋"。
+    **画面上唯一一处"静态算得出、成片才暴露"的溢出**：字幕层钉在页底、最多
+    `captionMaxLines` 行、字号取自模板；一个长句按每行 `可用宽 ÷ 字号` 个字折行
+    之后占了 n 行，n 行的高度一旦吃掉大半页高，作者画的图就没地方站了。
+    这里按 CJK 字宽 ≈ 字号 估行数（与 `_title_font_px` 里 agenda 那条守卫同一条
+    离散打包口径），超过 `captionMaxLines` 直接拦——字幕层按句滚动，第 3 行不是
+    "滚进来"，而是被 CSS 钳掉，屏幕上就是一句念了一半的字幕。
     """
     p = load_template()["plate"][aspect]
     cap_fs = max(1, int(p["captionFontSize"]))
     cap_w = canvas_w - 2 * int(p["captionInsetX"])
     per_line = max(1, cap_w // cap_fs)
-    # 页顶标题带的最大高度：图版不钳行数、只降字号（_title_font_px 的图版档按
-    # 字数降到 guardSize2 为止），所以按"降到底的字号 × 2 行"取上限——上限取小了
-    # 会把撞车放过去，取大了会误报短标题的段。
-    head_h = (int(p["titleInsetTop"])
-              + 2 * float(p["guardSize2"]) * float(p["titleLineHeight"]))
-    # 页底字幕带：n 行 + 底部内边距 + 一道安全缝（标题与字幕之间至少留 24px）
+    cap_max = int(p["captionMaxLines"])
     errs = []
     for seg in segments:
-        if seg_layout(seg) != "plate":
+        if seg_layout(seg) != "canvas" or not seg_subtitle(seg):
             continue
         for sent in seg["sentences"]:
             text = (sent.get("text") or "").strip()
             n_lines = -(-len(text) // per_line)          # ceil
-            cap_h = int(p["captionInsetBottom"]) + n_lines * cap_fs * float(p["captionLineHeight"])
-            if min(n_lines, int(p["captionMaxLines"])) != n_lines:
-                # 超过 captionMaxLines 会被 CSS 钳掉（图版不滚，第 3 行直接消失），
-                # 屏幕上就是一句念了一半的字幕。
+            if n_lines > cap_max:
                 errs.append(
-                    f"段落 '{seg['id']}' 的图版字幕有一句 {len(text)} 字，按 {cap_fs}px "
+                    f"段落 '{seg['id']}' 的字幕有一句 {len(text)} 字，按 {cap_fs}px "
                     f"字号每行只放得下 {per_line} 字，会占 {n_lines} 行，超过 "
-                    f"captionMaxLines={p['captionMaxLines']}——图版不滚，多出的行被"
-                    f"钳掉（观众看到的是半句）。把这一句压到 {per_line * int(p['captionMaxLines'])} "
-                    f"字以内，或拆成两句（图版换句=换一屏，拆句正是它要的节奏）")
-                break
-            if head_h + cap_h + 24 > canvas_h:
-                errs.append(
-                    f"段落 '{seg['id']}' 的图版文字层撞在一起：页顶标题带约 "
-                    f"{head_h}px + 页底字幕 {n_lines} 行约 {cap_h}px，超出页高 "
-                    f"{canvas_h}px——两层文字会在画面中间叠着画。压短这一句，"
-                    f"或用 --set plate.{aspect}.captionFontSize=… 调小字幕")
+                    f"captionMaxLines={cap_max}——超出部分被钳掉（观众看到的是半句）。"
+                    f"把这一句压到 {per_line * cap_max} 字以内，或拆成两句"
+                    f"（字幕层换句=换一屏，拆句正是它要的节奏）")
                 break
     return errs
 

@@ -32,7 +32,7 @@ SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
                "speakers", "segments")
 SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
                 "speed", "voice_id", "voice_style", "takeaway", "layout",
-                "beats")
+                "subtitle", "beats")
 SPEAKER_KEYS = ("voice_id", "voice_style", "label")
 # 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
 # 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
@@ -95,8 +95,7 @@ def validate_segments_source(data):
                 raise ValueError(f"segments_source.json 的 '{key}' 非法：{e}") from e
 
     # 结构性页的版式覆盖：不写 = agenda 投影卡（pipeline 盖章），写 "canvas" =
-    # 整页海报，写 "plate" = 图版（满幅图 + 标题 + 一句字幕）。这三条去向所以这里
-    # 按取值分派、不看段 id（content=False）。
+    # 整页海报。这几条去向所以这里按取值分派、不看段 id（content=False）。
     for key in ("opening_layout", "closing_layout"):
         _validate_layout(data.get(key), f"segments_source.json 的 '{key}'")
 
@@ -207,9 +206,17 @@ def validate_segments_source(data):
                        f"segments[{i}]（title={seg.get('title')!r}）的 voice_style")
         _validate_accent(seg.get("accent"),
                          f"segments[{i}]（title={seg.get('title')!r}）")
+        # 段落侧不吃历史取值：这里正是第一个能教人改写法的位置（manifest 里
+        # 的手写数据走同一条 _validate_layout，但那时稿件已经落盘，报错只剩回改）。
         _validate_layout(seg.get("layout"),
                          f"segments[{i}]（title={seg.get('title')!r}）",
-                         content=True)
+                         content=True, retired_ok=False)
+        # 页底字幕（整页画布）：只认布尔，写 "false" 这种字符串会静默当真值。
+        if seg.get("subtitle") is not None and not isinstance(seg["subtitle"], bool):
+            raise ValueError(
+                f"segments[{i}]（title={seg.get('title')!r}）的 'subtitle' 必须是"
+                f" JSON 布尔 true/false（实际: {seg['subtitle']!r}）——它只决定整页"
+                "画布页底那条字幕出不出现，版式仍写 layout")
         # 台词板（可选）：这一段的画面在第几句旁白时变成什么，人话写法。
         # 契约只校验"每拍都说了第几句、且说的是人话"；句序是否落在真实句子
         # 上要等重分句与配音完成，见 _beats.audit 在 run.py 生成 HTML 后那一次。

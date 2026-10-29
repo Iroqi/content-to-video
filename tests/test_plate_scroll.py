@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""图版字幕的换句：一列滚过一条**固定的边**，一句一步。
+"""整页画布的字幕层换句：一列滚过一条**固定的边**，一句一步。
 
-图版（layout:"plate"）是"满幅图 + 标题 + 页底一句字幕"，一句 2 秒——换句因此是
+整页画布 + `subtitle:true` 是"满幅图 + 页底一句字幕"，一句 2 秒——换句因此是
 成片里**次数最多的动作**（3 分钟口播两百次，而段落转场只有七八次）。它曾经是
 `visibility` 的开关：旧句啪一下灭、新句啪一下亮，整页其它每一处都有编排，唯独
 字幕是换灯。
@@ -13,7 +13,7 @@
 这份文件验的是判据，不是实现细节：
 
 1. **一步 = 一个槽高** —— 位移恒等于槽高、方向恒向上，末句之后不再滚；
-2. **首句不滚** —— 图版是满幅页（进场是硬切），第一帧字幕必须在位；
+2. **首句不滚** —— 满幅页进场是硬切，第一帧字幕必须在位；
 3. **口径从句子流借** —— 时长读 `subtitle.relay`、缓动读 `subtitle.scroll.ease`，
    锚点是新句开口（`start_time + onset`），都与 `.verse` 同源；
 4. **位移只写在列上** —— 行自己一条补间都没有，两句若各有各的位移，交叠期两条
@@ -37,7 +37,7 @@ _SCROLL_RE = re.compile(
 _ASPECT_KEY = {"portrait": "vertical", "landscape": "landscape"}
 
 
-def _src(text=None, layout="plate"):
+def _src(text=None, layout="canvas"):
     s = H.sample_source()
     s["segments"][0]["layout"] = layout
     if text:
@@ -70,7 +70,13 @@ def _render(src=None, aspect="portrait", tpl=None, onset=None):
 
 
 def _tweens(html):
-    return list(_SCROLL_RE.finditer(html))
+    """只收起拍段（seg-a）那条列的滚动，且按时刻排序。
+
+    样稿里的 seg-b 也是满幅页、也有字幕层，它自己那一条滚动会混进来；末句之后
+    "不再滚"的判据只能对着同一段的那几条算。
+    """
+    found = [m for m in _SCROLL_RE.finditer(html) if m.group("sid") == "seg-a"]
+    return sorted(found, key=lambda m: float(m.group("at")))
 
 
 def _slot(aspect="portrait", tpl=None):
@@ -121,9 +127,9 @@ class StepDistance(unittest.TestCase):
         slot = _slot()
         self.assertIn(f"--ctv-pl-slot:{slot}px;", self.html)
         self.assertIn(
-            "[data-aspect] .seg-plate .plate-clip{position:relative;"
+            "[data-aspect] .seg-canvas .plate-clip{position:relative;"
             "height:var(--ctv-pl-slot);overflow:hidden}", self.html)
-        self.assertIn("[data-aspect] .seg-plate .plate-slot{position:relative;"
+        self.assertIn("[data-aspect] .seg-canvas .plate-slot{position:relative;"
                       "height:var(--ctv-pl-slot)}", self.html)
 
     def test_landscape_has_its_own_slot(self):
@@ -135,7 +141,7 @@ class StepDistance(unittest.TestCase):
 
 
 class FirstSentenceStandsStill(unittest.TestCase):
-    """首句不滚：图版是满幅页，进场是硬切，第一帧字幕必须在位。"""
+    """首句不滚：满幅页进场是硬切，第一帧字幕必须在位。"""
 
     def test_first_sentence_has_no_step(self):
         html = _render(_src("这是第一句内容。这是第二句内容。这是第三句内容。"), onset=0.2)
@@ -205,18 +211,22 @@ class OnlyTheColumnMoves(unittest.TestCase):
         self.assertEqual(card.count('class="plate-line"'), 3)
 
 
-class NoScrollOnOtherPages(unittest.TestCase):
-    """滚动是图版的事：别的版式没有这个窗口，也不该有这条补间。"""
+class OnlyWhereTheSubtitleLayerExists(unittest.TestCase):
+    """滚动是字幕层的事：没有这一层的页没有这个窗口，也不该有这条补间。"""
 
     def test_slot_segment_has_no_scroll(self):
         self.assertEqual(_tweens(_render(_src(layout=None))), [])
 
-    def test_canvas_segment_has_no_scroll(self):
-        self.assertEqual(_tweens(_render(_src(layout="canvas"))), [])
+    def test_subtitle_off_has_no_scroll(self):
+        src = _src("这是第一句内容。这是第二句内容。")
+        src["segments"][0]["subtitle"] = False
+        self.assertEqual(_tweens(_render(src)), [])
 
-    def test_uppercase_layout_plate_still_scrolls(self):
-        """确认上面两条不是因为图版页根本没渲出来（反向对照）。"""
-        self.assertEqual(len(_tweens(_render(_src("这是第一句内容。这是第二句内容。")))), 1)
+    def test_retired_plate_layout_still_scrolls(self):
+        """`layout:"plate"` 的老稿件：版式并入 canvas，字幕层不能被合并弄丢。"""
+        html = _render(_src("这是第一句内容。这是第二句内容。", layout="plate"))
+        self.assertEqual(len(_tweens(html)), 1)
+        self.assertIn('class="plate-caption"', html)
 
 
 class Determinism(unittest.TestCase):

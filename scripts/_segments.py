@@ -82,34 +82,50 @@ def sids_needing_image(manifest):
             if needs_image(seg)]
 
 
-# 段落版式五档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
-# 整页画布（配图拉满全屏，HTML 的标题层与句子流层都不渲染，标题与文字由画布自己
-# 画）；"plate" = 图版（配图铺满这一页，只保留一层文字——标题 + 一句字幕，不画
-# 句子流、不画 tagline，见 PLATE_FIELDS）；"compare" = 并置对比（标题区照旧，
+# 段落版式四档：不写 layout = 槽位版式（标题区 + 配图槽 + 句子流）；"canvas" =
+# 整页画布（配图拉满全屏，标题层与句子流层都不渲染——画面全交给那张图，想要页底
+# 一条字幕就写 subtitle:true，见 seg_subtitle）；"compare" = 并置对比（标题区照旧，
 # 图槽一分为二，两张图各自按旁白入场 / 演进）；"agenda" = 开屏/结尾那张纯文字页。
 # 只有 agenda 绑段 id：它是结构性页专属的投影卡（行来自全片其它段——作者能选这一
-# 档，选不了它印什么，见 seg_layout）；canvas / plate / compare 三段通用。
+# 档，选不了它印什么，见 seg_layout）；canvas / compare 两段通用。
 # 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
-# references/canvas.md「整页画布」与同文件「并置对比」「图版」。
-LAYOUT_VALUES = ("canvas", "plate", "compare", "agenda")
+# references/canvas.md「整页画布」与同文件「并置对比」「字幕层」。
+LAYOUT_VALUES = ("canvas", "compare", "agenda")
+# 已并入别处的版式取值 → 现在该写什么。这里只负责把话说明白，"认不认"由调用方
+# 决定（见 _validate_layout 的 retired_ok 参数）。
+RETIRED_LAYOUTS = {
+    "plate": ('"plate" 已并入 "canvas"：版式按 canvas 渲染，字幕层默认打开（等价于 '
+              'subtitle:true）——想彻底不要字幕就写 "subtitle": false'),
+}
 
-# "配图铺满这一页"的两档：整页画布（无字层）与图版（标题 + 一句字幕）。渲染端据此
-# 把图槽盒拉到整幅、并在 clips 预处理里同理把 wipe 归零（画面主导的页不参与翻页
-# 转场）。**只有这一份判据**：html_renderer 的图槽几何、wipe 归零、字体图槽体检的
-# 分派、check_svg 的框尺寸都从这里读——各处各写一份 `in ("canvas", "plate")` 的
-# 代价是加第三档时漏掉某一处，那一处就静默按 4:3 槽位量一张整页的图。
-FULL_BLEED_LAYOUTS = ("canvas", "plate")
+# 满幅版式：配图铺满整页，标题层与句子流层都不生成。渲染端据此把图槽盒拉到整幅、
+# 并在 clips 预处理里把 wipe 归零（画面主导的页不参与翻页转场）。**只有这一份
+# 判据**：html_renderer 的图槽几何、wipe 归零、字体图槽体检的分派、check_svg 的
+# 框尺寸都从这里读——各处各写一份 `== "canvas"` 的代价是加新满幅档时漏掉某一处，
+# 那一处就静默按 4:3 槽位量一张整页的图。
+FULL_BLEED_LAYOUTS = ("canvas",)
 
 
 def is_full_bleed(seg):
-    """这一页的配图是不是铺满整幅（canvas / plate）。"""
+    """这一页的配图是不是铺满整幅（canvas）。"""
     return seg_layout(seg) in FULL_BLEED_LAYOUTS
 
 
-# 图版（layout:"plate"）是"图主导 + 一层最小的文字层"：满幅主视觉 + 标题 + **一句**
-# 字幕。两样不上画面——句子流（只显示当前句，不滚）与 tagline。写稿时这两个字段
-# 照旧写，它们是数据源（agenda 投影、别的版式都要用），只是这一页不画。
-PLATE_FIELDS = "title"
+def seg_subtitle(seg):
+    """整页画布页底那条字幕要不要出现（默认要）。
+
+    显式写的 `subtitle` 优先（false 才关）；没写时看历史写法——被并入 canvas 的
+    `layout:"plate"` 那一页本来就带字幕，合并不能把它弄丢。
+    """
+    if seg.get("subtitle") is not None:
+        return bool(seg["subtitle"])
+    if seg.get("layout") == "plate":
+        return True
+    return seg_layout(seg) == "canvas"
+
+
+# 满幅页上不那么上画面的字段：`title` / `tagline` 照旧写（它们是 agenda 投影与别的
+# 版式的数据源），只是这一页不画——别因为画面上没有就删掉。
 STRUCTURAL_SIDS = ("opening", "closing")
 
 # 需要"一对图"的版式：images.json 里对应条目写成 {"src": ["左", "右"], ...}。
@@ -119,7 +135,10 @@ PAIRED_LAYOUTS = ("compare",)
 
 
 def seg_layout(seg):
-    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'plate' / 'compare' / 'agenda'。
+    """渲染层的唯一版式分派入口：'slot' / 'canvas' / 'compare' / 'agenda'。
+
+    历史取值 `plate` 在这里归一到 `canvas`：版式的差别本来就只有"要不要交出版面"，
+    字幕是它的一个开关（`seg_subtitle`）而不是另一种页面。
 
     agenda 由 pipeline 自动盖进 manifest，所以正常数据里它已经在 `layout` 字段上；
     这里仍按 id 兜一档，是因为手写 manifest 是本技能支持的用法（见
@@ -127,12 +146,14 @@ def seg_layout(seg):
     渲染会把章节列表挤成一句 verse，比报错难发现得多。
     """
     lay = seg.get("layout")
+    if lay == "plate":
+        return "canvas"
     if lay:
         return lay
     return "agenda" if seg["id"] in STRUCTURAL_SIDS else "slot"
 
 
-def _validate_layout(value, where, *, content=False):
+def _validate_layout(value, where, *, content=False, retired_ok=True):
     """layout 取值校验（可选字段）。严格匹配：不做大小写归一、不 strip。
     放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式
     渲染，画布自己画的标题和 HTML 标题层并排出现在同一帧。宁可在这里报错。
@@ -145,6 +166,12 @@ def _validate_layout(value, where, *, content=False):
     """
     if value is None:
         return
+    if isinstance(value, str) and value in RETIRED_LAYOUTS:
+        # 历史取值：默认放行（老稿件不改也能跑，版式由 seg_layout 归一），但要
+        # 说清楚现在该写什么——静默接受等于让两套写法永远并存。
+        if retired_ok:
+            return
+        raise ValueError(f"{where} 的 layout={value!r}：{RETIRED_LAYOUTS[value]}")
     if not isinstance(value, str) or value not in LAYOUT_VALUES:
         raise ValueError(
             f"{where} 的 layout={value!r} 不是合法版式：只接受 "

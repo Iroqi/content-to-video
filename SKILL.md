@@ -83,7 +83,7 @@ GSAP 不随技能包分发：`gen_hyperframes.py` 依次从项目 `vendor/`、`~
 
 **前置：整理信源**。提炼标题、核心事实、上下文和视觉线索。数字、日期、金额、比例等事实保留可回查依据。
 
-**1. 写结构化稿**：生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不压成单人讲述；双人对话别放进 `layout:"canvas"` 段（整页画布没有字幕层，轮次信息只剩声音），也别放进 `layout:"plate"` 段（图版只有一句字幕，挤不下说话人标签）。内容段最多 7 段（≤6 段才放得下 `cta`）。
+**1. 写结构化稿**：生成 `segments_source.json`。每段至少有 `title` 和 `text`（或 `dialogue`）；建议显式 `id`（`seg` 前缀），改稿重排后 `images.json` 键不用跟着变。对话用顶层 `speakers` + 段落 `dialogue`，不压成单人讲述；双人对话别放进 `layout:"canvas"` 段（页底字幕层没有说话人标签的位置，轮次信息只剩声音）。内容段最多 7 段（≤6 段才放得下 `cta`）。
 
 顺手定好 `layout:"canvas"` / `layout:"plate"` 的段落，并想清**哪些段要让图跟着旁白变**（在该段写 `beats`，每条绑一个整数句序）。字段全集、行数与字数预算、`speakers[].label` 上墙约束、agenda 行为、哪些段值得交给 canvas，都在 `references/writing.md`；台词板见 `references/motion.md`。
 

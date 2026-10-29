@@ -455,15 +455,6 @@ _TEMPLATE_JSON = r'''
   },
   "plate": {
     "vertical": {
-      "titleSize": 60,
-      "guardChars1": 14,
-      "guardSize1": 52,
-      "guardChars2": 20,
-      "guardSize2": 44,
-      "titleLineHeight": 1.18,
-      "titleInsetX": 64,
-      "titleInsetTop": 72,
-      "titleScrimHeight": 340,
       "captionInsetX": 64,
       "captionInsetBottom": 84,
       "captionMaxLines": 2,
@@ -474,15 +465,6 @@ _TEMPLATE_JSON = r'''
       "captionSlotGapFrac": 0.35
     },
     "landscape": {
-      "titleSize": 58,
-      "guardChars1": 16,
-      "guardSize1": 50,
-      "guardChars2": 22,
-      "guardSize2": 44,
-      "titleLineHeight": 1.16,
-      "titleInsetX": 96,
-      "titleInsetTop": 64,
-      "titleScrimHeight": 260,
       "captionInsetX": 96,
       "captionInsetBottom": 64,
       "captionMaxLines": 2,

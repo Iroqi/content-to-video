@@ -24,7 +24,7 @@ from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME, ATTR_KEY)
 from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
-                       is_full_bleed, seg_layout)
+                       is_full_bleed, seg_layout, seg_subtitle)
 from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
 from _ease import validate_ease as ease_validate
@@ -438,14 +438,14 @@ def slot_verse_geometry(tpl, aspect, no_image):
 
 
 def _plate_slot_px(pl):
-    """图版字幕一格的高度（px）= 滚动一步的距离 = 裁切窗口的高度。
+    """页底字幕一格的高度（px）= 滚动一步的距离 = 裁切窗口的高度。
 
     **单一真源**：CSS 的窗口高度（`.plate-clip`）与补间位移（每句一步）都读它，
     两处各推一遍公式的后果是"窗矮了一点、字还按老槽高滚"，最后一句滚出去半个字。
 
     **每句占一个等高槽**是刻意的：句子在格内**贴底**，槽等高于是无论一句是
     1 行还是 2 行，字都停在页底同一个高度上。按句子实际行高给槽的话，短句的
-    槽矮、字就停得比长句高，页底那行字幕会随句长上下跳——图版字幕是钉在页底的，
+    槽矮、字就停得比长句高，页底那行字幕会随句长上下跳——字幕层是钉在页底的，
     这个跳比"滚动中有空带"难看得多。
 
     代价：短句滚动到中途，窗口里会经过一段空带（短句上方那一行的留白 + 槽隙）。
@@ -460,13 +460,13 @@ def _plate_slot_px(pl):
 
 
 def _plate_scroll_lines(rc, card):
-    """图版字幕的换句：整列滚过窗口那条固定的边，一句一步。
+    """页底字幕的换句（整页画布字幕层）：整列滚过窗口那条固定的边，一句一步。
 
     一条补间管一句的"到来"，位移**恒等于槽高**（`_plate_slot_px`）、方向恒向上。
     位移只写在列容器 `#pl-{sid}` 上——**行自己一条补间都没有**：两句若各有各的
     位移，交叠期两条位移在画面上互相穿过，读到的是"两句独立的字在飞"。
 
-    **第一句不滚**：图版是满幅页，`wipe` 归零走硬切（见 `is_full_bleed_card`），
+    **第一句不滚**：字幕层只在满幅页上出现，`wipe` 归零走硬切（见 `is_full_bleed_card`），
     页面第一帧就必须是完成态——给首句也排一条滚动，成片里这一段开头就是空字幕。
     末句之后也不再滚（没有下一句），窗口停在末句上。
 
@@ -474,7 +474,7 @@ def _plate_scroll_lines(rc, card):
     换句同一个时刻；时长与缓动直接读 `subtitle.relay` / `subtitle.scroll.ease`
     ——与 `.verse` 的滚动同源，两种版式的换句手感不各存一份。
     """
-    if not getattr(card, "is_plate", False):
+    if not getattr(card, "is_caption", False):
         return []
     relay = float(rc.relay_s)
     if relay <= 0.0:                 # relay 0 = 明确不要接力，也不滚
@@ -525,9 +525,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # 从模板提取 CSS 变量值
     _tl = rc.tl = tpl_layout["title"]
     _ag = rc.ag = tpl_layout["agenda"]
-    # 图版（layout:"plate"）的字号/几何各画幅一份，挂在模板顶层 `plate`
+    # 页底字幕（整页画布的可选层）的字号/几何各画幅一份，挂在模板顶层 `plate`
     rc.plate = tpl["plate"][aspect]
-    # 图版字幕的槽高：滚动距离的**唯一真源**（CSS 窗口高度与补间位移同读它）。
+    # 字幕层的槽高：滚动距离的**唯一真源**（CSS 窗口高度与补间位移同读它）。
     rc.plate_slot = _plate_slot_px(rc.plate)
     _vv = tpl_layout["verse"]
     _il = tpl_layout["image"]
@@ -678,7 +678,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _scroll_ease = str(tpl["subtitle"]["scroll"]["ease"]).strip()
     ease_validate(_scroll_ease, "[template] subtitle.scroll.ease")
     ease_reject_overshoot(_scroll_ease, "[template] subtitle.scroll.ease")
-    # 图版字幕的滚动读同一条（滚动只有一种手感，两种版式不各存一条曲线）
+    # 字幕层的滚动读同一条（滚动只有一种手感，两种版式不各存一条曲线）
     rc.scroll_ease = _scroll_ease
     # 入场浮出的起点（焦点换档的第五维：时间，见 runtime.js 的 verseRelay）。
     # 它**只作用于当前行**——其余行走的是"档位插值"（从上一句那档柔和走到这一句那
@@ -740,8 +740,6 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-camb-rx:{_camb["rx"]}%;--ctv-camb-ry:{_camb["ry"]}%;
   --ctv-camb-cx:{_camb["cx"]}%;--ctv-camb-cy:{_camb["cy"]}%;
   --ctv-camb-alpha:{_camb["alpha"]}%;--ctv-camb-edge:{_camb["edge"]}%;
-  --ctv-pl-title-lh:{_pl["titleLineHeight"]};--ctv-pl-title-x:{_pl["titleInsetX"]}px;
-  --ctv-pl-title-t:{_pl["titleInsetTop"]}px;--ctv-pl-title-scrim:{_pl["titleScrimHeight"]}px;
   --ctv-pl-cap-x:{_pl["captionInsetX"]}px;--ctv-pl-cap-b:{_pl["captionInsetBottom"]}px;
   --ctv-pl-cap-lines:{_pl["captionMaxLines"]};--ctv-pl-cap-fs:{_pl["captionFontSize"]}px;
   --ctv-pl-cap-lh:{_pl["captionLineHeight"]};--ctv-pl-cap-weight:{_pl["captionWeight"]};
@@ -819,32 +817,16 @@ def _card_colors(rc, seg):
     return ac, ac_attr, esc(ac_text)
 
 
-def _title_font_px(rc, seg, sid, is_agenda, is_plate=False):
+def _title_font_px(rc, seg, sid, is_agenda):
     """标题字号（内联，唯一不被 CSS 覆盖的标题数值），阈值/字号一律取模板：
     - agenda 页带长度守卫：agenda 头豁免了行数钳制（见 composition.css），
       长标题会无限折行挤爆定高列，故按 CJK 字宽 ≈ 字号 估算，压到目标行数
       内放得下为止；横屏的行预算被 maxRows 吃满，标题只锁 1 行，竖屏允许
       压进 2 行；
-    - 图版页沿用槽位版式的阈值表（`layout.<画幅>.title`），但**不设行数钳制**：
-      标题压在满幅图上、没有定高标题区，超长就折行（与横屏同一个取舍），
-      只降字号、不裁字；
     - 横屏内容段超阈值按 guardSize 降档，配合 text-wrap:balance 折行，避免
       长标题把左栏撑出孤字；竖屏内容段一律取 fontSize。
     """
     _tl, _ag, aspect, width = rc.tl, rc.ag, rc.aspect, rc.width
-    if is_plate:
-        # 图版与横屏共用一张阈值表（guardChars1/guardSize1…），竖屏那份模板没有
-        # 这几个键，按"超长降一档"从当前字号与宽度推：每行至少放 8 个字。
-        _pl = rc.plate
-        _base = float(_pl.get("titleSize", _tl["fontSize"]))
-        _tlen = len(seg["title"])
-        _cap1 = int(_pl.get("guardChars1", 16))
-        _cap2 = int(_pl.get("guardChars2", 22))
-        if _tlen > _cap2:
-            _base = float(_pl.get("guardSize2", _tl.get("guardSize2", _base * 0.78)))
-        elif _tlen > _cap1:
-            _base = float(_pl.get("guardSize1", _tl.get("guardSize1", _base * 0.87)))
-        return f"{max(MIN_READABLE_FONT_PX, _base):.0f}px"
     if is_agenda:
         # --set 能把任意 JSON 标量写进模板叶子（0 也合法），而字号是"每行能放
         # 几个字"的除数：0 会让下面那条整除 ZeroDivisionError 裸栈，崩在一个与
@@ -1203,7 +1185,7 @@ def _is_keep_page(rc, sid):
 
 
 def is_full_bleed_card(card):
-    """这张卡是不是"画面主导的满幅页"（整页画布 / 图版）。
+    """这张卡是不是"画面主导的满幅页"（整页画布）。
 
     与 `_segments.is_full_bleed(seg)` 是同一个判据的两种入口：那边吃 manifest 段，
     这边吃已装配的卡（渲染器的时间线各处只有卡）。版式名单仍只由 _segments 持有，
@@ -1261,16 +1243,11 @@ def _prepare_card(rc, clip):
     # 标题层与句子流层都不渲染，标题/文字由画布自己画。取值已由
     # _segments._validate_layout 把守；这里只认 canvas 且必须有配图。
     is_canvas = layout == "canvas"
-    # 图版（layout: "plate"）：图主导，但保留一层最小的文字层——标题 + **一句**字幕。
-    # 它填的是槽位版式（文字主导）与整页画布（一个字都没有）之间的空档：3b1b 的
-    # 每一帧就是这个样子。句子流层整层不生成（只挂当前句，不滚动），tagline 也不画
-    # ——这是它自己那一层，别的页一律照旧（见 references/canvas.md「图版」）。
-    is_plate = layout == "plate"
-    if is_plate and not has_image:
-        raise ValueError(
-            f"段落 '{sid}' 声明了 layout=\"plate\"（图版），但没有配图——这一页"
-            "满幅就是那张图，缺图只剩标题与字幕悬在空页上。请在 images.json 给"
-            "该段配一张图，或去掉 layout 字段回到槽位版式")
+    # 页底字幕（整页画布的可选层）：一条钉在页底的等高槽窗口，一屏一句，换句靠
+    # 整列滚动（`_plate_caption_html` / `_plate_scroll_lines`）。它填的是"整页画布
+    # 一个字都没有"与"槽位版式一墙句子"之间的空档：画面仍然全归作者，观众有了
+    # 一条跟着念的字幕。判据在 `_segments.seg_subtitle`——默认开，写 false 才关。
+    has_caption = is_canvas and seg_subtitle(seg)
     if is_canvas and not has_image:
         # 不拦就会出一帧只有进度条的空页：画布没图，标题和字幕又都不画。
         raise ValueError(
@@ -1286,15 +1263,14 @@ def _prepare_card(rc, clip):
     # tagline / verse / title_wrap 同理整条不生成：canvas 分支的装配一个都不
     # 消费，白算之外还会把 `font-size:;`（title_size 为空的守卫值）嵌进一串
     # 永不发射的 HTML 里——死代码不该长得像坏 CSS。
-    title_size = ("" if is_canvas
-                  else _title_font_px(rc, seg, sid, is_agenda, is_plate))
+    title_size = "" if is_canvas else _title_font_px(rc, seg, sid, is_agenda)
     # agenda 卡的副标题是 `.agenda-kicker`（`_agenda_col_html` 画在 `.agenda-head`
     # 里），**不是** `#tag-{sid}`——这一行算出来也不会进 DOM。留着它，
     # `card.tagline_html` 就对"这一段到底画没画副标题"给了第二个答案：副标题入场
     # 补间会指向一个永远不存在的元素（与画布页那段"死代码不该长得像坏 CSS"同源）。
-    # 图版的文字层只有标题 + 一句字幕（references/canvas.md「图版」），tagline 是
-    # 槽位版式的题头组才有的一行，这一页不画。
-    tagline_html = ("" if (is_canvas or is_agenda or is_plate)
+    # 整页画布的字幕层只有一句话（references/canvas.md「字幕层」），tagline 是槽位
+    # 版式的题头组才有的一行，这一页不画。
+    tagline_html = ("" if (is_canvas or is_agenda)
                     else _tagline_html(rc, seg, sid, ac))
     # 结尾 kicker 的**存在性**：`_kicker_entrance_lines` 拿它当闸门，与
     # `tagline_html` 同一个口径——补间只在"真有这一行"时生成。开屏那行不在这里
@@ -1324,9 +1300,9 @@ def _prepare_card(rc, clip):
     # 一整套错的几何。
     no_image_slot = (bool(getattr(rc, "no_image", False))
                      and not has_image
-                     and not (is_agenda or is_canvas or is_plate))
-    verse_html = ("" if is_canvas
-                  else _plate_caption_html(seg, sid, ac_text_attr) if is_plate
+                     and not (is_agenda or is_canvas))
+    verse_html = (_plate_caption_html(seg, sid, ac_text_attr) if has_caption
+                  else "" if is_canvas
                   else _verse_html(seg, sid, ac_text_attr))
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
@@ -1338,8 +1314,7 @@ def _prepare_card(rc, clip):
     # 之下、卡片背景色之上。
     card_open = (
         f'  <div id="{sid}" class="clip seg-card'
-        + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas
-           else " seg-plate" if is_plate else "")
+        + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
         + (" text-only" if no_image_slot else "")
         + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
         f'data-track-index="1" style="clip-path:{_wipe_pair(rc)[0]};--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
@@ -1353,8 +1328,7 @@ def _prepare_card(rc, clip):
     # DOM 里只是给 Layout 门禁多一个"这里有个盒子"的账。
     _tag_rev = (f'      <div class="title-reveal" id="rev-tag-{sid}">'
                 f'{tagline_html}</div>\n' if tagline_html else "")
-    title_wrap = ("" if is_canvas else _plate_title_wrap(rc, seg, sid, title_size, ac)
-                  if is_plate else (
+    title_wrap = ("" if is_canvas else (
         f'    <div class="seg-title-wrap">\n'
         f'      <div class="title-reveal" id="rev-title-{sid}">'
         f'<div class="seg-title" id="title-{sid}" '
@@ -1373,7 +1347,7 @@ def _prepare_card(rc, clip):
         gets_line=clip["gets_line"],
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
-        has_image=has_image, is_canvas=is_canvas, is_plate=is_plate,
+        has_image=has_image, is_canvas=is_canvas, is_caption=has_caption,
         title_size=title_size,
         apple_opening=apple_opening,
         # agenda 卡装配时回写实际行数（_agenda_col_html）；非 agenda 页用不到，
@@ -1387,30 +1361,12 @@ def _prepare_card(rc, clip):
         progress_html=progress_html, title_wrap=title_wrap)
 
 
-def _plate_title_wrap(rc, seg, sid, title_size, ac):
-    """图版（layout:"plate"）的标题带：一行标题压在满幅图上。
-
-    与槽位版式的 `.seg-title-wrap` 是两个盒子而不是同一个加修饰类：槽位那一个是
-    "标题区 + tagline"的定高块（竖屏还带行数钳制），图版这一个只有标题、且要压
-    在图之上（CSS 走 .plate-head）。共用一个盒子就得在两套几何之间来回覆盖，
-    而这两套几何的每一处差异都是有意的（见 references/rendering.md「画面结构」）。
-    """
-    return (
-        f'    <div class="plate-head">\n'
-        f'      <div class="title-reveal" id="rev-title-{sid}">'
-        f'<div class="seg-title plate-title" id="title-{sid}" '
-        f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac}40">'
-        f'{esc(seg["title"])}</div></div>\n'
-        f'    </div>'
-    )
-
-
 def _plate_caption_html(seg, sid, ac_text_attr):
-    """图版的一句字幕：**一列滚过一个固定窗口**，不是"换句时换掉那一行"。
+    """整页画布页底的那条字幕：**一列滚过一个固定窗口**，不是"换句时换掉那一行"。
 
-    图版要的是 3b1b 那种"一屏一句"，所以不排成句子流那一墙（几十句都在场上）；
+    要的是 3b1b 那种"一屏一句"，所以不排成句子流那一墙（几十句都在场上）；
     但"一屏一句"不等于"换句时把那一行啪一下换掉"。换句是全片次数最多的动作
-    （图版页一句 2 秒），它若是 `visibility` 的开关，观众看到的就是每两秒闪一下。
+    （满幅页一句 2 秒），它若是 `visibility` 的开关，观众看到的就是每两秒闪一下。
 
     结构：`.plate-clip` 是一个**固定高度、overflow:hidden 的窗口**，全部句子在
     `.plate-lines` 里排成一列、每句占一个等高槽（`.plate-slot`，句在槽内贴底）。
@@ -1468,22 +1424,14 @@ def _assemble_card(rc, card, clips, manifest):
                 + card.progress_html
                 + '  </div>')
     if card.is_canvas:
-        # 整页画布：只有画布 + 进度条。标题层/句子流层连 DOM 都不生成
-        # （不是 display:none）：留着的空盒子会给 Layout/Contrast 门禁添一
-        # 笔不存在的账，标题补间也会指向一个永远看不见的元素。
+        # 整页画布：画布 + （可选的）页底字幕 + 进度条。标题层与句子流层连 DOM 都
+        # 不生成（不是 display:none）：留着的空盒子会给 Layout/Contrast 门禁添一
+        # 笔不存在的账，标题补间也会指向一个永远看不见的元素。字幕层是唯一例外，
+        # 它由 `subtitle:true` 显式打开，盒几何全在 CSS（.seg-canvas .plate-caption）。
         return (card.card_open
                 + f'{card.image_html}\n'
                 + card.progress_html
-                + '  </div>')
-    if card.is_plate:
-        # 图版：满幅图 + 一层文字（标题压在顶部、一句字幕压在底部）。两个文字层的
-        # 盒几何全在 CSS（.plate-head / .plate-caption），这里只排顺序——标题 →
-        # 图 → 字幕 → 进度条，与竖屏槽位版式同一个纵向阅读顺序，差别只是图占满整页。
-        return (card.card_open
-                + card.title_wrap
-                + f'{card.image_html}\n'
-                + card.progress_html
-                + f'    {card.verse_html}\n'
+                + (f'    {card.verse_html}\n' if card.is_caption else '')
                 + '  </div>')
     if rc.aspect == "landscape":
         # 横屏内容段：左栏（标题组+句子流）垂直居中成一块，媒体卡居右。
@@ -2271,8 +2219,8 @@ def _still_image_carrier_sid(rc, card):
     判据收成一份是因为它有两个消费者——`_image_settle_lines` 问"该不该收拢"、
     generate_html 的卡片循环问"轮到第几张"给来向编号。
     """
-    # 图版与整页画布同一口径：画面主导的页，配图要"揭开即在位"，不收拢；
-    # 运镜交给作者（图版本来就是给整页 SVG 编排 / compare 用的档）。
+    # 画面主导的页：配图要"揭开即在位"，不收拢；
+    # 运镜交给作者（这一档本来就是给整页 SVG 编排用的）。
     if not card.has_image or is_full_bleed_card(card) or card.is_keep:
         return None
     if getattr(card, "layout", None) == "compare":
@@ -2614,11 +2562,11 @@ def _card_timeline_lines(rc, card):
     if card.has_image and not is_full_bleed_card(card) and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。
-        # **满幅版式（整页画布 / 图版，判据只有 is_full_bleed_card 一份）连这条补间
+        # **满幅版式（整页画布，判据只有 is_full_bleed_card 一份）连这条补间
         # 也不生成**：wipe 揭开即要求画面到位，配图再自带 0.2s 延迟淡入会演成"先擦
-        # 出空页、再浮出海报"的两段式（实测 15.9s 帧）。图版是"这一页就是那张画"，
+        # 出空页、再浮出海报"的两段式（实测 15.9s 帧）。整页画布是"这一页就是那张画"，
         # 它的进场只有两种合法写法——硬切（转场负责），或作者在 SVG 里自己演（运镜
-        # / 自绘）。模板给它"框先落位、图在框里收拢"是错的：图版根本没有框。
+        # / 自绘）。模板给它"框先落位、图在框里收拢"是错的：满幅页根本没有框。
         # 接续页（stage:"keep"）同样跳过：这一页的画面是上一页演完的样子，
         # 再淡入+上移 40px 就是 _stage_carry 要消灭的那种"页界回弹"。
         # 两类的共同点：**页面第一帧就必须是完成态**。
@@ -2648,7 +2596,7 @@ def _card_timeline_lines(rc, card):
         lines.extend(_frame_arc_lines(rc, card, _frame_sel, _frame_at, _frame_dur))
         # 同一个 guard 内挂收拢：能配图入场的才有资格演这一层。
         lines.extend(_image_settle_lines(rc, card, lead))
-    # 图版字幕的换句：整列滚过窗口那条固定的边（一句一步）。放在配图之后是因为
+    # 字幕层的换句：整列滚过窗口那条固定的边（一句一步）。放在配图之后是因为
     # 它管的也是"跟着旁白走"的那一层，作用域却是独立的列容器。
     lines.extend(_plate_scroll_lines(rc, card))
     lines.append(
@@ -2739,7 +2687,7 @@ def generate_html(manifest, audio_src, images=None,
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
         clip["wipe"] = _wd if prev_end is None else round(
             min(_wd, max(0.0, s_i - prev_end)), 2)
-        # 画面主导的页（整页画布 / 图版，判据只有 _segments.is_full_bleed 一份）：
+        # 画面主导的页（整页画布，判据只有 _segments.is_full_bleed 一份）：
         # 入场交给导演逐拍演，模板转场（clip-path 擦除 / 引导线 / 旧页剥离）一律退场。
         # 把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、_line_timeline_lines、
         # peel 三处都以 wipe<=0 为闸自动不生成，这一页在自己的音频起点整页出现、运动

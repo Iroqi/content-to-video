@@ -19,11 +19,9 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 
 ### 3. 正式渲染
 
-直接跑 `run.py`（不带 `--until`）：它会重新生成 HTML 再 render。
+直接跑 `run.py`（不带 `--until`）：它会重新生成 HTML 再 render。落盘后还有一道**成片时长对账**（量实际时长与 `total_duration` 比，容差 `max(1s, 2%)`，短于容差**退出码 4** 拦下），结果进 `production_report.json` 的 `video` 字段。它是交付前四道验收的第二道，四道怎么排、各自拦什么 → `look.md`「交付前四道」。
 
-落盘后还有一道**成片时长对账**：量实际时长与 `total_duration` 比，容差 `max(1s, 2%)`，短于容差**退出码 4** 拦下交付，超出或量不到只 warn。结果进 `production_report.json` 的 `video` 字段。
-
-`run.py` 默认 `--no-best-effort`：CLI 的 `--best-effort` 默认开，能出无声成片，与本技能红线冲突。只想看节奏、不在乎缺帧才加 `--allow-best-effort`（调试档，别交付）。逃生口 `--draft` 一次全开（占位 / ease / 缺 src 降级 / 各类降 warn / best-effort），report 记 `draft: true`。
+`--best-effort` / `--draft` 这类"放行"开关的错误用法也归那一节：**能出无声片不是本事，交付前没验过才是问题**。`run.py` 默认 `--no-best-effort`（CLI 自带 `--best-effort` 默认开，会让缺帧也出成片），只想看节奏才加 `--allow-best-effort`；`--draft` 一次全开降级，report 记 `draft: true`。
 
 ## 渲染性能：什么时候该动这几个参数
 

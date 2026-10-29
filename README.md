@@ -112,7 +112,7 @@ scripts/     全部 Python（只依赖标准库）
   pipeline.py    第 2 步：逐句配音与时间轴
   gen_hyperframes.py  第 3–4 步：配图校验、项目生成
   html_renderer.py    稿件时间轴 → 成片 HTML（含 GSAP 时间线）
-  perceptual.py       观感门禁：取帧、量画面、出 contact sheet
+  perceptual.py       观感门禁：取帧、量画面、出 contact sheet（交付第 3 道）
   check_svg.py        画好的 SVG 过一遍几何/对比度/字号/数据自查
   _template.py        视觉真源：版式、字体、动画参数的**唯一**来源
   _theme.py           配色真源
@@ -129,15 +129,15 @@ tests/       契约测试 ＋ 五道检查脚本
 
 | 你正要做的事 / 症状 | 读这一份 |
 | --- | --- |
-| 第 1 步写稿、字段报错、字数上墙 | [`references/writing.md`](references/writing.md) |
+| 第 1 步写稿、字段报错、字数上墙；顺带定"演什么"（`layout` / `beats`） | [`references/writing.md`](references/writing.md) |
 | 第 2 步配音、音色表、降级行为 | [`references/tts_pipeline.md`](references/tts_pipeline.md) |
-| 第 3 步选形式、素材落 `images.json`、生图崩字 | [`references/imagery.md`](references/imagery.md) |
-| 第 3 步画 SVG：几何、对比度、字号、数据自查 | [`references/canvas.md`](references/canvas.md) |
-| 动效该不该有、动多快；`animate` 怎么写、镜头归谁、参数怎么推 | [`references/motion.md`](references/motion.md) |
+| 第 3a 步选形式、素材落 `images.json`、生图崩字 | [`references/imagery.md`](references/imagery.md) |
+| 第 3b 步画 SVG：几何、对比度、字号、数据自查 | [`references/canvas.md`](references/canvas.md) |
+| 第 3b 步把台词板落成 `animate`：该不该动、动多快、镜头归谁 | [`references/motion.md`](references/motion.md) |
 | 第 4 步预览、渲染、调性能、官方门禁 | [`references/rendering.md`](references/rendering.md) |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | [`references/look.md`](references/look.md) |
 | 画面空 / 不动 / 换页没东西 | [`references/troubleshooting.md`](references/troubleshooting.md) |
-| "这一页在屏幕上到底有没有东西"（观感门禁） | [`look.md`](references/look.md)「观感门禁」 |
+| 能不能交付（四道验收）、"这一页在屏幕上到底有没有东西" | [`look.md`](references/look.md)「交付前四道」 |
 
 `SKILL.md` 是给 agent 的入口与核心规则，不是给人读的教程。
 

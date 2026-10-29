@@ -325,6 +325,10 @@ def _text_oob(el, inherited, vb_w, vb_h, content=""):
             left, right = x, x + est_w
         if left < -1e-6 or right > vb_w + 1e-6:
             side = "左" if left < 0 else "右"
+            # 旧行为分支：start 锚点坐标本身越过左缘——沿用原措辞，
+            # 回归测试 test_text_oob_vertical_and_anchor 钉死"画布左缘"字样。
+            if anchor == "start" and x < -1e-6:
+                return f"文字起点 x={x:g} 在画布左缘之外——把文字移进画布"
             return (f"文字越出画布{side}边缘"
                     f"（估算字宽 {est_w:g}px，{anchor} 锚点 x={x:g}，横向区间 "
                     f"[{left:g}, {right:g}] 超出 0–{vb_w:g}）——锚点在画布内但文字"

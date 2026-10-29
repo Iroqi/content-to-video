@@ -1,11 +1,15 @@
+import ast
 import contextlib
+import glob
 import io
 import os
+import re
 import subprocess
 import sys
 import unittest
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
+import _animate
 import _segments as SEG
 import _timeline as TL
 import _source_schema as SRC
@@ -443,6 +447,112 @@ class Speed(unittest.TestCase):
         TL.validate_speed(1.5)
         for badv in (0, -1, float("nan"), float("inf")):
             bad(TL.validate_speed, badv)
+
+
+class ConstantsHaveOneOwner(unittest.TestCase):
+    """抄一遍的东西迟早分家——用 AST 把"同一份知识"钉在一处。
+
+    行文里写着"同一份"的两份常量，比两份不说话的常量更危险：读代码的人
+    连怀疑的理由都没有。
+    """
+
+    def test_camera_keys_have_exactly_one_definition(self):
+        """CAMERA_KEYS 的真源只在 `_animate`，别处一个都不许再抄。"""
+        here = os.path.dirname(_animate.__file__)
+        owners = []
+        for name in sorted(os.listdir(here)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(here, name), encoding="utf-8") as fh:
+                tree = ast.parse(fh.read())
+            if any(isinstance(t, ast.Name) and t.id == "CAMERA_KEYS"
+                   for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                   for t in n.targets):
+                owners.append(name)
+        self.assertEqual(["_animate.py"], owners)
+
+
+_SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "scripts")
+
+
+class AttrKeySingleSource(unittest.TestCase):
+    """GSAP attr 通道名：真源只有 `_images_schema.ATTR_KEY` 一处。"""
+
+    def test_no_module_rewrites_the_literal(self):
+        """反向：任何一处把 "attr" 写回 dict 键，这条就红。
+
+        `_stage_carry` 的收尾态烘焙与 `html_renderer` 的补间发射各写一个字面量
+        时，"契约层放行的形状"与"烘焙认得的形状"只是恰好相等——分家那天症状是
+        stage:"keep" 接续页第 0 帧就坏，且生成期零报错。
+        """
+        offenders = []
+        for path in glob.glob(os.path.join(_SCRIPTS_DIR, "*.py")):
+            # _images_schema 是 ATTR_KEY 的登记处，它自己当然要写字面量；
+            # _derive 的 "attr" 是 derive payload 的自有键（"绑到哪个 SVG
+            # 属性"），与 GSAP 的 attr 通道同名不同义，不在此列。
+            if os.path.basename(path) in ("_images_schema.py", "_derive.py"):
+                continue
+            tree = ast.parse(open(path, encoding="utf-8").read())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Dict):
+                    continue
+                for key in node.keys:
+                    if (isinstance(key, ast.Constant) and key.value == "attr"):
+                        offenders.append(
+                            "%s:%d" % (os.path.basename(path), node.lineno))
+        self.assertEqual([], offenders,
+                         "GSAP attr 通道名必须走 _images_schema.ATTR_KEY")
+
+
+import _css_guard
+import _media_size
+import check_svg as _check_svg
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class SingleJudgment(unittest.TestCase):
+    """同一条判据只写一份：两处各写一遍的那几处。"""
+
+    def test_svg_guard_first_branch_was_subsumed(self):
+        """`"svg" in sel.split()` 恒被 `\\bsvg\\b` 包含——留着只是噪音。
+
+        这条把"包含关系"本身钉住：哪天有人把 `\bsvg\b` 放宽（比如只认
+        `^svg`），这条会红，提醒他第一条分支不再冗余、得真回来了。
+        """
+        corpus = ["svg", "#img-x svg", "svg .a", ".svg-icon", ".svg", "svgx",
+                  "#a>svg", "svg,a", "[data-x] svg", "SVG", "#A>SVG", "Svg"]
+        for sel in corpus:
+            if "svg" in sel.lower().split():
+                self.assertIsNotNone(
+                    re.search(r"\bsvg\b", sel, re.I),
+                    f"{sel!r} 命中了被删掉的第一条分支，留下的那条却没命中"
+                    "——两条并不等价，删错了")
+        for sel in ("svg", "#img-x svg", "svg .a", "#a>svg", "svg,a",
+                    "SVG", "#A>SVG"):
+            self.assertIsNone(_css_guard.transform_tween_kind(sel))
+
+    def test_transform_declaration_has_one_regex(self):
+        """`transform_rules` 里"这条声明是不是 transform"只认一份正则。"""
+        with open(_css_guard.__file__,
+                  encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertNotIn("^\\s*transform\\s*:", src)
+
+    def test_cover_geometry_shares_one_guard(self):
+        for degenerate in (((0, 0), (10, 10)), ((10, 10), (0, 0)),
+                           (None, (10, 10)), ((10, 10), None),
+                           ((-1, 10), (10, 10))):
+            self.assertIsNone(_media_size.cover_scale(*degenerate))
+            self.assertIsNone(_media_size.cover_crop_fraction(*degenerate))
+        self.assertAlmostEqual(_media_size.cover_scale((100, 100), (50, 50)), 2.0)
+        self.assertAlmostEqual(_media_size.cover_crop_fraction((100, 100), (50, 50)), 0.0)
+
+    def test_margin_entry_point_is_single(self):
+        self.assertFalse(hasattr(_check_svg, "_margin_pair"))
+        self.assertEqual(set(_check_svg.safe_margins()),
+                         {"portrait", "landscape"})
 
 
 class ContractSinking(unittest.TestCase):

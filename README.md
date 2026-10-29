@@ -27,6 +27,8 @@
 cd tests && python3 -m unittest discover -s .     # 1500 条，约 24 秒（含真渲染一支片）
 ```
 
+**测试按契约组织，不按轮次**。文件名叫什么，就说明"改这个模块该读哪一份"（`test_stage_carry` / `test_animate_timeline` / `test_render_backend`…）；缺陷锁与反向断言写在同一契约里，不另开一个"某轮 review"文件。`python tests/check_test_budget.py` 守三道闸：用例总量、单文件条数、以及不许出现以轮次编号命名的文件（`test_*_3.py`）。超线先合并再加，或明确抬线并写清理由。
+
 其中 `test_e2e_render.py` 是**唯一真的出一支 mp4 并看它一眼**的用例：造一份小项目 → 生成 HTML → `npx hyperframes render` → 断言文件存在、时长与时间轴对得上、抽出来的每一帧都不是纯色。它需要 Node 22+、headless Chrome 与带 libx264 的 ffmpeg；缺依赖时**跳过并打印原因**（`CTV_SKIP_E2E=1` 显式跳过，`CTV_E2E_REQUIRED=1` 缺依赖即失败）——CI 的 `e2e` job 就用后者，防止"全绿"再次只证明字符串拼得对。
 
 **三种结果分得开**：缺依赖 → 跳过（说缺什么）；`420s` 内没渲完 → 跳过（说卡在哪一步：还在装浏览器 / 进了渲染但一帧没抓出来 / 抓帧太慢）；渲完但结果不对 → **失败**。第一版把超时当成失败报，实测读到的是 `ERROR: ... timed out after 900 seconds`，看着像"机器慢"，其实是 CLI 在 300s 时转去下载 `chrome-headless-shell` 而这台机器下不完——红点指错方向比没有红点更坏。

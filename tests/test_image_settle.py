@@ -23,7 +23,7 @@ from unittest import mock
 
 import _helpers as H  # noqa: F401  副作用：把 scripts/ 放进 sys.path
 import _template
-from html_renderer import generate_html, _unit_frac
+from html_renderer import SETTLE_MIN_SECONDS, generate_html, _unit_frac
 
 # tl.fromTo("#img-seg-a > img",{scale:1.06,x:0,y:13.23},
 #           {scale:1,x:0,y:0,duration:0.60,ease:"power3.out"},2.80)
@@ -69,6 +69,16 @@ def settles(html):
     "哪几段有收拢"会每条多算一次，而"不演的载体不该有收拢"这类断言直接假阴性。
     """
     return [h for h in _SETTLE_RE.finditer(html) if float(h.group('dur')) > _PIN_MAX_DUR]
+
+
+class SettleFloorOnGrid(unittest.TestCase):
+    def test_floor_is_reachable_on_the_quantisation_grid(self):
+        """地板常量必须落在 0.05s 网格上。
+
+        写 0.08 时 `d >= 0.08` 与 `d >= 0.10` 完全等价（d 只可能是 0、0.05、0.10…），
+        于是注释里"30fps 两帧"那条阈值结构性不可达。
+        """
+        self.assertEqual(SETTLE_MIN_SECONDS * 20, int(SETTLE_MIN_SECONDS * 20))
 
 
 class UnitFrac(unittest.TestCase):

@@ -120,6 +120,57 @@ class VoicedSpan(unittest.TestCase):
         self.assertIsNone(_speech.voiced_span([], 0.0))
 
 
+class SilenceDetectReturnCode(unittest.TestCase):
+    def test_ffmpeg_failure_is_not_a_measurement(self):
+        """ffmpeg 非零退出必须返回 None，不是"整段都在说话"。
+
+        修复前只看 `stderr is None`：ffmpeg 起不来 / 文件打不开时 stderr 照样有
+        内容（一版错误），`_parse_silences` 一个 silence_* 都找不到，于是
+        `voiced_span` 回报 (0.0, 文件全长)——与真正的成功测量不可分辨，
+        连"量不出来"那句 warn 都不打。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            wav = os.path.join(td, "a.wav")
+            with wave.open(wav, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(b"\x00\x00" * 24000)
+            self.assertIsNone(_speech.measure_voiced_span("/bin/false", wav, 1.0))
+
+    def test_missing_binary_returns_none(self):
+        """反向：ffmpeg 不存在（OSError）同样按"量不出来"，不落一个假区间。"""
+        self.assertIsNone(_speech.measure_voiced_span(
+            os.path.join(tempfile.gettempdir(), "no-such-ffmpeg-xyz"), "x.wav", 1.0))
+
+
+class WavFrameFallback(unittest.TestCase):
+    def test_unreadable_file_is_not_judged_as_having_frames(self):
+        """wave 读不出一律按"无帧"，不得退回 `getsize > 44`。
+
+        那条尺寸判据正是本函数被发明来取代的（0 帧产物带 LIST/INFO 块约 78 字节，
+        会穿过 ">44" 被判成成功，混进 concat 后整条时间轴悄悄前移）。
+        """
+        from _audio import _wav_has_frames
+        with tempfile.TemporaryDirectory() as td:
+            bad = os.path.join(td, "bad.wav")
+            with open(bad, "wb") as f:
+                f.write(b"RIFF" + bytes(200))     # 尺寸远大于 44，但不是可读 WAV
+            self.assertFalse(_wav_has_frames(bad))
+
+    def test_real_wav_with_frames_passes(self):
+        """反向：真有帧的 WAV 照样认，收紧没把好产物一起挡掉。"""
+        from _audio import _wav_has_frames
+        with tempfile.TemporaryDirectory() as td:
+            wav = os.path.join(td, "ok.wav")
+            with wave.open(wav, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(b"\x00\x00" * 2400)
+            self.assertTrue(_wav_has_frames(wav))
+
+
 class MeasureOnRealWav(unittest.TestCase):
     """端到端：造一个"300ms 静音 + 音 + 300ms 静音"的 WAV，看量出来的边界。"""
 
@@ -207,6 +258,32 @@ class ManifestContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             MS.validate_timing_manifest(
                 self._manifest_with(onset="0.2", voiced=1.0))
+
+
+class NoDeadGuards(unittest.TestCase):
+    """恒真的守卫不是守卫。"""
+
+    def test_voiced_is_guarded_by_the_positive_check_not_a_second_condition(self):
+        """反向：`voiced <= 0` 时报错来自 positive 校验，不是 synth_failed 那条。
+
+        修复前 synth_failed 那条挂着 `and float(s["voiced"]) > 0`——上面
+        `_validate_finite_number(..., positive=True)` 已拒掉 <= 0，这条子条件
+        结构性永假，看着在判"给没给正的发声长度"，其实什么都没判。
+        """
+        with self.assertRaises(ValueError) as cm:
+            MS._validate_voiced_span(
+                {"onset": 0.0, "voiced": 0.0, "duration": 2.0,
+                 "synth_failed": True}, "sentences[0]")
+        self.assertIn("voiced", str(cm.exception))
+        self.assertNotIn("synth_failed", str(cm.exception))
+
+    def test_synth_failed_sentence_is_rejected(self):
+        """正向：静音兜底句带合法 voiced 仍被拒（判据只剩 synth_failed 一条）。"""
+        with self.assertRaises(ValueError) as cm:
+            MS._validate_voiced_span(
+                {"onset": 0.1, "voiced": 1.0, "duration": 2.0,
+                 "synth_failed": True}, "sentences[0]")
+        self.assertIn("synth_failed", str(cm.exception))
 
 
 class CueAndVerseUseOnset(unittest.TestCase):

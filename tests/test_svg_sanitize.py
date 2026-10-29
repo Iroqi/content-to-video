@@ -5,16 +5,55 @@
 "SVG 必须透明"那条规矩的唯一真源（references/canvas.md「不铺满幅底」），这里钉住
 它认哪些写法、不误报哪些。
 """
+import os
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
 import _helpers as H                       # noqa: F401  sys.path 装配
 import _svg_sanitize as S
+import check_svg
+
+NS = "http://www.w3.org/2000/svg"
+
+
+def _check_svg_text(raw, tmpdir=None):
+    """把一段 SVG 源文本交给 check_svg，返回 (errors, warns)。"""
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "t.svg")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(raw)
+        return check_svg.check_file(p, "slot", "portrait", "dark")
 
 
 def _clean(css):
     """过一遍 <style> 文本的净化，只返回产物（notes 是给人看的，这里不关心）。"""
     return S._clean_style_text(css, [])
+
+
+class SvgEntityGuard(unittest.TestCase):
+    def test_doctype_inside_a_comment_is_not_an_entity_declaration(self):
+        """注释里的 `<!DOCTYPE` 不该报废整份图。
+
+        修复前 `re.search(r"<!DOCTYPE|<!ENTITY", raw)` 扫全文：注释、`<desc>`
+        文本、属性值里的同名串一律命中，一份干净的 SVG 就此被拒。
+        """
+        raw = ('<svg xmlns="%s" viewBox="0 0 100 100">'
+               '<!-- <!DOCTYPE svg> -->'
+               '<rect x="0" y="0" width="100" height="100"/></svg>') % NS
+        errs, _ = _check_svg_text(raw)
+        self.assertFalse(any("DOCTYPE" in e or "ENTITY" in e for e in errs), errs)
+        markup, _ = S.sanitize_svg_for_inline(raw)
+        self.assertIn("rect", markup)
+
+    def test_real_entity_declaration_still_rejected(self):
+        """反向：真声明照样拒——这条守卫是为了挡实体膨胀，不能一起删掉。"""
+        evil = ('<!DOCTYPE svg [<!ENTITY a "AAAAAAAAAA">]>'
+                '<svg xmlns="%s"><desc>&a;</desc></svg>') % NS
+        errs, _ = _check_svg_text(evil)
+        self.assertTrue(any("ENTITY" in e for e in errs), errs)
+        with self.assertRaises(ValueError):
+            S.sanitize_svg_for_inline(evil)
 
 
 class WallclockDefinitions(unittest.TestCase):

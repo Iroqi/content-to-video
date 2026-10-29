@@ -250,6 +250,103 @@ class MediaVerdictSingleSource(unittest.TestCase):
             self.assertTrue(SU.is_inside(os.path.join(parent, "a.png"), parent))
             self.assertFalse(SU.is_inside(os.path.join(sibling, "a.png"), parent))
 
+
+class OnScreenTextContractShared(unittest.TestCase):
+    """「上墙一行不收分号」这条约束，写稿入口与手写 manifest 入口同一份。
+
+    修复前：`_source_schema` 对 title/tagline/takeaway/cta 走
+    `_validate_display_text`，`_manifest_schema` 连这个函数都没导入——
+    manifest 是文档明写"确需手写可按格式提供"的接口，正是手写最容易撞的地方。
+    同一句带分号的标题：写稿时被拒，写进 manifest 就静默上墙，而 agenda 行宽
+    是死的，第二件事在成片里被 nameTrim 悄悄裁掉。
+    """
+
+    def test_both_entrypoints_share_the_field_list(self):
+        self.assertEqual(SS.ON_SCREEN_SEGMENT_KEYS, MS.ON_SCREEN_SEGMENT_KEYS)
+        self.assertNotIn("ON_SCREEN_SEGMENT_KEYS = ", _source("_manifest_schema.py"),
+                         "manifest 侧不许自己列一份上墙字段清单")
+
+    def test_semicolon_rejected_in_both_entrypoints(self):
+        src_seg = {"id": "seg1", "title": "甲；乙", "text": "口播稿不受这条约束"}
+        with self.assertRaises(ValueError) as src_ctx:
+            SS.validate_segments_source({"segments": [src_seg]})
+        self.assertIn("分号", str(src_ctx.exception))
+        # manifest 侧：title 走同一条约束
+        with self.assertRaises(ValueError) as man_ctx:
+            MS.validate_timing_manifest({"schema_version": 2, "status": "ok",
+                                         "sentences": _SENT, "total_duration": 1.0,
+                                         "segments": [{"id": "seg1",
+                                                       "title": "甲；乙"}]})
+        self.assertIn("分号", str(man_ctx.exception),
+                      "手写 manifest 的上墙文字漏了这条约束")
+        # 顶层 closing_cta 与 source 侧的 cta 同一条
+        with self.assertRaises(ValueError) as cta_ctx:
+            MS.validate_timing_manifest({"schema_version": 2, "status": "ok",
+                                         "sentences": _SENT, "total_duration": 1.0,
+                                         "closing_cta": "甲；乙"})
+        self.assertIn("分号", str(cta_ctx.exception))
+
+
+class CssColorTableSelfConsistent(unittest.TestCase):
+    """色名表：`css_color_to_hex` 是对比度判据的地基，写错一个通道不报错。
+
+    修复前：`aliceblue` 记成 f0fff8（绿蓝通道写反，应为 f0f8ff）、`oldlace`
+    记成 fdf5e0（应为 fdf5e6）。它直接进 `ensure_text_contrast`：按错色算出来
+    的对比度是假的，"够不够对比度"的判定跟着错，且全程无 warn。
+    """
+
+    def test_aliases_are_the_same_value(self):
+        pairs = dict(re.findall(r"([a-z]+)-([0-9a-f]{6})", TH._CSS3_NAMES_SRC))
+        for a, b in (("aqua", "cyan"), ("fuchsia", "magenta"), ("gray", "grey"),
+                     ("darkgray", "darkgrey"), ("darkslategray", "darkslategrey"),
+                     ("dimgray", "dimgrey"), ("lightgray", "lightgrey"),
+                     ("lightslategray", "lightslategrey"),
+                     ("slategray", "slategrey")):
+            self.assertEqual(pairs[a], pairs[b], f"{a} 与 {b} 必须同值")
+
+    def test_anchor_values_match_the_css3_spec(self):
+        """锚点取"写错了一个通道就露馅"的那几个，不是随便挑的。"""
+        for name, want in (("aliceblue", "#f0f8ff"), ("oldlace", "#fdf5e6"),
+                           ("white", "#ffffff"), ("black", "#000000"),
+                           ("rebeccapurple", "#663399"),
+                           ("goldenrod", "#daa520")):
+            self.assertEqual(want, TH.css_color_to_hex(name))
+
+
+
+class UniqueTmpUmask(unittest.TestCase):
+    def test_unique_tmp_does_not_touch_process_umask(self):
+        """`unique_tmp` 不许动进程级 umask。
+
+        修复前 `os.umask(0)` 再写回：那是**进程级**全局量，而调用方在线程池里跑
+        （pipeline 的 TTS 并发），两个线程重叠期间落盘的文件会拿到 0777。
+        旧实现自己会写回原值，所以"跑完再读 umask"看不出问题——要盯的是
+        **它有没有调过**。
+        """
+        import _script_utils as SU
+        calls = []
+        real = os.umask
+
+        def spy(mask):
+            calls.append(mask)
+            return real(mask)
+
+        os.umask = spy
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                SU.unique_tmp(td, ".x.", ".tmp")
+        finally:
+            os.umask = real
+        self.assertEqual(calls, [], "unique_tmp 不该读/写进程级 umask")
+
+    def test_unique_tmp_stays_readable(self):
+        """反向：不按 umask 折算也不能退回 mkstemp 的 0600（成品要能被浏览器读）。"""
+        from _script_utils import unique_tmp
+        with tempfile.TemporaryDirectory() as td:
+            p = unique_tmp(td, ".y.", ".wav")
+            self.assertNotEqual(os.stat(p).st_mode & 0o777, 0o600)
+
+
     def test_unique_tmp_names_never_collide(self):
         """中转名唯一：并跑两个进程时，一方的异常清理不能删掉另一方的中转。
 
@@ -314,68 +411,6 @@ class MediaVerdictSingleSource(unittest.TestCase):
                 with self.assertRaises(ValueError) as cm:
                     SU.read_json_file(p)
             self.assertIn("嵌套", str(cm.exception))
-
-
-class OnScreenTextContractShared(unittest.TestCase):
-    """「上墙一行不收分号」这条约束，写稿入口与手写 manifest 入口同一份。
-
-    修复前：`_source_schema` 对 title/tagline/takeaway/cta 走
-    `_validate_display_text`，`_manifest_schema` 连这个函数都没导入——
-    manifest 是文档明写"确需手写可按格式提供"的接口，正是手写最容易撞的地方。
-    同一句带分号的标题：写稿时被拒，写进 manifest 就静默上墙，而 agenda 行宽
-    是死的，第二件事在成片里被 nameTrim 悄悄裁掉。
-    """
-
-    def test_both_entrypoints_share_the_field_list(self):
-        self.assertEqual(SS.ON_SCREEN_SEGMENT_KEYS, MS.ON_SCREEN_SEGMENT_KEYS)
-        self.assertNotIn("ON_SCREEN_SEGMENT_KEYS = ", _source("_manifest_schema.py"),
-                         "manifest 侧不许自己列一份上墙字段清单")
-
-    def test_semicolon_rejected_in_both_entrypoints(self):
-        src_seg = {"id": "seg1", "title": "甲；乙", "text": "口播稿不受这条约束"}
-        with self.assertRaises(ValueError) as src_ctx:
-            SS.validate_segments_source({"segments": [src_seg]})
-        self.assertIn("分号", str(src_ctx.exception))
-        # manifest 侧：title 走同一条约束
-        with self.assertRaises(ValueError) as man_ctx:
-            MS.validate_timing_manifest({"schema_version": 2, "status": "ok",
-                                         "sentences": _SENT, "total_duration": 1.0,
-                                         "segments": [{"id": "seg1",
-                                                       "title": "甲；乙"}]})
-        self.assertIn("分号", str(man_ctx.exception),
-                      "手写 manifest 的上墙文字漏了这条约束")
-        # 顶层 closing_cta 与 source 侧的 cta 同一条
-        with self.assertRaises(ValueError) as cta_ctx:
-            MS.validate_timing_manifest({"schema_version": 2, "status": "ok",
-                                         "sentences": _SENT, "total_duration": 1.0,
-                                         "closing_cta": "甲；乙"})
-        self.assertIn("分号", str(cta_ctx.exception))
-
-
-class CssColorTableSelfConsistent(unittest.TestCase):
-    """色名表：`css_color_to_hex` 是对比度判据的地基，写错一个通道不报错。
-
-    修复前：`aliceblue` 记成 f0fff8（绿蓝通道写反，应为 f0f8ff）、`oldlace`
-    记成 fdf5e0（应为 fdf5e6）。它直接进 `ensure_text_contrast`：按错色算出来
-    的对比度是假的，"够不够对比度"的判定跟着错，且全程无 warn。
-    """
-
-    def test_aliases_are_the_same_value(self):
-        pairs = dict(re.findall(r"([a-z]+)-([0-9a-f]{6})", TH._CSS3_NAMES_SRC))
-        for a, b in (("aqua", "cyan"), ("fuchsia", "magenta"), ("gray", "grey"),
-                     ("darkgray", "darkgrey"), ("darkslategray", "darkslategrey"),
-                     ("dimgray", "dimgrey"), ("lightgray", "lightgrey"),
-                     ("lightslategray", "lightslategrey"),
-                     ("slategray", "slategrey")):
-            self.assertEqual(pairs[a], pairs[b], f"{a} 与 {b} 必须同值")
-
-    def test_anchor_values_match_the_css3_spec(self):
-        """锚点取"写错了一个通道就露馅"的那几个，不是随便挑的。"""
-        for name, want in (("aliceblue", "#f0f8ff"), ("oldlace", "#fdf5e6"),
-                           ("white", "#ffffff"), ("black", "#000000"),
-                           ("rebeccapurple", "#663399"),
-                           ("goldenrod", "#daa520")):
-            self.assertEqual(want, TH.css_color_to_hex(name))
 
 
 if __name__ == "__main__":

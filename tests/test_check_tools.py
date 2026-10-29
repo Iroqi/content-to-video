@@ -30,6 +30,53 @@ GOOD = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" viewBo
         '<text x="40" y="100" font-size="36" fill="#dbe6f5">反向传播</text></svg>')
 
 
+NS = "http://www.w3.org/2000/svg"
+
+
+def _errors_for(fill):
+    """一张只含 <text fill=…> 的 4:3 SVG 走槽位档门禁，返回 (errors, warns)。"""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "t.svg")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="%s" viewBox="0 0 800 600" width="800" '
+                    'height="600"><text x="60" y="300" font-size="40" '
+                    'fill="%s">章节一</text></svg>' % (NS, fill))
+        return check_svg.check_file(p, "slot", "portrait", "dark")
+    finally:
+        import shutil
+        shutil.rmtree(d, True)
+
+
+class ContrastNamedColors(unittest.TestCase):
+    """`check_svg` 的字面对比度：色名与 hex 必须同结论。"""
+
+    def test_named_color_is_judged_like_its_hex(self):
+        """修复前：写 navy 静默放行、写等价的 #000080 报 error（同一个颜色）。"""
+        named, _ = _errors_for("navy")
+        hexed, _ = _errors_for("#000080")
+        self.assertTrue(any("对比度" in e for e in named),
+                        f"navy 没被查对比度：{named}")
+        self.assertTrue(any("对比度" in e for e in hexed))
+        # 同一颜色两种写法结论必须一致
+        self.assertEqual(any("对比度" in e for e in named),
+                         any("对比度" in e for e in hexed))
+
+    def test_every_dark_named_color_is_judged(self):
+        """反向：整批深色名都要过判据，不是 navy 一个碰巧。"""
+        for name in ("black", "maroon", "midnightblue", "indigo",
+                     "purple", "darkgreen", "firebrick", "teal"):
+            errs, warns = _errors_for(name)
+            self.assertTrue(
+                any("对比度" in m for m in errs + warns),
+                f"色名 {name} 完全没过对比度判据：{errs}{warns}")
+
+    def test_unparseable_fill_still_skips_the_check(self):
+        """反向：解析不出颜色的 fill 仍按"不查"处理（不是把 none 当黑色）。"""
+        errs, warns = _errors_for("none")
+        self.assertFalse(any("对比度" in m for m in errs + warns))
+
+
 class SvgChecker(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

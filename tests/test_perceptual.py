@@ -13,6 +13,7 @@
 `run.py --check-frames` 的集成测试覆盖（需要 Node + Chrome）。
 """
 import os
+import shutil
 import sys
 import tempfile
 
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unittest
+from unittest import mock
 
 try:
     from PIL import Image, ImageDraw
@@ -29,6 +31,8 @@ except ImportError:                     # 可选依赖：缺了整份跳过（�
 
 if HAS_PIL:
     import perceptual as P
+
+import _animate as EV
 
 # 竖屏页底色（与模板 dark 主题的渐变中段接近，四条判据都不依赖精确色值）
 BG = (10, 17, 24)
@@ -258,6 +262,113 @@ class TestPerceptual(unittest.TestCase):
 
 
 
+class SnapshotKeepsTheFramesItJustTook(unittest.TestCase):
+    """`_snapshot` 把 `rmtree(outdir)` 写在了 `subprocess.run` **之后**。
+
+    修复前：官方 snapshot 成功写出帧 → 目录立刻被自己清空 → `_scan_frames`
+    扫到空 → 抛"snapshot 没有产出任何帧"。于是 `--perceptual` 与
+    `perceptual.py --project` 恒走"门禁未完成"分支：contact sheet、空页、
+    死帧、换页时序这三条判词**从不执行**。SKILL.md 称它是"唯一一道在看画面的
+    检查"，实际永远失明。注释写的是"先清空"，位置却反了。
+    """
+
+    def _write_frames(self, outdir, times):
+        """模拟 hyperframes snapshot：在 run 被调用时产出帧。"""
+        os.makedirs(outdir, exist_ok=True)
+        for i, t in enumerate(times):
+            with open(os.path.join(outdir, f"frame-{i}-at-{t:.2f}s.png"),
+                      "wb") as fh:
+                fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+
+    def test_frames_written_by_snapshot_survive(self):
+        tmp = tempfile.mkdtemp(prefix="occam5-snap-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        outdir = os.path.join(tmp, "frames")
+
+        def fake_run(cmd, **kw):
+            self._write_frames(outdir, [1.0, 2.0])
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+
+        with mock.patch.object(P.subprocess, "run", side_effect=fake_run):
+            pairs = P._snapshot("/tmp/nonexistent-project", [1.0, 2.0], outdir,
+                                ["npx", "--yes", "hyperframes"])
+        self.assertEqual([t for t, _ in pairs], [1.0, 2.0])
+        self.assertEqual(len(pairs), 2)
+
+    def test_stale_frames_are_cleared_before_the_run(self):
+        """另一半契约：上一次的旧帧不能被当成这次的产出收下。"""
+        tmp = tempfile.mkdtemp(prefix="occam5-stale-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        outdir = os.path.join(tmp, "frames")
+        self._write_frames(outdir, [9.0])          # 上一次留下的
+
+        def fake_run(cmd, **kw):
+            self._write_frames(outdir, [1.0, 2.0])
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+
+        with mock.patch.object(P.subprocess, "run", side_effect=fake_run):
+            pairs = P._snapshot("/tmp/nonexistent-project", [1.0, 2.0], outdir,
+                                ["npx", "--yes", "hyperframes"])
+        self.assertNotIn(9.0, [t for t, _ in pairs],
+                         "旧帧混进了这一次的判据，量的就不是这次的编排了")
+
+    def test_nonzero_exit_still_raises(self):
+        """清空提前了，失败路径不能顺手被抹平。"""
+        tmp = tempfile.mkdtemp(prefix="occam5-fail-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with mock.patch.object(P.subprocess, "run",
+                               return_value=mock.Mock(returncode=1, stdout="",
+                                                      stderr="boom")):
+            with self.assertRaises(RuntimeError) as cm:
+                P._snapshot("/tmp/p", [1.0], os.path.join(tmp, "frames"),
+                            ["npx", "--yes", "hyperframes"])
+        self.assertIn("boom", str(cm.exception))
+
+
+# ── 取帧命令：与渲染侧同一条解析链 ────────────────────────────────────
+
+
+class SnapshotCommandIsResolved(unittest.TestCase):
+    """`_snapshot` 直接 `subprocess.run(["npx", ...])`，绕开了 `resolve_command`。
+
+    修复前：Windows 上 npm 装的是 `npx.cmd`，CreateProcess 不执行 .cmd/.bat
+    → FileNotFoundError → 报"找不到 npx"（Node 装了也报没装）。同仓
+    `_render_backend.snapshot_frames` 走的是解析过的命令，两边对不上。
+    """
+
+    def test_command_goes_through_resolve_command(self):
+        tmp = tempfile.mkdtemp(prefix="occam5-cmd-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        outdir = os.path.join(tmp, "frames")
+        seen = {}
+
+        def fake_resolve(cmd):
+            seen["cmd"] = list(cmd)
+            return ["/opt/node/npx"] + list(cmd)[1:]
+
+        def fake_run(cmd, **kw):
+            seen["run"] = list(cmd)
+            os.makedirs(outdir, exist_ok=True)
+            with open(os.path.join(outdir, "frame-0-at-1.00s.png"), "wb") as fh:
+                fh.write(b"\x89PNG\r\n\x1a\n")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(P, "resolve_command", side_effect=fake_resolve), \
+                mock.patch.object(P.subprocess, "run", side_effect=fake_run):
+            P._snapshot("/tmp/p", [1.0], outdir, ["npx", "--yes", "pkg"])
+        # 交给 resolve_command 的必须是**拼完子命令参数**的整条命令：Windows 上
+        # resolve 会把命令包进 `cmd /c "…"`，先解析再接参数，那些参数就落在
+        # cmd.exe 自己的 argv 里、进不了 /c 的命令体（--at/-o 整批丢失）。
+        self.assertEqual(seen.get("cmd"),
+                         ["npx", "--yes", "pkg", "snapshot", "/tmp/p",
+                          "--at", "1.00", "-o", outdir],
+                         "_snapshot 没有把整条命令交给 resolve_command 解析")
+        self.assertEqual(seen["run"][0], "/opt/node/npx")
+
+
+# ── hyperframes 包名：只有一份真源 ────────────────────────────────────
+
+
 class TestGateIsolation(unittest.TestCase):
     """取帧层的失败不许把整个编排层带崩，也不许把旧帧当成新帧。
 
@@ -315,6 +426,127 @@ class TestGateIsolation(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(os.path.dirname(old), ignore_errors=True)
+
+
+@unittest.skipUnless(HAS_PIL, "观感门禁要吃像素，缺 Pillow 跑不了")
+class SwitchSkewIsAlive(unittest.TestCase):
+    """`switch_skew` 判据此前**恒不触发**，等于没有这道门禁。
+
+    原因：候选先用同一条容差筛过一遍（`|段起点 - t| <= 采样间隔 + 容差`），
+    再判 `|偏移| > 采样间隔 + 容差`——筛完剩下的条条都落在容差内，判据恒假。
+    而"画面提前翻页、旁白还没开始"是肉眼一眼能看出来的毛病。
+    """
+
+    W, H = 320, 240
+    SLOT = (30, 90, 180, 120)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="occam4-perc-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self._n = 0
+
+    def _frame(self, painter):
+        self._n += 1
+        p = os.path.join(self.tmp, "f%02d.png" % self._n)
+        img = Image.new("RGB", (self.W, self.H), (12, 16, 24))
+        painter(ImageDraw.Draw(img))
+        img.save(p)
+        return p
+
+    def _analyze(self, painters, times, segs):
+        frames = [{"t": t, "path": self._frame(p)}
+                  for t, p in zip(times, painters)]
+        old = P.slot_rect
+        P.slot_rect = lambda aspect: (self.SLOT, (self.W, self.H))
+        try:
+            return P.analyze(frames, segs)
+        finally:
+            P.slot_rect = old
+
+    @staticmethod
+    def _before(d):
+        d.rectangle((20, 20, 300, 80), fill=(200, 200, 200))
+
+    @staticmethod
+    def _after(d):
+        d.rectangle((0, 0, 320, 240), fill=(90, 120, 150))   # 整屏换色 = 换页
+        d.rectangle((20, 20, 300, 80), fill=(200, 200, 200))
+
+    def test_page_switch_ahead_of_voice_is_flagged(self):
+        """画面在 4.3s 翻页、下一段旁白 8.0s 才开始 ⇒ 判"声画不同步"。
+
+        修复前：判据恒假，永远不报。
+        """
+        segs = [{"id": "seg1", "layout": None,
+                 "sentences": [{"start_time": 0.0, "duration": 4.0}]},
+                {"id": "seg2", "layout": None,
+                 "sentences": [{"start_time": 8.0, "duration": 4.0}]}]
+        r = self._analyze([self._before, self._after], [3.9, 4.3], segs)
+        kinds = {i["kind"] for i in r["issues"]}
+        self.assertIn("switch_skew", kinds, r["issues"])
+
+    def test_switch_within_sampling_gap_is_not_flagged(self):
+        """反向：换页读数只偏一个采样间隔时**不许**报（那是网格误差）。"""
+        segs = [{"id": "seg1", "layout": None,
+                 "sentences": [{"start_time": 0.0, "duration": 4.0}]},
+                {"id": "seg2", "layout": None,
+                 "sentences": [{"start_time": 4.0, "duration": 8.0}]}]
+        r = self._analyze([self._before, self._after], [3.9, 4.3], segs)
+        kinds = {i["kind"] for i in r["issues"]}
+        self.assertNotIn("switch_skew", kinds, r["issues"])
+
+
+class EvolveHiddenGuard(unittest.TestCase):
+    """「起始帧全空」这道守卫此前**结构性不可达**。
+
+    - painter 收全部元素、hidden 只收有 id 的 ⇒ 任何无 id 的装饰件都能让
+      `len(hidden) == len(painter)` 不成立；
+    - `<defs>` 的子元素（linearGradient 等）进了 painter 却永远没有
+      opacity=0，而真实 SVG 几乎都带 `<defs>`；
+    - 「没声明 opacity」被 `or 0` 当成隐藏，于是**可见**的页也被判成全空。
+    """
+
+    SVG_WITH_DEFS = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        '<defs><linearGradient id="g"/></defs>'
+        '<rect id="a" opacity="0"/><rect id="b" style="opacity:0"/></svg>')
+    SVG_VISIBLE = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        '<rect id="a"/><rect id="b"/></svg>')
+
+    def test_defs_does_not_silence_the_guard(self):
+        """带 <defs> 的真实 SVG 仍要报（修复前：defs 里的渐变让判据永不成立）。"""
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}]}, "seg-a", full_bleed=False)
+        self.assertTrue(any("空框" in w for w in warns), warns)
+
+    def test_at_time_anchor_is_not_treated_as_early(self):
+        """`at_time=2.5` 不在段首 ⇒ 不算"段首点亮"（修复前恒算早、守卫沉默）。"""
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}]}, "seg-a", full_bleed=False)
+        self.assertTrue(warns)
+
+    def test_visible_structure_is_not_called_hidden(self):
+        """反向：没写 opacity 的元素是**可见**的，不许判成全空。
+
+        修复前 `(_declared_opacity(el) or 0) <= 0` 把"没声明"当成 0。
+        """
+        _, warns = EV.check_animate(self.SVG_VISIBLE, {"steps": [
+            {"at": 1.5, "target": "#a", "to": {"fill": "#f59e0b"}}]}, "seg-a", full_bleed=False)
+        self.assertEqual(warns, [])
+
+    def test_head_beat_still_counts_as_early(self):
+        """反向：`at=0`（第 0 句 = 段首）点亮时不该报。"""
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at": 0, "target": "#a", "set": {"opacity": 1}}]}, "seg-a", full_bleed=False)
+        self.assertEqual(warns, [])
+
+    def test_camera_keys_come_from_one_place(self):
+        """相机键清单只有一份（在 `_animate`，契约层与渲染端都读它）。"""
+        import _images_schema as _ims
+        self.assertIn("rotation", EV.CAMERA_KEYS)
+        self.assertFalse(hasattr(_ims, "_EVOLVE_CAMERA_KEYS"),
+                         "契约层不该再留一份相机键清单")
 
 
 if __name__ == "__main__":

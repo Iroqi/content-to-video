@@ -490,5 +490,24 @@ class Renderer(unittest.TestCase):
         self.assertFalse(B._declares_motion({"s": {"animate": {"steps": []}}}, "s"))
 
 
+
+class DeadCodeStaysOut(unittest.TestCase):
+    """本轮清掉的死代码：它们在仓库里零调用方，靠"将来可能用得上"续命。
+
+    `_derive.span()` 尤其典型——docstring 说"起点 + 时长"，函数体只取了
+    duration。契约与实现不符却没人发现，正是因为它一次都没被调用过。
+    """
+
+    def test_derive_unused_helpers_are_gone(self):
+        for name in ("js_number", "js_css_attr_value", "ease_progress",
+                     "value_at"):
+            self.assertFalse(hasattr(D, name), f"_derive.{name} 又回来了")
+
+    def test_derive_unused_methods_are_gone(self):
+        for name in ("keys", "span"):
+            self.assertFalse(hasattr(D.Derived, name),
+                             f"Derived.{name} 又回来了")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -184,6 +184,47 @@ class RetryVerdict(unittest.TestCase):
         self.assertTrue(T.is_non_retryable(cm.exception))
 
 
+class TtsBodyDecoding(unittest.TestCase):
+    """响应体解码错误不许被误报成 URL 配错。"""
+
+    @staticmethod
+    def _resp(payload):
+        class R:
+            def __init__(self, data):
+                self._d = data
+
+            def read(self):
+                return self._d
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                    return False
+        return R(payload)
+
+    def test_non_utf8_body_reports_the_body(self):
+        """修复前：报的是"TTS 请求地址不合法（'utf-8' codec can't decode …）"。"""
+        with mock.patch.object(urllib.request, "urlopen",
+                               return_value=self._resp(b"\xff\xfe\x00bad gateway")):
+            c = T.MimoTtsClient("k", "https://api.example.com/v1")
+            with self.assertRaises(T.BadAudioResponseError) as cm:
+                c.synthesize("你好", "冰糖", "", "m", 30)
+        self.assertIn("UTF-8", str(cm.exception))
+        # 真正的病因是响应体；把人引去改一个没错的 --base-url 是最贵的那种误导
+        self.assertNotIn("地址不合法", str(cm.exception))
+
+    def test_unknown_url_type_still_reports_the_url(self):
+        """反向：urlopen 真的抛 `unknown url type` 时，诊断仍指向地址。"""
+        def boom(_req, timeout=None):
+            raise ValueError("unknown url type: 'notaurl'")
+        with mock.patch.object(urllib.request, "urlopen", side_effect=boom):
+            c = T.MimoTtsClient("k", "notaurl")
+            with self.assertRaises(T.BadAudioResponseError) as cm:
+                c.synthesize("你好", "冰糖", "", "m", 30)
+        self.assertIn("地址不合法", str(cm.exception))
+
+
 class SynthSentenceThroughProtocol(unittest.TestCase):
     """synth_sentence 只传领域参数给 client.synthesize，落盘/重试/失败清理归管线。"""
 

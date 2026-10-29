@@ -6,17 +6,21 @@
 在生成期、`hyperframes check`、渲染日志里全都一声不吭（它们查的是"图在不在、
 能不能解码"），只有成片里看得见。所以这两问必须在生成期出声。
 """
+import contextlib
 import io
 import os
+import shutil
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
 from _media_size import (raster_size, cover_scale, upscale_note,
                          cover_crop_fraction, aspect_note,
-                         UPSCALE_WARN, UPSCALE_SEVERE, CROP_WARN)
+                         UPSCALE_WARN, UPSCALE_SEVERE, CROP_WARN,
+                         _jpeg_size as raster_jpeg_size)
 from _audio import parse_video_size
 from _template import get_image_box, get_canvas
 import gen_hyperframes as GH
@@ -439,6 +443,80 @@ class CropWarnAtGeneration(unittest.TestCase):
                 GH.validate_images_files({"seg-a": {"src": "seg-a.svg"}}, d,
                                          seg_boxes={"seg-a": (980, 735)})
             self.assertNotIn("比例不贴合", buf.getvalue())
+
+
+
+class JpegSizeAtBufferEnd(unittest.TestCase):
+    def test_sof_at_exact_end_of_buffer_is_read(self):
+        """SOF 正好落在读块末端时要读得出。
+
+        修复前 `while pos + 9 < n` 差一个字节：SOF 段的前 9 字节就含齐了宽高，
+        它落在读块末端时 `pos + 9 == n`，旧条件判否 → 返回 None。而"读不出"在这
+        个模块里等于**静默放行**"像素够不够 / 会被裁掉多少"两道告警。
+        """
+        sof = (b"\xff\xc0"                      # SOF0 标记
+               + (0x0011).to_bytes(2, "big")    # 段长（解析器不校验，够占位即可）
+               + b"\x08"                        # 采样精度
+               + (640).to_bytes(2, "big")       # 高在前
+               + (480).to_bytes(2, "big"))      # 宽
+        # APP0 段长写 2 = 只有长度字段、没有载荷（跳过时 pos += 2 + 2）
+        buf = b"\xff\xd8" + b"\xff\xe0\x00\x02" + sof
+        self.assertEqual(len(buf), 6 + 9)       # SOF 的 9 字节正好是读块末端
+        self.assertEqual(raster_jpeg_size(buf), (480, 640))
+
+    def test_garbage_still_returns_none(self):
+        """反向：不是 JPEG 头照样读不出，放宽条件没把坏输入放进来。"""
+        self.assertIsNone(raster_jpeg_size(b"\x89PNG\r\n\x1a\n" + bytes(20)))
+        self.assertIsNone(raster_jpeg_size(b"\xff\xd8" + bytes(4)))
+
+
+class VideoSpanProbe(unittest.TestCase):
+    """视频素材的时长探测：走得完，且短了要说话。
+
+    起点读取器必须是模块级——它嵌在 `validate_images_files` 里、却由另一个
+    顶层函数调用时，任何一条可解码的视频都是 NameError，整条校验崩掉。
+    """
+
+    def _run_probe(self, media_start, seg_dur=8.0):
+        tmp = tempfile.mkdtemp(prefix="occam4-vid-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out = os.path.join(tmp, "proj")
+        os.makedirs(out)
+        with open(os.path.join(out, "a.mp4"), "wb") as fh:
+            fh.write(b"\x00" * 64)          # 存在即可，解码由 mock 顶掉
+
+        done = mock.Mock(returncode=0,
+                         stdout=b"",
+                         stderr=b"  Duration: 00:00:01.00, start: 0.000000\n")
+        with mock.patch.object(GH, "get_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+             mock.patch.object(GH, "ffmpeg_usable", return_value=True), \
+             mock.patch("subprocess.run", return_value=done):
+            images = {"s1": {"src": "a.mp4", "type": "video",
+                             "media_start": media_start}}
+            return GH.validate_images_files(images, out, {"s1": seg_dur})
+
+    def test_video_entry_does_not_raise(self):
+        """正向：一条视频媒体必须走得完（修复前是 NameError）。"""
+        missing, corrupt = self._run_probe(0.0)
+        self.assertEqual(missing, [])
+        self.assertEqual(corrupt, [])
+
+    def test_short_video_is_reported(self):
+        """反向：视频比段落短时判据要真的报出来（不是静默通过）。
+
+        段 8s、视频 1s、media_start 0 ⇒ 只剩 1s，不够 ⇒ 该报。
+        """
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._run_probe(0.0)
+        self.assertIn("不够段落", err.getvalue())
+
+    def test_media_start_is_module_level(self):
+        """起点读取函数必须在模块级（顶层函数能取到的那一层）。"""
+        self.assertTrue(hasattr(GH, "entry_media_start"),
+                        "entry_media_start 必须是模块级函数")
+        self.assertEqual(GH.entry_media_start({"media_start": 2.5}), 2.5)
+        self.assertEqual(GH.entry_media_start({}), 0.0)
 
 
 if __name__ == "__main__":

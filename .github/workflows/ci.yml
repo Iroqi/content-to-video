@@ -57,6 +57,13 @@ jobs:
           python tests/check_examples.py
           python tests/check_image_snippets.py
 
+      # 测试套件的增长也要有闸，理由与上面那份文档上限同构：用例从几十长到
+      # 一千五（四天里五个 `test_occam_review_<轮次>.py` 各收一轮 review 的账），
+      # 于是"改一个模块该读哪个测试文件"再也答不上来。它守三件事：总量、
+      # 单文件、以及不许再出现以轮次编号命名的文件。
+      - name: Test budget
+        run: python tests/check_test_budget.py
+
   # 出片档：真的渲染一支 mp4，并且真的看那支片子的像素。
   #
   # 这一档存在的唯一理由：其余用例全部用假进程替掉了 Node、Chrome 和 ffmpeg，

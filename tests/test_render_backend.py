@@ -1,4 +1,5 @@
 """渲染后端：命令解析 + 进程管理 + 成片时长探测。用假进程（python -c）验证，不需要 Node / Chrome / ffmpeg。"""
+import ast
 import contextlib
 import io
 import json
@@ -10,6 +11,7 @@ from unittest import mock
 
 import _helpers as H  # noqa: F401
 import _render_backend as RB
+import perceptual as P
 
 # v0.8.185 `check --json` 实测的六个阶段名。只用来**构造**假报告——判读那一侧
 # 按结构认阶段（带 findings 的顶层块），不认名字，所以这张表不必跟着判读改。
@@ -141,6 +143,35 @@ def _py(code):
     return [sys.executable, "-c", code]
 
 
+class WallClockOnlyForWallClock(unittest.TestCase):
+    """量间隔用 monotonic，比对文件 mtime 用墙钟：两种用途不许混。"""
+
+    @staticmethod
+    def _calls_wall_clock(func_name):
+        """函数体里有没有出现 `time.time()`（墙钟）调用。"""
+        path = RB.__file__
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        node = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == func_name)
+        return any(isinstance(n, ast.Attribute) and n.attr == "time"
+                   and isinstance(n.value, ast.Name)
+                   and n.value.id == "time"
+                   for n in ast.walk(node))
+
+    def test_run_check_measures_with_monotonic(self):
+        """修复前：run_check 用 time.time() 量间隔，墙钟被 NTP 校正就报负数。"""
+        self.assertFalse(
+            self._calls_wall_clock("run_check"),
+            "run_check 量的是间隔，必须走 time.monotonic()")
+
+    def test_snapshot_frames_still_compares_against_wall_clock(self):
+        """反向：snapshot 比的是文件 mtime，那里**必须**用 time.time()。"""
+        self.assertTrue(
+            self._calls_wall_clock("snapshot_frames"),
+            "snapshot_frames 拿 t0 跟文件 mtime 比，改 monotonic 就永远判不出新产物")
+
+
 class RenderWait(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -256,6 +287,52 @@ class ProbeVideoDuration(unittest.TestCase):
         self.assertEqual(RB.probe_video_duration(self.out, ff), 12.5)
 
 
+_SCRIPTS2 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+
+
+class HyperframesPackageHasOneSource(unittest.TestCase):
+    """钉固的版本号在仓库里被抄了四份，其中三份是退化的复制品。
+
+    修复前：`run.py` 与 `perceptual.py` 各写一遍
+    `os.environ.get("CTV_HYPERFRAMES_PACKAGE", "hyperframes@0.8.185")`——
+    硬编码的第二默认值会随 `_render_backend.DEFAULT_HYPERFRAMES_SPEC` 漂移，
+    而且 `CTV_HYPERFRAMES_PACKAGE=""`（空串是真实的误配形态）在这里**不会**
+    回落，直接把空串当包名递给 npx。`_render_backend.hyperframes_spec()`
+    用 `.strip() or DEFAULT` 处理了这件事，另外三处没有。
+    """
+
+    def test_pinned_version_appears_once_in_scripts(self):
+        spec = RB.DEFAULT_HYPERFRAMES_SPEC
+        for name in sorted(os.listdir(_SCRIPTS2)):
+            if not name.endswith(".py"):
+                continue
+            text = open(os.path.join(_SCRIPTS2, name), encoding="utf-8").read()
+            hits = text.count(spec)
+            if name == "_render_backend.py":
+                continue
+            self.assertEqual(hits, 0,
+                             f"{name} 里硬编码了 {spec}：包名只有 "
+                             f"_render_backend.hyperframes_spec() 一个真源")
+
+    def test_empty_env_var_falls_back_to_default(self):
+        with mock.patch.dict(os.environ, {"CTV_HYPERFRAMES_PACKAGE": "   "}):
+            self.assertEqual(RB.hyperframes_spec(),
+                             RB.DEFAULT_HYPERFRAMES_SPEC,
+                             "空/空白的包名必须回落，不能把空串递给 npx")
+
+    def test_perceptual_cli_default_uses_the_same_source(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        # 与 perceptual.main 里 --package 同一形态：只验默认值来源
+        with mock.patch.dict(os.environ,
+                             {"CTV_HYPERFRAMES_PACKAGE": "hyperframes@9.9.9"}):
+            self.assertEqual(P.hyperframes_spec(), "hyperframes@9.9.9")
+        with mock.patch.dict(os.environ, {"CTV_HYPERFRAMES_PACKAGE": ""}):
+            self.assertEqual(P.hyperframes_spec(),
+                             RB.DEFAULT_HYPERFRAMES_SPEC)
+        del ap
+
+
 class NodeVersionGate(unittest.TestCase):
     """渲染前的 Node 版本闸。
 
@@ -313,6 +390,38 @@ class NodeVersionGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _report(stage, severity, code):
+    return {"ok": True, stage: {"findings": [
+        {"severity": severity, "code": code, "message": "m"}]}}
+
+
+class GateStrictCodes(unittest.TestCase):
+    """`GATE_STRICT_CODES` 是"必须当真"，不是"登记过就放过"。"""
+
+    def test_strict_code_surfaces_as_warning(self):
+        """`clipped_text` 以 warning 出现时也要点名。
+
+        修复前 `known_codes` = 噪声 ∪ 严格码，于是它整条静默——而
+        `references/rendering.md` 明写"clip_media_fit 与 clipped_text 不在噪声之列"。
+        """
+        for code in ("clipped_text", "clip_media_fit", "low_contrast",
+                     "missing_asset", "runtime_error"):
+            with self.subTest(code=code):
+                verdict = RB.check_verdict(_report("layout", "warning", code))
+                self.assertTrue(verdict, f"{code} 不该被静默")
+                self.assertEqual(verdict[0][1], code)
+
+    def test_noise_code_stays_silent(self):
+        """反向：噪声码仍要静默，别把闸门改成"什么都报"。"""
+        code = next(iter(RB.GATE_NOISE_CODES))
+        self.assertEqual(RB.check_verdict(_report("lint", "warning", code)), [])
+
+    def test_unregistered_warning_still_surfaces(self):
+        """反向：未登记的新码照样点名（CLI 加了新检查不能被吞）。"""
+        v = RB.check_verdict(_report("lint", "warning", "brand_new_code"))
+        self.assertEqual([c for _, c, _ in v], ["unregistered:brand_new_code"])
 
 
 class OfficialGate(unittest.TestCase):
@@ -438,6 +547,34 @@ class CheckOutputParsing(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+class SnapshotKeepsTheEndFrame(unittest.TestCase):
+    """`--check-frames` 承诺"含首末帧"，而 `--no-end` 把末帧关掉了。
+
+    官方 `--end` 默认 true（会额外补一张时间线末帧）。修复前命令里硬带
+    `--no-end`，末帧永远不在产物里；修复方式是**删掉那一行**而不是自己
+    猜一个 `dur - eps` 时刻。
+    """
+
+    def test_command_does_not_opt_out_of_the_end_frame(self):
+        seen = {}
+
+        def run(args, **kw):
+            seen["args"] = args
+            return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(RB.subprocess, "run", run), \
+                    mock.patch.object(RB, "_newest_mtime", lambda d: 1e18):
+                _snap, why = RB.snapshot_frames(
+                    "proj", "out.mp4", [0.0, 3.5],
+                    os.path.join(tmp, "frames"),
+                    command=["npx", "--yes", "hyperframes"])
+        self.assertEqual(why, "")
+        self.assertNotIn("--no-end", seen["args"],
+                         "--no-end 会关掉官方默认给的那张末帧")
+        self.assertIn("--at", seen["args"])
+
+
 class SnapshotCommandAssembly(unittest.TestCase):
     """取帧命令：子命令参数必须在 resolve **之后**仍进得了命令行。"""
 
@@ -488,6 +625,26 @@ class SnapshotCommandAssembly(unittest.TestCase):
                 self.assertIn(token, line)
             # 字符串收尾于命令体引号：后面不再拖任何参数
             self.assertTrue(line.endswith('"'))
+
+
+class SlotRectSurvivesBadTemplate(unittest.TestCase):
+    """读不出模板要**出声**，不能静默返回 None 让「画布稀薄」整条消失。
+
+    修复前 `slot_rect` 在 `load_template` 抛 OSError 时直接 `return None, None`：
+    排查时看到的是「没报」而不是「报不了」，整条稀薄判据跟着人间蒸发。
+    """
+
+    def test_template_failure_is_loud(self):
+        import _template
+        with mock.patch.object(_template, "load_template",
+                               side_effect=OSError("模板不在")):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                box, _canvas = P.slot_rect("portrait")
+        self.assertIsNone(box)
+        self.assertIn("图槽矩形", err.getvalue(),
+                      "读不出模板必须打 warn：否则排查时看到的是「没报」"
+                      "而不是「报不了」")
 
 
 class ProcessTreeCleanup(unittest.TestCase):

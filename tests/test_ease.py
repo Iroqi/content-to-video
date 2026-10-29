@@ -407,6 +407,17 @@ class ElasticArgs(unittest.TestCase):
             self.assertEqual(E.validate_ease(spec, "ease"), spec)
 
 
+class EaseCatalogue(unittest.TestCase):
+    def test_none_is_not_an_extra_family(self):
+        """`none` 在目录里，宽松档下不该被当"目录外的新族"。"""
+        E._ALLOW_EXTRA["on"] = True
+        try:
+            self.assertIsNone(E._extra_family("none"))
+            self.assertEqual(E._extra_family("wiggle"), "wiggle")
+        finally:
+            E._ALLOW_EXTRA["on"] = False
+
+
 class LenientCatalog(unittest.TestCase):
     """`--allow-ease` 的宽松档：目录外的档名放行，形状坑照旧拒。
 

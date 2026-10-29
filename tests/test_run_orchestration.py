@@ -16,6 +16,7 @@ from unittest import mock
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
 import _degraded as D
+import pipeline
 import run as R
 from _script_utils import write_json_atomic
 
@@ -655,6 +656,109 @@ class ArchitecturePin(unittest.TestCase):
                          "TTS/HTML 步骤参数列表里不该再出现解释器路径")
 
 
+def _fake_gate(project, tm, out_dir, aspect=None, command=None):
+    """观感门禁的假产物：帧数/判词/拼图三样都在，没有 error。
+
+    只证明"这一档真的调到了门禁"——真门禁要 Node + Chrome + Pillow，
+    那条链路由 `tests/test_perceptual.py` 与 e2e 覆盖。
+    """
+    _fake_gate.calls.append({"project": project, "aspect": aspect,
+                             "out_dir": out_dir})
+    return {"frames": 4, "issues": [], "contact_sheet": "sheet.png",
+            "segs": []}
+
+
+_fake_gate.calls = []
+
+
+class CheckUntilRunsPerceptual(unittest.TestCase):
+    """`--until check --perceptual`：HTML 已生成，观感门禁却整条分支没有调用点。
+
+    修复前：`--perceptual` 只有两个落点（`args.until == "html"` 与定稿渲染），
+    `--until check` 分支里只有官方门禁 → 落报告 → return。于是这一档的判词
+    凭空消失，报告里连一条 skipped 都没有，而 `--perceptual` 的 help 写的是
+    "跑观感门禁…判词进 production_report 的 perceptual 字段"。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        self.h.make_images_complete()
+        _fake_gate.calls = []
+
+    def _invoke(self, argv):
+        with mock.patch.object(R.perceptual, "run_gate", _fake_gate), \
+                mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            return self.h.invoke(argv)
+
+    def test_check_until_runs_the_gate(self):
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(len(_fake_gate.calls), 1,
+                         "--until check --perceptual 没有跑观感门禁")
+
+    def test_check_until_writes_verdict_into_report(self):
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(self.h.report()["perceptual"]["frames"], 4)
+
+    def test_without_the_flag_the_gate_stays_off(self):
+        self._invoke(["--until", "check"])
+        self.assertEqual(_fake_gate.calls, [])
+        self.assertNotIn("perceptual", self.h.report())
+
+    def test_html_and_check_share_one_implementation(self):
+        """两档的判词必须同源：各贴一段正是本轮失效的成因。"""
+        self._invoke(["--until", "html", "--perceptual"])
+        html_report = self.h.report()["perceptual"]
+        _fake_gate.calls = []
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(html_report, self.h.report()["perceptual"])
+
+
+class SlotNoImageReachesTheOrchestrator(unittest.TestCase):
+    """`--slot-no-image` 写在 run.py 的参数节里，旗标却只在 gen_hyperframes。
+
+    修复前：`run.py --slot-no-image` 直接被 argparse 拒；就算手工分步调
+    gen，编排层的缺图闸也会在 `--until render` 下 exit 2，把这条"没有生图
+    能力也能出片"的路整条堵死。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        # 只给整页画布段（seg-b）落图：槽位段 seg-a 缺图。
+        os.makedirs(os.path.join(self.h.project, "images"), exist_ok=True)
+        with open(os.path.join(self.h.project, "images", "seg-b.svg"),
+                  "w", encoding="utf-8") as f:
+            f.write("<svg/>")
+        from _script_utils import write_json_atomic
+        write_json_atomic(os.path.join(self.h.project, "images.json"),
+                          {"seg-b": {"src": "images/seg-b.svg"}})
+
+    def test_flag_is_parseable(self):
+        args = R._build_parser(show_all=True).parse_args(
+            ["--source", "x.json", "--slot-no-image"])
+        self.assertTrue(args.slot_no_image)
+
+    def test_flag_reaches_the_html_step(self):
+        self.h.invoke(["--until", "html", "--slot-no-image"])
+        self.assertIn("--slot-no-image", self.h.gen_argv)
+
+    def test_slot_missing_no_longer_blocks_delivery(self):
+        with mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            self.h.invoke(["--slot-no-image"])
+        rep = self.h.report()
+        self.assertEqual(rep["images"]["missing"], 1,
+                         "缺图的事实要照实记，放行的是拦截不是统计")
+        self.assertTrue(any("slot-no-image" in s for s in rep["skipped"]),
+                        f"放行没在报告里留痕：{rep['skipped']}")
+
+    def test_without_the_flag_slot_missing_still_blocks(self):
+        with mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            with self.assertRaises(SystemExit) as cm:
+                self.h.invoke([])
+        self.assertEqual(cm.exception.code, 2)
+
+
 class CheckFramesFlag(unittest.TestCase):
     """--check-frames：默认不取帧；开了就编排官方 snapshot，失败只 warn 不阻断。
 
@@ -760,6 +864,49 @@ class OfficialGateWiring(unittest.TestCase):
         gate_step = next(s for s in self.h.report()["steps"]
                          if s["name"] == "官方门禁 check")
         self.assertTrue(gate_step["ok"], "非阻断 warning 不应把报告步骤记成失败")
+
+
+class BeatsReachesManifest(unittest.TestCase):
+    """`_group_segments` 逐字段搬可选键，漏了 `beats`。
+
+    修复前：source 里写了 beats → `build_from_structured` 收进 `Block.extra`
+    → `pipeline` 分组时**没有这个键** → manifest 里没有 beats → `run.py` 的
+    `_beats.audit` 读到的恒为 None → SKILL.md 承诺的"句序越界 exit 2"永不触发，
+    `production_report.beats` 恒为 `{total:0, errors:0, warnings:0}`。
+    而作者数出的句序与重分句后的句数天然不一致，这正是那道闸存在的理由。
+    """
+
+    def _group(self, seg):
+        sents = [{"index": 0, "text": "甲。", "start_time": 0.0, "duration": 1.0},
+                 {"index": 1, "text": "乙。", "start_time": 1.0, "duration": 1.0}]
+        return pipeline._group_segments([seg], sents, {})[0]
+
+    def test_beats_is_carried_into_manifest_segment(self):
+        seg = {"id": "seg1", "title": "标题", "tagline": "补充阅读",
+               "accent": "amber", "start": 0, "end": 2,
+               "beats": [{"on": 0, "change": "开场"}]}
+        self.assertEqual(self._group(seg).get("beats"),
+                         [{"on": 0, "change": "开场"}])
+
+    def test_passthrough_list_names_every_key_manifest_schema_accepts(self):
+        """搬运清单是**枚举式**的：漏一个键不报错。所以清单本身要有锁。
+
+        拿 `_manifest_schema` 认的段落级可选键对账——那边加了一个透传字段，
+        这边没跟上，这条先红（而不是等某个作者写了 beats 才发现闸是空的）。
+        """
+        import _manifest_schema as _MS
+        schema = open(_MS.__file__, encoding="utf-8").read()
+        accepted = set()
+        for key in ("speed", "layout", "voice_id", "voice_style", "takeaway",
+                    "turns", "beats"):
+            if key in schema:
+                accepted.add(key)
+        self.assertTrue(accepted, "_manifest_schema 里找不到已知的可选段落键，"
+                                  "这条对账本身失效了")
+        for key in sorted(accepted):
+            self.assertIn(key, pipeline.PASSTHROUGH_SEG_KEYS,
+                          f"_manifest_schema 认 '{key}'，但 pipeline 没搬它")
+
 
 
 class BeatsGate(unittest.TestCase):

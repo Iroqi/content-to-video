@@ -172,5 +172,16 @@ class TestAudit(unittest.TestCase):
         self.assertEqual((errs, warns, total), ([], [], 0))
 
 
+import _beats
+
+
+
+class BeatsDuplicatePrinterStaysOut(unittest.TestCase):
+    """`print_audit` 全仓零调用方：run.py 自己又写了一遍同样的打印循环。"""
+
+    def test_beats_duplicate_printer_is_gone(self):
+        self.assertFalse(hasattr(_beats, "print_audit"))
+
+
 if __name__ == "__main__":
     unittest.main()

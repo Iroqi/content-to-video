@@ -619,6 +619,36 @@ class CarriedPageIsNotReintroduced(unittest.TestCase):
         self.assertIn("images/closing.svg", html)
 
 
+class CssInitialValueTable(unittest.TestCase):
+    def test_stop_opacity_relative_bake_uses_css_initial_value(self):
+        """漏掉的属性名会让相对写法按 0 起算（stop-opacity 的初值是 1）。
+
+        修复前 `{"stopOpacity": "+=0.5"}` 烘出 0.5，运行期按 1+0.5 钳到 1——
+        接续页页界静默跳变，且 notes 一声不响。
+        """
+        svg = ('<svg xmlns="%s" viewBox="0 0 1080 1440">'
+               '<stop id="s1" offset="0"/>'
+               "</svg>") % NS
+        out, _ = SC.bake_settled_state(
+            svg, [{"target": "#s1", "to": {"stop-opacity": "+=0.5"}}])
+        el = next(e for e in ET.fromstring(out).iter() if e.get("id") == "s1")
+        self.assertIn("stop-opacity:1.5", el.get("style"))
+
+    def test_zero_initial_property_still_starts_at_zero(self):
+        """反向：初值确实是 0 的属性仍按 0 起算，补表没把整张表改成非零。"""
+        svg = ('<svg xmlns="%s" viewBox="0 0 1080 1440">'
+               '<rect id="r1" x="10" y="10" width="20" height="20"/>'
+               "</svg>") % NS
+        out, _ = SC.bake_settled_state(
+            svg, [{"target": "#r1", "to": {"strokeDashoffset": "+=4"}}])
+        el = next(e for e in ET.fromstring(out).iter() if e.get("id") == "r1")
+        self.assertIn("stroke-dashoffset:4", el.get("style"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
 class CarryPagesIsStructural(unittest.TestCase):
     """接续页由结构决定，没有开关（`_segments.is_next_page_continuing`）。
 

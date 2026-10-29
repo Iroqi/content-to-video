@@ -631,12 +631,12 @@ class CarryPagesIsStructural(unittest.TestCase):
 
     SAME = "images/stage.svg"
 
-    def _segs(self, *, src_b=None, animate_a=True, n=2):
-        a = {"id": "seg-a", "src": self.SAME}
+    def _segs(self, *, src_b=None, animate_a=True, n=2, layout="canvas"):
+        a = {"id": "seg-a", "src": self.SAME, "layout": layout}
         if animate_a:
             a["animate"] = {"steps": [{"at": 0, "target": "#plate",
                                        "to": {"opacity": 1}}]}
-        b = {"id": "seg-b", "src": src_b or self.SAME}
+        b = {"id": "seg-b", "src": src_b or self.SAME, "layout": layout}
         return [a, b][:n]
 
     def _carry(self, **kw):
@@ -644,6 +644,12 @@ class CarryPagesIsStructural(unittest.TestCase):
 
     def test_same_picture_after_an_animated_page_is_carried(self):
         self.assertEqual(self._carry(), {"seg-b": "seg-a"})
+
+    def test_slot_layout_is_not_carried(self):
+        """槽位页同图也不算接续：构图归模板，页界那条擦除 + 配图入场是版式语义，
+        不是回弹。而且后一份内联副本里的 `#id` 全部解析成空集（实测），那半页的
+        补间一拍都不落地——烘焙它只会把两页的页界一起弄坏。"""
+        self.assertEqual(self._carry(layout=None), {})
 
     def test_camera_pose_is_irrelevant(self):
         """判据不读相机姿态：同图 + 有编排就接续，回原位也一样（画面本来就一样）。"""

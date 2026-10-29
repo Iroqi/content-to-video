@@ -41,7 +41,12 @@
 句子，而那时稿子可能已经改过。images.json 那边仍有 `shot`（可选的验收点），
 两处分工见 `_images_schema`。
 """
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _segments import is_next_page_continuing  # noqa: E402  接续判据只有一份
+from _stage_carry import judging_row  # noqa: E402  判据那一行怎么拼也只有一份
 
 # 一句台词带一拍以上的终止标点（。！？…；）时，观众读到的是"两个结论"。
 # 这一句念完要 3-6 秒，画面却只能对上其中一句——三拍以上的说明是这一条。
@@ -229,7 +234,11 @@ def audit(manifest, images=None):
         # 台词板声明了拍、该段却一条补间都没有：整张表就是愿望清单。这是台词板
         # 最容易退化成的东西，而且比不写更坏——作者以为写了。判据只看"有没有"，
         # 不看"对不对"：具体哪条属性从多少补到多少，由 images.json 的契约把关。
-        if images is not None and not _declares_motion(images, sid):
+        # 接续页放行：它的画面确实在变，变的那几拍写在上一页的 steps 里（收尾态
+        # 被烘焙成本页起点）。"接着上一页演、自己没写补间"是合法演法，把它报成
+        # 愿望清单会教作者去删一条做对了的台词板。
+        if (images is not None and not _declares_motion(images, sid)
+                and not _is_carried_page(manifest, images, sid)):
             warns.append(
                 f"段落 '{sid}' 写了 {len(beats)} 拍，但 images.json 里这一段没有"
                 f"任何 animate 补间——「{beats[0]['change'][:24]}」只写在"
@@ -247,12 +256,32 @@ def _declares_motion(images, sid):
     """images.json 里这一段声明了补间没有。
 
     只认 `animate`（图内编排：属性补间与参数推进同一个字段）。跨段接续只搬上一页的
-    收尾态、本身不产生新的拍，所以不算——接着上一页演、自己没写 steps 的段落，台词板
-    照样落空。
+    收尾态、本身不产生新的拍，所以不算——放行它的是 `_is_carried_page`，不是这里。
     """
     entry = images.get(sid)
     if not isinstance(entry, dict):
         return False
     return bool((entry.get("animate") or {}).get("steps"))
+
+
+def _is_carried_page(manifest, images, sid):
+    """这一页是不是接着上一页演的（判据唯一真源：`_segments.is_next_page_continuing`）。
+
+    只用来放行"只声明不实现"那条 warn。判据本身不在这里重写——生成期烘焙与渲染
+    端已经各读一次同一份，第三处若再写一个近似版本，就会出现"烘焙认了、门禁不认"
+    这种两套答案的局面。
+
+    判据吃的是"上一段"（同图 + 满幅 + 有编排都记在上一段头上），所以这里必须把
+    **上一段的 src / animate 合进去**再问。
+    """
+    segs = manifest.get("segments") or []
+    for i, seg in enumerate(segs):
+        if seg.get("id") != sid:
+            continue
+        if i == 0:
+            return False
+        return is_next_page_continuing(
+            [judging_row(s, images) for s in segs[:i + 1]], i - 1)
+    return False
 
 

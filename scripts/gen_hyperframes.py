@@ -171,7 +171,7 @@ from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa
                            root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import (bake_settled_state, carry_pages,  # noqa: E402
-                          global_ref_leaks)
+                          global_ref_leaks, judging_row)
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
                        beat_cycles, duration_tolerance)
 
@@ -1225,9 +1225,11 @@ def animate_prepare(images, segments, out_dir):
         raw, markup = out
         entry["inline_svg"] = markup
         # 接续页：起点不是盘上原图，而是上一页演完的画面（见 _stage_carry_pass）。
-        # 判据是结构（同图 + 上一页有编排），不是某个字段——见 _segments。
+        # 判据是结构（同图 + 上一页是满幅页 + 有编排），不是某个字段——见 _segments。
+        # `layout` 取自 manifest 段本身（images.json 里没有版式），其余三个键在条目上。
         carried = (sid in seg_pos
-                   and is_next_page_continuing(segments, seg_pos[sid]))
+                   and is_next_page_continuing(
+                       [judging_row(s, images) for s in segments], seg_pos[sid]))
         _animate_checks(sid, src, raw, block, entry, seg, segments, dflt_dur,
                         full_bleed, carried, errs, warns)
     _stage_carry_pass(images, segments, dflt_dur, errs, warns)
@@ -1526,23 +1528,15 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
     C 必须拿到 A+B 的叠加），所以只能沿 manifest 段序推进；第一遍走的是 images.json
     的键序，两者不保证一致，就地算会用到还没烘焙的前页。
 
-    接的是谁由结构决定（`_stage_carry.carry_pages`：两页同一张 src、上一页有编排），
-    没有任何字段可写。烘焙本身在 _stage_carry（口径与边界写在那个模块头）；这里只做
-    生成期才做得到的两件事：把烘焙过的副本回写进条目，以及拿**烘焙后**的副本重跑一次
-    这一页的运镜自查（第一遍按盘上原图算的投影对接续页是假话）。
+    接的是谁由结构决定（`_stage_carry.carry_pages`：两页同一张 src、上一页是满幅页且
+    有编排），没有任何字段可写。烘焙本身在 _stage_carry（口径与边界写在那个模块头）；
+    这里只做生成期才做得到的两件事：把烘焙过的副本回写进条目，以及拿**烘焙后**的副本
+    重跑一次这一页的运镜自查（第一遍按盘上原图算的投影对接续页是假话）。
     """
     if not images:
         return
-    # 段是 manifest 段 + images.json 那份条目（src / animate 都在条目上）：判据要看的
-    # 三个键只有合起来才齐，且必须合起来传——三处消费者（这里、渲染端、写稿门禁）
-    # 看到的是同一份结构，才会永远得出同一个答案。
-    merged = []
-    for seg in segments:
-        row = dict(seg)
-        entry = images.get(seg["id"]) or {}
-        row["src"] = entry.get("src")
-        row["animate"] = entry.get("animate")
-        merged.append(row)
+    # 段是 manifest 段 + images.json 那份条目（判据要的三个键，见 judging_row）。
+    merged = [judging_row(seg, images) for seg in segments]
     for sid, prev_sid in carry_pages(images, merged).items():
         seg = next(x for x in segments if x["id"] == sid)
         prev = next(x for x in segments if x["id"] == prev_sid)

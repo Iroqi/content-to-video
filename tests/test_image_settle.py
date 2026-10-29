@@ -51,8 +51,11 @@ def _four_slot_source():
     return src
 
 
-def render(aspect="portrait", dur=6.0, gap=0.4, source=None, images=None):
-    m = H.make_manifest(source=source or _four_slot_source(), dur=dur, gap=gap)
+def render(aspect="portrait", dur=6.0, gap=0.4, source=None, images=None,
+           manifest=None):
+    """`manifest` 给定时直接用（调用方在段上改过版式，不能重算覆盖）。"""
+    m = manifest or H.make_manifest(source=source or _four_slot_source(),
+                                    dur=dur, gap=gap)
     with contextlib.redirect_stderr(io.StringIO()):
         return m, generate_html(m, "audio/combined.wav",
                                 images=images or H.sample_images(m),
@@ -212,14 +215,19 @@ class WhoDoesNotSettle(unittest.TestCase):
     def test_carried_page_has_no_settle(self):
         """接续页搬的是上一页演完的终态，收拢就是 _stage_carry 要消灭的页界回弹。
 
-        造法：让 seg-b 与 seg-a 同图、seg-a 带编排 —— 结构成立就是接续，不需要任何字段。
+        造法：让 seg-b 与 seg-a 同图、都改成整页画布（接续只在满幅页上成立）、
+        seg-a 带编排 —— 结构成立就是接续，不需要任何字段。
         """
         src = _four_slot_source()
-        images = H.sample_images(H.make_manifest(source=src, dur=6.0))
+        m = H.make_manifest(source=src, dur=6.0)
+        for seg in m["segments"]:
+            if seg["id"] in ("seg-a", "seg-b"):
+                seg["layout"] = "canvas"
+        images = H.sample_images(m)
         images["seg-b"]["src"] = images["seg-a"]["src"]
         images["seg-a"]["animate"] = {"steps": [{"at": 0, "target": "#x",
                                                 "to": {"opacity": 1}}]}
-        _, html = render(source=src, images=images)
+        _, html = render(source=src, images=images, manifest=m)
         self.assertNotIn("seg-b", [s.group("sid") for s in settles(html)])
 
     def test_scale_at_or_below_one_disables_the_layer(self):

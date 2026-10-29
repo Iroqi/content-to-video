@@ -32,7 +32,7 @@ from _ease import reject_overshoot as ease_reject_overshoot
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
-from _stage_carry import carry_pages
+from _stage_carry import carry_pages, judging_row
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -2642,15 +2642,13 @@ def generate_html(manifest, audio_src, images=None,
 
     # ── 配图/视频归一化（只做一次，后续阶段复用这份结果）───────────
     images = images or {}
-    # 接续页判据读的是 images.json 的顶层键（src / animate），所以要在归一化**之前**
-    # 把答案算出来——归一化会把除 src/type 之外的键搬进 `opts`。生成期据此决定
-    # "烘不烘焙"、渲染端据此决定"要不要当新页再演一遍"，两边看的是同一个 dict。
+    # 接续页判据读的是 images.json 的顶层键（src / animate）加段上的版式，所以要在
+    # 归一化**之前**把答案算出来——归一化会把除 src/type 之外的键搬进 `opts`。生成期
+    # 据此决定"烘不烘焙"、渲染端据此决定"要不要当新页再演一遍"，两边看的是同一份合并
+    # （合并逻辑只有 `_stage_carry.judging_row` 一份）。
     raw_images = images or {}
     carries = carry_pages(
-        raw_images,
-        [dict(seg, src=(raw_images.get(seg["id"]) or {}).get("src"),
-              animate=(raw_images.get(seg["id"]) or {}).get("animate"))
-         for seg in manifest["segments"]])
+        raw_images, [judging_row(seg, raw_images) for seg in manifest["segments"]])
     images = _normalize_images(images)
     total_dur = manifest["total_duration"]
     sentences = manifest["sentences"]

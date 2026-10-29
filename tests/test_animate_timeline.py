@@ -1007,8 +1007,8 @@ class DirectorPrepare(unittest.TestCase):
         """接续页起点 = 上一页演完的画面，不是盘上原图——全隐藏的原图也不该替接续页
         报"起始帧全空"。同一张全隐藏的图：首页 canvas 导演报一条，接续页不添第二声。
 
-        seg-b 自己不写编排：上一页有 animate、两页同图，它就自动是接续页（判据只看
-        上一页，不看自己）。
+        seg-b 自己不写编排：上一页有 animate、两页同图、且是满幅版式，它就自动是
+        接续页（判据只看上一页，不看自己）。第一拍放在 0.5 秒，首页才真的"段首全空"。
         """
         rel = _write_svg(self.tmp.name, "seg-a",
                          '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
@@ -1016,7 +1016,7 @@ class DirectorPrepare(unittest.TestCase):
                          '<rect width="200" height="100" fill="#fff"/></g></svg>')
         images = {
             "seg-a": {"src": rel, "animate": {
-                "steps": [{"at": 0, "target": "#node", "set": {"opacity": 1}}]}},
+                "steps": [{"at": 0.5, "target": "#node", "set": {"opacity": 1}}]}},
             "seg-b": {"src": rel},
         }
         segs = [self._seg("seg-a", "canvas"), self._seg("seg-b", "canvas")]
@@ -1024,6 +1024,7 @@ class DirectorPrepare(unittest.TestCase):
         self.assertEqual(errs, [])
         hook = [w for w in warns if "起始帧全空" in w]
         self.assertEqual(len(hook), 1, warns)   # 只有首页那一条，接续页不添
+        self.assertIn("'seg-a'", hook[0])
 
     def test_opacity_zero_via_style_and_inherited_group_hidden(self):
         """opacity=0 写在 inline style 或组上继承下来，同样算隐藏（visibility/

@@ -360,7 +360,7 @@ def _num(args, i, default):
 def curve(name, default):
     """给定 ease 名返回曲线 f:[0,1]→[0,1]，morph 生成期按它采样形状进度。
 
-    `default` 取模板 `animation.director.ease`，让 morph 的缺省手性与兄弟补间一致。
+    `default` 取模板 `animation.animate.ease`，让 morph 的缺省手性与兄弟补间一致。
     族名已由 `validate_ease` 在契约层过了一遍，这里仍留线性兜底（渲染端不该因为一条
     算不出的曲线抛断整页）。
 

@@ -48,11 +48,14 @@ jobs:
       #   check_numbers——「是几」：文档里的数字必须等于代码常量（决策阈值最小集）
       #   check_examples——「能不能跑」：文档示例退化成"看起来对"的那天，读者要
       #                    自己再撞一遍当初试错撞出来的坑
+      #   check_image_snippets——「抄得进去吗」：文档里的 images.json 片段必须过
+      #                    契约层；它曾在示例搬家后静默失败而无人发现
       - name: Doc contracts
         run: |
           python tests/check_docs.py
           python tests/check_numbers.py
           python tests/check_examples.py
+          python tests/check_image_snippets.py
 
   # 出片档：真的渲染一支 mp4，并且真的看那支片子的像素。
   #

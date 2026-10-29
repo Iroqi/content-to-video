@@ -152,7 +152,7 @@ from _template import (MIN_READABLE_FONT_PX, get_canvas, get_image_box,  # noqa:
                        load_template, put_override, same_aspect)
 from _ease import allow_extra as ease_allow_extra  # noqa: E402  宽松档的开关只有一份
 from _manifest_schema import load_timing_manifest  # noqa: E402
-from _evolve import check_evolve  # noqa: E402
+from _animate import animate_of, check_animate  # noqa: E402  编排的唯一入口
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path,
                             allow_infinite_loop as infinite_loop_allow)  # noqa: E402  宽松档开关
@@ -913,7 +913,7 @@ def _plate_overlap_errors(segments, canvas_w, canvas_h, aspect):
 
 
 def _svg_selectable_tokens(raw):
-    """SVG 里可被 director target 命中的选择器集合：{'#id', ..., '.class', ...}。
+    """SVG 里可被 animate target 命中的选择器集合：{'#id', ..., '.class', ...}。
 
     target 白名单允许 id 或 class（class 专为 stagger 一组元素开），存在性校验就得
     两类都收：一个 class 属性可能写多个空格分隔的类名，逐个拆进去。净化器保留 class
@@ -942,10 +942,15 @@ def _svg_selectable_tokens(raw):
 _BEAT_EPS = 0.005   # 落点已与时间轴同精度（round 2 位），这里只吸收浮点尾巴
 
 
-def _director_default_duration():
-    """模板 animation.director.duration——没写 duration 的 step 用它，相对链游标也用它。
+def _beat_default_duration():
+    """模板 animation.animate.duration——没写 duration 的 step 用它，相对链游标也用它。
     必须与渲染端取的是同一份，否则门禁算出的落点不是渲染器真正用的时刻。"""
-    return float(load_template()["animation"]["director"]["duration"])
+    return float(load_template()["animation"]["animate"]["duration"])
+
+
+def _beat_label(step):
+    """这一拍改的是谁：属性补间是 target，参数推进是「参数名」。"""
+    return step.get("target") or "「%s」" % (step.get("param"),)
 
 
 def _beat_anchor(step):
@@ -1019,18 +1024,18 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
     try:
         beats = beat_positions(steps, sentences, round(seg_start, 2), dflt_dur)
     except ValueError:
-        return []   # at 越界由 director_prepare 的句序检查按步报错，这里不重复
+        return []   # at 越界由 animate_prepare 的句序检查按步报错，这里不重复
     seg_end = float(sentences[-1]["start_time"]) + float(sentences[-1].get("duration", 0.0))
     out = []
     for i, ((pos, dur), step) in enumerate(zip(beats, steps)):
         kind, _where = _beat_landing(pos, sentences, seg_start, seg_end, next_start)
         anchor = _beat_anchor(step)
         if kind == "before":
-            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）落点 {pos:.2f}s "
+            out.append(f"animate.steps[{i}]（{_beat_label(step)}，{anchor}）落点 {pos:.2f}s "
                        f"比本段旁白起点 {seg_start:.2f}s 还早 {seg_start - pos:.2f}s——这一页"
                        "那时还没出现，补间排在 clip 窗口外等于没演")
         elif kind == "after":
-            out.append(f"director.steps[{i}]（{step['target']}，{anchor}）落点 {pos:.2f}s 已过"
+            out.append(f"animate.steps[{i}]（{_beat_label(step)}，{anchor}）落点 {pos:.2f}s 已过"
                        f"下一段旁白起点 {next_start:.2f}s——这一页那时已被下一页盖住，等于没演。"
                        "多半是 at_time 按旧配音手算后过期了：跟旁白的节拍改用 at（句序锚），"
                        "或把秒数调小")
@@ -1045,7 +1050,7 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
                 again = f"（演 {n} 遍、共 {span:.2f}s）" if n and n > 1 else ""
                 staggered = (f"，stagger 还要再推 {extra:.2f}s（收到 {pos + total:.2f}s）"
                              if extra else "")
-                out.append(f"director.steps[{i}]（{step['target']}，{anchor}）从 {pos:.2f}s 演到 "
+                out.append(f"animate.steps[{i}]（{_beat_label(step)}，{anchor}）从 {pos:.2f}s 演到 "
                            f"{pos + span:.2f}s 才完{again}{staggered}，而下一段旁白 {next_start:.2f}s 就把这一页盖"
                            f"过来——这一拍被切在半路，它要收的那个尾在成片里从没出现过（早 "
                            f"{pos + total - next_start:.2f}"
@@ -1150,7 +1155,7 @@ def next_speech_start(segments, sid):
 
 
 def beat_report_lines(images, segments, dflt_dur):
-    """每个导演段一张对轴表（作者用 --beat-report 索取，默认不打，免得盖过 warn）。
+    """每个写了 animate 的段一张对轴表（作者用 --beat-report 索取，默认不打，免得盖过 warn）。
 
     它回答"每一拍到底踩在话的哪儿"：in=句内、gap=句间静音、tail=段尾静音、
     before/after=窗外（就是门禁 warn 的那两类）。**in 也不等于准**：句内 frac 是
@@ -1160,23 +1165,23 @@ def beat_report_lines(images, segments, dflt_dur):
     seg_by_id = {seg["id"]: seg for seg in segments}
     lines = []
     for sid in (images or {}):
-        director = (images[sid] or {}).get("director")
+        block = animate_of(images[sid])
         seg = seg_by_id.get(sid)
-        if not director or not seg:
+        if not block or not seg:
             continue
         sents = seg["sentences"]
         seg_start = float(sents[0]["start_time"])
         seg_end = float(sents[-1]["start_time"]) + float(sents[-1].get("duration", 0.0))
         nxt = next_speech_start(segments, sid)
         try:
-            beats = beat_positions(director["steps"], sents, round(seg_start, 2), dflt_dur)
+            beats = beat_positions(block["steps"], sents, round(seg_start, 2), dflt_dur)
         except ValueError as e:
             lines.append(f"[beat] {sid}: 解析中断 — {e}")
             continue
         lines.append(f"[beat] {sid}  旁白 {seg_start:.2f}–{seg_end:.2f}s（{len(sents)} 句）"
                      + (f"，下一页 {nxt:.2f}s 起" if nxt is not None else "，末段无右界"))
         tally = {}
-        for (pos, _dur), step in zip(beats, director["steps"]):
+        for (pos, _dur), step in zip(beats, block["steps"]):
             kind, where = _beat_landing(pos, sents, seg_start, seg_end, nxt)
             n = beat_cycles(step)
             if n is None:
@@ -1185,352 +1190,240 @@ def beat_report_lines(images, segments, dflt_dur):
                 where += f"（演 {n} 遍）"
             tally[kind] = tally.get(kind, 0) + 1
             lines.append("       %-12s %8.2fs  %-6s %-30s %s" % (
-                step["target"], pos, kind, where, _beat_anchor(step)))
+                _beat_label(step), pos, kind, where, _beat_anchor(step)))
         lines.append("       — %d 拍：%s" % (
             len(beats), " · ".join("%s %d" % (k, tally[k]) for k in
                                    ("in", "gap", "tail", "before", "after") if tally.get(k))))
     return lines
 
 
-def director_prepare(images, segments, out_dir):
-    """SVG「导演」编排的生成期体检 + 净化内联，返回 (错误, 警告)。
+def animate_prepare(images, segments, out_dir):
+    """图内编排（images.json 的 `animate`）的生成期体检 + 净化内联，返回 (错误, 警告)。
 
-    只处理写了 `director` 的条目：读盘 → 净化（`_svg_sanitize` 去掉 script/on*/外链/
-    SMIL/墙钟动画，root 改成 cover 语义）→ 回填 `entry["inline_svg"]`，渲染端据此内联
-    成活 DOM 交给 GSAP 逐帧驱动。下面几件事只有这里查得到：
+    一条路通吃：写了 `animate` 就**读盘 → 净化 → 回填 `entry["inline_svg"]`**，渲染端
+    据此内联成活 DOM 交给 GSAP 逐帧驱动。`_svg_sanitize` 统一剥 script/on*/外链/SMIL/
+    墙钟动画，所以"只是图里加个小动画"和"整页接管编排"过的是同一道安全面。
 
-    - **at 越界**：`steps[i].at` 的整数部分必须 < 该段句数（0 基），越界渲染端会 raise。
+    下面几件事只有这里查得到（契约层读不到图）：
+
+    - **at 越界**：`steps[i].at` 的整数部分必须 < 该段句数（0 基），否则渲染端 raise。
       用 `at_time` 的步骤没有句序可锚，跳过。
-    - **target 落空**（error）：target 的 id 必须在 SVG 里真实存在——落空不报错，只是
-      选择器匹配不到、**静默无动画**，成片看着没动却零提示。
+    - **target 落空 / 槽位页调机位 / 起始帧全空**：`_animate.check_animate`（读 SVG 原文）。
     - **运镜裁切**（warn）：`#cam` 内容被推到画幅静止位之外（`_cam_crop`）。
     - **节拍出窗**（warn）：落点早于本段旁白、晚于下一段起点，或起点在窗内而终点越界
       （被切在半路，终态没出现）。逐拍明细用 `--beat-report`。
-    - **净化说明**：删掉了哪些构造，按 warn 告知。
+    - **参数演绎的静态自检**：`bind` 落空、与本条目的属性补间抢同一个属性、起始帧
+      读数与 `params` 初值不一致、端点算不出来（见 `_derive_checks`）。
 
     最后按段序走第二遍烘焙 `stage:"keep"` 接续页（`_stage_carry_pass`），并替它补做
     运镜自查——第一遍按盘上原图算的投影对接续页不成立。
 
-    非 SVG 挂 director 已由 `_images_schema` 在契约层拒掉，这里不重复。
+    非 SVG 写 animate 已由 `_images_schema` 在契约层拒掉，这里不重复。
     """
     errs, warns = [], []
     seg_by_id = {seg["id"]: seg for seg in segments}
-    dflt_dur = _director_default_duration()   # 与渲染端同一份缺省，否则落点算错
+    dflt_dur = _beat_default_duration()   # 与渲染端同一份缺省，否则落点算错
     for sid, entry in (images or {}).items():
-        director = entry.get("director")
-        # 接续页：起点不是盘上原图，而是上一页演完的画面（见 _stage_carry_pass）。
-        carried = entry.get("stage") == "keep"
-        if not director:
+        seg = seg_by_id.get(sid)
+        full_bleed = seg is not None and is_full_bleed(seg)
+        # 并置对比（src 是一对图）：两格各自可能写 animate，逐格净化内联。
+        if isinstance(entry.get("src"), list):
+            _prepare_compare_panes(sid, entry, out_dir, seg, segments, dflt_dur,
+                                   full_bleed, errs, warns)
+            continue
+        block = animate_of(entry)
+        if not block:
             continue
         src = entry["src"]
-        path = os.path.join(out_dir, src)
-        if not os.path.isfile(path):
-            errs.append(f"段落 '{sid}' 的 director 配图 {src} 在 {out_dir} 下不存在")
+        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns)
+        if out is None:
             continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                raw = f.read()
-        except OSError as e:
-            errs.append(f"段落 '{sid}' 的 director 配图 {src} 读不了: {e}")
-            continue
-        try:
-            markup, notes = sanitize_svg_for_inline(raw)
-        except ValueError as e:
-            errs.append(f"段落 '{sid}' 的 director 配图 {src} 无法净化内联: {e}")
-            continue
-        for n in notes:
-            warns.append(f"段落 '{sid}' 的 director 配图 {src}：{n}")
-        ids = _svg_selectable_tokens(raw)
-        seg = seg_by_id.get(sid)
-        n_sent = len(seg["sentences"]) if seg else 0
-        for i, step in enumerate(director["steps"]):
-            if seg is None:
-                errs.append(f"段落 '{sid}' 写了 director，但 manifest 里没有这一段")
-                break
-            # at 才有句序越界可验；at_time 锚在段落绝对时间（含相对串），与旁白句数无关，跳过。
-            if "at" in step:
-                at = step["at"]
-                if int(at) >= n_sent:
-                    errs.append(f"段落 '{sid}' 的 director.steps[{i}] at={at} 越界："
-                                f"该段只有 {n_sent} 句旁白（at 的整数部分=句序，最大 {n_sent - 1}）")
-            target = step["target"]
-            if target not in ids:
-                errs.append(f"段落 '{sid}' 的 director.steps[{i}] target={target} 在 "
-                            f"{src} 里找不到对应 id/class 的元素——选择器落空不会报错，只会"
-                            "静默没有动画。给该元素补上这个 id/class，或改 target")
+        raw, markup = out
         entry["inline_svg"] = markup
-        # 起始帧钩子：只查整页画布 × 导演。画布页不生成标题层与句子流层，开头整片
-        # 空白时观众对着空画面不知所以然；槽位页有标题和句子流兜底，不需要这条。
-        # 接续页（stage:"keep"）跳过：它的起点是上一页演完的画面，不是盘上原图。
-        # 判据只读静态可见性（见 _svg_frame0_visibility 的"宁可多报"口径）：
-        # 导演约定"内容 opacity=0 起步、结构底同时到位"，全隐藏起步 = 开场没有钩子。
-        if not carried and seg is not None and seg_layout(seg) == "canvas":
-            n_vis, n_all = _svg_frame0_visibility(raw)
-            if n_all and n_vis == 0:
-                warns.append(
-                    f"段落 '{sid}' 的整页画布导演档起始帧全空：SVG 里 {n_all} 个可渲染"
-                    f"元素全部以 opacity=0 / visibility:hidden 起步，第一拍落子之前"
-                    f"整页是空白（画布页没有标题层也没有字幕层）。开场要留钩子：把"
-                    f"结构底（坐标轴/外框/标题）不写进 director.steps、让它和页面同时"
-                    f"到位，或把第一拍 set 在页起点（见 references/canvas.md"
-                    f"「整页画布的密度与层次」的起始帧一条）")
-        # 运镜裁切：源码看着坐标都在幅内，是 scale 把内容推出去的，只有这里同时握有
-        # SVG 原文与 steps（判据与口径见 _cam_crop 模块头）。warn 不 error：途中出画是
-        # 合法演法，这里只报"静止位看不见的内容"，而那也可能是作者故意的取舍。
-        # 净化后的串就够用（sanitize 只改 root 的 cover 语义、剥脚本，viewBox 与几何不动）。
-        # 接续页（stage:"keep"）跳过：起点不该是盘上原图而是上一页演完的画面，
-        # 由 _stage_carry_pass 拿烘焙后的副本重算，免得两遍各报一套互相矛盾的越界。
-        if not carried:
-            for w in crop_warnings(markup, director.get("steps")):
-                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
-        # z 序自证：SVG 叠压顺序 = DOM 顺序，而导演揭示顺序是作者声明的意图——
-        # 后亮的元素要叠在先亮的上面。两个都被步骤揭示的内容元素包围盒相交时，
-        # 若先亮的反而写在 DOM 后面，成片里它会把后亮的盖住（后亮的在它最该显眼
-        # 的那一刻被压在旧内容底下）。warn 不 error：包围盒相交是保守近似，故意
-        # 垫底的取舍也存在。接续页（stage:"keep"）跳过：起点是上一页演完的画面，
-        # 盘上原图的 DOM 顺序对接续页的可见层是假话。
-        if not carried:
-            for w in _zorder_warnings(markup, director.get("steps")):
-                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
-        # 节拍↔旁白对轴：at_time 是按某一版配音手算的绝对秒，重配音/改句长/动 --gap
-        # 之后它整体错位，而落在 clip 窗口外的那一拍是**静默不演**（引擎按
-        # data-start/data-duration 硬切可见性）。这里同时握有 steps 与 manifest 句子，
-        # 是整条链上唯一算得出落点的地方。warn 不 error：压在下一页可能正是要的效果。
-        if seg:
-            for w in _beat_window_warnings(director["steps"], seg["sentences"],
-                                           float(seg["sentences"][0]["start_time"]),
-                                           next_speech_start(segments, sid), dflt_dur,
-                                           keep=carried):
-                warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+        # 接续页：起点不是盘上原图，而是上一页演完的画面（见 _stage_carry_pass）。
+        carried = entry.get("stage") == "keep"
+        _animate_checks(sid, src, raw, block, entry, seg, segments, dflt_dur,
+                        full_bleed, carried, errs, warns)
     _stage_carry_pass(images, segments, dflt_dur, errs, warns)
     return errs, warns
 
 
-def _evolve_prepare(images, segments, out_dir, dflt_dur, errs, warns):
-    """槽位版式 `evolve` 的生成期体检 + 净化内联（与 director_prepare 同构）。
+def _read_svg_for_inline(sid, src, out_dir, what, errs, warns):
+    """读盘 + 净化，返回 (源文本, 净化内联串)；读不了/净化不了就报错并返回 None。"""
+    path = os.path.join(out_dir, src)
+    if not os.path.isfile(path):
+        errs.append(f"段落 '{sid}' 的 {what} 配图 {src} 在 {out_dir} 下不存在")
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            raw = f.read()
+    except OSError as e:
+        errs.append(f"段落 '{sid}' 的 {what} 配图 {src} 读不了: {e}")
+        return None
+    try:
+        markup, notes = sanitize_svg_for_inline(raw)
+    except ValueError as e:
+        errs.append(f"段落 '{sid}' 的 {what} 配图 {src} 无法净化内联: {e}")
+        return None
+    for n in notes:
+        warns.append(f"段落 '{sid}' 的 {what} 配图 {src}：{n}")
+    return raw, markup
 
-    为什么单独一遍、不进 director_prepare：两者的内联理由不同——director 内联是
-    为了**接管整页编排**（标题层与句子流层都不生成），evolve 内联只是为了**给槽位里
-    的图加一条图内补间**，版面、入场、运镜全部照旧。混在一个循环里写，迟早有人把
-    "内联 = 整页画布"当成同义词。
 
-    查的还是那三件（消息按 evolve 措辞）：
+def _animate_checks(sid, src, raw, block, holder, seg, segments, dflt_dur,
+                    full_bleed, carried, errs, warns, pane_idx=None):
+    """编排的判据本体，单图与并置分格共用（`holder` = entry 或 pane）。
 
-    - **target 落空**（error）：选择器匹配不到 = 静默无动画。
-    - **图里不再调机位**（error）：契约层已拒相机属性，这里按 SVG 原文再挡一次。
-    - **起始帧全空**（warn）：所有元素写死 `opacity=0` 且没有段首点亮——槽位版式
-      那半秒标题、句子流、配图都在入场，空框比不动更差。
-    - **节拍出窗**（warn）：与 director 同一个判据、同一个函数，落点算的是真执行
-      的那一拍。
-
-    内联走同一条净化（`sanitize_svg_for_inline`），于是 `<script>` / `on*` / 外链 /
-    SMIL / 墙钟 CSS 动画在两条路上被剥得一模一样——安全性不能因为"只是加个小动画"
-    而松一档。
+    调用前 `inline_svg` 必须已由 `_read_svg_for_inline` 回填——这里只管判。
     """
-    seg_by_id = {seg["id"]: seg for seg in segments}
-    # 与渲染端同一份缺省时长：两处取值不同，落点就会差一截而门禁仍是绿的
-    dflt_dur = _director_default_duration() if dflt_dur is None else dflt_dur
-    for sid, entry in (images or {}).items():
-        block = entry.get("evolve")
-        # 并置对比（src 是一对图）：两格各自可能挂 director/evolve，逐格净化内联。
-        # 不分格处理的话 panes[i] 里的补间永远不生效——那一格的图会一直是
-        # `<img>`，GSAP 按 `#img-{sid}-{i} #target` 找不到元素，静默无动画。
-        if isinstance(entry.get("src"), list):
-            _inline_compare_panes(
-                sid, entry, out_dir, seg_by_id, segments, dflt_dur, errs, warns)
-            continue
-        if not block:
-            continue
-        src = entry["src"]
-        path = os.path.join(out_dir, src)
-        if not os.path.isfile(path):
-            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 在 {out_dir} 下不存在")
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                raw = f.read()
-        except OSError as e:
-            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 读不了: {e}")
-            continue
-        try:
-            markup, notes = sanitize_svg_for_inline(raw)
-        except ValueError as e:
-            errs.append(f"段落 '{sid}' 的 evolve 配图 {src} 无法净化内联: {e}")
-            continue
-        for n in notes:
-            warns.append(f"段落 '{sid}' 的 evolve 配图 {src}：{n}")
-        bad, soft = check_evolve(raw, block["steps"], sid)
-        errs.extend(bad)
-        warns.extend(soft)
-        entry["inline_svg"] = markup
-        seg = seg_by_id.get(sid)
-        if seg is None:
-            errs.append(f"段落 '{sid}' 写了 evolve，但 manifest 里没有这一段")
-            continue
-        n_sent = len(seg["sentences"])
-        for i, step in enumerate(block["steps"]):
-            if "at" in step and int(step["at"]) >= n_sent:
-                errs.append(f"段落 '{sid}' 的 evolve.steps[{i}] at={step['at']} 越界："
-                            f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
-        for w in _beat_window_warnings(block["steps"], seg["sentences"],
-                                       float(seg["sentences"][0]["start_time"]),
-                                       next_speech_start(segments, sid), dflt_dur):
-            warns.append(f"段落 '{sid}' 的 evolve 配图 {src}：{w}")
-    return errs, warns
+    where = f"段落 '{sid}'" + (f" 第 {pane_idx} 格" if pane_idx is not None else "")
 
+    # ① 读 SVG 原文的静态体检：target 落空 / 槽位页调机位 / 起始帧全空
+    bad, soft = check_animate(raw, block, sid, full_bleed=full_bleed)
+    errs.extend(bad)
+    warns.extend(soft)
 
-def _derive_prepare(images, segments, out_dir, dflt_dur, errs, warns):
-    """参数演绎 `derive` 的生成期体检 + 净化内联（与 `_evolve_prepare` 同构）。
-
-    与前两条路的差别只有一处：它改的**不是某个元素的某个属性**，而是由参数算出来
-    的一组属性。于是多出三类只有这里才查得出来的病：
-
-    - **target 落空 / at 越界 / 出窗**：与 evolve 逐字同判（同一批函数，不另立口径）。
-    - **起始帧读数与初值对不上**（warn）：SVG 里 `x2="800"`，而把这个属性绑上去的
-      表达式在 `params` 初值处算出 540——第一拍之前画面是 800，第一帧一落地跳到
-      540，看着像"图自己闪了一下"。作者多半是把表达式改过、忘了同步改 SVG。
-      只认整页唯一命中的单 id 绑定，class 多元素与 `transform` 一律跳过（那两种
-      本来就不该按"属性串相等"比）。
-    - **同属性两头写**（error）：同一段里 director 也在给 `#arm` 的 `x2` 补间。
-      两条时间线都在写同一个属性，后写的赢，先写的白写——而**哪条后写取决于 DOM
-      里脚本的挂载顺序**，作者不可能算得准。这种"静默半张图不演"必须在生成期拦。
-
-    复用 `_svg_selectable_tokens` 收选择器：净化器只摘 `on*`/外链，id 与 class 原样
-    保留，所以源文本里收的集合与内联后 DOM 上的一致。
-    """
-    from _derive import compile_derive
-    seg_by_id = {seg["id"]: seg for seg in segments}
-    dflt_dur = _director_default_duration() if dflt_dur is None else dflt_dur
-    for sid, entry in (images or {}).items():
-        # 并置对比的每一格都可能挂 derive，逐格走（与 evolve 同一条内联通道）
-        if isinstance(entry.get("src"), list):
-            _derive_compare_panes(sid, entry, out_dir, seg_by_id, segments,
-                                  dflt_dur, errs, warns)
-            continue
-        block = entry.get("derive")
-        if not block:
-            continue
-        src = entry["src"]
-        path = os.path.join(out_dir, src)
-        if not os.path.isfile(path):
-            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 在 {out_dir} 下不存在")
-            continue
+    # ② 参数演绎：bind 落空、抢属性、初值不齐、端点算不出来
+    if block.get("params"):
+        from _derive import compile_derive
+        # 只把参数推进的拍交给编译器：属性补间也在同一个 steps 里，它没有 param。
+        param_block = dict(block, steps=[st for st in block["steps"]
+                                         if "param" in st])
         try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                raw = f.read()
-        except OSError as e:
-            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 读不了: {e}")
-            continue
-        try:
-            markup, notes = sanitize_svg_for_inline(raw)
-        except ValueError as e:
-            errs.append(f"段落 '{sid}' 的 derive 配图 {src} 无法净化内联: {e}")
-            continue
-        for n in notes:
-            warns.append(f"段落 '{sid}' 的 derive 配图 {src}：{n}")
-        try:
-            d = compile_derive(block, dflt_dur, f"段落 '{sid}' 的 derive")
+            d = compile_derive(param_block, dflt_dur, where)
         except ValueError as e:
             # 契约层已经编译过一遍；走到这里说明 images.json 不是经它进来的
             errs.append(str(e))
-            continue
-        entry["inline_svg"] = markup
-        _derive_checks(sid, src, raw, block, d, entry, seg_by_id.get(sid),
-                       segments, dflt_dur, errs, warns)
-    return errs, warns
+            return
+        _derive_checks(sid, src, raw, param_block, d, holder, seg, segments,
+                       dflt_dur, errs, warns, pane_idx=pane_idx)
+
+    if seg is None:
+        errs.append(f"{where} 写了 animate，但 manifest 里没有这一段")
+        return
+    n_sent = len(seg["sentences"])
+    for i, step in enumerate(block["steps"]):
+        # at 才有句序越界可验；at_time 锚在段落绝对时间（含相对串），与旁白句数无关。
+        if "at" in step and int(step["at"]) >= n_sent:
+            errs.append(f"{where} 的 animate.steps[{i}] at={step['at']} 越界："
+                        f"该段只有 {n_sent} 句旁白（at 的整数部分=句序，最大 {n_sent - 1}）")
+
+    # ③ 整页画布的起始帧钩子：画布页不生成标题层与句子流层，开头整片空白时观众
+    #    对着空画面不知所以然；槽位页有标题和句子流兜底，不需要这条。
+    #    接续页（stage:"keep"）跳过：它的起点是上一页演完的画面，不是盘上原图。
+    if not carried and seg_gap_is_canvas(seg):
+        n_vis, n_all = _svg_frame0_visibility(raw)
+        if n_all and n_vis == 0:
+            warns.append(
+                f"段落 '{sid}' 的整页画布起始帧全空：SVG 里 {n_all} 个可渲染元素全部以"
+                f" opacity=0 / visibility:hidden 起步，第一拍落子之前整页是空白（画布页"
+                f" 没有标题层也没有字幕层）。开场要留钩子：把结构底（坐标轴/外框/标题）"
+                f" 不写进 animate、让它和页面同时到位，或把第一拍 set 在页起点"
+                f"（见 references/canvas.md「整页画布的密度与层次」的起始帧一条）")
+    # ④ 运镜裁切、z 序自证：都要同时握有 SVG 原文与 steps。warn 不 error：途中出画
+    #    是合法演法，这里只报"静止位看不见的内容"。接续页跳过——起点是上一页演完的
+    #    画面，盘上原图对接续页是假话，由 _stage_carry_pass 拿烘焙后的副本重算。
+    if not carried:
+        for w in crop_warnings(_inline_markup(holder), block["steps"]):
+            warns.append(f"{where} 的配图 {src}：{w}")
+        for w in _zorder_warnings(_inline_markup(holder), block["steps"]):
+            warns.append(f"{where} 的配图 {src}：{w}")
+    # ⑤ 节拍↔旁白对轴：落在 clip 窗口外的那一拍是**静默不演**（引擎按
+    #    data-start/data-duration 硬切可见性）。这里同时握有 steps 与 manifest 句子，
+    #    是整条链上唯一算得出落点的地方。warn 不 error：压在下一页可能正是要的效果。
+    for w in _beat_window_warnings(block["steps"], seg["sentences"],
+                                   float(seg["sentences"][0]["start_time"]),
+                                   next_speech_start(segments, sid), dflt_dur,
+                                   keep=carried):
+        warns.append(f"{where} 的配图 {src}：{w}")
 
 
-def _derive_compare_panes(sid, entry, out_dir, seg_by_id, segments, dflt_dur,
-                          errs, warns):
-    """并置对比条目里带 `derive` 的格子：内联 + 同一套体检（含"和本格 director 打架"）。"""
-    from _derive import compile_derive
+def _inline_markup(holder):
+    """条目（或分格）上已回填的净化内联串。"""
+    return (holder or {}).get("inline_svg") or ""
+
+
+def seg_gap_is_canvas(seg):
+    """这一段是不是整页画布版式（`_segments.seg_layout` 的薄壳，读起来短一点）。"""
+    return seg is not None and seg_layout(seg) == "canvas"
+
+
+def _prepare_compare_panes(sid, entry, out_dir, seg, segments, dflt_dur,
+                           full_bleed, errs, warns):
+    """并置对比条目里写了 animate 的格子：内联 + 同一套体检。
+
+    每格独立于另一格：左边会动、右边静止是**常见**写法（"我改了哪边"本身就是要讲
+    的事），所以这里不要求两格同档。写完立刻 pop 掉 `inline_svg` 之外的搬运：
+    `_normalize_images` 会把格里的非 src/type 键当 opts 抄一遍，整段 SVG 文本留着
+    等于把 markup 复制进 opts（体积翻倍，且会进生产报告）。
+    """
     srcs = entry["src"]
     panes = entry.get("panes") or [{}, {}]
     for i, pane in enumerate(panes):
-        block = (pane or {}).get("derive")
+        block = animate_of(pane)
         if not block:
             continue
         src = srcs[i] if i < len(srcs) else None
         if not src:
             continue
-        path = os.path.join(out_dir, src)
-        if not os.path.isfile(path):
-            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 在 {out_dir} 下不存在")
+        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns)
+        if out is None:
             continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                raw = f.read()
-        except OSError as e:
-            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 读不了: {e}")
-            continue
-        try:
-            markup, notes = sanitize_svg_for_inline(raw)
-        except ValueError as e:
-            errs.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src} 无法净化内联: {e}")
-            continue
-        for n in notes:
-            warns.append(f"段落 '{sid}' 第 {i} 格的 derive 配图 {src}：{n}")
-        try:
-            d = compile_derive(block, dflt_dur,
-                               f"段落 '{sid}' 第 {i} 格的 derive")
-        except ValueError as e:
-            errs.append(str(e))
-            continue
-        # panes[i] 的内联由 _inline_compare_panes 回填（它认 evolve/director）；
-        # 这里自己回填，免得两条路谁先跑谁说话。
+        raw, markup = out
         pane["inline_svg"] = markup
-        _derive_checks(sid, src, raw, block, d, pane, seg_by_id.get(sid),
-                       segments, dflt_dur, errs, warns, pane_idx=i)
+        _animate_checks(sid, src, raw, block, pane, seg, segments, dflt_dur,
+                        full_bleed, False, errs, warns, pane_idx=i)
 
 
 def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
                    dflt_dur, errs, warns, pane_idx=None):
-    """`derive` 的判据本体，单图与并置分格共用（`holder` = entry 或 pane）。"""
+    """参数演绎的判据本体，单图与并置分格共用（`holder` = entry 或 pane）。"""
     where = f"段落 '{sid}'" + (f" 第 {pane_idx} 格" if pane_idx is not None else "")
     ids = _svg_selectable_tokens(raw)
 
     # ① 选择器落空：静默没有动画
     for i, b in enumerate(block["bind"]):
         if b["target"] not in ids:
-            errs.append(f"{where} 的 derive.bind[{i}] target={b['target']} 在 {src} 里"
+            errs.append(f"{where} 的 animate.bind[{i}] target={b['target']} 在 {src} 里"
                         f"找不到对应 id/class 的元素——选择器落空不会报错，只会"
                         f"静默不改任何属性。给该元素补上这个 id/class，或改 target")
 
-    # ② 与 director 抢同一个属性：两条时间线都在写，谁后写谁赢（且不可预测）
-    dir_steps = ((holder.get("director") or {}).get("steps") or []) + \
-                ((holder.get("evolve") or {}).get("steps") or [])
+    # ② 与属性补间抢同一个属性：两条时间线都在写，谁后写谁赢（且不可预测）
+    tween_steps = animate_of(holder).get("steps") or []
     bound = {(b["target"], b["attr"]) for b in block["bind"]}
-    for j, step in enumerate(dir_steps):
+    for j, step in enumerate(tween_steps):
         tgt = step.get("target")
         for key in ("from", "to", "set"):
-            for attr in (step.get(key) or {}):
+            tween = step.get(key)
+            if not isinstance(tween, dict):
+                continue                      # 参数推进的拍：`to` 是个数
+            for attr in tween:
                 if (tgt, attr) in bound:
                     errs.append(
-                        f"{where}：derive 在给 {tgt} 的 {attr} 按参数算值，"
-                        f"而同一段的 director/evolve.steps[{j}] 也在补间同一个属性"
+                        f"{where}：animate.bind 在给 {tgt} 的 {attr} 按参数算值，"
+                        f"而同一段的 animate.steps[{j}] 也在补间同一个属性"
                         f"——两条时间线都写它，先写的白写（谁后写取决于脚本挂载顺序）。"
-                        f"把这个属性交给其中一条：要么从 derive.bind 里删掉，"
-                        f"要么把那一拍的 {attr} 从 director 那步拿掉")
+                        f"把这个属性交给其中一条：要么从 bind 里删掉，"
+                        f"要么把那一拍的 {attr} 从 steps 那步拿掉")
 
     if seg is None:
-        errs.append(f"{where} 写了 derive，但 manifest 里没有这一段")
+        errs.append(f"{where} 写了 animate，但 manifest 里没有这一段")
         return
 
     # ③ at 句序越界（at_time 锚绝对时间，与句数无关，跳过）
     n_sent = len(seg["sentences"])
     for i, st in enumerate(block["steps"]):
         if "at" in st and int(st["at"]) >= n_sent:
-            errs.append(f"{where} 的 derive.steps[{i}] at={st['at']} 越界："
+            errs.append(f"{where} 的 animate.steps[{i}] at={st['at']} 越界："
                         f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
 
-    # ④ 出窗：derive 的 step 没有 target，_beat_window_warnings 的文案要读它，
+    # ④ 出窗：参数拍的 step 没有 target，_beat_window_warnings 的文案要读它，
     #    所以给它一个能指认的名字（参数名比 target 更有用）。
     probe = [dict(st, target=f"「{st['param']}」") for st in block["steps"]]
     for w in _beat_window_warnings(probe, seg["sentences"],
                                    float(seg["sentences"][0]["start_time"]),
                                    next_speech_start(segments, seg["id"]), dflt_dur):
-        warns.append(f"{where} 的 derive 配图 {src}：{w}"
-                     .replace("director.steps[", "derive.steps["))
+        warns.append(f"{where} 的配图 {src}：{w}")
 
     # ⑤ 起始帧读数与 params 初值不一致：第一帧会跳一下。只认**唯一命中**的单 id
     #    绑定——class 多元素各写各的静态值，`transform` 是复合串，都不该按"属性串
@@ -1553,10 +1446,10 @@ def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
             continue                      # 元素上没写这个属性：CSS/缺省值接管，不比
         if abs(have - want_v) > 0.5:
             warns.append(
-                f"{where} 的 derive：{b['target']} 在 SVG 里写死 {b['attr']}={have:g}，"
+                f"{where}：{b['target']} 在 SVG 里写死 {b['attr']}={have:g}，"
                 f"而表达式在 params 初值（{_fmt_params(derived.params)}）处算出 "
                 f"{want_v:g}——第一帧落地时会跳 {abs(have - want_v):g}。要么改 SVG 的静态值，"
-                f"要么改 params 初值，让两者对齐（见 references/director.md「参数演绎」）")
+                f"要么改 params 初值，让两者对齐（见 references/svg-motion.md「参数演绎」）")
 
     # ⑥ 端点处仍算不出来（除零 / 定义域外 / 越界到 inf）：成片里那一帧会抛异常，
     #    GSAP 的 onUpdate 一抛就断在那一帧，后面的拍全部不演。
@@ -1564,7 +1457,7 @@ def _derive_checks(sid, src, raw, block, derived, holder, seg, segments,
         try:
             derived.geometry(env)
         except Exception as e:
-            errs.append(f"{where} 的 derive 在 {label} 算不出来：{e}")
+            errs.append(f"{where} 在 {label} 算不出来：{e}")
 
 
 def _derive_endpoint_envs(block, derived):
@@ -1626,62 +1519,7 @@ def _svg_attr(raw, sel, attr):
     return _parse_num(v)
 
 
-def _inline_compare_panes(sid, entry, out_dir, seg_by_id, segments, dflt_dur,
-                          errs, warns):
-    """并置对比条目的逐格净化内联：`panes[i]` 里有 director/evolve 的那格才内联。
-
-    每格独立于另一格：左边是导演档、右边是静态图是**常见**写法（"我改了哪边"
-    本身就是要讲的事），所以这里不要求两格同档。
-
-    补间语法与单图条目那份完全一致（`_validate_director` 在契约层已按同一套
-    校验过 panes[i]），这里只负责把 SVG 净化后回填到该格的 `inline_svg`——
-    渲染端 `_compare_html` 读到它就内联成活 DOM。写完立刻 pop 掉：
-    `_normalize_images` 会把格里的非 src/type 键当 opts 抄一遍，留着等于把整段
-    SVG 文本复制进 opts（体积翻倍，且那段 markup 会进生产报告）。
-    """
-    srcs = entry["src"]
-    panes = entry.get("panes") or [{}, {}]
-    for i, pane in enumerate(panes):
-        block = (pane or {}).get("evolve") or (pane or {}).get("director")
-        if not block:
-            continue
-        src = srcs[i] if i < len(srcs) else None
-        if not src:
-            continue
-        path = os.path.join(out_dir, src)
-        if not os.path.isfile(path):
-            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 在 {out_dir} 下不存在")
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                raw = f.read()
-        except OSError as e:
-            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 读不了: {e}")
-            continue
-        try:
-            markup, notes = sanitize_svg_for_inline(raw)
-        except ValueError as e:
-            errs.append(f"段落 '{sid}' 第 {i} 格的配图 {src} 无法净化内联: {e}")
-            continue
-        for n in notes:
-            warns.append(f"段落 '{sid}' 第 {i} 格的配图 {src}：{n}")
-        if (pane or {}).get("evolve"):
-            bad, soft = check_evolve(raw, block["steps"], f"{sid}[{i}]")
-            errs.extend(bad)
-            warns.extend(soft)
-        pane["inline_svg"] = markup
-        seg = seg_by_id.get(sid)
-        if seg is None:
-            continue
-        n_sent = len(seg["sentences"])
-        for j, step in enumerate(block["steps"]):
-            if "at" in step and int(step["at"]) >= n_sent:
-                errs.append(
-                    f"段落 '{sid}' 第 {i} 格的第 {j} 拍 at={step['at']} 越界："
-                    f"该段只有 {n_sent} 句旁白（最大 {n_sent - 1}）")
-
-
-def _director_beats(steps, seg, dflt_dur):
+def _steps_beats(steps, seg, dflt_dur):
     """steps → [(绝对秒, 时长)]，锚在段落首句起点；解析不动时返回 None。
 
     只服务"按时刻结算收尾态"的排序需求（_stage_carry._ordered），所以 at 越界这类
@@ -1743,7 +1581,7 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
         prev_markup = prev_entry.get("inline_svg")
         if not prev_markup:
             errs.append(f"{where}，但上一段 '{prev['id']}' 没有可接续的内联画面——它没写"
-                        " director（写了才净化内联），或它的配图没读进来/没能内联。"
+                        " animate（写了才净化内联），或它的配图没读进来/没能内联。"
                         " 接续页要的是上一页演完的那幅活画面，<img> 那份没有可烘焙的元素态")
             continue
         if prev_entry.get("src") != src:
@@ -1751,10 +1589,10 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
                         f"{prev_entry.get('src')!r} 不是同一张图——接续的前提是同一幅画"
                         " 跨页继续演。要换画面就别写 stage；要同一幅画就把两页的 src 对齐")
             continue
-        prev_steps = (prev_entry.get("director") or {}).get("steps") or []
+        prev_steps = animate_of(prev_entry).get("steps") or []
         try:
             markup, notes = bake_settled_state(
-                prev_markup, prev_steps, _director_beats(prev_steps, prev, dflt_dur))
+                prev_markup, prev_steps, _steps_beats(prev_steps, prev, dflt_dur))
         except ValueError as e:
             errs.append(f"{where}，但烘焙上一页的收尾态失败: {e}")
             continue
@@ -1763,14 +1601,14 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
         entry["inline_svg"] = markup
         # 接续页的运镜自查拿**烘焙后**的副本来算：这一页的相机姿态是在上一页推近的画
         # 面之上再乘一层，只看盘上原图会把已经出画的元素当成"在幅内"。
-        own = (entry.get("director") or {}).get("steps")
+        own = animate_of(entry).get("steps")
         for w in crop_warnings(markup, own):
-            warns.append(f"段落 '{sid}' 的 director 配图 {src}：{w}")
+            warns.append(f"段落 '{sid}' 的 animate 配图 {src}：{w}")
         # step_i 不叫 i：外层 for i, seg 用的是段序，内层复用 i 会静默把它
         # 换成 step 下标——今天块内不读外层 i 所以无害，下一行加一句用 i 的
         # 代码就会拿到错的值。
         for step_i, sel in global_ref_leaks(markup, own):
-            errs.append(f"{where}，但它的 director.steps[{step_i}]（target={sel}）打在了两份副本"
+            errs.append(f"{where}，但它的 animate.steps[{step_i}]（target={sel}）打在了两份副本"
                         "共享的元素上——图里的 url(#id)/href=\"#id\" 按文档序只认第一份"
                         f"（= 上一段 '{prev['id']}' 那一幅），所以这一拍打在本页这份上，本页"
                         "没有任何图形会去读它。渐变/滤镜/marker 这类共享元素的补间请只在"
@@ -1911,7 +1749,7 @@ def _epilog():
         '    "seg1": {"src": "images/seg1.png",',
         '              "provider": "imagegen", "license": "CC0"},',
         '    "seg2": {"src": "images/seg2.svg",',
-        '              "director": {"steps": [',
+        '              "animate": {"steps": [',
         '                 {"target": "#bar-1", "at": 0, "to": {"height": 320}},',
         '                 {"target": "#bar-2", "at": 1, "to": {"height": 480}}]}},',
         '    "seg3": {"src": "images/seg3.gif"}',
@@ -1961,7 +1799,7 @@ def main(argv=None):
                              "（排查动画与语音不同步用；只打表，不改变生成结果）。")
     parser.add_argument("--set", action="append", default=[], metavar="键=值",
                         help="临时改一个模板视觉参数（可重复），如 "
-                             "--set animation.director.duration=0.8。键是 "
+                             "--set animation.animate.duration=0.8。键是 "
                              "scripts/_template.py 的叶子路径，值照 JSON 写。只在本次"
                              "进程生效、不落盘；定稿的取值请写回模板。")
     parser.add_argument("--allow-ease", action="store_true",
@@ -1990,7 +1828,7 @@ def main(argv=None):
     # --draft 是它们的总开关：草稿档一次放行全部迭代逃生口（含 ease），
     # 成片与预览的差异由 run.py 在报告里点名；定稿路径（不带 --draft）照旧收紧。
     if args.allow_ease or args.draft:
-        # 放行必须早于任何契约校验（images.json 的 director 校验就发生在下面的
+        # 放行必须早于任何契约校验（images.json 的 animate 校验就发生在下面的
         # load_images_json 里），否则宽松档写了也会先被钉固目录拒掉。
         ease_allow_extra(True)
     if args.allow_infinite_loop or args.draft:
@@ -2203,31 +2041,17 @@ def main(argv=None):
             print(f"[error] {_e}", file=sys.stderr)
         sys.exit(1)
 
-    # 导演（时间轴同步 SVG 动画）的生成期体检 + 净化内联：必须在 generate_html
+    # 图内编排（images.json 的 animate）的生成期体检 + 净化内联：必须在 generate_html
     # 之前跑，它把净化后的 SVG 回填进 entry["inline_svg"]，渲染端才知道这张要内联。
-    _dir_errs, _dir_warns = director_prepare(images, manifest["segments"], out_dir)
-    # 槽位版式的图内演进（evolve）：同一条净化、同一套节拍判据，但不接管编排。
-    # 放在 director_prepare 之后，错误一并打印——两条路一起判完再退出，作者一次
-    # 就能看到全部问题，不必改一个跑一遍。
-    _dir_errs = list(_dir_errs)
-    _dir_warns = list(_dir_warns)
-    _ev_errs, _ev_warns = _evolve_prepare(images, manifest["segments"], out_dir,
-                                          _director_default_duration(), [], [])
-    _dir_errs.extend(_ev_errs)
-    _dir_warns.extend(_ev_warns)
-    # 参数演绎（derive）：净化内联 + 落空/越界/出窗/起始帧/与 director 抢属性。
-    # 同一条通道、同一份净化，所以"只是按参数算值"不是放宽安全面的理由。
-    _dv_errs, _dv_warns = _derive_prepare(images, manifest["segments"], out_dir,
-                                          _director_default_duration(), [], [])
-    _dir_errs.extend(_dv_errs)
-    _dir_warns.extend(_dv_warns)
+    # 一条路通吃属性补间与参数演绎——同一个字段，同一份净化，同一套节拍判据。
+    _dir_errs, _dir_warns = animate_prepare(images, manifest["segments"], out_dir)
     for _w in _dir_warns:
         print(f"[warn] {_w}", file=sys.stderr)
     if args.beat_report:
         # 对轴表打在 warn 之后、失败退出之前：报的正是"哪一拍没踩在话上"，
         # 越界这类错误发生时它最有价值，所以不能被 exit 挡在前面。
         for _line in beat_report_lines(images, manifest["segments"],
-                                       _director_default_duration()):
+                                       _beat_default_duration()):
             print(_line, flush=True)
     if _dir_errs:
         for _e in _dir_errs:

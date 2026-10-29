@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 import gen_hyperframes as G          # noqa: E402
 import perceptual as P               # noqa: E402
-import _evolve as EV                 # noqa: E402
+import _animate as EV                # noqa: E402
 import _images_schema as IMS         # noqa: E402
 
 try:
@@ -208,14 +208,14 @@ class EvolveHiddenGuard(unittest.TestCase):
 
     def test_defs_does_not_silence_the_guard(self):
         """带 <defs> 的真实 SVG 仍要报（修复前：defs 里的渐变让判据永不成立）。"""
-        _, warns = EV.check_evolve(self.SVG_WITH_DEFS, [
-            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}], "seg-a")
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}]}, "seg-a", full_bleed=False)
         self.assertTrue(any("空框" in w for w in warns), warns)
 
     def test_at_time_anchor_is_not_treated_as_early(self):
         """`at_time=2.5` 不在段首 ⇒ 不算"段首点亮"（修复前恒算早、守卫沉默）。"""
-        _, warns = EV.check_evolve(self.SVG_WITH_DEFS, [
-            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}], "seg-a")
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at_time": 2.5, "target": "#a", "to": {"opacity": 1}}]}, "seg-a", full_bleed=False)
         self.assertTrue(warns)
 
     def test_visible_structure_is_not_called_hidden(self):
@@ -223,36 +223,42 @@ class EvolveHiddenGuard(unittest.TestCase):
 
         修复前 `(_declared_opacity(el) or 0) <= 0` 把"没声明"当成 0。
         """
-        _, warns = EV.check_evolve(self.SVG_VISIBLE, [
-            {"at": 1.5, "target": "#a", "to": {"fill": "#f59e0b"}}], "seg-a")
+        _, warns = EV.check_animate(self.SVG_VISIBLE, {"steps": [
+            {"at": 1.5, "target": "#a", "to": {"fill": "#f59e0b"}}]}, "seg-a", full_bleed=False)
         self.assertEqual(warns, [])
 
     def test_head_beat_still_counts_as_early(self):
         """反向：`at=0`（第 0 句 = 段首）点亮时不该报。"""
-        _, warns = EV.check_evolve(self.SVG_WITH_DEFS, [
-            {"at": 0, "target": "#a", "set": {"opacity": 1}}], "seg-a")
+        _, warns = EV.check_animate(self.SVG_WITH_DEFS, {"steps": [
+            {"at": 0, "target": "#a", "set": {"opacity": 1}}]}, "seg-a", full_bleed=False)
         self.assertEqual(warns, [])
 
     def test_camera_keys_come_from_one_place(self):
-        """相机键清单只有一份（契约层那份含 rotation，此前本地抄漏了）。"""
-        self.assertEqual(set(EV.CAMERA_KEYS), set(IMS._EVOLVE_CAMERA_KEYS))
+        """相机键清单只有一份（在 `_animate`，契约层与渲染端都读它）。"""
+        import _images_schema as _ims
         self.assertIn("rotation", EV.CAMERA_KEYS)
+        self.assertFalse(hasattr(_ims, "_EVOLVE_CAMERA_KEYS"),
+                         "契约层不该再留一份相机键清单")
 
 
 # ── 单一真源：相机键不许各抄一份 ─────────────────────────────────────
 class NoDuplicatedConstants(unittest.TestCase):
     """抄一遍的东西迟早分家——这里用 AST 把"同一份知识"钉在一处。"""
 
-    def test_evolve_does_not_redefine_camera_keys(self):
-        path = os.path.join(os.path.dirname(G.__file__), "_evolve.py")
-        with open(path, encoding="utf-8") as fh:
-            tree = ast.parse(fh.read())
-        redef = [n.lineno for n in ast.walk(tree)
-                 if isinstance(n, ast.Assign)
-                 for t in n.targets
-                 if isinstance(t, ast.Name) and t.id == "CAMERA_KEYS"]
-        self.assertEqual([], redef,
-                         "CAMERA_KEYS 的真源在 _images_schema，_evolve 不另抄")
+    def test_camera_keys_have_exactly_one_definition(self):
+        """CAMERA_KEYS 的真源只在 `_animate`，别处一个都不许再抄。"""
+        here = os.path.dirname(G.__file__)
+        owners = []
+        for name in sorted(os.listdir(here)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(here, name), encoding="utf-8") as fh:
+                tree = ast.parse(fh.read())
+            if any(isinstance(t, ast.Name) and t.id == "CAMERA_KEYS"
+                   for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                   for t in n.targets):
+                owners.append(name)
+        self.assertEqual(["_animate.py"], owners)
 
 
 if __name__ == "__main__":

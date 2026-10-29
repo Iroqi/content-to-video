@@ -1,6 +1,6 @@
 # 第 3 步 · SVG：把画面画对
 
-**怎么画**（几何、密度、对比度、字号、数据自查）→ 本文件。**怎么让它跟着话变**（`evolve` / `derive` / 两档动画 / `director` 原语 / 跨段接续）→ `references/motion.md`。
+**怎么画**（几何、密度、对比度、字号、数据自查）→ 本文件。**怎么让它跟着话变**（`animate` 的拍法、镜头、参数演绎、跨段接续）→ `references/svg-motion.md`。
 
 > **动笔前先读这五节**：「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」——画错不会有任何报错，只在成片上看出来。整页画布（`layout:"canvas"`）再加「整页画布的密度与层次」。选不选 SVG 见 `references/writing.md`「哪些段值得交给 canvas」与 `references/imagery.md`；画面出问题按 `references/troubleshooting.md`查。
 
@@ -12,7 +12,7 @@
 
 来源三条，手绘优先：**手绘 `.svg` 放进 `images/`**；**官方 registry 现成块**（`npx hyperframes catalog --query "<英文效果>"`——查询必须英文，中文返回空且不提示——再 `hyperframes add <name>` 装，进导演档要重写成补间驱动，不许墙钟动画与 `Math.random`）；**SVG 图库**（logo/图标用 simple-icons、lucide、tabler，同一期同一套、统一线宽，来源与 license 记进 provenance）。
 
-要不要动、怎么动是**独立决策**，见 `references/motion.md`「SVG 动画：两档」。映射走 `{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行）。
+要不要动、怎么动是**独立决策**：判据见 `references/motion.md`「让图跟着旁白动」，拍法见 `references/svg-motion.md`。映射走 `{"seg4": {"src": "images/seg4.svg"}}`——外部 SVG 以 `<img>` 载入（内部脚本不执行）。
 
 ### 画布几何：根节点尺寸按版式分两种
 
@@ -54,7 +54,7 @@
 
 **SVG 以 `<img>` 载入，内部文字不属于 HTML 文本流，没有任何一道检查会量它**，所以取色表放在自查之前。
 
-要机器量对比度/压字：把该 SVG **内容**临时内联成 DOM 副本跑 `hyperframes check`。**副本只用来问门禁，绝不能当产物**——交付的 `index.html` 必须保持 `<img>` 形态。**唯一例外**是写了 `director` 的那张：交付时就是内联活 DOM，内联前必过 `scripts/_svg_sanitize.py` 净化（见 `references/motion.md`「SVG 动画：两档」）。
+要机器量对比度/压字：把该 SVG **内容**临时内联成 DOM 副本跑 `hyperframes check`。**副本只用来问门禁，绝不能当产物**——交付的 `index.html` 必须保持 `<img>` 形态。**唯一例外**是写了 `animate` 的那张：交付时就是内联活 DOM，内联前必过 `scripts/_svg_sanitize.py` 净化（见 `references/svg-motion.md`「契约」）。
 
 **判定线**（WCAG）：正文与标签 ≥ 4.5:1；最大字号档（≥24px，或 ≥18.66px 加粗）≥ 3:1，低于 3:1 重画；次要文字按 ≥ 7:1 取色。
 
@@ -87,7 +87,7 @@
 3. **安全边距照页面走**：竖屏四周 50px、横屏 96px。`text-anchor="end"` 的落点按量出来的字宽倒推，不按字符数估（量法见「数据图的几何自查」）。
 4. **"不铺满幅底"在这里更要紧**：留透明才能透出模板那三层背景。
 5. **图内可以有标题，字号按整页读**：标题 72–76px、小标题 38–48px、正文 30–40px、kicker/图例 26–28px。字越大越要自己复查对比度——**这一版的 `Contrast` 门禁数不到你**。字体名写死（`'Microsoft YaHei','PingFang SC',…`）：`<img>` 载入读不到页面 `--ctv-font-*` 变量。生成期那条 `[warn]`（"该段 N 句旁白不会上画面 / 这张 SVG 里有 M 个 `<text>`"）是"要点有没有画进图里"唯一的机械判据。
-6. **机械劳动交给脚手架**：`python scripts/canvas_kit.py --spec spec.json --aspect portrait -o images/seg1.svg` 吐一张按画幅原生尺寸画的透明底画布 + 一份能塞进 images.json `director` 的 steps 草稿（`--emit-steps` 另存；落在技能目录内会被守卫拦，先 `cd` 到项目目录）。**完整 spec 与七种 kind 的最小片段在 `python scripts/canvas_kit.py --help`**；写错时当场列出该 kind 的合法键与必填键。最小骨架：
+6. **机械劳动交给脚手架**：`python scripts/canvas_kit.py --spec spec.json --aspect portrait -o images/seg1.svg` 吐一张按画幅原生尺寸画的透明底画布 + 一份能塞进 images.json `animate` 的 steps 草稿（`--emit-steps` 另存；落在技能目录内会被守卫拦，先 `cd` 到项目目录）。**完整 spec 与七种 kind 的最小片段在 `python scripts/canvas_kit.py --help`**；写错时当场列出该 kind 的合法键与必填键。最小骨架：
 
 ```json
 {
@@ -102,7 +102,7 @@
 
    **它只收机械部分**（画布几何、三档字号、线宽、取色压暗、初始 `opacity` 分档——`draw`/`count`/`type` 不写 `opacity="0"`，写了就永远不亮）。`duration`/`ease`/`stagger`/`repeat`/`yoyo` 写进元素即可（`yoyo` 必须带 `repeat`）；`roughness` 0–10 只作用于 `panel`/`polyline`/`bars`/`circle`/`rule` 的坐标（按 `roughness × 该画幅线宽` seeded 抖动），**坐标轴与文字不吃这个键**——字抖一下就不成字。**构图仍归人**。
 
-   **给上 `--sentences <该段句数>`，草稿才真能用**：不给时按元素顺序一路 `at=0,1,2…`，内容元素比旁白句子多时最后几拍落到句序之外，生成期按 `error` 整条拒掉（"at=N 越界：该段只有 M 句旁白"）。给了句数，游标按它取模回绕；**显式钉拍**（元素里写 `beat`）的越界提前打 `[warn]`。`--emit-steps <path>` 另存 `{"steps": […]}`，直接当 `"director"` 的值。
+   **给上 `--sentences <该段句数>`，草稿才真能用**：不给时按元素顺序一路 `at=0,1,2…`，内容元素比旁白句子多时最后几拍落到句序之外，生成期按 `error` 整条拒掉（"at=N 越界：该段只有 M 句旁白"）。给了句数，游标按它取模回绕；**显式钉拍**（元素里写 `beat`）的越界提前打 `[warn]`。`--emit-steps <path>` 另存 `{"steps": […]}`，直接当 `"animate"` 的值。
 
 照片当画布不做比例与字号校验，但该段整段时间屏幕上不出现任何标题——生成期照样给一条 `[warn]`。想留标题就把要点画成 SVG；确实要"只有画面"的过场，忽略它。
 
@@ -114,7 +114,7 @@
 - **一页至少三层**：背景层（模板那三层，别铺满幅底盖掉）、中景（主视觉 + 局部底板/面板/分隔带，自身也有"面板 < 底板 < 页底"三档）、前景（标注文字、数值、accent 强调）。辅助线敢用亮档：轴线/网格/分隔线不低于 `#64748b`、线宽 ≥3px——层次靠**明度差与大小差**，不靠透明度。
 - **字号最多三档 + 一档 accent**（脚手架竖屏 64/40/32、横屏 62/33/28；最大档与最小档比值 ≥2）。一个 accent 负责"现在看这里"，其余走中性灰阶。
 - **数信息单元**：一页有几个独立可看的东西（一块图、一行结论、一组标注各算一个）？**少于 3 个就别当整页画布做**——那本质是字卡，按海报重写或退回槽位。
-- **导演页还要看"起始帧"**：前 1 秒画面是空的，而整页画布**没有转场遮这一下**（见 `references/rendering.md`「动画」）。只要不铺满幅底，第一帧至少不是死平一块色；把**结构底**（坐标轴、外框、分隔带、面板格子）不写进 `director.steps`，让它和页面同时到位、只逐拍长"内容"，或把第一拍放在 `at_time` 0.1s。这是**生成期门禁**：所有可渲染元素都从 `opacity=0` / `visibility:hidden` 起步时，`gen_hyperframes` 按段落打 `[warn]`「起始帧全空」。
+- **导演页还要看"起始帧"**：前 1 秒画面是空的，而整页画布**没有转场遮这一下**（见 `references/rendering.md`「动画」）。只要不铺满幅底，第一帧至少不是死平一块色；把**结构底**（坐标轴、外框、分隔带、面板格子）不写进 `animate.steps`，让它和页面同时到位、只逐拍长"内容"，或把第一拍放在 `at_time` 0.1s。这是**生成期门禁**：所有可渲染元素都从 `opacity=0` / `visibility:hidden` 起步时，`gen_hyperframes` 按段落打 `[warn]`「起始帧全空」。
 
 ### 图版：满幅主视觉 + 标题 + 一句字幕
 
@@ -124,7 +124,7 @@
 
 **什么时候别用**：句子多、信息密度高（图版不滚，一句超过 `captionMaxLines` 行就被钳掉半句，生成期报 `error`）；需要 tagline / 副标题 / 多行要点（只有标题那一行）；双人对话（字幕层没有说话人标签的位置）。
 
-**和整页画布共用的部分**（同一份几何，`FULL_BLEED_LAYOUTS` 一个判据管到底）：根节点写画幅原生尺寸，`check_svg.py --layout plate` 按满幅档验比例/对比度/安全边距/空带/满幅底；配图拉满整幅（圆角、外发光、1px 内描边全撤）；**不参与擦除转场**、**不生成入场补间**——揭开就在位，镜头交给 `director` / `evolve` / `derive`；进度条与底轨抬到 `z-index:2`。
+**和整页画布共用的部分**（同一份几何，`FULL_BLEED_LAYOUTS` 一个判据管到底）：根节点写画幅原生尺寸，`check_svg.py --layout plate` 按满幅档验比例/对比度/安全边距/空带/满幅底；配图拉满整幅（圆角、外发光、1px 内描边全撤）；**不参与擦除转场**、**不生成入场补间**——揭开就在位，镜头交给该段的 `animate`；进度条与底轨抬到 `z-index:2`。
 
 **图版独有的四条**：
 
@@ -154,4 +154,4 @@ SVG 以 `<img>` 载入时是独立文档，页面 `--ctv-font-family` 渗不进�
 
 ---
 
-**要让它动**：`evolve`（留在槽位、图跟着话变）、`derive`（一拍推一个参数、几何自己算）、`director` 原语全集、两档动画、跨段接续（`stage:"keep"`）都在 `references/motion.md`「SVG 动画：两档」——那是"演"的那一侧，本文件只到"图长什么样"为止。
+**要让它动**：给该段写 `animate`——留在槽位只让图内元素跟着话变、或者把这段换成整页画布连镜头一起演；拍法、参数演绎、跨段接续都在 `references/svg-motion.md`。那是"演"的那一侧，本文件只到"图长什么样"为止。

@@ -10,6 +10,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _animate  # noqa: E402  编排块的形状（steps/params/bind）只有一份读法
 from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
@@ -47,31 +48,21 @@ def validate_relative_project_path(src, where):
             depth += 1
     return norm
 
-# 槽位版式 evolve 不接受相机属性：镜头归模板（入场收拢 + Ken Burns 运镜），
-# 作者再推一层就是两层意图打架，画面读成"图在自己乱动"。要整页推镜请走 director
-# 的整页画布。真源在这里，_evolve.check_evolve 从它读，不另抄一份。
-_EVOLVE_CAMERA_KEYS = frozenset({"svgOrigin", "transformOrigin", "scale",
-                                 "xPercent", "yPercent", "rotation"})
-
 # images.json 条目里渲染端**真正会读**的键。之外的键一律 warn 点名
 # （`position`/`fit`/`alt` 这类凭空发明的写法不该被静默丢掉）。
 # warn 只在预检（validate_images_json）打；html_renderer._normalize_images
 # 要求入参已过本预检，不重复打。
 # 并置对比（layout "compare"）每格的键集：只有两档补间与三项出处。刻意不给
 # 播放/音频/type——两格都是静态图或 SVG（理由见 _check_pair）。
-PANE_KEYS = ("director", "evolve", "derive", "source_url", "license", "attribution")
+PANE_KEYS = ("animate", "source_url", "license", "attribution")
 
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
-    # director / derive：写了才走净化内联（见 references/motion.md「SVG 动画：两档」）。
-    "director",
-    # evolve：槽位版式里的"同一元素演进"（见 references/director.md「槽位版式的演进」）。
-    # 与 director 同一套 steps 写法，但不接管整页编排、不调机位（镜头归模板）。
-    "evolve",
-    # derive：一条参数驱动的几何演绎（见 references/director.md「参数演绎」）。一拍只写
-    # "参数推到多少"，图内几何由表达式逐帧重算——同步与中间态都是真几何，不靠抄参数。
-    "derive",
+    # animate：SVG 编排（见 _animate）。写了才净化内联成活 DOM；不写就是静图。
+    # steps 一拍改写某个元素（target）或推一个参数（param），带 params/bind 时几何
+    # 按参数逐帧重算。
+    "animate",
     # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
     # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
     "stage",
@@ -82,7 +73,7 @@ MEDIA_ENTRY_KEYS = frozenset({
     # 开了"绕过净化、把任意字符串塞进 DOM"的注入口）。
     "inline_svg",
     # 视频音轨四件套：前三个管响度与进出，media_start 管从第几秒起播。只对
-    # video 成立，写在非 video 上按"写了不会生效"拒掉（口径同 director/stage）。
+    # video 成立，写在非 video 上按"写了不会生效"拒掉（口径同 animate/stage）。
     # <video> 的音轨是唯一不经过 TTS 却混进成片的声音（见 html_renderer._media_html），
     # 没增益旋钮就等于原声压着口播一起播，且链上没有任何报错。
     "volume", "fade_in", "fade_out", "media_start",
@@ -113,9 +104,9 @@ MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
 def is_svg_path(path):
-    """这条路径是不是 SVG。五处（缺图探测/整页画布/renderer bare-media/director/
+    """这条路径是不是 SVG。五处（缺图探测/整页画布/renderer bare-media/animate/
     stage）共用这一份：各写一遍 splitext 时，改了大小写规则只会改到其中一处，
-    症状是"契约说能挂 director、渲染端却不内联"。
+    症状是"契约说能挂 animate、渲染端却不内联"。
     """
     return os.path.splitext(str(path).lower())[1] == ".svg"
 
@@ -135,7 +126,7 @@ def classify_media_path(path, explicit_type="auto"):
         return "gif"
     return "image"
 
-# director 的 target 只认单个 id / class 选择器，且字符集受限——它会被拼进 GSAP
+# animate 的 target 只认单个 id / class 选择器，且字符集受限——它会被拼进 GSAP
 # 选择器字符串（`#img-{sid} {target}`），带引号/空格/逗号/伪类的写法轻则选择器失配、
 # 动画静默丢失，重则破坏脚本。与段 id 同一条收口思路（见 _segments._SID_RE）。
 # class 选择器（`.marker`）专为 stagger 开：一条 step 命中一组同类元素、按递增
@@ -200,7 +191,7 @@ def _validate_tween_vars(vars_, where):
             raise ValueError(f"{where} 的键必须是非空字符串（实际: {k!r}）")
         if k.lower().startswith("on"):
             raise ValueError(
-                f"{where} 含回调键 {k!r}——director 只接受可序列化的补间属性，"
+                f"{where} 含回调键 {k!r}——animate 只接受可序列化的补间属性，"
                 "不接受 onStart/onUpdate/onComplete 这类回调（信源不可信，"
                 "回调等于在渲染页执行任意逻辑）")
         if k == ATTR_KEY and not isinstance(v, dict):
@@ -230,7 +221,7 @@ def _validate_tween_leaf(v, where):
 
 
 def _validate_morph(morph, where):
-    """director 步骤的 morph：一条同拓扑 path 的形变（from→to 只换坐标）。
+    """编排步骤的 morph：一条同拓扑 path 的形变（from→to 只换坐标）。
 
     同拓扑（命令字母序列 + 每条数值个数一致）在契约层就拦，别等生成期。核见
     _path_morph。
@@ -249,7 +240,7 @@ def _validate_morph(morph, where):
 
 
 def _validate_count(count, where):
-    """director 步骤的 count：一个 <text> 的数字滚动（from→to 随时间缓动）。
+    """编排步骤的 count：一个 <text> 的数字滚动（from→to 随时间缓动）。
 
     渲染端展开成"代理对象补间 + onUpdate 写 textContent"——那个 onUpdate 是我们
     生成的，不是信源塞进来的回调。除 to 外全可选：decimals 控制小数位，
@@ -279,7 +270,7 @@ def _validate_count(count, where):
 
 
 def _validate_type(typ, where):
-    """director 步骤的 type：打字机逐字揭示——把 <text> 里现成的整段文本按进度
+    """编排步骤的 type：打字机逐字揭示——把 <text> 里现成的整段文本按进度
     逐字写回。只收空对象 `{}`：字数取自那条 <text>（运行时读 textContent），节奏
     走 step 级 duration/ease。
     """
@@ -293,7 +284,7 @@ def _validate_type(typ, where):
 
 
 def _validate_stagger(stagger, where):
-    """director 步骤的 stagger：一条 step 命中一组元素时，逐个之间的时间间隔。
+    """编排步骤的 stagger：一条 step 命中一组元素时，逐个之间的时间间隔。
 
     收数字（每个间隔秒数）或对象（GSAP stagger 配置：each/amount/from/grid/ease）。
     值走标量/数组校验、禁 on*。
@@ -330,7 +321,7 @@ def _validate_stagger(stagger, where):
 def _validate_repeat_yoyo(step, where):
     """repeat / yoyo 的取值判据——**唯一真源**。
 
-    images.json 的 `director.steps[]` 与 canvas_kit 的 spec 元素共用这一份（各自
+    images.json 的 `animate.steps[]` 与 canvas_kit 的 spec 元素共用这一份（各自
     只另加上下文约束）。两处各写一遍会在改判据那天分家：一处放行、一处拒收，
     报错文案还一模一样。
 
@@ -369,19 +360,19 @@ def _validate_repeat_yoyo(step, where):
                              "偶数遍收尾回起点）")
 
 
-def _validate_director(key, dirval, what="director"):
-    """校验 images.json 条目的编排块（时间轴同步的 SVG 动画）。
+def _validate_steps(key, block, what="steps"):
+    """校验一组 steps（`animate` 与 `canvas_kit` 的 spec 共用同一套语法）。
 
-    `what` 只换报错里的名字：evolve 与 director 共用同一套 steps 语法，两条路
-    的锚点/target/互斥规则必须一模一样，复制一份是下一处漂移的起点。
+    `what` 只换报错里的名字；判据只有这一份——锚点、target、互斥规则各写一遍
+    就是下一处漂移的起点。
     """
-    if not isinstance(dirval, dict):
+    if not isinstance(block, dict):
         raise ValueError(f"images.json 的 '{key}' 的 {what} 必须是对象")
-    unknown = set(dirval) - {"steps"}
+    unknown = set(block) - {"steps"}
     if unknown:
         raise ValueError(
             f"images.json 的 '{key}' 的 {what} 含未知键 {sorted(unknown)}——只认 'steps'")
-    steps = dirval.get("steps")
+    steps = block.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError(
             f"images.json 的 '{key}' 的 {what}.steps 必须是非空数组"
@@ -396,7 +387,7 @@ def _validate_director(key, dirval, what="director"):
                              f"{sorted(_DIRECTOR_STEP_KEYS)}")
         # 锚点二选一：at（句序）或 at_time（段落绝对秒）。两者都写或都不写都是歧义，
         # 一律拒。at_time 让导演档脱离"句子分桶"：整页画布的自由编排可以直接按秒排
-        # 补间，不必迁就旁白句边界（见 references/motion.md「SVG 动画：两档」）。
+        # 补间，不必迁就旁白句边界（见 references/svg-motion.md「拍级键」）。
         has_at, has_time = "at" in step, "at_time" in step
         if has_at == has_time:
             raise ValueError(
@@ -519,13 +510,13 @@ def _validate_director(key, dirval, what="director"):
                 "无限循环没有终点可采。要循环就写明确遍数（repeat:N）")
         # morph 的形变是采样出来的：`duration: 0` 时采样器按 max(2, 0×fps) 采两个关键帧，
         # 全落在同一时刻——成片里不是"很快的形变"，是**瞬跳**，而作者看到的仍是自己写的
-        # 那条曲线。duration 缺省（模板 director.duration）不在此列：那是没写，不是写了 0。
+        # 那条曲线。duration 缺省（模板 animation.animate.duration）不在此列：那是没写，不是写了 0。
         if morph is not None and "duration" in step and float(step["duration"]) <= 0:
             raise ValueError(
                 f"{where} 写了 morph 却给 duration={step['duration']}——形变是生成期"
                 "按 duration×fps 采样成离散关键帧的，0 秒采不出中间态，成片里这一拍"
                 "会退化成瞬跳。给一个 >0 的 duration，或删掉让它走模板缺省")
-    return dirval
+    return block
 
 
 
@@ -539,7 +530,7 @@ def validate_images_json(data):
 
     两种写法：
         {"seg1": {"src": "images/seg1.png"},
-         "seg2": {"src": "images/seg2.svg", "director": {...}},
+         "seg2": {"src": "images/seg2.svg", "animate": {"steps": [...]}},
          "seg3": {"src": "images/seg3.gif"}}
       "type" 可选（auto=按扩展名；image/video/gif 显式指定），其余字段可选
       （静态图只需 src），不接受裸字符串路径。
@@ -563,9 +554,15 @@ def validate_images_json(data):
         if isinstance(value, dict):
             unknown = unknown_media_keys(value)
             if unknown:
+                # 旧写法（director / evolve / derive）留在这里几乎必然是"改了没生效"：
+                # 三个键已归一为 animate，渲染端只读 animate，写旧的等于没写。
+                legacy = sorted(set(unknown) & {"director", "evolve", "derive"})
+                hint = (f"　── 其中 {'/'.join(legacy)} 是旧写法，三个键已归一为 animate："
+                        "把它下面的 steps / params / bind 原样挪进 \"animate\" 就生效"
+                        if legacy else "")
                 print(f"[warn] images.json 的 '{key}' 含渲染端不读的字段："
-                      f"{', '.join(unknown)}——它们不会出现在画面上。条目只认："
-                      f"{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
+                      f"{', '.join(unknown)}——它们不会出现在画面上。{hint}"
+                      f"　条目只认：{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
                       "写错了就删掉。"
                       "想改构图请改稿件或 SVG 本体，images.json 只管映射与播放属性",
                       file=sys.stderr)
@@ -603,8 +600,8 @@ def _validate_entry(key, value, errs):
             f"images.json 的 '{key}' 必须是媒体对象（实际: {type(value).__name__}）")
         return
     src = value.get("src")
-    # 一对图（并置对比版式）：src 写成 ["左", "右"]，两个位各自可以挂 director /
-    # evolve。它与单图条目是两套形状，判据也分开——先判这一支再落到单图那套，
+    # 一对图（并置对比版式）：src 写成 ["左", "右"]，两个位各自可以挂 animate。
+    # 它与单图条目是两套形状，判据也分开——先判这一支再落到单图那套，
     # 免得"src 不是字符串"那句把一对图判成错误。
     if isinstance(src, list):
         _collect(errs, lambda: _check_pair(key, value, src))
@@ -618,7 +615,7 @@ def _validate_entry(key, value, errs):
     if "inline_svg" in value:
         errs.append(
             f"images.json 的 '{key}' 不得手写 'inline_svg'——它是生成期净化"
-            "SVG 后回填的内部键；要时间轴同步动画请写 'director'")
+            "SVG 后回填的内部键；要动画请写 'animate'")
     if not isinstance(src, str):
         return
     _collect(errs, lambda: _check_video_only_opts(key, value, src))
@@ -626,9 +623,7 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_duck(key, value, src))
     _collect(errs, lambda: _check_poster(key, value))
     _collect(errs, lambda: _normalize_src(key, value, src))
-    _collect(errs, lambda: _check_derive(key, value, src))
-    _collect(errs, lambda: _check_director(key, value, src))
-    _collect(errs, lambda: _check_evolve(key, value, src))
+    _collect(errs, lambda: _check_animate(key, value, src))
     _collect(errs, lambda: _check_stage(key, value, src))
 
 
@@ -639,15 +634,15 @@ def _check_pair(key, value, src):
 
         {"seg3": {"layout_compare": true,
                   "src": ["images/before.svg", "images/after.svg"],
-                  "panes": [{"director": {...}}, {"director": {...}}]}}
+                  "panes": [{"animate": {"steps": [...]}}, {}]}}
 
-    为什么允许 `panes` 而不是把两套补间塞进一个 `director`：两张图各自有自己
+    为什么允许 `panes` 而不是把两套补间塞进一个 `animate`：两张图各自有自己
     的元素 id（`#a`、`#b` 往往重名），合成一份 steps 就分不清这一条打的是哪一格。
     分格声明是唯一不会歧义的写法。
 
     刻意**不接受视频**：两段视频同屏时各自的音轨、各自的循环相位、各自的
     duck 让路会互相打架，而这一版式要的是"并排看清两个状态的差别"——动态的
-    并置反而让人分不清哪边在动。要动画就用 SVG（panes 里的 director/evolve 够用）。
+    并置反而让人分不清哪边在动。要动画就用 SVG（panes 里的 animate 够用）。
     """
     if len(src) != 2:
         raise ValueError(
@@ -663,7 +658,7 @@ def _check_pair(key, value, src):
                 f"images.json 的 '{key}' 的 src[{i}]={item!r} 是视频：并置对比"
                 "只收静态图与 SVG。两段视频同屏时各自的音轨、循环相位、duck "
                 "让路会互相打架，动态并置也让人分不清哪边在动——"
-                "要两份都动就画 SVG，用 panes 里的 director/evolve 分别驱动")
+                "要两份都动就画 SVG，用 panes 里的 animate 分别驱动")
         # 路径归一（越界/绝对路径）与单图同一条判据，回写成两边各自一项。
         src[i] = validate_relative_project_path(
             item, f"images.json 的 '{key}' 的 src[{i}]")
@@ -672,7 +667,7 @@ def _check_pair(key, value, src):
     for _opt in ("type", "poster", "loop", "muted", "autoplay", "playsinline",
                  "volume", "fade_in", "fade_out", "media_start", "duck",
                  "source_url", "license", "attribution", "query", "provider",
-                 "stage", "director", "evolve", "derive"):
+                 "stage", "animate"):
         if _opt in value:
             raise ValueError(
                 f"images.json 的 '{key}' 是并置对比（src 为一对图），不接受 "
@@ -687,7 +682,7 @@ def _check_pair(key, value, src):
     if not isinstance(panes, list) or len(panes) != 2:
         raise ValueError(
             f"images.json 的 '{key}' 的 'panes' 必须是 2 项的数组"
-            "（[左格, 右格]，每格 {\"director\"?: …, \"evolve\"?: …}）")
+            "（[左格, 右格]，每格 {\"animate\"?: …}）")
     for i, pane in enumerate(panes):
         if pane is None:
             panes[i] = {}
@@ -697,16 +692,10 @@ def _check_pair(key, value, src):
                 f"images.json 的 '{key}' 的 panes[{i}] 必须是对象"
                 f"（实际: {type(pane).__name__}）")
         _reject_unknown_keys(pane, PANE_KEYS, f"images.json 的 '{key}' 的 panes[{i}]")
-        for _opt in ("director", "evolve"):
-            if _opt in pane:
-                what = _opt
-                _validate_director(what, pane[_opt], what=what)
-        if "derive" in pane:
-            if not is_svg_path(src[i]):
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 panes[{i}] 写了 derive，但那一格 "
-                    f"src={src[i]!r} 不是 SVG——derive 只对 .svg 生效")
-            validate_derive(f"{key} 的 panes[{i}]", pane["derive"])
+        if "animate" in pane:
+            # 分格的编排与单图同一条契约，只是报错里点名是第几格（两格各写各的，
+            # 分不清哪格写错是最常见的"改了没生效"来源）。
+            _check_animate(f"{key} 的 panes[{i}]", pane, src[i])
         # 两格各自的出处：写进 pane 才不会被上面的"单图键"拦下，而它确实
         # 是逐格的事实（左边是实拍、右边是示意图，出处本来就不一样）。
         for _opt in ("source_url", "license", "attribution"):
@@ -882,34 +871,22 @@ def _check_provenance(key, value):
         raise ValueError("\n".join(_errs))
 
 
-def _check_director(key, value, src):
-    """director：SVG 的时间轴同步动画。只允许挂在 .svg 上（其它素材
-    没有可被 GSAP 逐帧驱动的图内命名元素）。"""
-    if "director" not in value:
-        return
-    if not is_svg_path(src):
-        raise ValueError(
-            f"images.json 的 '{key}' 写了 director，但 src={src!r} 不是 SVG"
-            "——director 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
-    _validate_director(key, value["director"])
-
-
 DERIVE_STEP_KEYS = frozenset({"at", "at_time", "param", "from", "to",
                               "duration", "ease", "delay"})
 DERIVE_BIND_KEYS = ("target", "attr", "expr")
 
 
 def validate_derive(key, block):
-    """`derive`：一条参数驱动的几何演绎（见 `_derive` 与 director.md「参数演绎」）。
+    """参数演绎：`animate` 里写 `params` + `bind` 的那条路（见 `_derive`）。
 
-    与 director 的分界：director 写"什么时候哪个元素变成什么"（属性级，一个元素
+    与属性补间的分界：那边写"什么时候哪个元素变成什么"（属性级，一个元素
     一条）；derive 写"这个参数走到多少，几何自己算"（参数级，一拍驱动一组元素）。
     两者可以同段共存（一个管出场、一个管连续演绎），但**同一个属性不能同时被
     两者写**——那条冲突要连读 SVG 才知道，放在 gen_hyperframes 判。
 
     这里只做形状与取值：键集封闭、参数名合法、初值是有限数、表达式能编译、target
-    形态与 director 同一条正则（它也进 GSAP 选择器）、step 的锚点/时长/缓动与
-    director 同一套判据（复用 `_validate_director` 的单步检查会要求 target，
+    形态与属性补间同一条正则（它也进 GSAP 选择器）、step 的锚点/时长/缓动与
+    属性补间同一套判据（复用 `_validate_steps` 的单步检查会要求 target，
     所以锚点与时长这几条单独走一遍同名函数，判据只有一份）。
     """
     from _derive import (BIND_ATTRS, PARAM_NAME_RE, ExprError, compile_expr)
@@ -943,7 +920,7 @@ def validate_derive(key, block):
         anchor = {k: st[k] for k in ("at", "at_time", "duration", "ease", "delay")
                   if k in st}
         anchor["to"] = st.get("to")
-        # duration 的判据在这里比 director 严一档，理由不是口味：参数演绎的每一帧都是
+        # duration 的判据在这里比属性补间严一档，理由不是口味：参数演绎的每一帧都是
         # 由"进度 × 表达式"**重算**出来的，没有中间态可言——duration 缺省走模板值，写 0
         # 则整段演绎退化成一帧瞬跳，而作者写它的意图几乎必然是"没有时长"而不是"我要瞬跳"
         # （要瞬跳就把 to 写进 params 初值，或干脆别写这一步）。
@@ -952,7 +929,7 @@ def validate_derive(key, block):
                 f"{w} 的 duration=0——参数演绎是按进度逐帧重算几何的，时长 0 会让"
                 f"整段演绎退化成一次瞬跳；要瞬跳就直接把终值写进 params 初值，"
                 f"要演就给它一个 >0 的时长（省略则走模板缺省）")
-        _validate_director_probe(anchor, w)
+        _validate_steps_probe(anchor, w)
         pname = st.get("param")
         if pname not in params:
             raise ValueError(
@@ -978,12 +955,12 @@ def validate_derive(key, block):
         if not isinstance(target, str) or not _DIRECTOR_TARGET_RE.match(target):
             raise ValueError(
                 f"{w} 的 target 必须是单个 id 或 class 选择器（# 或 . 开头），"
-                f"与 director 同一条约束（实际: {target!r}）")
+                f"与属性补间同一条约束（实际: {target!r}）")
         if b.get("attr") not in BIND_ATTRS:
             raise ValueError(
                 f"{w} 的 attr 只收几何属性 {'/'.join(BIND_ATTRS)}（实际: "
                 f"{b.get('attr')!r}）。`d` / `points` 这类复合几何要整条重写路径，"
-                "不属于参数演绎；颜色与透明度归 director")
+                "不属于参数演绎；颜色与透明度归属性补间")
         try:
             compile_expr(b.get("expr"), params, f"{w}（{target}.{b['attr']}）")
         except ExprError as e:
@@ -995,12 +972,12 @@ def _finite(v):
     return is_finite_number(v) and not isinstance(v, bool)
 
 
-def _validate_director_probe(step, where):
-    """复用 director 单步里"与 target 无关"的那几条判据（锚点、duration、ease）。
+def _validate_steps_probe(step, where):
+    """复用属性补间单步里"与 target 无关"的那几条判据（锚点、duration、ease）。
 
-    为什么能复用：这些规则一旦分家，同一个 `at: 4` 在 director 里被拒、在 derive
+    为什么能复用：这些规则一旦分家，同一个 `at: 4` 在属性补间里被拒、在参数推进
     里被放行，作者会以为后者更宽松——而渲染端拿同一份 `beat_positions` 解析，它只
-    认一份口径。做法是把单步塞进一个**只含这些键**的探针副本，走 director 那份
+    认一份口径。做法是把单步塞进一个**只含这些键**的探针副本，走属性补间那份
     校验（has_at / at_time / duration / delay / ease 全部由它判），报错文案前缀换回
     本层。`to` 由调用方保证"参数 + 数值"，探针里补一个数值占位当补间变量。
     """
@@ -1010,67 +987,87 @@ def _validate_director_probe(step, where):
     if "to" in probe:
         probe["to"] = {"opacity": 1}
     try:
-        _validate_director("?", {"steps": [probe]}, what="?")
+        _validate_steps("?", {"steps": [probe]}, what="?")
     except ValueError as e:
         raise ValueError(str(e).replace("images.json 的 '?' 的 ?.steps[0]", where))
 
 
-def _check_derive(key, value, src):
-    """derive：参数驱动的几何演绎。与 director 一样只对 SVG 生效（要净化内联）。"""
-    if "derive" not in value:
+def _check_animate(key, value, src):
+    """`animate`：SVG 的编排块（见 `_animate` 模块说明）。
+
+    一条通吃的契约：`steps` 是属性补间或参数推进（`target` / `param` 二选一），
+    `params` + `bind` 让几何按参数逐帧重算。只对 .svg 生效（要净化内联成活 DOM）。
+
+    这里判形状与取值；两条要看 SVG 内容的判据（target 落空、槽位页调机位、起始帧
+    全空）在生成期由 `_animate.check_animate` 跑——契约层读不到图。
+    """
+    block = _animate.animate_of(value)
+    if not block:
+        if "animate" in value:
+            raise ValueError(
+                f"images.json 的 '{key}' 的 animate 是空对象——不写 animate 就是"
+                "静图，写了就至少要有 steps")
         return
+    where = f"images.json 的 '{key}' 的 animate"
     if not is_svg_path(src):
         raise ValueError(
-            f"images.json 的 '{key}' 写了 derive，但 src={src!r} 不是 SVG"
-            "——derive 逐帧改写图内元素的几何属性，只对 .svg 生效")
-    validate_derive(key, value["derive"])
+            f"images.json 的 '{key}' 写了 animate，但 src={src!r} 不是 SVG"
+            "——编排靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
+    unknown = set(block) - {"steps", "params", "bind"}
+    if unknown:
+        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 steps / params / bind")
 
+    params = block.get("params") or {}
+    binds = block.get("bind") or []
+    steps = block.get("steps") or []
+    if not steps:
+        raise ValueError(f"{where}.steps 必须是非空数组"
+                         "（每一步 = 在某句旁白时改写某个元素，或把某个参数推到多少）")
+    if bool(params) != bool(binds):
+        raise ValueError(
+            f"{where} 的 params 与 bind 要一起写或一起省：params 声明参数（初值），"
+            "bind 说明谁读它。只写一边时参数不会改变画面")
+    # 先逐拍判形状（键集、target/param 二选一）：两种拍记在同一块 steps 里，
+    # 后面的分支才拆得开。
+    for i, step in enumerate(steps):
+        w = f"{where}.steps[{i}]"
+        if not isinstance(step, dict):
+            raise ValueError(f"{w} 必须是对象")
+        unknown = set(step) - (_DIRECTOR_STEP_KEYS | {"param"})
+        if unknown:
+            raise ValueError(f"{w} 含未知键 {sorted(unknown)}——只认 "
+                             f"{sorted(_DIRECTOR_STEP_KEYS | {'param'})}")
+        has_target, has_param = "target" in step, "param" in step
+        if has_target == has_param:
+            raise ValueError(
+                f"{w} 二选一：target（补间某个 SVG 元素）或 param（推一个参数，"
+                "要配 params/bind）")
+        if has_param and not params:
+            raise ValueError(
+                f"{w} 写了 param，但这条条目没有 params/bind——参数推进必须"
+                "说明参数初值与谁读它")
 
-def _check_evolve(key, value, src):
-    """evolve：槽位版式里"讲到哪儿、图里的元素就变到哪儿"（见 _evolve）。
-
-    与 director 的差别只在语义边界，语法是同一套：steps 的校验**原样复用**
-    `_validate_director`，于是三条锚点规则（at / at_time 二选一、at 非负、
-    target 是单个 id/class）两边永远一致。evolve 只额外管两件：
-
-    - **不能与 director 同段**：一个是整页编排、一个是槽位内演进，同时写就是
-      两个作者抢同一张图（画面上表现为机位和内容各按各的节拍走）。
-    - **不再调机位**：`svgOrigin` / `scale` 这类相机写法归 director；槽位里的
-      镜头由模板的入场收拢与 Ken Burns 负责，作者再推一层就是两层意图打架。
-      这条在生成期按 SVG 内容再查一遍（见 `_evolve.check_evolve`），这里先把
-      最明显的错误挡在契约层。
-    """
-    if "evolve" not in value:
+    if params:
+        # 两种拍同段共存是常态（一拍管出场、一组管连续演绎），各走各的判据。
+        param_steps = [st for st in steps if "param" in st]
+        tween_steps = [st for st in steps if "target" in st]
+        if not param_steps:
+            raise ValueError(
+                f"{where} 声明了 params/bind，却没有任何一拍写 param——参数没有"
+                "被推过，几何不会变。要演就把某一拍的 param 写出来，不演就删掉 "
+                "params/bind")
+        validate_derive(key, {"params": params, "steps": param_steps, "bind": binds})
+        if tween_steps:
+            _validate_steps(key, {"steps": tween_steps}, what="animate")
         return
-    errs = []
-    if "director" in value:
-        errs.append(
-            f"images.json 的 '{key}' 同时写了 director 和 evolve——前者是整页画布"
-            "编排（标题层与句子流层都不生成），后者是槽位版式里的图内演进。"
-            "二选一：要整页跟着旁白演用 director，只想让图里的元素跟着变用 evolve")
-    if not is_svg_path(src):
-        errs.append(
-            f"images.json 的 '{key}' 写了 evolve，但 src={src!r} 不是 SVG"
-            "——evolve 靠净化后内联的 SVG 命名元素做补间，只对 .svg 生效")
-    if errs:
-        raise ValueError("\n".join(errs))
-    _validate_director(key, value["evolve"], what="evolve")
-    for i, step in enumerate(value["evolve"]["steps"]):
-        for bucket in ("to", "from", "set"):
-            vars_ = step.get(bucket) or {}
-            cam = sorted(k for k in vars_ if k in _EVOLVE_CAMERA_KEYS)
-            if cam:
-                raise ValueError(
-                    f"images.json 的 '{key}' 的 evolve.steps[{i}] 的 {bucket} 写了 "
-                    f"{cam}：槽位版式的镜头归模板（入场收拢 + 运镜），图内不再调机位。"
-                    "要让整页跟着旁白推镜，把这段换成 layout:\"canvas\" 写 director")
+    _validate_steps(key, {"steps": steps}, what="animate")
 
 
 def _check_stage(key, value, src):
     """stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
 
     只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有读得到
-    manifest 的 gen_hyperframes 判得了。本页可以不写 director：steps 为空的页面照样
+    manifest 的 gen_hyperframes 判得了。本页可以不写 animate：steps 为空的页面照样
     接续（inline_svg 由接续烘焙给出）。
     """
     if "stage" not in value:

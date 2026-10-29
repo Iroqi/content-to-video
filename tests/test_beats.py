@@ -137,20 +137,20 @@ class TestAudit(unittest.TestCase):
         self.assertEqual(len(warns), 1)
         self.assertIn("画面不会动", warns[0])
 
-    def test_declared_beat_with_director_is_not_flagged(self):
+    def test_declared_beat_with_animate_is_not_flagged(self):
         m = _manifest([_seg("seg1", ["一", "二"],
                             beats=[{"on": 1, "change": "把两条线合成一条"}])])
         images = {"seg1": {"src": "images/seg1.svg",
-                           "director": {"steps": [{"at": 1, "target": "#a",
+                           "animate": {"steps": [{"at": 1, "target": "#a",
                                                    "to": {"opacity": 0}}]}}}
         errs, warns, _ = audit(m, images=images)
         self.assertEqual((errs, warns), ([], []))
 
-    def test_evolve_also_counts_as_motion(self):
+    def test_slot_animate_also_counts_as_motion(self):
         m = _manifest([_seg("seg1", ["一"], beats=[{"on": 0, "change": "压暗 a"}])])
         images = {"seg1": {"src": "images/seg1.svg",
-                           "evolve": {"steps": [{"at": 0, "target": "#a",
-                                                 "to": {"opacity": 0.3}}]}}}
+                           "animate": {"steps": [{"at": 0, "target": "#a",
+                                                  "to": {"opacity": 0.3}}]}}}
         errs, warns, _ = audit(m, images=images)
         self.assertEqual((errs, warns), ([], []))
 

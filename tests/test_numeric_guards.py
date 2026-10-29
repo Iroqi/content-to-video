@@ -22,7 +22,7 @@ NEEDS_FINITE_GUARD = (float("nan"), float("inf"))
 
 
 def _step(**kw):
-    """一条最小的 director step（可覆盖任意字段）。
+    """一条最小的 animate step（可覆盖任意字段）。
 
     给 at_time 时自动摘掉 at：契约层要求两个锚点二选一，两个都留着报的是另一条错。
     """
@@ -31,7 +31,7 @@ def _step(**kw):
         if k == "at_time":
             step.pop("at", None)
         step[k] = v
-    return {"seg-a": {"src": "images/a.svg", "director": {"steps": [step]}}}
+    return {"seg-a": {"src": "images/a.svg", "animate": {"steps": [step]}}}
 
 
 class NumericGuardsRejectNonFinite(unittest.TestCase):
@@ -53,7 +53,7 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
             for key in ("to", "from"):
                 with self.subTest(key=key, bad=bad):
                     self._assert_rejected(
-                        {"seg-a": {"src": "images/a.svg", "director": {"steps": [
+                        {"seg-a": {"src": "images/a.svg", "animate": {"steps": [
                             {"at": 0, "target": "#a", "count": {key: bad}}]}}},
                         "必须是数字", bad=bad)
 
@@ -98,7 +98,7 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
     def test_finite_values_still_pass(self):
         """回归网：这道守卫不是"把数字全拒了"。"""
         validate_images_json({
-            "seg-a": {"src": "images/a.svg", "director": {"steps": [
+            "seg-a": {"src": "images/a.svg", "animate": {"steps": [
                 {"at": 0, "target": "#a", "duration": 1.5, "delay": 0,
                  "stagger": {"each": 0.2, "from": "center", "amount": 1},
                  "to": {"opacity": 0}},

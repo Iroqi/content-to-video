@@ -1,4 +1,4 @@
-"""scripts/canvas_kit.py 的测试：画布几何来自模板、初始态与 director 草稿配对、产物过 check_svg 门禁。
+"""scripts/canvas_kit.py 的测试：画布几何来自模板、初始态与 animate 草稿配对、产物过 check_svg 门禁。
 
 样例 spec 的坐标按画幅**比例**算（不是抄一份像素数），这样同一份构图能在竖屏与横屏
 各出一份原生分辨率的画布页——也顺手证明了尺寸真源确实跟着 get_canvas 走。
@@ -21,7 +21,7 @@ from _script_utils import seeded_wobble
 from _template import get_canvas, load_template
 
 TEMPLATES = load_template()
-DIRECTOR_DEFAULT = TEMPLATES["animation"]["director"]
+DIRECTOR_DEFAULT = TEMPLATES["animation"]["animate"]
 
 
 def local(tag):
@@ -84,7 +84,7 @@ def write_json(dirpath, name, data):
 
 
 def run_cli(args):
-    """跑 main()，把 stdout（director 草稿）与 stderr（人类可读的账）分开收回来。"""
+    """跑 main()，把 stdout（animate 草稿）与 stderr（人类可读的账）分开收回来。"""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = K.main(args)
@@ -112,7 +112,7 @@ class CanvasGeometry(unittest.TestCase):
         self.assertEqual(sizes["kicker"], str(tiers["tagline"]["fontSize"]))
 
     def test_svg_survives_the_inline_sanitizer(self):
-        """写了 director 的画布页交付时是净化内联的活 DOM：脚手架的产物必须能过那一步。"""
+        """写了 animate 的画布页交付时是净化内联的活 DOM：脚手架的产物必须能过那一步。"""
         svg = K.render_svg(K.validate_spec(spec_for("portrait")))
         markup, notes = _svg_sanitize.sanitize_svg_for_inline(svg)
         self.assertEqual(notes, [])
@@ -474,7 +474,7 @@ class Roughness(unittest.TestCase):
             K.validate_spec(spec)
         self.assertIn("不吃 roughness", str(cm.exception))
 
-    def test_roughness_never_reaches_the_director_draft(self):
+    def test_roughness_never_reaches_the_animate_draft(self):
         """草稿按 #id 寻址、与坐标无关：加不加 roughness，steps 一模一样。"""
         draft = K.selfcheck_fragment(K.validate_spec(self._spec(2)))
         self.assertEqual(draft, K.selfcheck_fragment(K.validate_spec(self._spec(None))))
@@ -544,10 +544,10 @@ class DirectorDraft(unittest.TestCase):
         self.assertEqual([s["at"] for s in self.fragment(many, sentences=3)["steps"]],
                          [0, 1, 2, 0, 1])
 
-    def test_draft_is_a_valid_images_json_director_block(self):
+    def test_draft_is_a_valid_images_json_animate_block(self):
         frag = self.fragment(spec_for("portrait"))
         # 真契约：套成 images.json 的一条条目过 validate_images_json（不猜它的形状）
-        validate_images_json({"seg7": {"src": "images/seg7.svg", "director": frag}})
+        validate_images_json({"seg7": {"src": "images/seg7.svg", "animate": frag}})
         targets = [s["target"] for s in frag["steps"]]
         self.assertEqual(targets, ["#kicker", "#curve", "#dot", "#bars", "#bignum",
                                    "#motto", "#underline"])
@@ -593,8 +593,8 @@ class DirectorDraft(unittest.TestCase):
         by = {s["target"]: s for s in frag["steps"]}
         self.assertEqual(by["#pp"]["from"], {"opacity": 0})
         self.assertEqual(by["#pp"]["to"], {"opacity": 0.5})
-        # 真契约：带显式 opacity 的草稿必须能直接过 images.json 的 director 校验
-        validate_images_json({"seg7": {"src": "images/seg7.svg", "director": frag}})
+        # 真契约：带显式 opacity 的草稿必须能直接过 images.json 的 animate 校验
+        validate_images_json({"seg7": {"src": "images/seg7.svg", "animate": frag}})
 
     def test_content_panel_with_zero_opacity_is_refused(self):
         """内容元素 opacity:0 = 那一拍补间 0→0：永远不亮，且成片看着像"演过了"。"""
@@ -661,9 +661,9 @@ class DirectorDraft(unittest.TestCase):
         self.assertNotIn("yoyo", steps[1])
         # repeat:0 与缺省等价，不塞进去（与渲染端 _cycle_vars 同口径）
         self.assertNotIn("repeat", steps[2])
-        # 真契约：带 repeat/yoyo 的草稿必须能直接过 images.json 的 director 校验
+        # 真契约：带 repeat/yoyo 的草稿必须能直接过 images.json 的 animate 校验
         validate_images_json({"seg7": {"src": "images/seg7.svg",
-                                       "director": {"steps": steps}}})
+                                       "animate": {"steps": steps}}})
         # 同一份判据在脚手架侧也拒无限循环
         with self.assertRaises(ValueError) as cm:
             self.fragment({"elements": [{"kind": "circle", "id": "d", "cx": 400,
@@ -787,7 +787,7 @@ class CommandLine(unittest.TestCase):
             frag = json.load(f)
         self.assertEqual(frag, json.loads(out))
         # 草稿落盘了就得能直接进 images.json——这是它唯一的用途
-        validate_images_json({"seg1": {"src": "images/seg1.svg", "director": frag}})
+        validate_images_json({"seg1": {"src": "images/seg1.svg", "animate": frag}})
         self.assertIn("4 个结构底", err)
         self.assertIn("7 拍内容", err)
         self.assertIn("已写", err)
@@ -830,7 +830,7 @@ class CommandLine(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             run_cli(["--spec", self.spec, "-o", self.out, "--no-check",
                      "--emit-steps", steps])
-        self.assertIn("director 草稿", str(cm.exception))
+        self.assertIn("animate 草稿", str(cm.exception))
         self.assertFalse(os.path.exists(steps))
 
     def test_bad_spec_is_an_error_not_a_traceback(self):
@@ -945,7 +945,7 @@ class CommandLine(unittest.TestCase):
         # 校验不过就不该落产物：留着上一轮的 SVG，作者会以为这轮也出了图。
         self.assertFalse(os.path.exists(out))
 
-    def test_unsatisfiable_director_draft_reports_in_our_voice(self):
+    def test_unsatisfiable_animate_draft_reports_in_our_voice(self):
         """spec 合法但草稿过不了真契约时，报的是一句 [error] + 退出码 2。
 
         证伪：selfcheck 原先罩在 spec 的 try 外面。spec 里给 polyline 同时写 `draw` 与

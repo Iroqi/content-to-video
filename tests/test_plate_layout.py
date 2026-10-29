@@ -124,7 +124,7 @@ class TestTimeline(unittest.TestCase):
         self.assertIn("duration:0.01", line)
 
     def test_no_ken_burns(self):
-        """配图不漂：画面主导的页，运镜交给作者（director / evolve）。"""
+        """配图不漂：画面主导的页，运镜交给作者（`animate` 的相机键）。"""
         drift = [ln for ln in self.html.split("\n")
                  if 'tl.fromTo("#img-seg-a > img"' in ln]
         self.assertEqual(drift, [])

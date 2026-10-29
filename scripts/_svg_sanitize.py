@@ -2,11 +2,11 @@
 """把 SVG 净化成可安全内联进成片 HTML 的活 DOM。
 
 内联会让 SVG 成为同源活 DOM（`<img>` 载入时按 data 处理、脚本不执行），所以导演档
-（见 `references/motion.md`「SVG 动画：两档」）**必须先净化**，让它回到 `<img>` 的安全水位。
+（见 `references/svg-motion.md`「契约」）**必须先净化**，让它回到 `<img>` 的安全水位。
 
 同时保证**逐帧 seek 的决定性**（见 rendering.md「动画」）：墙钟自走的东西（CSS
 `@keyframes`/`transition`、SMIL `<animate*>`）在成片里会漂移，一并剥掉。要氛围循环
-就别写 director，走 `<img>`。
+就别写 animate，走 `<img>`。
 
 基于 ElementTree 结构化改写，不用正则删标签（那种能被绕过）。
 """
@@ -40,7 +40,7 @@ ET.register_namespace("xlink", XLINK_NS)
 # 成片 HTML 就是 script 元素（同源活 DOM，直接执行）。判定层必须先折成小写再比，
 # 合法 SVG 标签本就小写（foreignObject 是唯一驼峰，折后仍命中）。
 _DROP_TAGS = {"script", "foreignobject"}
-# 墙钟动画元素：逐帧 seek 下不可复现，director 模式剥掉，运动交给时间线补间。
+# 墙钟动画元素：逐帧 seek 下不可复现，内联档剥掉，运动交给时间线补间。
 _WALLCLOCK_TAGS = {"animate", "animatetransform", "animatemotion", "set"}
 # CSS 里驱动墙钟动画的属性名（在 <style> 文本与 inline style 上都清）。
 # 值的终止同时认 `;` 和 `}`：`.a{animation:x}` 结尾没有分号，吃到 `;` 会把闭合 `}`
@@ -505,7 +505,7 @@ def _drop_at_rules(css, notes):
             if "keyframes" in key:
                 # @keyframes 的真实删除原因是墙钟动画定义，不是"外部资源"——
                 # note 说错原因会把作者引去删一条不存在的外链。
-                why = "（墙钟动画的定义；要动请用 director 补间）"
+                why = "（墙钟动画的定义；要动请用 animate 补间）"
             else:
                 why = ("（作者漏了分号，按 CSS 语法它已吞进下一条规则）"
                        if "\n" in m.group(0) else "（成片里要么无意义，要么是外部资源）")
@@ -542,7 +542,7 @@ def _clean_style_text(css, notes):
         if _WALLCLOCK_CSS.search(s):
             s = _WALLCLOCK_CSS.sub("", s)
             notes.append("<style> 里的 CSS animation/transition 声明已剥离"
-                         "（墙钟动画在逐帧渲染里不可复现；要动请用 director 补间）")
+                         "（墙钟动画在逐帧渲染里不可复现；要动请用 animate 补间）")
         # 剥空的规则体连选择器一起清掉（`.a{animation:x 1s}` 剥完只剩 `.a{}`）
         return re.sub(r"(?m)^[ \t]*[^{}\n]*\{[ \t\r\n]*\}[ \t]*\n?", "", s)
 
@@ -634,7 +634,7 @@ def sanitize_svg_for_inline(raw):
             if p is not None:
                 p.remove(el)
             notes.append(f"SMIL <{tag}> 已删除（墙钟动画在逐帧渲染里不可复现；"
-                         "要动请用 director 补间）")
+                         "要动请用 animate 补间）")
             continue
         # 事件属性 on*、外部/脚本 href 一律摘掉。
         for k in list(el.attrib):

@@ -7,11 +7,11 @@
 在页界处整体回弹。观众看到的不是"同一幕换了下一句台词"，而是"换了另一幅画"。
 
 **做法（一句话）**：作者只画**一张** SVG，把旁白切成几段，每段只写**接续的那几拍**。
-生成期在 `gen_hyperframes.director_prepare` 里多做一遍：把上一段 steps 的**收尾态**
+生成期在 `gen_hyperframes.animate_prepare` 里多做一遍：把上一段 steps 的**收尾态**
 烘焙进本段那份内联 SVG 的副本（本段自己的 steps 到点在副本之上继续演）。运行期零改动、
 零新原语——每页仍然是一份静态 SVG + 一条挂在自己时间线上的补间，逐帧 seek 可复现。
 
-**为什么"收尾态"是可算的**：director 的全部原语都是可序列化的补间（无 on* 回调，见
+**为什么"收尾态"是可算的**：动画的全部原语都是可序列化的补间（无 on* 回调，见
 _images_schema._validate_tween_vars），所以每一步的结束态只由它的 `to`/`set`/`draw`/
 `morph`/`count` 字面量决定，与运行时无关。按 beat 时刻排序逐条结算即可（同一元素后到
 的说话）。`from`-only 步骤的结束态 = 演之前的样子，而"演之前的样子"已经是上一段烘焙的
@@ -361,7 +361,7 @@ def _fold_camera(root, steps, center):
 
 
 def bake_settled_state(markup, steps, beats=None):
-    """把一段 director 的**收尾画面**烘焙进它的内联副本，返回 (新副本, 跳过说明)。
+    """把一段编排的**收尾画面**烘焙进它的内联副本，返回 (新副本, 跳过说明)。
 
     参数是上一段的 (净化后 markup, steps, beat 落点)；产物交给下一段当 inline_svg 用。
     只在生成期调用一次每页一份，不进渲染循环，所以这里的开销是"读一遍 XML 改一遍树"。
@@ -490,7 +490,7 @@ def infer_stage_keep(images, seg_ids):
     **判据（三条同时成立；任何一条不成立就维持原样）**：
 
     1. 本页 `src` 与上一段 `src` **完全相同**（不同图无从烘焙，硬写也是 error）；
-    2. 上一段**已内联**（写了 director 且净化过——没内联就没有可烘焙的元素态）；
+    2. 上一段**已内联**（写了 animate 且净化过——没内联就没有可烘焙的元素态）；
     3. 上一段 `#cam` 的**收尾位不是原位**：推近、平移，或显式给了原点都算。
        收尾位回原位时"从原图起跑"与"从上一页收尾起跑"是同一幅画，不盖章更诚实。
        收尾位读不出（`resolved=False`）或永不停下（`repeat:-1`）一律不推断——宁可
@@ -502,7 +502,7 @@ def infer_stage_keep(images, seg_ids):
     让作者学会"无脑加一行"。盖章之后，这个字段从"必须记住"变成"只在想要非默认
     行为时才需要写"——而那正是默认值该有的样子。
 
-    **只在归一化之前调用**：判据读的 `inline_svg` / `director` / `stage` 都是
+    **只在归一化之前调用**：判据读的 `inline_svg` / `animate` / `stage` 都是
     images.json 的顶层键。`html_renderer._normalize_images` 会把除 `src`/`type`
     之外的键搬进 `opts`，搬完之后这三条判据条条落空（`inline_svg` 永远读不到），
     盖出来的 `stage` 写在顶层也不会被 `_is_keep_page`（读 `opts["stage"]`）看见
@@ -528,7 +528,7 @@ def infer_stage_keep(images, seg_ids):
         src = entry.get("src")
         if not src or src != prev_entry.get("src"):
             continue
-        steps = (prev_entry.get("director") or {}).get("steps") or []
+        steps = (prev_entry.get("animate") or {}).get("steps") or []
         pose = cam_resting_pose(steps)
         if not pose or not pose.get("resolved") or not pose.get("rests"):
             continue

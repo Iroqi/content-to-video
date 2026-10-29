@@ -10,7 +10,7 @@ import _cam_crop as CC
 import gen_hyperframes as G
 from _cam_crop import cam_content_center, cam_geometry, crop_warnings, decompose_transform
 from _images_schema import validate_images_json
-from test_director import _write_svg
+from test_animate_timeline import _write_svg
 
 NS = "http://www.w3.org/2000/svg"
 
@@ -439,18 +439,23 @@ class OriginSharedWithRenderer(unittest.TestCase):
 
 
 def _two_page_stage(tmp, svg=STAGE_SVG, steps_a=None, steps_b=None, src_b=None):
-    """写一份"两页同一张图"的 images.json，跑 director_prepare，返回 (images, errs, warns)。"""
+    """写一份"两页同一张图"的 images.json，跑 animate_prepare，返回 (images, errs, warns)。
+
+    两页都是满幅版式（canvas）：场景跨页接续只在版面归作者的页上有意义。
+    """
     rel = _write_svg(tmp, "stage", svg)
     images = {
-        "seg-a": {"src": rel, "director": {"steps": steps_a or [
+        "seg-a": {"src": rel, "animate": {"steps": steps_a or [
             {"at": 0, "target": "#plate", "to": {"opacity": 1}}]}},
         "seg-b": {"src": src_b or rel, "stage": "keep"},
     }
     if steps_b:
-        images["seg-b"]["director"] = {"steps": steps_b}
-    segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0, "duration": 2.0}]},
-            {"id": "seg-b", "sentences": [{"index": 1, "start_time": 2.4, "duration": 2.0}]}]
-    errs, warns = G.director_prepare(images, segs, tmp)
+        images["seg-b"]["animate"] = {"steps": steps_b}
+    segs = [{"id": "seg-a", "layout": "canvas",
+             "sentences": [{"index": 0, "start_time": 0.0, "duration": 2.0}]},
+            {"id": "seg-b", "layout": "canvas",
+             "sentences": [{"index": 1, "start_time": 2.4, "duration": 2.0}]}]
+    errs, warns = G.animate_prepare(images, segs, tmp)
     return images, errs, warns
 
 
@@ -491,21 +496,21 @@ class PrepareCarriesState(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         rel = _write_svg(tmp.name, "stage", STAGE_SVG)
-        images = {"seg-a": {"src": rel, "stage": "keep", "director": {
+        images = {"seg-a": {"src": rel, "stage": "keep", "animate": {
             "steps": [{"at": 0, "target": "#plate", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, tmp.name)
+        errs, _ = G.animate_prepare(images, segs, tmp.name)
         self.assertTrue(any("第一段" in e for e in errs), errs)
 
-    def test_previous_page_without_director_is_an_error_not_a_silent_img(self):
+    def test_previous_page_without_animate_is_an_error_not_a_silent_img(self):
         images, errs, _ = _two_page_stage(
             self.tmp.name, steps_a=None)
-        # steps_a=None 走默认（有 director），这里另造一份"上一页没写 director"的
+        # steps_a=None 走默认（有 animate），这里另造一份"上一页没写 animate"的
         images2 = {"seg-a": {"src": images["seg-a"]["src"]},
                    "seg-b": {"src": images["seg-a"]["src"], "stage": "keep"}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]},
                 {"id": "seg-b", "sentences": [{"index": 1, "start_time": 2.4}]}]
-        errs, _ = G.director_prepare(images2, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images2, segs, self.tmp.name)
         self.assertTrue(any("没有可接续的内联画面" in e for e in errs), errs)
 
     def test_different_src_on_the_two_pages_is_an_error(self):
@@ -628,7 +633,7 @@ class InferStageKeep(unittest.TestCase):
     SAME = "images/stage.svg"
 
     def _imgs(self, steps_a, *, src_a=None, src_b=None, stage_b=None, svg=True):
-        a = {"src": src_a or self.SAME, "director": {"steps": steps_a}}
+        a = {"src": src_a or self.SAME, "animate": {"steps": steps_a}}
         if svg:
             a["inline_svg"] = "<svg/>"
         b = {"src": src_b or self.SAME}
@@ -709,21 +714,21 @@ class InferStageMatchesRenderer(unittest.TestCase):
         rel = _write_svg(self.tmp.name, "stage", STAGE_SVG)
         # 句子必须带 text、段必须带 title：渲染端 `_verse_html` / `title_wrap`
         # 直接按这两个键取值，只给骨架会在这里 KeyError
-        segs = [{"id": "seg-a", "title": "甲",
+        segs = [{"id": "seg-a", "title": "甲", "layout": "canvas",
                  "sentences": [{"index": 0, "start_time": 0.0,
                                 "duration": 2.0, "text": "第一句。"}]},
-                {"id": "seg-b", "title": "乙",
+                {"id": "seg-b", "title": "乙", "layout": "canvas",
                  "sentences": [{"index": 1, "start_time": 2.4,
                                 "duration": 2.0, "text": "第二句。"}]}]
         # str(rel) 而不是同一个对象：_write_svg 会**就地**把 src 改写成
         # images/<name>.svg，两页共用同一个字符串实例时被改的会是同一份，
         # 造出的"同一张图"其实是测试自己嫁接的
         images = {
-            "seg-a": {"src": str(rel), "director": {"steps": [
+            "seg-a": {"src": str(rel), "animate": {"steps": [
                 {"at": 0, "target": "#cam", "to": {"scale": 1.4}}]}},
             "seg-b": {"src": str(rel)},
         }
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual(errs, [])
         # 生成期盖了章 → 第二页拿到烘焙后的副本
         self.assertEqual(images["seg-b"].get("stage"), "keep")
@@ -741,31 +746,32 @@ class InferStageMatchesRenderer(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             html = generate_html(m, "audio/combined.wav", images=images)
         # 渲染端同样认成接续页：挂载即音频起点（硬切），不擦进来
-        self.assertIn('id="seg-b" class="clip seg-card" data-start="2.40"', html)
+        self.assertIn('id="seg-b" class="clip seg-card', html)
+        self.assertIn('data-start="2.40"', html)
         self.assertNotIn('tl.from("#img-seg-b"', html)
 
     def test_renderer_stamps_on_its_own_before_normalizing(self):
         """渲染端自己那次盖章必须真的生效——不是"判据落空的死代码"。
 
         曾把 infer_stage_keep 排在 _normalize_images 之后：判据读的 inline_svg /
-        director / stage 已被搬进 opts，条条落空；盖出来的 stage 写在顶层，而
+        animate / stage 已被搬进 opts，条条落空；盖出来的 stage 写在顶层，而
         _is_keep_page 读 opts["stage"]——于是渲染端永远看不见接续，烘好的副本
         照样被当成新页擦进来重演一遍，烘焙的意义正好被抵消。
         """
         import contextlib
         import io
         from html_renderer import generate_html
-        segs = [{"id": "seg-a", "title": "甲",
+        segs = [{"id": "seg-a", "title": "甲", "layout": "canvas",
                  "sentences": [{"index": 0, "start_time": 0.0,
                                 "duration": 2.0, "text": "第一句。"}]},
-                {"id": "seg-b", "title": "乙",
+                {"id": "seg-b", "title": "乙", "layout": "canvas",
                  "sentences": [{"index": 1, "start_time": 2.4,
                                 "duration": 2.0, "text": "第二句。"}]}]
-        # 不经 director_prepare：只有 inline_svg 与末拍推近的相机，模拟"生成期
+        # 不经 animate_prepare：只有 inline_svg 与末拍推近的相机，模拟"生成期
         # 之外直接调渲染端"的调用面。
         images = {
             "seg-a": {"src": "images/stage.svg", "inline_svg": "<svg/>",
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at": 0, "target": "#cam", "to": {"scale": 1.4}}]}},
             "seg-b": {"src": "images/stage.svg"},
         }

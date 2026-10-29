@@ -31,7 +31,10 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = re.compile(
-    r"(SKILL\.md|references/[\w.]+\.md|[\w.]+\.md)`?"
+    # 文件名里允许连字符（`svg-motion.md`）：`\w` 不含 `-`，收窄成 `[\w.]` 会让
+    # 「`references/svg-motion.md`「契约」」整条匹配不上，退化成匹配末段
+    # `motion.md` 这个**另一个文件**——检查器于是对着错误的文件报悬空。
+    r"(SKILL\.md|references/[\w.-]+\.md|[\w.-]+\.md)`?"
     r"\s*的?\s*[（(]?\s*「([^」]+)」")
 
 # references/ 的 H1 模板：`第 N 步 · 主题`（N ∈ 1..4，步骤文档都带这一步号）。

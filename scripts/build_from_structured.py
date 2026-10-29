@@ -192,7 +192,7 @@ def _collect_blocks(source):
             extra["layout"] = seg["layout"]
         # 台词板（归一后的 [{on, change}]，形状由 _beats.validate_beats 把关）：
         # 透传进 manifest，好让 run.py 在真实时间轴上核对句序是否越界。它**不进
-        # HTML**——台词板是意图层，渲染端只认 images.json 里的 director/evolve。
+        # HTML**——台词板是意图层，渲染端只认 images.json 里的 animate。
         if seg.get("beats"):
             extra["beats"] = validate_beats(seg.get("beats"), f"段落 {seg.get('id') or i}")
         # 缺省段落 id 用中性前缀 seg（配图键与文件名同源）。

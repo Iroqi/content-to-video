@@ -89,7 +89,7 @@ class BeatsReachesManifest(unittest.TestCase):
         }]}
         # images.json 缺映射时 audit 会先报"没有导演拍点"，那条也是 error——
         # 这里只关心"越界被看见"：给一段空的 images 映射把它挡掉。
-        errs, warns, total = B.audit(manifest, {"seg1": {"director": []}})
+        errs, warns, total = B.audit(manifest, {"seg1": {"animate": []}})
         self.assertEqual(total, 1)
         self.assertTrue(errs, "beats 进了 manifest，越界就必须被 audit 报出来")
         self.assertTrue(any("越界" in e for e in errs), errs)

@@ -166,7 +166,7 @@ class SvgChecker(unittest.TestCase):
         _, warns = self.run_check(self._canvas_svg(body), layout=layout, aspect="portrait")
         return [w for w in warns if "吃掉对比度" in w]
 
-    def test_canvas_opacity_zero_is_the_directors_start_state(self):
+    def test_canvas_opacity_zero_is_the_start_state(self):
         # 导演页每个元素都从 opacity=0 逐拍点亮；照旧报就是每页十来条噪声，
         # 把真正那条（半透明）淹掉
         body = '<text x="90" y="150" font-size="64" font-family="s" opacity="0">熵</text>'
@@ -702,19 +702,19 @@ class SvgTextMetrics(unittest.TestCase):
 class EpilogExampleRuns(unittest.TestCase):
     """--help 尾巴那份"实测跑通"的 images.json：声明就得被测试兜住。
 
-    证伪：seg2 曾挂 `stage:"keep"`，而 seg1 是不带 director 的 PNG——生成期
+    证伪：seg2 曾挂 `stage:"keep"`，而 seg1 是不写 animate 的 PNG——生成期
     直接报"上一段没有可接续的内联画面"，照抄命令第一步就红。stage:keep 是
     跨页接续标记（接的必须是同一张图的上一页导演档），不是素材条目的一种
     形状，不放进"三种素材条目"的示例里。
     """
 
-    def test_epilog_example_passes_schema_and_director_prepare(self):
+    def test_epilog_example_passes_schema_and_animate_prepare(self):
         epi = gen_hyperframes._epilog()
         block = epi.split("可直接照抄的 images.json（实测跑通）：", 1)[1]
         images = json.loads(block[block.index("{"):block.rindex("}") + 1])
         # 契约层：三种条目形状都过 images.json 校验
         validate_images_json(images)
-        # 生成期：真文件 + 真 manifest 形状，director_prepare 零 error
+        # 生成期：真文件 + 真 manifest 形状，animate_prepare 零 error
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         os.makedirs(os.path.join(tmp.name, "images"))
@@ -738,7 +738,7 @@ class EpilogExampleRuns(unittest.TestCase):
             {"id": "seg3", "layout": "slot",
              "sentences": [{"start_time": 4.0, "end_time": 5.0}]},
         ]
-        errs, _warns = gen_hyperframes.director_prepare(images, segments, tmp.name)
+        errs, _warns = gen_hyperframes.animate_prepare(images, segments, tmp.name)
         self.assertEqual(errs, [])
 
 
@@ -774,7 +774,7 @@ class CheckSvgCommandLine(unittest.TestCase):
         self.assertIn("[FAIL]", out)
         self.assertIn("1 条 error", out)
 
-    def test_directory_expands_svg_only(self):
+    def test_animate_timeliney_expands_svg_only(self):
         write(self.tmp.name, "a.svg", GOOD)
         write(self.tmp.name, "notes.txt", "not an svg")
         rc, out, _err = self._main([self.tmp.name])
@@ -893,6 +893,19 @@ class DocExampleChecker(unittest.TestCase):
     def test_doc_examples_run(self):
         import check_examples
         self.assertEqual(check_examples.main(), 0)
+
+
+class ImageSnippetChecker(unittest.TestCase):
+    """文档里的 images.json 片段必须过契约层。
+
+    这条此前**没有接线**：`check_image_snippets.py` 只在人手跑时才存在，示例跟着
+    文档搬家（`director.md` → `svg-motion.md`）后它静默失败了两条，而所有测试照旧
+    全绿。断言的写法与上面两个检查器同一条：只调 main()。
+    """
+
+    def test_doc_image_snippets_validate(self):
+        import check_image_snippets
+        self.assertEqual(check_image_snippets.main(), 0)
 
 
 class FontFloorSingleSource(unittest.TestCase):

@@ -3,7 +3,7 @@
 
 ## 要解决的那件事
 
-`director` / `evolve` 的补间是**属性级**的：要变三个元素就写三条，各自写
+同一块 `animate` 里的属性补间是**属性级**的：要变三个元素就写三条，各自写
 `duration` / `ease` / 起点，靠作者保证它们"同一时刻、同一节奏"。3b1b 不是这么
 做镜头的：一个场景有一个**主参数**（把 θ 从 0 转到 2π），所有几何都由它算出来，
 所以"同步"是免费的。这个模块补的就是这一层：
@@ -50,7 +50,7 @@ PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,31}$")
 
 # 一条 `bind` 只能写**一个**属性，且必须是有几何意义的那几个。白名单而不是黑名单：
 # `d` 与 `points` 是复合几何，按参数逐个重算是另一件事（要整条重写路径），
-# `opacity` / `fill` 是样式层、不归几何演绎管（那是 director 的活）。
+# `opacity` / `fill` 是样式层、不归几何演绎管（那是属性补间的活）。
 BIND_ATTRS = ("x", "y", "cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2",
               "width", "height", "transform")
 
@@ -337,7 +337,7 @@ class Derived:
             "params": dict(self.params),
             "steps": [{"p": t["p"], "a": t["a"], "b": t["b"], "ease": t["ease"]}
                       for t in self.tracks],
-            # 选择器在这里就拼成"整页作用域"的形式（与 director 的 target 同一条
+            # 选择器在这里就拼成"整页作用域"的形式（与属性补间的 target 同一条
             # 收窄规则：多段内联同名 id 不串台），渲染端不必再拼一次。
             # 注意：这里的 "attr" 是 **derive payload 自己的键名**，意思是"绑到
             # 哪个 SVG 属性"（取值受 BIND_ATTRS 限定），与 GSAP vars 里那个 attr

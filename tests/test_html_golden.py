@@ -16,7 +16,7 @@ from html_renderer import generate_html
 CASES = {
     "portrait_dark": dict(aspect="portrait", theme="dark"),
     "landscape_dark": dict(aspect="landscape", theme="dark"),
-    # 并置对比：两格各自一条补间（左格 evolve、右格 director），两画幅各一份。
+    # 并置对比：两格各自一条补间（`panes[i].animate`），两画幅各一份。
     # 单独立用例是因为这一版式的 DOM 与时间线作用域都另成一套（`#img-{sid}-{i}`），
     # 槽位版式的快照照不到它。
     "compare_portrait": dict(aspect="portrait", theme="dark", _case="compare"),
@@ -37,9 +37,9 @@ def _compare_images(manifest):
     imgs["seg-a"] = {
         "src": ["images/seg-a-0.svg", "images/seg-a-1.svg"],
         "panes": [
-            {"evolve": {"steps": [{"at": 0, "target": "#a",
-                                   "to": {"opacity": 0.4}}]}},
-            {"director": {"steps": [{"at": 1, "target": "#b",
+            {"animate": {"steps": [{"at": 0, "target": "#a",
+                                    "to": {"opacity": 0.4}}]}},
+            {"animate": {"steps": [{"at": 1, "target": "#b",
                                      "to": {"opacity": 1}}]}},
         ],
     }
@@ -359,7 +359,7 @@ class Structure(unittest.TestCase):
                       'data-start="7.20"', html)
         # clip-path 补间时长取 0.01（瞬间切：0 时长会被 GSAP 当作 set()，加载即渲染
         # 不裁剪态、预览首帧被画布页盖住；0.01s 不足一帧、视觉仍是瞬间出现），
-        # 运动全部由 director 时间线承担
+        # 运动全部由 animate 时间线承担
         self.assertIn('tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},'
                       '{clipPath:"inset(0% 0 0 0)",duration:0.01,'
                       'ease:"power2.inOut"},7.20)', html)

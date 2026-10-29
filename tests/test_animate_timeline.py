@@ -1,4 +1,4 @@
-"""SVG「导演」（时间轴同步动画）：净化、schema、渲染、生成期门禁的回归。"""
+"""SVG 编排的时间线（`animate`）：净化、schema、渲染、生成期门禁的回归。"""
 import os
 import tempfile
 import unittest
@@ -111,19 +111,19 @@ class Sanitize(unittest.TestCase):
 
 class Schema(unittest.TestCase):
     def test_valid_director_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": "#a", "set": {"opacity": 1}},
             {"at": 1, "target": "#b", "to": {"strokeDashoffset": 0, "attr": {"r": 5}},
              "duration": 0.6, "ease": "power2.out"}]}}})
 
     def test_fractional_at_and_draw_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 1.5, "target": "#curve", "draw": True},
             {"at": 2, "target": "#cam", "to": {"scale": 2, "svgOrigin": "500 360"}}]}}})
 
     def test_at_time_anchor_accepted(self):
         # at_time 与 at 二选一：整条 steps 混用两种锚点也合法（自由场景按秒编排）
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": "#node", "set": {"opacity": 1}},
             {"at_time": 3.5, "target": "#caption", "from": {"opacity": 0}, "to": {"opacity": 1}}]}}})
 
@@ -147,21 +147,21 @@ class Schema(unittest.TestCase):
         for bad in (5, "d", [1, 2], True, None):
             with self.subTest(attr=bad):
                 with self.assertRaises(ValueError) as cm:
-                    validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {
+                    validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {
                         "steps": [{"at": 0, "target": "#a", "to": {"attr": bad}}]}}})
                 self.assertIn("attr", str(cm.exception))
 
     def test_nested_scalar_attr_rejected_too(self):
         """递归层同样要查：`{"attr": {"fill": {"x": 1}}}` 里的 attr 是对象，合规。"""
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": "#a", "to": {"attr": {"fill": "red"}}}]}}})
         # 但 attr 嵌在更深层时同样按对象要求（键名一样，语义一样）
         with self.assertRaises(ValueError):
-            validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
                 {"at": 0, "target": "#a", "to": {"attr": {"attr": 3}}}]}}})
 
     def test_morph_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 1, "target": "#p", "morph": {"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"},
              "duration": 1.0}]}}})
 
@@ -179,11 +179,11 @@ class Schema(unittest.TestCase):
     def _one_step(self, step):
         with self.assertRaises(ValueError):
             validate_images_json({"seg4": {"src": "images/seg4.svg",
-                                          "director": {"steps": [step]}}})
+                                          "animate": {"steps": [step]}}})
 
     def test_director_on_non_svg_rejected(self):
         with self.assertRaises(ValueError):
-            validate_images_json({"seg4": {"src": "images/seg4.png", "director": {
+            validate_images_json({"seg4": {"src": "images/seg4.png", "animate": {
                 "steps": [{"at": 0, "target": "#a", "set": {"opacity": 1}}]}}})
 
     def test_handwritten_inline_svg_rejected(self):
@@ -208,12 +208,12 @@ class Schema(unittest.TestCase):
 
     def test_class_target_accepted(self):
         # class 选择器（.marker）合法——stagger 一组元素靠它
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": ".marker", "from": {"opacity": 0}, "to": {"opacity": 1},
              "stagger": 0.15}]}}})
 
     def test_relative_at_time_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at_time": 1.0, "target": "#a", "to": {"opacity": 1}},
             {"at_time": "+0.3", "target": "#b", "to": {"opacity": 1}},
             {"at_time": "-0.1", "target": "#c", "set": {"opacity": 0}}]}}})
@@ -224,7 +224,7 @@ class Schema(unittest.TestCase):
         self._one_step({"at_time": "+1s", "target": "#a", "set": {"opacity": 1}})
 
     def test_count_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at_time": 0.5, "target": "#num",
              "count": {"from": 0, "to": 6.02, "decimals": 2, "suffix": "×10²³"},
              "duration": 1.5}]}}})
@@ -241,7 +241,7 @@ class Schema(unittest.TestCase):
 
     def test_type_accepted(self):
         # 打字机：type 只认空对象 {}，快慢用 step 级 duration/ease（这里给了 duration）
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at_time": 0.5, "target": "#cap", "type": {}, "duration": 1.2}]}}})
 
     def test_type_with_count_rejected(self):
@@ -258,7 +258,7 @@ class Schema(unittest.TestCase):
         self._one_step({"at": 0, "target": "#c", "type": "熵"})
 
     def test_stagger_accepted_number_and_object(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "director": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": ".a", "to": {"opacity": 1}, "stagger": 0.1},
             {"at": 1, "target": ".b", "to": {"opacity": 1},
              "stagger": {"each": 0.2, "from": "center"}}]}}})
@@ -279,7 +279,7 @@ class TweenKnobContract(unittest.TestCase):
 
     def _ok(self, step):
         validate_images_json({"seg4": {"src": "images/seg4.svg",
-                                      "director": {"steps": [step]}}})
+                                      "animate": {"steps": [step]}}})
 
     def _bad(self, step, *needles):
         with self.assertRaises(ValueError) as cm:
@@ -451,7 +451,7 @@ class Renderer(unittest.TestCase):
     def _images(self):
         return {
             "seg-a": {"src": "images/seg-a.svg", "inline_svg": "<svg viewBox=\"0 0 980 735\"><g id=\"node\"/></svg>",
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at": 0, "target": "#node", "to": {"opacity": 1}, "duration": 0.4},
                           {"at": 1, "target": "#node", "set": {"fill": "#f00"}}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -464,7 +464,7 @@ class Renderer(unittest.TestCase):
         seg_a = next(s for s in m["segments"] if s["id"] == "seg-a")
         t0 = round(seg_a["sentences"][0]["start_time"], 2)
         t1 = round(seg_a["sentences"][1]["start_time"], 2)
-        # target 收到 #img-seg-a 作用域；缺省 ease 来自模板 animation.director
+        # target 收到 #img-seg-a 作用域；缺省 ease 来自模板 animation.animate
         self.assertIn(f'tl.to("#img-seg-a #node", '
                       f'{{"opacity": 1, "duration": 0.4, "ease": "power2.out"}}, {t0:.2f})', html)
         self.assertIn(f'tl.set("#img-seg-a #node", {{"fill": "#f00"}}, {t1:.2f})', html)
@@ -523,7 +523,7 @@ class Renderer(unittest.TestCase):
     def test_at_out_of_range_raises(self):
         m = H.make_manifest()
         imgs = self._images()
-        imgs["seg-a"]["director"]["steps"].append({"at": 99, "target": "#node", "set": {"opacity": 1}})
+        imgs["seg-a"]["animate"]["steps"].append({"at": 99, "target": "#node", "set": {"opacity": 1}})
         with self.assertRaises(ValueError):
             HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
 
@@ -536,7 +536,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g id="cam"><path id="curve"/></g></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at": 0.5, "target": "#curve", "draw": True, "duration": 1.2},
                           {"at": 1, "target": "#cam", "to": {"scale": 2, "svgOrigin": "500 360"},
                            "duration": 1.5, "ease": "power2.inOut"}]}},
@@ -555,13 +555,17 @@ class Renderer(unittest.TestCase):
     # ---- 缺省原点的钉值（GSAP 对没写原点的 SVG 绕 bbox 左上角，不是中心）----
 
     def _cam_html(self, steps, svg=None):
+        """相机只有在满幅版式上归作者：段声明 layout:"canvas" 才 pin 原点。"""
         m = H.make_manifest()
+        for seg in m["segments"]:
+            if seg["id"] == "seg-a":
+                seg["layout"] = "canvas"
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": svg or ('<svg viewBox="0 0 980 735"><g id="cam">'
                                             '<rect id="node" x="100" y="100" width="200" '
                                             'height="200"/></g></svg>'),
-                      "director": {"steps": steps}},
+                      "animate": {"steps": steps}},
             "seg-b": {"src": "images/seg-b.svg"},
         }
         return HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
@@ -608,7 +612,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g id="node"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 1.0, "delay": 0.25, "target": "#node",
                            "set": {"opacity": 0.5}}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -625,7 +629,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 10 10"><path id="p"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 0.0, "target": "#p",
                            "morph": {"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"},
                            "duration": 1.0}]}},
@@ -655,7 +659,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 10 10"><path id="p"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           dict(step, target="#p",
                                morph={"from": "M 0 0 L 1 1", "to": "M 0 5 L 1 9"})]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -732,7 +736,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g id="node"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 0.0, "target": "#node", "to": {"opacity": 1},
                            "duration": 0.4, "repeat": 3, "yoyo": True}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -746,7 +750,7 @@ class Renderer(unittest.TestCase):
         m = H.make_manifest()
         imgs = {"seg-a": {"src": "images/seg-a.svg",
                           "inline_svg": '<svg viewBox="0 0 980 735"><g id="node"/></svg>',
-                          "director": {"steps": [
+                          "animate": {"steps": [
                               {"at_time": 0.0, "target": "#node",
                                "to": {"opacity": 1}, "duration": 0.4}]}},
                 "seg-b": {"src": "images/seg-b.svg"}}
@@ -759,7 +763,7 @@ class Renderer(unittest.TestCase):
         imgs = {"seg-a": {"src": "images/seg-a.svg",
                           "inline_svg": ('<svg viewBox="0 0 980 735"><path id="c"/>'
                                          '<text id="n">0</text><text id="t">字</text></svg>'),
-                          "director": {"steps": [
+                          "animate": {"steps": [
                               {"at_time": 0.0, "target": "#c", "draw": True,
                                "duration": 0.8, "repeat": 1, "yoyo": True},
                               {"at_time": 1.0, "target": "#n", "count": {"to": 10},
@@ -782,7 +786,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><text id="num"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 0.5, "target": "#num",
                            "count": {"to": 6.02, "decimals": 2}, "duration": 1.5}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -806,7 +810,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><text id="cap">熵增原理</text></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 0.5, "target": "#cap", "type": {},
                            "duration": 1.2}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -827,7 +831,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g class="mk"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 0.0, "target": ".mk", "from": {"opacity": 0},
                            "to": {"opacity": 1}, "duration": 0.4, "stagger": 0.15}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -846,7 +850,7 @@ class Renderer(unittest.TestCase):
         imgs = {
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g id="a"/><g id="b"/></svg>',
-                      "director": {"steps": [
+                      "animate": {"steps": [
                           {"at_time": 1.0, "target": "#a", "to": {"opacity": 1}, "duration": 0.5},
                           {"at_time": "+0.3", "target": "#b", "to": {"opacity": 1}, "duration": 0.5}]}},
             "seg-b": {"src": "images/seg-b.svg"},
@@ -865,10 +869,10 @@ class DirectorPrepare(unittest.TestCase):
 
     def test_attaches_inline_and_warns_on_stripped(self):
         rel = _write_svg(self.tmp.name, "seg-a", SVG_WITH_ALL)
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, warns = G.director_prepare(images, segs, self.tmp.name)
+        errs, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual(errs, [])
         self.assertIn("inline_svg", images["seg-a"])
         self.assertNotIn("<script>", images["seg-a"]["inline_svg"])
@@ -876,14 +880,14 @@ class DirectorPrepare(unittest.TestCase):
 
     def test_missing_target_id_is_error(self):
         rel = _write_svg(self.tmp.name, "seg-a", SVG_WITH_ALL)
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": "#ghost", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertTrue(any("找不到对应 id" in e for e in errs))
 
     def test_camera_crop_warns_here_not_in_check_svg(self):
-        """裁切的判据是 SVG 原文 **加上** director steps，只有这一层同时握有两者。
+        """裁切的判据是 SVG 原文 **加上** animate steps，只有这一层同时握有两者。
 
         `check_svg.py` 读单文件、看不到 images.json 的运镜参数，所以这类 bug 必须由
         prepare 报；反过来 prepare 也不该把它升级成 error——途中出画是合法演法，
@@ -893,10 +897,12 @@ class DirectorPrepare(unittest.TestCase):
                          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">'
                          '<g id="cam"><rect id="band" x="80" y="1362" width="920" '
                          'height="60"/></g></svg>')
-        images = {"seg-a": {"src": rel, "director": {"steps": [
+        images = {"seg-a": {"src": rel, "animate": {"steps": [
             {"at": 0, "target": "#cam", "to": {"scale": 1.16, "svgOrigin": "540 660"}}]}}}
-        segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, warns = G.director_prepare(images, segs, self.tmp.name)
+        # 运镜归作者只发生在满幅版式上：槽位页写相机会被契约层与生成期一起拒。
+        segs = [{"id": "seg-a", "layout": "canvas",
+                 "sentences": [{"index": 0, "start_time": 0.0}]}]
+        errs, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual(errs, [])
         crop = [w for w in warns if "运镜收尾位" in w]
         self.assertEqual(len(crop), 1, warns)
@@ -909,47 +915,47 @@ class DirectorPrepare(unittest.TestCase):
                          '<g id="cam"><rect id="panel" x="60" y="300" width="960" '
                          'height="700"/></g>'
                          '<rect id="band" x="80" y="1362" width="920" height="60"/></svg>')
-        images = {"seg-a": {"src": rel, "director": {"steps": [
+        images = {"seg-a": {"src": rel, "animate": {"steps": [
             {"at": 0, "target": "#cam", "to": {"scale": 1.16, "svgOrigin": "540 660"}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        _, warns = G.director_prepare(images, segs, self.tmp.name)
+        _, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual([w for w in warns if "运镜收尾位" in w], [])
 
     def test_class_target_present_passes(self):
         rel = _write_svg(self.tmp.name, "seg-a",
                          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 735">'
                          '<g class="mk a"/><g class="b mk"/></svg>')
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": ".mk", "to": {"opacity": 1}, "stagger": 0.1}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual(errs, [])
 
     def test_class_target_missing_is_error(self):
         rel = _write_svg(self.tmp.name, "seg-a",
                          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 735">'
                          '<g class="mk"/></svg>')
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": ".ghost", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertTrue(any("找不到对应 id/class" in e for e in errs))
 
     def test_at_out_of_range_is_error(self):
         rel = _write_svg(self.tmp.name, "seg-a", SVG_WITH_ALL)
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 5, "target": "#node", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertTrue(any("越界" in e for e in errs))
 
     def test_at_time_skips_sentence_range_check(self):
         # 只有一句旁白的段用 at_time 锚点：没有句序可锚，不该报越界，target 命中即通过
         rel = _write_svg(self.tmp.name, "seg-a", SVG_WITH_ALL)
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at_time": 3.0, "target": "#node", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.director_prepare(images, segs, self.tmp.name)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual([e for e in errs if "越界" in e], [])
         self.assertIn("inline_svg", images["seg-a"])
 
@@ -965,9 +971,9 @@ class DirectorPrepare(unittest.TestCase):
                          '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
                          'viewBox="0 0 1080 1440"><g id="node" opacity="0">'
                          '<rect width="200" height="100" fill="#fff"/></g></svg>')
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
-        errs, warns = G.director_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
+        errs, warns = G.animate_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
         self.assertEqual(errs, [])
         hook = [w for w in warns if "起始帧全空" in w]
         self.assertEqual(len(hook), 1, warns)
@@ -979,9 +985,9 @@ class DirectorPrepare(unittest.TestCase):
                          'viewBox="0 0 1080 1440"><rect id="panel" x="60" y="300" width="960" '
                          'height="700" fill="#16233a"/><g id="node" opacity="0">'
                          '<rect width="200" height="100" fill="#fff"/></g></svg>')
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
-        _, warns = G.director_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
+        _, warns = G.animate_prepare(images, [self._seg("seg-a", "canvas")], self.tmp.name)
         self.assertEqual([w for w in warns if "起始帧全空" in w], [])
 
     def test_slot_director_blank_frame0_not_checked(self):
@@ -990,11 +996,11 @@ class DirectorPrepare(unittest.TestCase):
                          '<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
                          'viewBox="0 0 980 735"><g id="node" opacity="0">'
                          '<rect width="200" height="100" fill="#fff"/></g></svg>')
-        images = {"seg-a": {"src": rel, "director": {
+        images = {"seg-a": {"src": rel, "animate": {
             "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}}}
         segs = [{"id": "seg-a", "sentences": [
             {"index": 0, "start_time": 0.0, "duration": 2.0}]}]
-        _, warns = G.director_prepare(images, segs, self.tmp.name)
+        _, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual([w for w in warns if "起始帧全空" in w], [])
 
     def test_keep_page_frame0_not_checked(self):
@@ -1006,13 +1012,13 @@ class DirectorPrepare(unittest.TestCase):
                          'viewBox="0 0 1080 1440"><g id="node" opacity="0">'
                          '<rect width="200" height="100" fill="#fff"/></g></svg>')
         images = {
-            "seg-a": {"src": rel, "director": {
+            "seg-a": {"src": rel, "animate": {
                 "steps": [{"at": 0, "target": "#node", "set": {"opacity": 1}}]}},
-            "seg-b": {"src": rel, "stage": "keep", "director": {
+            "seg-b": {"src": rel, "stage": "keep", "animate": {
                 "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}},
         }
         segs = [self._seg("seg-a", "canvas"), self._seg("seg-b", "canvas")]
-        errs, warns = G.director_prepare(images, segs, self.tmp.name)
+        errs, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual(errs, [])
         hook = [w for w in warns if "起始帧全空" in w]
         self.assertEqual(len(hook), 1, warns)   # 只有首页那一条，接续页不添
@@ -1147,7 +1153,7 @@ class BackgroundWarns(unittest.TestCase):
 
 
 class CheckSvgWallclock(unittest.TestCase):
-    def test_wallclock_animation_warns_director_hint(self):
+    def test_wallclock_animation_warns_animate_hint(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
@@ -1156,7 +1162,7 @@ class CheckSvgWallclock(unittest.TestCase):
         p = _write_svg(d.name, "w", svg)
         errs, warns = check_svg.check_file(os.path.join(d.name, p), "slot", "portrait", "dark")
         self.assertEqual([e for e in errs if "墙钟" in e], [])
-        self.assertTrue(any("墙钟动画" in w and "director" in w for w in warns))
+        self.assertTrue(any("墙钟动画" in w and "animate" in w for w in warns))
 
 
 if __name__ == "__main__":

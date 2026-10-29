@@ -263,10 +263,10 @@ class PrepareIntegration(unittest.TestCase):
 
     def _prepare(self, at_time):
         images = {"seg-a": {"src": "images/seg-a.svg",
-                            "director": {"steps": [
+                            "animate": {"steps": [
                                 {"at_time": at_time, "target": "#a1",
                                  "to": {"opacity": 1}}]}}}
-        return G.director_prepare(images, SEGS, self.tmp.name)
+        return G.animate_prepare(images, SEGS, self.tmp.name)
 
     def test_stale_at_time_surfaces_as_warn_not_error(self):
         errs, warns = self._prepare(5.6)        # 落在 seg-b 的旁白里
@@ -283,7 +283,7 @@ class PrepareIntegration(unittest.TestCase):
 
 class Report(unittest.TestCase):
     def test_table_lists_each_beat_with_landing_and_tally(self):
-        images = {"seg-a": {"src": "images/seg-a.svg", "director": {"steps": [
+        images = {"seg-a": {"src": "images/seg-a.svg", "animate": {"steps": [
             {"at_time": 1.0, "target": "#a1", "to": {"opacity": 1}},
             {"at_time": 2.2, "target": "#a2", "to": {"opacity": 1}},
             {"at_time": 6.0, "target": "#t1", "to": {"opacity": 1}}]}}}
@@ -295,7 +295,7 @@ class Report(unittest.TestCase):
         self.assertIn("after  下一页起点之后（看不见）", body)
         self.assertIn("— 3 拍：in 1 · gap 1 · after 1", lines[-1])
 
-    def test_segments_without_director_are_skipped(self):
+    def test_segments_without_animate_are_skipped(self):
         images = {"seg-a": {"src": "images/seg-a.svg"}, "seg-z": {"src": "x.svg"}}
         self.assertEqual(G.beat_report_lines(images, SEGS, 0.5), [])
 
@@ -389,17 +389,17 @@ class ZOrder(unittest.TestCase):
         # panel 有 transform 祖先 → 包围盒算不出，跳过而不是误报
         self.assertEqual(warns, [])
 
-    def test_through_director_prepare(self):
+    def test_through_animate_prepare(self):
         # 集成：生成期体检必须带出这条 warn（判据要 steps + SVG 两份输入，
         # 渲染端手里没有，只能在这层做）
         d = os.path.join(self.tmp.name, "images")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "seg-a.svg"), "w", encoding="utf-8") as f:
             f.write(self._svg(self._BODY))
-        images = {"seg-a": {"src": "images/seg-a.svg", "director": {"steps": [
+        images = {"seg-a": {"src": "images/seg-a.svg", "animate": {"steps": [
             {"at": 0, "target": "#dot"},
             {"at": 1, "target": "#panel"}]}}}
-        errs, warns = G.director_prepare(images, SEGS, self.tmp.name)
+        errs, warns = G.animate_prepare(images, SEGS, self.tmp.name)
         self.assertEqual(errs, [])
         hits = [w for w in warns if "z 序与揭示顺序相反" in w]
         self.assertEqual(len(hits), 1, warns)

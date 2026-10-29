@@ -115,11 +115,11 @@ def put_override(assignment):
     path = path.strip()
     if not sep or not path:
         raise ValueError(f"--set 要写成 键=值（实际: {assignment!r}），如 --set "
-                         f"animation.director.duration=0.8")
+                         f"animation.animate.duration=0.8")
     leaves = dict(_leaves(_template_parsed(), ""))
     if path not in leaves:
         # 候选按"路径段重叠"排，而不是子串包含：拼错通常是段内错一个字母
-        # （direktor），子串匹配在那里一条都命中不了。
+        # （duratoin），子串匹配在那里一条都命中不了。
         want = path.lower()
         head = want.rsplit(".", 1)[0]
 
@@ -564,7 +564,7 @@ _TEMPLATE_JSON = r'''
         {"scale": 1.05, "panX": -0.6, "panY": 0.25, "ease": "power3.out"}
       ]
     },
-    "director": {
+    "animate": {
       "duration": 0.5,
       "ease": "power2.out"
     },

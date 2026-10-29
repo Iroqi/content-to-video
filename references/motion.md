@@ -1,6 +1,6 @@
 # 第 3 步 · 动效判据
 
-`references/rendering.md` 讲怎么实现（转场、入场、焦点衰减的落地细节）；本文件回答**该不该动、动多快**，以及**图里那个动怎么算出来**（`evolve` / `derive`）。
+`references/rendering.md` 讲怎么实现（转场、入场、焦点衰减的落地细节）；本文件回答**该不该动、动多快**。图里那几条 step 怎么写、镜头归谁、参数怎么推 → `references/svg-motion.md`。
 
 ## 先写台词板，再写补间
 
@@ -15,7 +15,7 @@
 简写时**下标即句序**；跳句用全写 `[{"on": 0, "change": "…"}, {"on": 2, "change": "…"}]`——两种写法不可混用（"第几拍"会有两个来源，契约层直接拒）。
 
 - `on` 必填：说不上来第几句变，说明这一拍没想清楚。这个病没有门禁看得见——`check` 只证明能渲，时长契约只证明演完，`--perceptual` 只知道画面在动；句序还会被重分句打散，`run.py` 生成 HTML 前逐条核越界，exit 2。
-- 台词板写意图，`images.json` 的 `director.steps` / `evolve.steps` 写实现：台词板里写属性名、时长、缓动会被拒（`change` 超 60 字即视为在实现层写东西），只声明不实现会被 `run.py` 点名 warn——那时它只是愿望清单，比不写更坏。
+- 台词板写意图，`images.json` 的 `animate.steps` 写实现：台词板里写属性名、时长、缓动会被拒（`change` 超 60 字即视为在实现层写东西），只声明不实现会被 `run.py` 点名 warn——那时它只是愿望清单，比不写更坏。
 
 ## 四职务：每条补间都要能说出它在替观众做什么
 
@@ -24,7 +24,7 @@
 | 职务 | 回答 | 例子 | 反例 |
 |---|---|---|---|
 | 引导视线 | 现在该看哪里 | 焦点衰减五维、karaoke、入场后收拢 | 无休止漂浮/呼吸/旋转 |
-| 展示变化 | 什么变成了什么 | `evolve`、`morph`、`count`、`draw`、`stage:"keep"` | 弹一下又弹回去 |
+| 展示变化 | 什么变成了什么 | `animate` 的补间、`morph`、`count`、`draw`、`stage:"keep"` | 弹一下又弹回去 |
 | 推进叙事 | 接下来发生了什么 | 段落 wipe、整页画布推镜、标题揭示边 | 与内容无关的花活 |
 | 操作反馈 | 我刚那下生效没有 | **只在网页预览**（`preview.js`） | 把这份手感带进成片 |
 
@@ -115,39 +115,16 @@ P(t) = (A·(1 − f_主(t)),  B·(1 − f_副(t)))      终点在 (0,0)
 - **没有目的的漂浮**：氛围层只许低幅度、长周期、只改亮度或极慢位移的呼吸。
 - **机械的逐字蹦出**：每个字都有自己的出生时刻，观众数得出字数。要表达"被推上来"就用一条连续揭示边（见上节）。
 - **循环要在片长内收尾**：稳态循环不写 `repeat:-1`——GSAP 按 `1e10` 折算，`seek()`、预览进度条、按时刻取帧一起坏。遍数由生成期按片长算；契约层直接拒，只想试手感走 `--until html --allow-infinite-loop`。
-- **别手抄同步**：三条补间各写 `duration` 保证"一起动"，抄错一条就脱节，而脱节只表现为"看着有点乱"。有连续量驱动时改用 `derive`（见 `references/director.md`「参数演绎」）。
+- **别手抄同步**：三条补间各写 `duration` 保证"一起动"，抄错一条就脱节，而脱节只表现为"看着有点乱"。有连续量驱动多个元素时改用参数演绎（见 `references/svg-motion.md`「参数演绎」）。
 
-## SVG 动画：两档
+## 让图跟着旁白动
 
-选哪档只看一件事——**画面要不要对上某句话**。
+一条判据：**这一页的画面要不要对上某句话**。
 
-| 档 | 怎么走 | 与口播同步 | 用在哪 |
-|---|---|---|---|
-| 氛围循环 | CSS / SMIL 自走，`<img>` 载入 | 不能，逐帧也不可复现 | 只给氛围层（`check_svg.py` 会 warn） |
-| 导演 | 净化内联 + GSAP 按句驱动 | 能，逐帧可复现 | 要画面跟上某句话的一切 |
+- **要** → 给该段写 `animate`：SVG 经 `_svg_sanitize` 净化（删 `<script>`/`on*`/`<foreignObject>`/带 scheme 的 href、外链 `url()` 换 `about:blank`、剥掉 SMIL 与 CSS animation）后内联成活 DOM，由 GSAP 按 `timing_manifest` 逐句驱动。这是**唯一**允许内联进交付 HTML 的情形，也是唯一能与口播同步、逐帧可复现的动法。
+- **不要** → 不写 `animate`，图就是静的。整段只有氛围在动也可以用墙钟动画（CSS `@keyframes` / SMIL），但它与旁白无关、逐帧不可复现，`check_svg.py` 会 warn，成片里不采用——只许留在氛围层。
 
-**① 氛围循环**（墙钟，走 `<img>`）：CSS/`@keyframes`/SMIL 自走，**无法与口播同步**、逐帧不可复现。只用于氛围层，`check_svg.py` 会 warn。
-
-**② 导演**（净化内联，opt-in）：写 `director` 的 SVG 先经 `_svg_sanitize` 净化（删 `<script>`/`on*`/`<foreignObject>`/带 scheme 的 href、外链 `url()` 换 `about:blank`、剥掉 SMIL 与 CSS animation），再由 GSAP 按句驱动——唯一允许内联进交付 HTML 的情形。
-
-**怎么写那几条 step**：键表、六个够用的"演"、`evolve`、`derive` 全在 `references/director.md`——三张编排共用同一套锚点语义，写一次就够。样子长这样：
-
-```json
-{"seg4": {"src": "images/seg4.svg", "director": {"steps": [
-  {"at": 0, "target": "#node-a", "set": {"opacity": 1}},
-  {"at": 0.4, "target": "#curve", "draw": true, "duration": 1.2},
-  {"at": 1, "target": "#cam", "to": {"scale": 2.2, "svgOrigin": "500 360"}, "duration": 1.5},
-  {"at": 2, "target": ".row", "from": {"opacity": 0, "y": 16}, "to": {"opacity": 1, "y": 0}, "stagger": 0.12}
-]}}}
-```
-
-### 跨段接续（`stage: "keep"`）
-
-一个动作常一句话讲不完，而段落边界是硬的。给接续页写 `"stage": "keep"`，它的起点就是上一页演完的那幅画面。
-
-**多数情况不用你写**（`_stage_carry.infer_stage_keep`）：同图 + 上一段有 `director` + 上一段末拍把相机停在非原位，判中会点名并说明怎么改回去；想让它独立重演，换开 `src` 或去掉末拍运镜。
-
-机制：生成 HTML 时把上一页补间的收尾态烘焙进本页内联副本——相机姿态折成 `#cam` 内静态 `<g data-ctv-stage>`，元素级 `opacity`/`attr` 落成起始属性，`x`/`y` 折成 `translate` 前缀。**量连续性看柱子边沿，别拿整幅 PSNR**（页界本就整幅换色）。约束：两页同图、上一页必须有 `director`（接续页自己可不写）；元素级 `transform` 只接 `x`/`y`（`scale`/`rotation` 跳过并 warn）；`repeat`/`yoyo` 按收尾那头接；**接续页别给 `<defs>` 里的元素写补间**（id 重复，图内引用只认第一份）；相机原点由渲染器钉。接续页不走擦除、不生成配图入场（那正是"页界回弹"的本体）。
+"先静后动"不是另一种配置：把第一拍放到要动的那句话上即可。键表、镜头归谁、参数演绎、跨段接续（`stage:"keep"`）都在 `references/svg-motion.md`。
 
 ## 官方校验命令
 

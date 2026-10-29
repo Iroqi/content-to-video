@@ -21,22 +21,22 @@ class OverrideContract(unittest.TestCase):
         T._OVERRIDES.clear()
 
     def test_override_reaches_load_template(self):
-        self.assertEqual(T.load_template()["animation"]["director"]["duration"], 0.5)
-        T.put_override("animation.director.duration=0.9")
-        self.assertEqual(T.load_template()["animation"]["director"]["duration"], 0.9)
+        self.assertEqual(T.load_template()["animation"]["animate"]["duration"], 0.5)
+        T.put_override("animation.animate.duration=0.9")
+        self.assertEqual(T.load_template()["animation"]["animate"]["duration"], 0.9)
 
     def test_unknown_path_is_named_with_the_nearest_keys(self):
         with self.assertRaises(ValueError) as cm:
-            T.put_override("animation.direktor.duration=1")
+            T.put_override("animation.animate.duratoin=1")
         msg = str(cm.exception)
-        self.assertIn("animation.direktor.duration", msg)
-        self.assertIn("animation.director.duration", msg)  # 最近的候选要列出来
+        self.assertIn("animation.animate.duratoin", msg)
+        self.assertIn("animation.animate.duration", msg)  # 最近的候选要列出来
 
     def test_block_replacement_is_refused(self):
         with self.assertRaises(ValueError):
-            T.put_override('animation.director={"duration":1}')
+            T.put_override('animation.animate={"duration":1}')
         with self.assertRaises(ValueError):
-            T.put_override("animation.director.duration=null")
+            T.put_override("animation.animate.duration=null")
 
     def test_bare_word_is_not_a_json_scalar(self):
         with self.assertRaises(ValueError) as cm:
@@ -59,9 +59,9 @@ class OverrideContract(unittest.TestCase):
         T.put_override("subtitle.relay.from=0")  # 数字写 0 是合法的
 
     def test_layer_is_scoped(self):
-        with T.override_layer(["animation.director.duration=0.7"]):
-            self.assertEqual(T.load_template()["animation"]["director"]["duration"], 0.7)
-        self.assertEqual(T.load_template()["animation"]["director"]["duration"], 0.5)
+        with T.override_layer(["animation.animate.duration=0.7"]):
+            self.assertEqual(T.load_template()["animation"]["animate"]["duration"], 0.7)
+        self.assertEqual(T.load_template()["animation"]["animate"]["duration"], 0.5)
 
 
 class ConsumersSeeTheOverride(unittest.TestCase):
@@ -89,8 +89,8 @@ class ConsumersSeeTheOverride(unittest.TestCase):
 
     def test_html_renderer_sees_it(self):
         import html_renderer as HR
-        T.put_override("animation.director.duration=0.77")
-        self.assertEqual(HR.load_template()["animation"]["director"]["duration"], 0.77)
+        T.put_override("animation.animate.duration=0.77")
+        self.assertEqual(HR.load_template()["animation"]["animate"]["duration"], 0.77)
 
 
 class PlaceholderFontStack(unittest.TestCase):

@@ -31,6 +31,7 @@ from _ease import validate_ease as ease_validate
 from _ease import reject_overshoot as ease_reject_overshoot
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
+from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
 from _stage_carry import infer_stage_keep
 
 
@@ -1027,9 +1028,9 @@ def _media_html(rc, sid, s, d):
             f'      </video>\n'
             f'    </div>'
         )
-    # 导演档（images.json 写了 director）：gen_hyperframes 已把净化后的 SVG
+    # 动了编排的图（images.json 写了 animate）：gen_hyperframes 已把净化后的 SVG
     # 回填进 inline_svg。这里内联成活 DOM，GSAP 才能逐帧驱动图内命名元素
-    # （见 _director_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
+    # （见 _animate_timeline_lines）。净化去掉了 script/on*/SMIL/墙钟动画，
     # 内联的安全性与决定性由 _svg_sanitize 保证——普通 SVG 仍是 <img>。
     # 容器带 `data-layout-allow-overflow`：入场收拢（settle 起手 scale 1.05~1.08）
     # 以 scale≥1 铺满槽位，子元素 bbox 每帧都比容器大几像素。
@@ -1060,10 +1061,10 @@ def _compare_html(rc, sid, s, d):
     成立，拆成两个槽就要给每一道门禁各教一遍"这两个其实是一个"。
 
     两格各自独立：
-    - 各自的 id（`img-{sid}-0/1`）：补间才能分别打，`panes[i].director` 的
+    - 各自的 id（`img-{sid}-0/1`）：补间才能分别打，`panes[i].animate` 的
       target 也才有稳定锚点。
     - 各自的 `<img>`（SVG 照旧不铺满幅底，走 bare-media 撤掉装饰底）。
-    - 各自的内联 SVG（写了 director/evolve 的那格）：gen_hyperframes 把净化后
+    - 各自的内联 SVG（写了 animate 的那格）：gen_hyperframes 把净化后
       的 SVG 回填在 `inline_svg` 上，逐格独立。
     """
     panes = []
@@ -1194,7 +1195,7 @@ def _verse_html(seg, sid, ac_text_attr):
 def _is_keep_page(rc, sid):
     """这一页是不是跨段接续页（images.json 的 ``stage: "keep"``）。
 
-    烘焙本身在生成期的 ``gen_hyperframes.director_prepare``（见 ``_stage_carry``），
+    烘焙本身在生成期的 ``gen_hyperframes.stage_prepare``（见 ``_stage_carry``），
     渲染端只读这一个布尔：它决定"还要不要把这一页当新页再演一遍"。
     """
     entry = rc.images.get(sid)
@@ -1643,7 +1644,7 @@ def _cycle_js(step):
     return "".join(f'{k}:{json.dumps(v)},' for k, v in vars_.items())
 
 
-def _canvas_first_beat(card, director, beats):
+def _canvas_first_beat(card, block, beats):
     """画布页的首拍前置：让这一页的第一件事发生在段的头一帧。
 
     现象：整页画布没有标题层也没有句子流，导演第一拍若落在第 2 句或更晚，从段起点
@@ -1661,7 +1662,7 @@ def _canvas_first_beat(card, director, beats):
         return []
     sid = card.sid
     seen, out = set(), []
-    for step in director["steps"]:
+    for step in block["steps"]:
         target = step.get("target")
         if not target or target in seen:
             continue
@@ -1677,11 +1678,11 @@ def _canvas_first_beat(card, director, beats):
 
 
 def _derive_timeline_lines(rc, card):
-    """`derive`：一条参数驱动的几何演绎（见 `_derive`、director.md「参数演绎」）。
+    """参数演绎：`animate` 里写了 `params` + `bind` 的那条路（见 `_derive`）。
 
-    与 `evolve` / `director` 的根本差别：那边一拍写"哪个元素变成什么"，这边一拍只写
-    **参数被推到多少**，图内的几何由 `bind` 里的表达式**逐帧重算**。好处有三，
-    每一条都是属性级补间做不到的：
+    与属性补间的差别：那边一拍写"哪个元素变成什么"，这边一拍只写**参数被推到
+    多少**，图内的几何由 `bind` 里的表达式**逐帧重算**。好处有三，每一条都是
+    属性级补间做不到的：
 
     - 同步是免费的：三个元素一起动只需要一个参数（不再靠作者把三条 duration/ease
       抄成一样）；
@@ -1697,7 +1698,7 @@ def _derive_timeline_lines(rc, card):
     """
     if not card.has_image:
         return []
-    # 并置对比的两格各挂各的 derive（`rc.images["{sid}:{i}"]`，见 _normalize_images）。
+    # 并置对比的两格各挂各的参数（`rc.images["{sid}:{i}"]`，见 _normalize_images）。
     # 单图版式读 `rc.images[sid]`，那一条的 sid 不会是分格键，两条路互不串台。
     targets = ([f"{card.sid}:{i}" for i in (0, 1)]
                if getattr(card, "layout", None) == "compare" else [card.sid])
@@ -1712,22 +1713,22 @@ def _derive_lines_for(rc, card, key):
     from _derive import compile_derive
 
     entry = rc.images.get(key)
-    opts = (entry or {}).get("opts", {})
-    block = opts.get("derive")
-    if not block:
+    block = animate_of((entry or {}).get("opts") or {})
+    if not block.get("params"):
         return []
-    # 作用域收窄到这一格的容器：多段内联同名 id 才不会串台（与 director 同一条
+    block = dict(block, steps=[st for st in block["steps"] if "param" in st])
+    # 作用域收窄到这一格的容器：多段内联同名 id 才不会串台（与属性补间同一条
     # 规则；分格再收一层到 `-{i}`，左右两格画同一张 SVG 也不会互相改写）。
     scope = f"#img-{key.replace(':', '-')}"
-    dflt = rc.anim["director"]
+    dflt = rc.anim["animate"]
     try:
         beats = beat_positions(block["steps"], card.seg["sentences"], card.s,
                                dflt["duration"])
     except ValueError as e:
-        raise ValueError(f"段落 '{card.sid}' 的 derive.steps 有一步 {e}")
+        raise ValueError(f"段落 '{card.sid}' 的 animate.steps 有一步 {e}")
     d = compile_derive(block, dflt["duration"])
     payload = d.js_payload(scope)
-    # 本次未写 ease 的拍走模板缺省（与 director 同一个数）
+    # 本次未写 ease 的拍走模板缺省（与属性补间同一个数）
     for st in payload["steps"]:
         st["ease"] = st["ease"] or dflt["ease"]
 
@@ -1761,20 +1762,24 @@ def _derive_lines_for(rc, card, key):
     return lines
 
 
-def _director_timeline_lines(rc, card):
-    """SVG「导演」补间：整页画布的 director.steps（展开逻辑见 `_expand_steps`）。"""
+def _animate_timeline_lines(rc, card):
+    """SVG 编排（images.json 的 `animate`）→ 挂在主时间线上的 GSAP 补间。
+
+    一个字段通吃"哪一拍让图里的东西变成什么样"，与版式无关：`pin_cam` 由版式推出
+    （满幅页版面归作者，机位也归作者；槽位页镜头归模板，只在图内改元素）。
+    """
     if not card.has_image:
         return []
     entry = rc.images.get(card.sid)
-    opts = (entry or {}).get("opts", {})
-    director = opts.get("director")
-    if not director:
+    block = animate_of((entry or {}).get("opts") or {})
+    if not block:
         return []
-    return _expand_steps(rc, card, director, key="director", pin_cam=True)
+    return (_expand_steps(rc, card, block, pin_cam=is_full_bleed_card(card))
+            + _derive_timeline_lines(rc, card))
 
 
-def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
-    """把一段编排（director / evolve 同构）展开成挂在主时间线上的 GSAP 补间。
+def _expand_steps(rc, card, block, pin_cam=True, pane=None):
+    """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
     位置取自该段旁白的句子（可为句内小数偏移）——于是图内
     元素的状态变化、描边生长、运镜都和口播对齐，且因为是时间线属性补间（非墙钟），
@@ -1797,7 +1802,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
       采样成一段 `tl.set(attr:{d})` 关键帧；时间均匀推进、形状进度按该步 `ease`（缺省
       模板 `power2.out`）取样，逐帧 seek 可复现、无运行时依赖。
     - `set` 瞬时赋值；`from`+`to` = fromTo；单独 `to`/`from` 各走一路。缺省
-      duration/ease 取模板 animation.director（视觉真源单一数据源）。
+      duration/ease 取模板 animation.animate（渲染端的视觉缺省，单一数据源）。
     - `count:{to,...}` 数字滚动、`type:{}` 打字机逐字揭示：都展开成"渲染端生成的代理
       补间 + onUpdate 写 textContent"（读的是校验过的标量/元素自身文本，非信源回调）。
       二者与 morph 一样各负责整段、忽略 stagger，且块以 `(function…)()` 起头，故发射时
@@ -1808,7 +1813,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
     """
     entry = (rc.images.get(card.sid) or {}) if pane is None else _pane_media(rc, card.sid, pane)
     sentences = card.seg["sentences"]
-    dflt = rc.anim["director"]
+    dflt = rc.anim["animate"]
     sid = card.sid
     # 并置对比的分格作用域：每格有自己的容器 id（img-{sid}-0/1），否则两格的
     # 同名 target（#a）会互相串台——左边那条补间打到右边那格上。
@@ -1818,14 +1823,14 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
     try:
         beats = beat_positions(block["steps"], sentences, card.s, dflt["duration"])
     except ValueError as e:
-        raise ValueError(f"段落 '{sid}' 的 {key}.steps 有一步 {e}")
+        raise ValueError(f"段落 '{sid}' 的 animate.steps 有一步 {e}")
     # 相机缺省原点的钉值：作者整页没写 svgOrigin/transformOrigin 且真的推了近，就把
     # 生成期算的那个内容中心写成显式 svgOrigin 注入。不钉的话 GSAP 绕的是 `#cam` 自身
     # bbox 的左上角（实测，见 _cam_crop.cam_default_origin 的 docstring），那个角还跟着
     # 别的步的 from 瞬态飘 —— 出画 warn 与跨段烘焙算的取景就和成片不是一幅画。
-    # 槽位版式的 evolve 不调机位（契约层已拒相机属性），原点注入这件事对它没有意义：
-    # 槽位里的镜头由模板的入场收拢负责（配图不做持续推近，见 references/rendering.md），
-    # 再钉一个原点只会让"图内原点"与 "CSS transform-origin"两个中心打架。
+    # 槽位版式不调机位（契约层已拒相机属性），原点注入对它没有意义：那里的镜头由
+    # 模板的入场收拢负责（配图不做持续推近，见 references/rendering.md），再钉一个
+    # 原点只会让"图内原点"与"CSS transform-origin"两个中心打架。
     pin = (cam_default_origin(entry.get("opts", {}).get("inline_svg"), block["steps"])
            if pin_cam else None)
 
@@ -1833,6 +1838,8 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
     if pin_cam:
         lines.extend(_canvas_first_beat(card, block, beats))
     for step, (pos, dur) in zip(block["steps"], beats):
+        if "target" not in step:
+            continue            # 参数推进的拍：由 _derive_timeline_lines 整块摊成代理补间
         sel = f"{scope} {step['target']}"
         sel_js = json.dumps(sel)
         ease = step.get("ease", dflt["ease"])
@@ -1854,7 +1861,7 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
         if "morph" in step:
             # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
             # 时间均匀推进（t=pos+u·span），形状进度 k=ease(每一遍内的位置)——因为 GSAP
-            # 不会对 set 再缓动，缓动曲线就由这里的采样定义（缺省取模板 director.ease，与
+            # 不会对 set 再缓动，缓动曲线就由这里的采样定义（缺省取模板 animation.animate.ease，与
             # 兄弟 tween 同手性）。逐帧 seek 时 GSAP 只取"最近一个已到的 set"，于是形状是
             # 时间的确定函数、跨平台可复现，不需要任何运行时 morph 库。拓扑相符性在契约层
             # 已校验。repeat/yoyo 折进采样：整段跨度 = dur×遍数，遍序号奇偶决定这一遍正放
@@ -1863,12 +1870,12 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
             ease_fn = ease_curve(step.get("ease"), dflt["ease"])
             cycles = beat_cycles(step)
             if cycles is None:
-                # repeat:-1 在 morph 上没有终点可采（契约层已拒，director 校验那条
+                # repeat:-1 在 morph 上没有终点可采（契约层已拒，animate 校验那条
                 # “没有终点可采”）。此前这里写 `beat_cycles(step) or 1` 静默压成
                 # 一遍：成片演一遍就停，而对轴门禁与接续烘焙仍按"无限、无收尾态"
                 # 记账——报告与成片分家，且全程无 warn。宁可直接炸出来。
                 raise ValueError(
-                    f"director 步 {step.get('target')!r} 的 morph 不支持 "
+                    f"animate 步 {step.get('target')!r} 的 morph 不支持 "
                     "repeat:-1：形变是生成期采样，没有终点就采不出中间态")
             yoyo = bool(step.get("yoyo"))
             span = beat_span(step, dur)
@@ -1966,51 +1973,22 @@ def _expand_steps(rc, card, block, key="director", pin_cam=True, pane=None):
 
 
 def _compare_timeline_lines(rc, card):
-    """并置对比两格的补间：`panes[i].director` / `.evolve` 逐格展开。
+    """并置对比两格的编排：`panes[i].animate` 逐格展开。
 
     两格各用 `#img-{sid}-{i}` 作作用域（见 `_expand_steps` 的 `pane` 参数）。
-    这一版式上不接相机：相机会话属于整页画布（`director` + `layout:"canvas"`），
-    而这里两个格子的景别本来就是要**并排对照**的——一格推近另一格不动，读作
-    "这两件事不一样大"，而作者想说的是"这两件事形状不同"。
+    这一版式上不接相机：两个格子的景别本来就是要**并排对照**的——一格推近另一格
+    不动，读作"这两件事不一样大"，而作者想说的是"这两件事形状不同"。
     """
     if not card.has_image or getattr(card, "layout", None) != "compare":
         return []
     out = []
     for i in (0, 1):
         pane = (rc.images.get(f"{card.sid}:{i}") or {}).get("opts") or {}
-        for key in ("director", "evolve"):
-            block = pane.get(key)
-            if block:
-                out.extend(_expand_steps(rc, card, block, key=key,
-                                         pin_cam=False, pane=i))
+        block = animate_of(pane)
+        if block:
+            out.extend(_expand_steps(rc, card, block, pin_cam=False, pane=i))
+            out.extend(_derive_lines_for(rc, card, f"{card.sid}:{i}"))
     return out
-
-
-def _evolve_timeline_lines(rc, card):
-    """槽位版式 SVG 的「演进」补间（images.json 的 `evolve`，见 `_evolve`）。
-
-    与 `_director_timeline_lines` 共用全部的"怎么演"（锚点、draw、morph、count、
-    type、stagger、repeat/yoyo），区别只在**它不接管编排**：
-
-    - 版面仍是槽位版式：标题层、句子流层、配图入场收拢都照旧；
-      这条补间只是叠在图内元素上，让"讲到的那个状态"真的出现在画面里。
-    - **不注入相机原点**：槽位里的镜头归模板，`evolve` 已在契约层拒掉相机属性，
-      这里也就不做 `cam_default_origin` 那一套（对槽位图算出来的中心没有意义）。
-    - **起点态取图上的静态值**：只写 `to` 的补间从元素当前值起补（GSAP 缺省），
-      所以"结构底可见、内容从初态长到终态"是默认语义，不会出现整块空框。
-
-    实现上给 director 那段加上 `pin_cam` 与 `key` 两个开关复用同一份展开逻辑：
-    两套编排的节拍解析、时序参数、ASI 护栏、morph 采样必须逐字一致——复制一份
-    就是下一处"门禁算的落点和成片不一样"。
-    """
-    if not card.has_image:
-        return []
-    entry = rc.images.get(card.sid)
-    opts = (entry or {}).get("opts", {})
-    evolve = opts.get("evolve")
-    if not evolve:
-        return []
-    return _expand_steps(rc, card, evolve, key="evolve", pin_cam=False)
 
 
 def _kicker_kern_pad_px(rc):
@@ -2294,7 +2272,7 @@ def _still_image_carrier_sid(rc, card):
     generate_html 的卡片循环问"轮到第几张"给来向编号。
     """
     # 图版与整页画布同一口径：画面主导的页，配图要"揭开即在位"，不收拢；
-    # 运镜交给作者（图版本来就是给 SVG director / compare 用的档）。
+    # 运镜交给作者（图版本来就是给整页 SVG 编排 / compare 用的档）。
     if not card.has_image or is_full_bleed_card(card) or card.is_keep:
         return None
     if getattr(card, "layout", None) == "compare":
@@ -2565,7 +2543,7 @@ def _pane_carriers(rc, card):
 
     单图版式返回一条（`#img-{sid} > img`）；并置对比返回两条，逐格一条。
 
-    哪一格不参与也在这里判：写着 director/evolve/derive 的那格是作者已手写编排的
+    哪一格不参与也在这里判：写着 animate 的那格是作者已手写编排的
     内联 SVG（`> svg` 不是 `> img`，选择器本来就落空），视频同理。
     """
     if getattr(card, "layout", None) == "compare":
@@ -2676,16 +2654,12 @@ def _card_timeline_lines(rc, card):
     lines.append(
         f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
     )
-    # 导演补间挂在本卡时间线末尾：位置各自取句子起点，与上面的入场/进度条互不干扰。
-    lines.extend(_director_timeline_lines(rc, card))
-    # 槽位版式的图内演进（images.json 的 evolve）：不接管编排，只让图里的元素跟着
-    # 旁白变。与 director 互斥（契约层已拒），所以两条不会同时往同一张图上写补间。
-    lines.extend(_evolve_timeline_lines(rc, card))
-    # 参数演绎（images.json 的 derive）：一拍推一个参数，几何逐帧重算。与上面两条
-    # 可以同段共存（一个管出场、一个管连续演绎），同属性冲突由生成期拦。
-    lines.extend(_derive_timeline_lines(rc, card))
-    # 并置对比两格各自的补间（panes[0]/panes[1]）。单独一条：这一版式的两张图
-    # 各有各的容器 id，作用域与上面两条都不同。
+    # 图内编排（images.json 的 animate）挂在本卡时间线末尾：位置各自取句子起点，
+    # 与上面的入场/进度条互不干扰。属性补间与参数演绎都在这一条里——一拍要么改
+    # 某个元素、要么推某个参数，同一个字段。
+    lines.extend(_animate_timeline_lines(rc, card))
+    # 并置对比两格各自的编排（panes[0]/panes[1]）：这一版式的两张图各有各的容器
+    # id，作用域与上面那条不同。
     lines.extend(_compare_timeline_lines(rc, card))
     return lines
 
@@ -2769,7 +2743,7 @@ def generate_html(manifest, audio_src, images=None,
         # 入场交给导演逐拍演，模板转场（clip-path 擦除 / 引导线 / 旧页剥离）一律退场。
         # 把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、_line_timeline_lines、
         # peel 三处都以 wipe<=0 为闸自动不生成，这一页在自己的音频起点整页出现、运动
-        # 全由 director 驱动（对标 3b1b 的连续镜头，而非翻页）。
+        # 全由 animate 驱动（对标 3b1b 的连续镜头，而非翻页）。
         # 接续页（stage:"keep"）同理且更要紧：这一页的画面是上一页演完的样子，
         # 擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry 烘焙的意义。
         if (is_full_bleed(clip["seg"])

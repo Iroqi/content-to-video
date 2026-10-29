@@ -95,7 +95,7 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 
 # ── 导演节拍 → 时间轴位置──────────────────────────────────────────
 # 「这一步落在绝对秒哪儿」只有一份实现：渲染端（html_renderer 发 GSAP 关键帧）与
-# 生成期门禁/对轴报告（gen_hyperframes.director_prepare）都调这里。两处各写一套就
+# 生成期门禁/对轴报告（gen_hyperframes.animate_prepare）都调这里。两处各写一套就
 # 会漂移——门禁拿着渲染器根本不会用的时刻报错，比没门禁更糟。
 _WHOLE_BEAT_KEYS = ("morph", "count", "type")   # 各自负责整段，从 pos 一直占满 dur
 
@@ -144,7 +144,7 @@ def _beat_spans_time(step):
 
 
 def beat_positions(steps, sentences, seg_start, default_duration):
-    """把 director.steps 解析成 `[(绝对秒位置, 补间时长)]`，与 steps 同序。
+    """把 animate.steps 解析成 `[(绝对秒位置, 补间时长)]`，与 steps 同序。
 
     - `at`（句序锚）：整数=该段第几句（0 基），小数=句内偏移。位置 =
       `sentences[floor(at)].start_time + frac × 该句时长 + delay`。**跟着 manifest 走，
@@ -154,7 +154,7 @@ def beat_positions(steps, sentences, seg_start, default_duration):
       位置 = `seg_start + at_time + delay`。**和语音没有任何绑定**——它按某一版配音手算，
       重配音、改句长、动 `--gap` 都会整体错位，且不会有任何报错。
     - `delay`：两类锚都叠加。
-    - 缺省 `duration` 由调用方传（模板 `animation.director`），门禁与渲染必须同值。
+    - 缺省 `duration` 由调用方传（模板 `animation.animate`），门禁与渲染必须同值。
 
     `at` 越界抛 ValueError（消息只说"at=N 越界…"，由调用方补上段落/步序上下文）：
     句序锚的整数部分必须 < 该段句数，否则渲染端会拿着不存在的句子算位置。

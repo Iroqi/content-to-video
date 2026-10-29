@@ -113,7 +113,7 @@ class Harness:
         path = os.path.join(self.project, "images.json")
         with open(path, encoding="utf-8") as f:
             mapping = json.load(f)
-        mapping[sid]["evolve"] = {"steps": steps}
+        mapping[sid]["animate"] = {"steps": steps}
         write_json_atomic(path, mapping)
 
     def drop_manifest(self):
@@ -339,11 +339,11 @@ class Gates(unittest.TestCase):
         """--set 原样转给生成器：取值校验只有 gen 那份 parser 一份。"""
         self.h.make_images_complete()
         self.h.invoke(["--until", "html",
-                       "--set", "animation.director.duration=0.9",
+                       "--set", "animation.animate.duration=0.9",
                        "--set", "layout.vertical.title.fontSize=72"])
         argv = self.h.gen_argv
         i = argv.index("--set")
-        self.assertEqual(argv[i + 1], "animation.director.duration=0.9")
+        self.assertEqual(argv[i + 1], "animation.animate.duration=0.9")
         self.assertEqual(argv.count("--set"), 2, "可重复的旗标要全部转过去")
 
     def test_visual_knobs_absent_unless_asked(self):

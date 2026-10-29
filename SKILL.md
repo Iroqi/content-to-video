@@ -36,7 +36,8 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
 | 第 3 步选形式、素材落 `images.json`；缺图 / 图糊 / 被裁 / 生图崩字 | `references/imagery.md` | 全片都是手绘 SVG 时 |
 | 第 3 步 SVG 画什么（几何、对比度、字号、数据自查） | `references/canvas.md` | 不画 SVG 就不用读 |
-| 第 3 步 动效：该不该动、动多快、选哪档、steps 怎么写 | `motion.md`「四职务」、`references/director.md` | 从不（写任何补间之前都要过） |
+| 第 3 步 动效：该不该动、动多快 | `motion.md`「四职务」 | 从不（写任何补间之前都要过） |
+| 第 3 步 编排：`animate` 怎么写、镜头归谁、参数怎么推 | `references/svg-motion.md` | 全片不写 `animate` 时 |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md`、`motion.md`「官方校验命令」 | 从不（第 4 步就要用） |
 | 字幕怎么跟着念（焦点、换句、时钟） | `references/subtitles.md` | 全走默认模板时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |
@@ -60,7 +61,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 - **先定编排，再选版式**：`canvas` = 整页一张 SVG 按旁白逐拍演，`plate` = 满幅图 + 一行标题 + 页底一句字幕，槽位与 agenda 兜底。选型见 `references/writing.md`「哪些段值得交给 canvas」。
 
 **④ 交付纪律**（违反则出片没验过）
-- **先写台词板，再写补间**：画面要跟着旁白变，先在稿子里写 `beats`（第几句旁白时画面变成什么，人话），再落 `director` / `evolve` / `derive`。`on` 必填，写不出说明这一拍没想清楚；配音后 `run.py` 核句序，越界 exit 2。见 `references/motion.md`。
+- **先写台词板，再写补间**：画面要跟着旁白变，先在稿子里写 `beats`（第几句旁白时画面变成什么，人话），再落 `animate`。`on` 必填，写不出说明这一拍没想清楚；配音后 `run.py` 核句序，越界 exit 2。见 `references/motion.md`。
 - **画面要有证据**：交付前跑 `--perceptual`：图槽空不空、有没有 3 秒不动、换页对不对得上旁白。判词只证明"没有明显坏"，**好不好看仍要翻那张 contact sheet**。
 
 ## 环境
@@ -98,7 +99,7 @@ python scripts/pipeline.py --source segments_source.json -o audio_output --resum
 
 - 只有 SVG 能进导演档——ImageGen 图只能当静态素材贴进画面。
 - **观众该看到什么 / 素材从哪来**：`references/imagery.md`。两种形式——ImageGen 生图与 SVG（手绘或脚手架），统一落进 `--project` 的 `images/` 并写 `images.json`（`src` 相对项目根，如 `images/seg1.png`）。provenance 字段按该文件「images.json」的清单保留，二次整理不要覆盖。
-- **画 SVG**：`references/canvas.md`，动笔前先读它开头点名的那几节——**画错了没有任何报错**。要它跟着旁白逐拍演，读 `motion.md`「SVG 动画：两档」；图内要有一个**连续量**驱动多个元素时用 `derive` 参数演绎（`references/director.md`「参数演绎」）。画完跑 `check_svg.py images/`。
+- **画 SVG**：`references/canvas.md`，动笔前先读它开头点名的那几节——**画错了没有任何报错**。要它跟着旁白逐拍演，写 `animate`（`references/svg-motion.md`）；图内要有一个**连续量**驱动多个元素时用参数演绎（同文件「参数演绎」）。画完跑 `check_svg.py images/`。
 
 **4. 生成 HTML、预览、检查、渲染**
 
@@ -120,7 +121,7 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 - `--until html` 是迭代档（出 HTML 即停、人工预览），`--until check` 停在官方门禁之后，`--until render`（默认）才出成片。前两档没 key 时**自动加 `--no-tts`**（报告记 skipped、产物标 degraded）；不给 `--until` 的定稿路径绝不降级——无声片不是成片。
 - **调试旗标一律不进交付，`--draft` 是它们的总开关**：一次放行占位 / ease / 缺 src 降级 / 槽位比例·对比度与画布字号降 warn / 渲染 best-effort。`--until html` 之外带它们跑渲染在入口 exit 2；安全类与画布档判据在 draft 下照旧拦截。差异由 `production_report` 的 `draft` 标记与 skipped 清单点名。`check_svg.py` 同样吃 `--draft`。
 
-探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.director.duration=0.8`，键是 `scripts/_template.py` 的叶子路径）。它只在本次进程生效，定稿的取值写回模板。
+探索期改观感不必动模板常量：`--set 键=值` 临时改一个视觉参数（可重复，如 `--set animation.animate.duration=0.8`，键是 `scripts/_template.py` 的叶子路径）。它只在本次进程生效，定稿的取值写回模板。
 
 缺图处理：段落在 images.json 里没有映射键时只在真要渲染时拦（exit 2），`--until html` 只警告；**满幅版式（`layout:"canvas"` / `layout:"plate"`）除外**，那两页缺图连预览 HTML 都出不来，一律 exit 2。想在图没画完之前先看编排用 `--until html --placeholder-missing`（占位 SVG 顶一张）。映射的 `src` 文件不存在则连 `--until html` 也拦，`--draft` 下降级放行（报告留痕）；`--until images` 只看覆盖率、不拦。**没有生图能力**（连 SVG 也画不出）时加 `--slot-no-image`：槽位段缺图不再留空图槽，改由句子流铺满内容区，照旧能出成片（日志 `[notice]` 点名哪几段降级，见 `imagery.md`「无图降级档」）。
 
@@ -136,6 +137,6 @@ python scripts/run.py --source SOURCE -o OUTPUT                # 定稿：TTS �
 - 产物（音频、HTML、配图、成片）不得落进技能目录，脚本有 `guard_not_in_skill_dir` 拦截。
 - 进入 HTML 的文本必须走现有转义路径，不要新增未转义的 f-string 插值。
 - `accent` 与媒体路径的白名单/路径约束在 `_validate.py` 与 `_images_schema.py`，相对路径不得逃出项目根。
-- `derive` 的表达式**不经 `eval`**：自写 tokenizer + 递归下降，只收算术、白名单函数与已声明的参数；渲染页里也不出现 `eval`（生成期就编译成 JS 字面代码）。加白名单名字前先问它是否破坏逐帧可复现。
+- 参数演绎的表达式**不经 `eval`**：自写 tokenizer + 递归下降，只收算术、白名单函数与已声明的参数；渲染页里也不出现 `eval`（生成期就编译成 JS 字面代码）。加白名单名字前先问它是否破坏逐帧可复现。
 - 音频缺失直接失败，不生成无声成片。
 - 密钥只从 CLI / 环境 / 用户 `.env` 读取，不写入 manifest、HTML、images.json 或技能目录。

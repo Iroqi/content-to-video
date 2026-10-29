@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""整页画布（layout:"canvas"）那页 SVG 的脚手架：一份 spec.json → 一张按画幅原生分辨率画的画布页 + 一份 director 草稿。
+"""整页画布（layout:"canvas"）那页 SVG 的脚手架：一份 spec.json → 一张按画幅原生分辨率画的画布页 + 一份 animate 草稿。
 
 收走的只是机械部分（画布几何、三档字号、取色、初始态、节拍编排），**构图仍归人**：
 所有坐标由 spec 给，脚本不做任何自动布局——那是版式引擎，不是脚手架。
@@ -9,7 +9,7 @@
 
 两份产物配套消费：
   - seg1.svg：透明底（绝不自铺满幅底板；模板的渐变/网格/氛围光三层要从内容背后透出来）
-  - stdout（或 steps.json）：{"steps": […]}，整块塞进 images.json 该段条目的 "director" 就能用
+  - stdout（或 steps.json）：{"steps": […]}，整块塞进 images.json 该段条目的 "animate" 就能用
 
 三条隐藏约束（代码里各有对应动作）：
   - **谁能藏、谁不能藏**：结构底随页面到位（不写 opacity）；内容元素由导演逐拍点亮，写
@@ -21,7 +21,7 @@
 repeat/yoyo 的取值与互斥校验跟 _images_schema 同一套（yoyo 必须带 repeat、只挂内容元素），
 跨键约束（如 morph 不能配 repeat:-1）由 selfcheck 过真契约时兜底。
 
-roughness 只改 SVG 坐标，不进 director 草稿（草稿按 #id 寻址）。只收在
+roughness 只改 SVG 坐标，不进 animate 草稿（草稿按 #id 寻址）。只收在
 panel / polyline / bars / circle / rule 上——坐标轴是数据标尺、文字抖了不成字。
 取值与 rough.js 同名同义，上限沿用它的"over 10 is mostly useless"。
 """
@@ -61,13 +61,13 @@ ASPECTS = ("portrait", "landscape")
 #   图内文字是唯一的字，主次就靠这三档拉开（title 档另有 HTML 层用，画布上归图内大标题）。
 # 线宽 = layout.<画幅>.progressBar.height：页面上唯一另一处"一条实线该多粗"的既有决定，
 #   跟着它走，画布上的轴线就和进度条同一份量；竖屏 4px / 横屏 5px 也都够过压缩。
-# 动画缺省 = animation.director：steps 里不写 duration/ease 时渲染端用的就是它，
+# 动画缺省 = animation.animate：steps 里不写 duration/ease 时渲染端用的就是它（模板键名不变），
 #   所以草稿只在作者显式写了、且与缺省不同值时才把这两个键印出来。
 # 这几个表由 `_apply_template()` 填，而不是在 import 期定值：CLI 的 `--set` 覆写
 # 要到解析参数时才生效，import 期快照会让"改了字号、脚手架还用旧的"。
 TIERS = {}
 LINE_W = {}
-DIRECTOR_DEFAULT = {}
+ANIM_DEFAULT = {}
 PANEL_R = {}
 
 
@@ -82,8 +82,8 @@ def _apply_template():
     LINE_W.clear()
     LINE_W.update({a: tpl["layout"][k]["progressBar"]["height"]
                    for a, k in zip(ASPECTS, ("vertical", "landscape"))})
-    DIRECTOR_DEFAULT.clear()
-    DIRECTOR_DEFAULT.update(tpl["animation"]["director"])
+    ANIM_DEFAULT.clear()
+    ANIM_DEFAULT.update(tpl["animation"]["animate"])
     # 面板圆角 = 模板给该画幅配图槽定的那颗圆角：画布页上的局部底板和槽位配图理应用
     # 同一个倒角语言，别在这里再定一个"看起来差不多"的数。
     PANEL_R.clear()
@@ -182,7 +182,7 @@ ENUM_NOTES = {
     "label_side": "刻度线往标签的哪一侧伸：横轴 above/below、竖轴 left/right",
     "anchor": ("'start'=字左缘落在 x（默认）/ 'middle'=字中线落在 x / 'end'=字右缘落在 x，"
                "右对齐时x 要按量出来的字宽倒推，别按字数估"),
-    "role": ('"structure"=结构底（第 0 帧就在，不进 director steps） / "content"=内容'
+    "role": ('"structure"=结构底（第 0 帧就在，不进 animate steps） / "content"=内容'
              "（逐拍点亮，必须给 id）"),
 }
 
@@ -248,7 +248,7 @@ def _jit_size(v, amp, seed_key, i):
 
 
 def _seed_key(el, i):
-    """抖动的种子键：有 id 用 id（director 也按 id 寻址，一个元素一个身份）；
+    """抖动的种子键：有 id 用 id（animate 也按 id 寻址，一个元素一个身份）；
     无 id 的结构底按 kind#序号——同页两个 panel 的抖动不重样。i 是元素在 spec 里
     的序号，spec 不变种子就不变。"""
     return el["id"] if "id" in el else "{}#{}".format(el["kind"], i)
@@ -430,12 +430,12 @@ def _validate_common_keys(el, where):
     if "stagger" in el:
         _validate_stagger(el["stagger"], f"{where} 的 stagger")
     # repeat / yoyo 的取值判据走 _images_schema 那一份（唯一真源）：spec 与
-    # images.json 的 director 是同一个 GSAP 语义的两个入口，判据分家就是两道门
+    # images.json 的 animate 是同一个 GSAP 语义的两个入口，判据分家就是两道门
     # 给两个答案。这里只补 spec 特有的上下文——反复只能挂在内容元素上。
     _validate_repeat_yoyo(el, where)
     if (el.get("repeat") is not None or el.get("yoyo")) and role_of(el) != "content":
         raise ValueError(f"{where} 写了 repeat / yoyo，但它不是内容元素——结构底随页面"
-                         "一起到位、不进 director steps，没有'哪一拍'可反复。"
+                         "一起到位、不进 animate steps，没有'哪一拍'可反复。"
                          "要反复的是内容元素")
     _roughness_of(el, where)
 
@@ -445,7 +445,7 @@ def _validate_kind_keys(el, kind, where):
     if kind == "panel":
         _opt_num(el, "r", where, None, nonnegative=True)
         opacity = _opt_num(el, "opacity", where, None, nonnegative=True)
-        # 内容元素的 opacity 是"落定透明度"（由 build_director 带进那一拍的 to），
+        # 内容元素的 opacity 是"落定透明度"（由 build_animate 带进那一拍的 to），
         # 写成 0 就是让那一拍补间 0→0——元素永远不亮，而成片看着像"演过了"。
         # 与 _starts_hidden 对 draw/count/type 的例外同一条理由：当场拒，别留成
         # 最难查的那种坏法。要半透明落定就写 0.1~0.79 的档。
@@ -539,7 +539,7 @@ def _validate_content_id(el, where):
     render_svg 也被 tests 与 pipeline 直接调用）。
     """
     if role_of(el) == "content" and "id" not in el:
-        raise ValueError(f"{where} 是内容元素却缺 id：director 的 step 要靠 "
+        raise ValueError(f"{where} 是内容元素却缺 id：animate 的 step 要靠 "
                          '"#id" 点名它，没有 id 就永远不会被点亮。'
                          '给它一个 id（或写 "role": "structure" 把它归成结构底）')
 
@@ -604,7 +604,7 @@ def load_spec(path, **overrides):
 
 
 def _target_of(el):
-    """元素在 director 里被点名的选择器：一个元素一个 id，class 目标由作者手写。"""
+    """元素在 animate 里被点名的选择器：一个元素一个 id，class 目标由作者手写。"""
     return "#" + el["id"]
 
 
@@ -621,7 +621,7 @@ def _check_ids_unique(els):
                              "（字母或下划线起头，仅字母/数字/-/_）")
         if el_id in seen:
             raise ValueError(f"{where}={el_id!r} 与 elements[{seen[el_id]}] 重复"
-                             "（director 的 target 会同时命中两处）")
+                             "（animate 的 target 会同时命中两处）")
         seen[el_id] = i
 
 
@@ -697,7 +697,7 @@ def _rest_opacity(el):
 
     只有 panel 吃 opacity 键（ELEMENT_KEYS 里就它有），其余内容元素一律落 1。
     帧 0 归零是导演约定（见 _starts_hidden），落定到几成透明是作者意图——两件事
-    分别由 SVG 起始属性与 build_director 的那一拍说话，谁也不盖谁。
+    分别由 SVG 起始属性与 build_animate 的那一拍说话，谁也不盖谁。
     """
     v = el.get("opacity")
     return 1 if v is None else float(v)
@@ -934,7 +934,7 @@ def _emit_body(spec, ctx):
     for i, el in enumerate(spec["elements"], 1):
         where = f"spec 的 elements[{i}]（kind={el['kind']!r}）"
         if role_of(el) == "content" and "id" not in el:
-            raise ValueError(f"{where} 是内容元素却缺 id：director 的 step 要靠 "
+            raise ValueError(f"{where} 是内容元素却缺 id：animate 的 step 要靠 "
                              '"#id" 点名它，没有 id 就永远不会被点亮')
         # 抖动的种子与幅度按元素现算（渲染层再过一遍 roughness 判据：render_svg 也被
         # 测试与其它入口直接调用，校验层那道不是唯一关口）。幅度 = roughness × 线宽，
@@ -950,7 +950,7 @@ def _emit_body(spec, ctx):
             # （作者的"落定透明度"）时，追加会产出 `opacity="0.5" opacity="0"`
             # 这种重复属性——整张 SVG 不是合法 XML（实测 ET.ParseError: duplicate
             # attribute），内联、check_svg、净化全路都读不了它。作者那档透明度不丢：
-            # 由 build_director 带进那一拍的 to（见下）。
+            # 由 build_animate 带进那一拍的 to（见下）。
             node["attrs"] = ([(k, "0") if k == "opacity" else (k, v)
                               for k, v in node["attrs"]]
                              + ([("opacity", "0")]
@@ -980,8 +980,8 @@ def render_svg(spec):
                       "\n".join(body), "</svg>", ""])
 
 
-# ── director 草稿：一份能直接进 images.json 的 {"steps": […]} ──────
-def build_director(spec, sentences=None):
+# ── animate 草稿：一份能直接进 images.json 的 {"steps": […]} ──────
+def build_animate(spec, sentences=None):
     """结构底不进 steps（它和页面一起到位），内容元素按文档顺序一拍一个 at 锚点。
 
     句序锚点在"这一拍跟着某句话"，秒数由渲染端按 manifest 算——草稿不必知道配音时长。
@@ -1031,8 +1031,8 @@ def build_director(spec, sentences=None):
             step["repeat"] = el["repeat"]
         if el.get("yoyo"):
             step["yoyo"] = True
-        for key, dflt in (("duration", DIRECTOR_DEFAULT["duration"]),
-                          ("ease", DIRECTOR_DEFAULT["ease"])):
+        for key, dflt in (("duration", ANIM_DEFAULT["duration"]),
+                          ("ease", ANIM_DEFAULT["ease"])):
             # 只用与模板缺省不同的值：相同值写进 JSON 就是第二份真源，模板改档它不跟。
             if el.get(key) is not None and el[key] != dflt:
                 step[key] = el[key]
@@ -1046,10 +1046,10 @@ def selfcheck_fragment(spec, sid="seg1", sentences=None):
     形状判给 _images_schema（契约正文），否则脚手架印出的草稿要等 run.py 在渲染前
     才拒掉。sid 用合法段 id 当壳，真实段 id 由作者替换。
     """
-    frag = build_director(spec, sentences=sentences)
+    frag = build_animate(spec, sentences=sentences)
     if not frag["steps"]:
         return frag
-    validate_images_json({sid: {"src": "images/{}.svg".format(sid), "director": frag}})
+    validate_images_json({sid: {"src": "images/{}.svg".format(sid), "animate": frag}})
     return frag
 
 
@@ -1171,14 +1171,14 @@ def _epilog():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="整页画布 SVG 脚手架：spec.json → 画布页 SVG + director 草稿（steps 走 stdout 或 --emit-steps）",
+        description="整页画布 SVG 脚手架：spec.json → 画布页 SVG + animate 草稿（steps 走 stdout 或 --emit-steps）",
         epilog=_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--spec", required=True, help="画布页元素清单 JSON")
     ap.add_argument("-o", "--out", required=True, help="输出 SVG 路径")
     ap.add_argument("--aspect", choices=list(ASPECTS), help="画幅（覆盖 spec 顶层；默认 portrait）")
     ap.add_argument("--accent", help="本页强调色（覆盖 spec 顶层；默认取段落缺省 accent）")
-    ap.add_argument("--emit-steps", help="把 director 草稿另写一份 JSON 到该路径")
+    ap.add_argument("--emit-steps", help="把 animate 草稿另写一份 JSON 到该路径")
     ap.add_argument("--sentences", type=int,
                     help="该段旁白句数。给了它，自动拍按句数回绕（内容元素多于句子时产出的"
                          "草稿仍可直接生成），并对显式钉拍的 at 越界提前告警")
@@ -1214,7 +1214,7 @@ def main(argv=None):
     # 混在 references/ 旁边的目录里看不出是残渣）。
     guards = [("输出 SVG", args.out)]
     if args.emit_steps:
-        guards.append(("director 草稿", args.emit_steps))
+        guards.append(("animate 草稿", args.emit_steps))
     guard_not_in_skill_dir(*guards)
 
     try:

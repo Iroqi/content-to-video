@@ -6,7 +6,7 @@
   "信源不可信"就只剩一句口号。同时钉"Python 求值"与"JS 代码生成"同源一致，
   否则门禁算的和成片演的是两个东西。
 - **契约层**：键集封闭、参数名、属性白名单、端点有限。
-- **生成期**：落空 / 越界 / 出窗 / 起始帧对不上 / 与 director 抢同一属性。
+- **生成期**：落空 / 越界 / 出窗 / 起始帧对不上 / 与属性补间抢同一属性。
 - **渲染**：作用域收窄、代理补间逐帧重算、页里不出现 `eval`。
 """
 import math
@@ -41,7 +41,7 @@ def _write_svg(tmp, sid, text=SEG_A_SVG):
 
 
 def _block(**over):
-    """一个最小的、在 SEG_A_SVG 上成立的 derive 块（θ 转 90°：针尖沿圆弧走）。"""
+    """一个最小的、在 SEG_A_SVG 上成立的 animate 块（θ 转 90°：针尖沿圆弧走）。"""
     b = {
         "params": {"theta": 0},
         "steps": [{"at": 0, "param": "theta", "to": 90, "duration": 1.5}],
@@ -207,7 +207,7 @@ class Schema(unittest.TestCase):
     """契约层：形状与取值。"""
 
     def _v(self, block, src="images/seg4.svg"):
-        validate_images_json({"seg4": {"src": src, "derive": block}})
+        validate_images_json({"seg4": {"src": src, "animate": block}})
 
     def test_valid_block_accepted(self):
         self._v(_block())
@@ -263,7 +263,7 @@ class Schema(unittest.TestCase):
             self._v(_block(bind=[]))
 
     def test_anchor_and_duration_rules_reused(self):
-        """锚点/时长/缓动走 director 那份判据：不许 derive 变成偷偷放宽的后门。"""
+        """锚点/时长/缓动走属性补间那份判据：不许参数演绎变成偷偷放宽的后门。"""
         for step in ({"param": "theta", "to": 1},                       # 没锚点
                      {"at": 0, "at_time": 1, "param": "theta", "to": 1},
                      {"at": 0, "param": "theta", "to": 1, "duration": -1},
@@ -274,8 +274,8 @@ class Schema(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self._v(_block(steps=[step]))
 
-    def test_step_grammar_matches_director(self):
-        """同一条错误文案在两个语法下都指认同一处（探针借用了 director 的判据）。"""
+    def test_step_grammar_matches_tween(self):
+        """同一条错误文案在两个语法下都指认同一处（探针借用了属性补间的判据）。"""
         with self.assertRaises(ValueError) as cm:
             self._v(_block(steps=[{"at": 0, "param": "theta", "to": 1, "duration": 0}]))
         msg = str(cm.exception)
@@ -286,29 +286,26 @@ class Schema(unittest.TestCase):
     def test_compare_pane_derive_accepted(self):
         validate_images_json({"seg4": {
             "src": ["images/a.svg", "images/b.svg"],
-            "panes": [{"derive": _block()}, {}]}})
+            "panes": [{"animate": _block()}, {}]}})
 
     def test_compare_pane_derive_requires_svg(self):
         with self.assertRaises(ValueError):
             validate_images_json({"seg4": {
                 "src": ["images/a.png", "images/b.svg"],
-                "panes": [{"derive": _block()}, {}]}})
+                "panes": [{"animate": _block()}, {}]}})
 
     def test_compare_single_image_keys_still_ban_derive(self):
         # 单图键挂 derive 是早期写法，应当被拒（只有 panes[i] 里才有意义）
         with self.assertRaises(ValueError):
             validate_images_json({"seg4": {
-                "src": ["images/a.svg", "images/b.svg"], "derive": _block()}})
+                "src": ["images/a.svg", "images/b.svg"], "animate": _block()}})
 
 
 class Prepare(unittest.TestCase):
     """生成期：净化内联、落空、越界、出窗、起始帧、抢属性。"""
 
     def _run(self, images, m=None):
-        errs, warns = [], []
-        G._derive_prepare(images, (m or H.make_manifest())["segments"], self.tmp,
-                          None, errs, warns)
-        return errs, warns
+        return G.animate_prepare(images, (m or H.make_manifest())["segments"], self.tmp)
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -319,7 +316,7 @@ class Prepare(unittest.TestCase):
 
     def test_clean_block_inlines_and_passes(self):
         src = _write_svg(self.tmp, "seg-a")
-        images = {"seg-a": {"src": src, "derive": _block()}}
+        images = {"seg-a": {"src": src, "animate": _block()}}
         errs, warns = self._run(images)
         self.assertEqual(errs, [])
         self.assertEqual(warns, [])
@@ -328,7 +325,7 @@ class Prepare(unittest.TestCase):
     def test_missing_target_is_an_error(self):
         src = _write_svg(self.tmp, "seg-a")
         b = _block(bind=[{"target": "#ghost", "attr": "x", "expr": "theta"}])
-        errs, _ = self._run({"seg-a": {"src": src, "derive": b}})
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertEqual(len(errs), 1)
         self.assertIn("#ghost", errs[0])
         self.assertIn("静默", errs[0])
@@ -337,13 +334,13 @@ class Prepare(unittest.TestCase):
         src = _write_svg(self.tmp, "seg-a",
                          SEG_A_SVG.replace('id="tip"', 'class="mark" id="tip"'))
         b = _block(bind=[{"target": ".mark", "attr": "r", "expr": "14 + theta/10"}])
-        errs, _ = self._run({"seg-a": {"src": src, "derive": b}})
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertEqual(errs, [])
 
     def test_at_out_of_range_is_an_error(self):
         src = _write_svg(self.tmp, "seg-a")
         b = _block(steps=[{"at": 9, "param": "theta", "to": 90}])
-        errs, _ = self._run({"seg-a": {"src": src, "derive": b}})
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertTrue(any("越界" in e for e in errs), errs)
 
     def test_beat_outside_window_warns(self):
@@ -353,8 +350,8 @@ class Prepare(unittest.TestCase):
         late = float(seg["sentences"][0]["start_time"]) + 3600
         src = _write_svg(self.tmp, "seg-a")
         b = _block(steps=[{"at_time": late, "param": "theta", "to": 90}])
-        _, warns = self._run({"seg-a": {"src": src, "derive": b}}, m)
-        self.assertTrue(any("derive.steps[0]" in w for w in warns), warns)
+        _, warns = self._run({"seg-a": {"src": src, "animate": b}}, m)
+        self.assertTrue(any("animate.steps[0]" in w for w in warns), warns)
         self.assertTrue(any("「theta」" in w for w in warns), warns)
 
     def test_start_frame_mismatch_warns(self):
@@ -363,12 +360,12 @@ class Prepare(unittest.TestCase):
         src = _write_svg(self.tmp, "seg-a", svg)
         b = _block(bind=[{"target": "#tip", "attr": "cx",
                           "expr": "490 + 260*cos(theta*pi/180)"}])
-        _, warns = self._run({"seg-a": {"src": src, "derive": b}})
+        _, warns = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertTrue(any("跳" in w for w in warns), warns)
 
     def test_start_frame_match_is_silent(self):
         src = _write_svg(self.tmp, "seg-a")
-        _, warns = self._run({"seg-a": {"src": src, "derive": _block()}})
+        _, warns = self._run({"seg-a": {"src": src, "animate": _block()}})
         self.assertEqual(warns, [])
 
     def test_transform_bind_accepted_and_never_compared_to_static(self):
@@ -378,35 +375,33 @@ class Prepare(unittest.TestCase):
                                            'id="hub" transform="rotate(0 490 367)" cx="490"'))
         b = _block(bind=[{"target": "#hub", "attr": "transform",
                           "expr": "0*theta + 0"}])
-        errs, warns = self._run({"seg-a": {"src": src, "derive": b}})
+        errs, warns = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertEqual(errs, [])
         self.assertFalse(any("transform" in w for w in warns), warns)
 
-    def test_conflict_with_director_is_an_error(self):
-        """两条时间线写同一个属性：先写的白写，且谁后写不可预测。"""
+    def test_conflict_with_a_property_step_is_an_error(self):
+        """同一块 animate 里，属性补间与 bind 写同一个属性：先写的白写。"""
         src = _write_svg(self.tmp, "seg-a")
-        images = {"seg-a": {"src": src, "derive": _block(),
-                            "director": {"steps": [
-                                {"at": 0, "target": "#tip",
-                                 "to": {"cx": 600}}]}}}
-        errs, _ = self._run(images)
+        b = _block()
+        b["steps"] = b["steps"] + [{"at": 0, "target": "#tip", "to": {"cx": 600}}]
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertTrue(any("白写" in e for e in errs), errs)
         self.assertTrue(any("cx" in e for e in errs), errs)
 
-    def test_conflict_with_evolve_is_an_error(self):
+    def test_conflict_through_set_is_an_error_too(self):
         src = _write_svg(self.tmp, "seg-a")
-        images = {"seg-a": {"src": src, "derive": _block(),
-                            "evolve": {"steps": [
-                                {"at": 0, "target": "#tip", "set": {"cx": 600}}]}}}
-        errs, _ = self._run(images)
+        b = _block()
+        b["steps"] = b["steps"] + [{"at": 0, "target": "#tip", "set": {"cx": 600}}]
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertTrue(any("白写" in e for e in errs), errs)
 
     def test_different_attr_is_not_a_conflict(self):
         src = _write_svg(self.tmp, "seg-a")
-        images = {"seg-a": {"src": src, "derive": _block(),
-                            "director": {"steps": [
-                                {"at": 0, "target": "#tip", "to": {"opacity": 1}},
-                                {"at": 0, "target": "#hub", "to": {"cx": 600}}]}}}
+        b = _block()
+        b["steps"] = b["steps"] + [
+            {"at": 0, "target": "#tip", "to": {"opacity": 1}},
+            {"at": 0, "target": "#hub", "to": {"cx": 600}}]
+        images = {"seg-a": {"src": src, "animate": b}}
         errs, _ = self._run(images)
         self.assertEqual(errs, [])
 
@@ -416,24 +411,23 @@ class Prepare(unittest.TestCase):
         b = _block(steps=[{"at": 0, "param": "theta", "to": -1}],
                    bind=[{"target": "#tip", "attr": "cx",
                           "expr": "490 + 260/(theta+1)"}])
-        errs, _ = self._run({"seg-a": {"src": src, "derive": b}})
+        errs, _ = self._run({"seg-a": {"src": src, "animate": b}})
         self.assertTrue(any("算不出来" in e for e in errs), errs)
 
     def test_compare_pane_inlined(self):
         src = _write_svg(self.tmp, "seg-a")
         images = {"seg-a": {"src": [src, src],
-                            "panes": [{"derive": _block()}, {}]}}
+                            "panes": [{"animate": _block()}, {}]}}
         errs, _ = self._run(images)
         self.assertEqual(errs, [])
         self.assertIn("inline_svg", images["seg-a"]["panes"][0])
         self.assertNotIn("inline_svg", images["seg-a"]["panes"][1])
 
-    def test_compare_pane_conflict_uses_pane_director(self):
+    def test_compare_pane_conflict_stays_inside_its_pane(self):
         src = _write_svg(self.tmp, "seg-a")
-        images = {"seg-a": {"src": [src, src], "panes": [
-            {"derive": _block(),
-             "director": {"steps": [{"at": 0, "target": "#tip", "to": {"cy": 1}}]}},
-            {}]}}
+        b = _block()
+        b["steps"] = b["steps"] + [{"at": 0, "target": "#tip", "to": {"cy": 1}}]
+        images = {"seg-a": {"src": [src, src], "panes": [{"animate": b}, {}]}}
         errs, _ = self._run(images)
         self.assertTrue(any("第 0 格" in e and "白写" in e for e in errs), errs)
 
@@ -441,19 +435,20 @@ class Prepare(unittest.TestCase):
 class Renderer(unittest.TestCase):
     """渲染端：作用域、代理补间、页里不出现 eval。"""
 
-    def _html(self, derive=None, panes=None, layout=None):
+    def _html(self, params=None, panes=None, layout=None):
+        """`panes` 给了就换成一对图条目：单图那套键（含 animate）搬进 panes[i]。"""
         m = H.make_manifest()
         for seg in m["segments"]:
             if seg["id"] == "seg-a" and layout:
                 seg["layout"] = layout
-        entry = {"src": "images/seg-a.svg",
-                 "inline_svg": '<svg viewBox="0 0 980 735"><g id="arm"/>'
-                               '<circle id="tip" cx="750" cy="367"/></svg>',
-                 "derive": derive or _block()}
-        images = {"seg-a": entry, "seg-b": {"src": "images/seg-b.svg"}}
+        block = params or _block()
         if panes is not None:
-            entry["src"] = ["images/seg-a.svg", "images/seg-b.svg"]
-            entry["panes"] = panes
+            entry = {"src": ["images/seg-a.svg", "images/seg-b.svg"], "panes": panes}
+        else:
+            entry = {"src": "images/seg-a.svg", "animate": block,
+                     "inline_svg": '<svg viewBox="0 0 980 735"><g id="arm"/>'
+                                   '<circle id="tip" cx="750" cy="367"/></svg>'}
+        images = {"seg-a": entry, "seg-b": {"src": "images/seg-b.svg"}}
         return HR.generate_html(m, "audio/combined.wav", images=images,
                                 aspect="portrait")
 
@@ -479,20 +474,20 @@ class Renderer(unittest.TestCase):
         self.assertNotIn("D.params", html)
 
     def test_compare_panes_scoped_per_pane(self):
-        html = self._html(panes=[{"derive": _block()}, {}], layout="compare")
+        html = self._html(panes=[{"animate": _block()}, {}], layout="compare")
         self.assertIn('"#img-seg-a-0 #tip"', html)
         self.assertNotIn('"#img-seg-a-1 #tip"', html)
 
     def test_compare_pane_without_derive_emits_nothing(self):
-        html = self._html(panes=[{}, {"derive": _block()}], layout="compare")
+        html = self._html(panes=[{}, {"animate": _block()}], layout="compare")
         self.assertIn('"#img-seg-a-1 #tip"', html)
         self.assertNotIn('"#img-seg-a-0 #tip"', html)
 
     def test_beats_accept_derive_as_motion(self):
         """台词板只问"有没有画面对应"，derive 也算——不然后台提醒是假警报。"""
         import _beats as B
-        self.assertTrue(B._declares_motion({"s": {"derive": _block()}}, "s"))
-        self.assertFalse(B._declares_motion({"s": {"derive": {"steps": []}}}, "s"))
+        self.assertTrue(B._declares_motion({"s": {"animate": _block()}}, "s"))
+        self.assertFalse(B._declares_motion({"s": {"animate": {"steps": []}}}, "s"))
 
 
 if __name__ == "__main__":

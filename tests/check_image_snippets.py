@@ -3,7 +3,7 @@
 
 `check_examples.py` 守的是"文档示例跑得通"，但它只覆盖了 spec 类示例（canvas_kit
 的 spec、writing.md 的稿件）。`images.json` 的片段此前一条都不在它的清单里——而
-`derive` / `evolve` / `director` 这些概念页最容易写出的错，恰恰是"字段名拼对了一半、
+`animate` 这类概念页最容易写出的错，恰恰是"字段名拼对了一半、
 结构差一层"，那种错不会让任何示例跑不通（因为根本没有示例），却让照抄的读者在
 第一次生成时撞墙。
 
@@ -24,10 +24,12 @@ from _images_schema import validate_images_json  # noqa: E402
 
 # (文档相对路径, 锚点串, 说明)
 SNIPPETS = [
-    (os.path.join("references", "canvas.md"),
-     '"param": "theta"', "canvas.md「参数演绎」的最小可跑示例"),
-    (os.path.join("references", "canvas.md"),
-     '"param": "theta", "to": 180', "canvas.md「参数演绎」的多拍累进示例"),
+    (os.path.join("references", "svg-motion.md"),
+     '"target": "#node-a"', "svg-motion.md「契约」的完整示例"),
+    (os.path.join("references", "svg-motion.md"),
+     '"param": "theta"', "svg-motion.md「参数演绎」的最小示例"),
+    (os.path.join("references", "svg-motion.md"),
+     '"param": "theta", "to": 180', "svg-motion.md「参数演绎」的多拍累进示例"),
 ]
 
 

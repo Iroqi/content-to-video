@@ -2,7 +2,7 @@
 
 ## 为什么需要它
 
-仓库原有的动效机制全是**手写补间**：`director.steps` / `evolve.steps` 的每一步都
+仓库原有的动效机制全是**手写补间**：`animate.steps` 的每一步都
 要作者自己写 `at`（句序）或 `at_time`（绝对秒）。这带来两个病，而且都不出声：
 
 1. **漏绑**。一张演三态的图，作者只写了前两拍，第三拍"图还在第一个状态、旁白已经
@@ -28,7 +28,7 @@
 | 层 | 回答什么 | 载体 |
 |---|---|---|
 | 台词板 `beats` | **这一拍说什么、画面该变成什么**（人话） | segments_source.json |
-| `director.steps` / `evolve.steps` | 具体哪条属性从多少补到多少 | images.json |
+| `animate.steps` | 具体哪条属性从多少补到多少 | images.json |
 | `perceptual` | 成片里到底有没有变 | 取帧像素判据 |
 
 三者不互相替代：台词板是**意图层**，可以被机器逐个核对；steps 是**实现层**，
@@ -108,7 +108,7 @@ def validate_beats(raw, where):
                 f"{where} 的句序 {beat['on']} 出现了两次"
                 f"（第 {seen[beat['on']]} 条与第 {i} 条）：一句旁白只能绑一拍——"
                 "同一句里要变两处，写成一条 change 用顿号并列，"
-                "真正的先后顺序交给 director/evolve 的 steps")
+                "真正的先后顺序交给 animate.steps")
         seen[beat["on"]] = i
     return out
 
@@ -131,7 +131,7 @@ def _check_change(value, index, where, on):
         raise ValueError(
             f"{where}[{index}] 的 change 有 {len(text)} 字，超过 {CHANGE_MAX_CHARS} 字上限。"
             "这里写意图（\"把两条线合成一条\"），不要写实现"
-            "（属性、时长、缓动属于 images.json 的 director/evolve）")
+            "（属性、时长、缓动属于 images.json 的 animate）")
     return {"on": on, "change": text}
 
 
@@ -149,7 +149,7 @@ def _check_full(item, index, where):
     if isinstance(on, bool) or not isinstance(on, int):
         raise ValueError(
             f"{where}[{index}] 的 'on' 必须是整数（0 = 本段第一句），"
-            f"实际是 {type(on).__name__}。句内偏移留给 director 的 at=0.5，"
+            f"实际是 {type(on).__name__}。句内偏移留给 animate 的 at=0.5，"
             "台词板只认整句")
     if on < 0:
         raise ValueError(f"{where}[{index}] 的 'on'={on} 不能是负数（0 = 本段第一句）")
@@ -194,7 +194,7 @@ def audit(manifest, images=None):
     1. **句序越界**（error）：`on` 指到该段不存在的句子。写稿时节拍按原稿数，
        重分句后句数变少，`on: 5` 会落到一片空处——静默失效，成片里看不出。
     2. **只声明不实现**（warn）：台词板说有这一拍，而 `images.json` 里这一段
-       一条 `director` / `evolve` 都没有。台词板写成愿望清单是最容易发生的事，
+       一条 `animate` 都没有。台词板写成愿望清单是最容易发生的事，
        而它比不写更坏：作者以为写了。
     3. **一句两拍**（warn）：`on` 指向的那句话里有 3 个以上终止标点。这一句要念
        3-6 秒，画面只能对上其中一句，观众会看到"图先变了、话还没讲完"。
@@ -232,9 +232,9 @@ def audit(manifest, images=None):
         if images is not None and not _declares_motion(images, sid):
             warns.append(
                 f"段落 '{sid}' 写了 {len(beats)} 拍，但 images.json 里这一段没有"
-                f"任何 director / evolve / derive 补间——「{beats[0]['change'][:24]}」只写在"
+                f"任何 animate 补间——「{beats[0]['change'][:24]}」只写在"
                 "台词板上，画面不会动。台词板是意图层，实现要落到 images.json 的 "
-                "director.steps / evolve.steps / derive.steps；这一段不想演就把 beats 删掉")
+                "animate.steps；这一段不想演就把 beats 删掉")
     return errs, warns, total
 
 
@@ -246,18 +246,13 @@ def count(manifest):
 def _declares_motion(images, sid):
     """images.json 里这一段声明了补间没有。
 
-    只认 `director`（整页编排）、`evolve`（槽位内演进）与 `derive`（参数演绎）三个
-    键：它们是仓库里仅有的三条"画面随旁白变"的通路。`stage: keep` 只搬上一页的收尾
-    态、本身不产生新的拍，所以不算——写了 keep 而没有 steps 的段落，台词板照样落空。
-    `derive` 的"步"是推参数而不是改属性，但在台词板眼里它同样是"这一拍有画面对应"。
+    只认 `animate`（图内编排：属性补间与参数推进同一个字段）。`stage: keep` 只搬上一
+    页的收尾态、本身不产生新的拍，所以不算——写了 keep 而没有 steps 的段落，台词板照样
+    落空。
     """
     entry = images.get(sid)
     if not isinstance(entry, dict):
         return False
-    for key in ("director", "evolve", "derive"):
-        val = entry.get(key)
-        if isinstance(val, dict) and val.get("steps"):
-            return True
-    return False
+    return bool((entry.get("animate") or {}).get("steps"))
 
 

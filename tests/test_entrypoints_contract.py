@@ -46,23 +46,23 @@ class EpilogSampleRuns(unittest.TestCase):
         self.assertEqual(sorted(out), sorted(data))
 
     def test_epilog_example_does_not_get_silently_dropped(self):
-        """示例里的 director.steps 得过 director 校验（不是只过 images 那层）。
+        """示例里的 animate.steps 得过 animate 校验（不是只过 images 那层）。
 
-        这条分开写是因为 director 的键集封闭且不认"看名字就知道"的键
+        这条分开写是因为 animate 的键集封闭且不认"看名字就知道"的键
         （锚点是 at/at_time 不是 anchor、目标是 target 不是 selector）。
         images.json 那层只查"是不是 svg"，steps 内部的错它一个都不管。
         """
         data = self._images_block()
-        self.assertIn("director", data["seg2"])
+        self.assertIn("animate", data["seg2"])
         # 示例就是三种素材条目（图 / SVG 导演档 / GIF）的形状：曾挂过
         # stage:"keep"，而 keep 是跨页接续标记、接的必须是同一张图的上一页
         # 导演档——照抄那份在生成期直接报"上一段没有可接续的内联画面"，
         # "实测跑通"成了谎话（端到端回归见 test_check_tools.EpilogExampleRuns）。
         self.assertNotIn("stage", data["seg2"])
-        # 抠出来的那份必须真的走到了 director 校验：把 steps 换成一个明显
-        # 非法的形态，若仍通过说明 director 根本没被调用（测试自身在骗人）
+        # 抠出来的那份必须真的走到了 animate 校验：把 steps 换成一个明显
+        # 非法的形态，若仍通过说明 animate 根本没被调用（测试自身在骗人）
         broken = json.loads(json.dumps(data))
-        broken["seg2"]["director"]["steps"] = [{"target": "#bar-1", "at": 0,
+        broken["seg2"]["animate"]["steps"] = [{"target": "#bar-1", "at": 0,
                                                 "anchor": 0}]
         self.assertIn("anchor", err_of(broken))
 
@@ -87,13 +87,13 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         self.assertIn("裸字符串路径", err)
 
     def test_same_entry_playback_and_animation_errors_are_all_reported(self):
-        """同一段里 muted 写错 + director 挂在 PNG 上——两处互不依赖，都要报。"""
+        """同一段里 muted 写错 + animate 挂在 PNG 上——两处互不依赖，都要报。"""
         err = err_of({
             "seg1": {"src": "images/a.mp4", "muted": "true",
-                     "director": {"steps": "no"}},
+                     "animate": {"steps": "no"}},
         })
         self.assertIn("muted", err)
-        self.assertIn("director", err)
+        self.assertIn("animate", err)
         self.assertIn("2 处问题", err)
 
     def test_every_audio_opt_key_is_reported_not_just_the_first(self):
@@ -126,12 +126,12 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         self.assertIn("license", err)
         self.assertIn("3 处问题", err)
 
-    def test_stage_and_director_errors_are_not_masked_by_each_other(self):
-        """director 与 stage 都挂在 PNG 上时两条都要报（互不依赖）。"""
+    def test_stage_and_animate_errors_are_not_masked_by_each_other(self):
+        """animate 与 stage 都挂在 PNG 上时两条都要报（互不依赖）。"""
         err = err_of({"seg1": {
-            "src": "images/a.png", "director": {"steps": []}, "stage": "carry",
+            "src": "images/a.png", "animate": {"steps": []}, "stage": "carry",
         }})
-        self.assertIn("director", err)
+        self.assertIn("animate", err)
         self.assertIn("stage", err)
 
     def test_one_group_error_does_not_hide_another_group(self):
@@ -211,7 +211,7 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         data = validate_images_json({
             "seg1": {"src": "images\\a.png"},
             "seg2": {"src": "images/b.svg",
-                     "director": {"steps": [{"target": "#t", "at": 0,
+                     "animate": {"steps": [{"target": "#t", "at": 0,
                                              "to": {"opacity": 1}}]},
                      "stage": "keep"},
             "seg3": {"src": "images/c.mp4", "type": "video", "muted": True,

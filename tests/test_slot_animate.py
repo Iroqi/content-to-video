@@ -1,15 +1,16 @@
-"""槽位版式演进（`evolve`）：契约、生成期体检、渲染三层回归。
+"""槽位版式的图内编排（`animate` 落在非满幅页上）：契约、生成期体检、渲染三层回归。
 
-对应的产品判断写在 `scripts/_evolve.py` 的模块注释里，这里只钉行为：
-同样的 steps 语法，与 director 的三条差别（不调机位 / 起点态兜底 /
-按段独立），以及"要么整页交出版面，要么留在槽位"这个二选一。
+同一块 `animate` 写进槽位页时只有三条差别，而这三条都不由键名区分、由版式推出：
+镜头归模板（不调机位）、标题层与句子流层照旧生成、起始态取图上的静态值。
 """
+import contextlib
+import io
 import os
 import tempfile
 import unittest
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
-import _evolve as EV
+import _animate as AN
 from _images_schema import validate_images_json
 import html_renderer as HR
 import gen_hyperframes as G
@@ -33,26 +34,24 @@ def _write_svg(tmp, sid, text):
 
 
 class Schema(unittest.TestCase):
-    """契约层：与 director 共用 steps 语法，但边界不同。"""
+    """契约层：槽位页与满幅页写的是同一块 animate，边界由版式推。"""
 
     def _one_step(self, step):
         with self.assertRaises(ValueError):
             validate_images_json({"seg4": {"src": "images/seg4.svg",
-                                          "evolve": {"steps": [step]}}})
+                                           "animate": {"steps": [step]}}})
 
-    def test_valid_evolve_accepted(self):
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "evolve": {"steps": [
+    def test_valid_animate_accepted(self):
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at": 0, "target": "#base", "set": {"opacity": 1}},
             {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"}, "duration": 0.6}]}}})
 
     def test_at_time_anchor_accepted(self):
-        # 与 director 同一套锚点规则（含 at_time 绝对秒）
-        validate_images_json({"seg4": {"src": "images/seg4.svg", "evolve": {"steps": [
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at_time": 2.5, "target": "#label", "from": {"opacity": 0},
              "to": {"opacity": 1}}]}}})
 
     def test_no_anchor_rejected(self):
-        # 锚点规则是原样复用的，别让 evolve 变成一条偷偷放宽的后门
         self._one_step({"target": "#dot", "set": {"opacity": 1}})
 
     def test_at_and_at_time_mutually_exclusive(self):
@@ -61,91 +60,116 @@ class Schema(unittest.TestCase):
     def test_bad_target_rejected(self):
         self._one_step({"at": 0, "target": "#a .b", "set": {"opacity": 1}})
 
-    def test_camera_keys_rejected(self):
-        """镜头归模板：入场收拢 + Ken Burns 已经在推，作者再推就是两层意图打架。"""
-        for key, val in (("svgOrigin", "500 360"), ("scale", 1.4),
-                         ("xPercent", 10), ("yPercent", -10),
-                         ("transformOrigin", "center")):
-            with self.subTest(key=key):
-                self._one_step({"at": 1, "target": "#dot", "to": {key: val}})
+    def test_legacy_contract_names_point_at_the_rename(self):
+        """旧写法（director / evolve / derive）不静默忽略：它们是"改了没生效"的头号来源。"""
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            validate_images_json({"seg1": {"src": "images/a.svg",
+                                           "director": {"steps": []}}})
+        msg = buf.getvalue()
+        self.assertIn("旧写法", msg)
+        self.assertIn("animate", msg)
 
-    def test_camera_key_rejected_in_from_and_set_too(self):
-        # 三个载荷都要挡：只挡 `to` 就是留给作者一个绕过去的写法
-        self._one_step({"at": 1, "target": "#dot", "from": {"scale": 1.4}})
-        self._one_step({"at": 1, "target": "#dot", "set": {"scale": 1.4}})
-
-    def test_evolve_and_director_mutually_exclusive(self):
-        with self.assertRaises(ValueError) as cm:
-            validate_images_json({"seg4": {"src": "images/seg4.svg",
-                                           "evolve": {"steps": [
-                                               {"at": 0, "target": "#dot",
-                                                "set": {"opacity": 1}}]},
-                                           "director": {"steps": [
-                                               {"at": 0, "target": "#dot",
-                                                "set": {"opacity": 1}}]}}})
-        self.assertIn("evolve", str(cm.exception))
-
-    def test_evolve_on_non_svg_rejected(self):
+    def test_animate_on_non_svg_rejected(self):
         with self.assertRaises(ValueError):
-            validate_images_json({"seg4": {"src": "images/seg4.png", "evolve": {
+            validate_images_json({"seg4": {"src": "images/seg4.png", "animate": {
                 "steps": [{"at": 0, "target": "#a", "set": {"opacity": 1}}]}}})
 
+    def test_empty_animate_rejected(self):
+        with self.assertRaises(ValueError):
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {}}})
 
-class CheckEvolve(unittest.TestCase):
-    """生成期体检：只用源文本判得了的三件事。"""
+    def test_tween_and_param_steps_share_one_block(self):
+        """同段共存：一拍管出场、一组管连续演绎，两种拍记在同一块 steps 里。"""
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {
+            "steps": [{"at": 0, "target": "#base", "set": {"opacity": 1}},
+                      {"at": 1, "param": "theta", "to": 90, "duration": 1.2}],
+            "params": {"theta": 0},
+            "bind": [{"target": "#dot", "attr": "cx",
+                      "expr": "200 + 100*cos(theta*pi/180)"}]}}})
+
+    def test_params_without_a_param_step_rejected(self):
+        """声明了参数却没有任何一拍推它：几何不会变，等于写了一段死配置。"""
+        with self.assertRaises(ValueError) as cm:
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {
+                "steps": [{"at": 0, "target": "#base", "set": {"opacity": 1}}],
+                "params": {"theta": 0},
+                "bind": [{"target": "#dot", "attr": "cx", "expr": "200 + theta"}]}}})
+        self.assertIn("param", str(cm.exception))
+
+
+class CheckAnimate(unittest.TestCase):
+    """生成期体检：只用源文本判得了的几件事（相机那条按 full_bleed 决定）。"""
 
     def test_clean_steps_pass(self):
-        errs, warns = EV.check_evolve(SEG_A_SVG, [
+        errs, warns = AN.check_animate(SEG_A_SVG, {"steps": [
             {"at": 0, "target": "#base", "set": {"opacity": 1}},
-            {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"}}], "seg-a")
+            {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual((errs, warns), ([], []))
 
     def test_missing_target_is_an_error(self):
-        errs, _ = EV.check_evolve(SEG_A_SVG, [
-            {"at": 1, "target": "#nope", "set": {"opacity": 1}}], "seg-a")
+        errs, _ = AN.check_animate(SEG_A_SVG, {"steps": [
+            {"at": 1, "target": "#nope", "set": {"opacity": 1}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(len(errs), 1)
         self.assertIn("#nope", errs[0])
         self.assertIn("seg-a", errs[0])
 
     def test_class_selector_is_a_valid_target(self):
         svg = SEG_A_SVG.replace('<circle id="dot"', '<circle class="mark dot" id="dot"')
-        errs, _ = EV.check_evolve(svg, [
-            {"at": 1, "target": ".mark", "to": {"opacity": 1}}], "seg-a")
+        errs, _ = AN.check_animate(svg, {"steps": [
+            {"at": 1, "target": ".mark", "to": {"opacity": 1}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(errs, [])
 
-    def test_camera_key_flagged_even_if_schema_let_it_through(self):
-        # 契约层已经挡了，这里再挡一次：gen 阶段直接吃 images.json 的路径不止一条
-        errs, _ = EV.check_evolve(SEG_A_SVG, [
-            {"at": 1, "target": "#dot", "to": {"scale": 1.4}}], "seg-a")
+    def test_camera_key_flagged_on_slot_layout(self):
+        # 契约层也挡（那里读得到版式），这里再挡一次：gen 阶段直接吃
+        # images.json 的路径不止一条
+        errs, _ = AN.check_animate(SEG_A_SVG, {"steps": [
+            {"at": 1, "target": "#dot", "to": {"scale": 1.4}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(len(errs), 1)
         self.assertIn("scale", errs[0])
-        self.assertIn("director", errs[0])
+        self.assertIn("canvas", errs[0])
+
+    def test_camera_key_on_full_bleed_is_fine(self):
+        svg = SEG_A_SVG.replace("<g id=\"base\">", "<g id=\"cam\"><g id=\"base\">") \
+            .replace("</g>\n<circle", "</g></g>\n<circle")
+        errs, _ = AN.check_animate(svg, {"steps": [
+            {"at": 1, "target": "#cam", "to": {"scale": 1.4}}]}, "seg-a",
+            full_bleed=True)
+        self.assertEqual(errs, [])
 
     def test_all_hidden_first_frame_warns(self):
         svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
                '<rect id="a" opacity="0"/><rect id="b" style="opacity:0"/></svg>')
-        _, warns = EV.check_evolve(svg, [
-            {"at": 1.5, "target": "#a", "to": {"opacity": 1}}], "seg-a")
+        _, warns = AN.check_animate(svg, {"steps": [
+            {"at": 1.5, "target": "#a", "to": {"opacity": 1}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(len(warns), 1)
         self.assertIn("空框", warns[0])
 
     def test_hidden_but_lit_at_head_does_not_warn(self):
         svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
                '<rect id="a" opacity="0"/><rect id="b" opacity="0"/></svg>')
-        _, warns = EV.check_evolve(svg, [
-            {"at": 0, "target": "#a", "set": {"opacity": 1}}], "seg-a")
+        _, warns = AN.check_animate(svg, {"steps": [
+            {"at": 0, "target": "#a", "set": {"opacity": 1}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(warns, [])
 
     def test_visible_structure_does_not_warn(self):
         # 结构底本来就可见 = 落位那一帧不是空框，不该误报
-        _, warns = EV.check_evolve(SEG_A_SVG, [
-            {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"}}], "seg-a")
+        _, warns = AN.check_animate(SEG_A_SVG, {"steps": [
+            {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"}}]}, "seg-a",
+            full_bleed=False)
         self.assertEqual(warns, [])
 
     def test_unparsable_svg_stays_silent(self):
         # 解析不了由净化那一步报，这里不重复刷屏
-        self.assertEqual(EV.check_evolve("<svg", [{"at": 0, "target": "#a"}], "s"),
-                         ([], []))
+        self.assertEqual(
+            AN.check_animate("<svg", {"steps": [{"at": 0, "target": "#a"}]}, "s",
+                             full_bleed=False), ([], []))
 
 
 class Prepare(unittest.TestCase):
@@ -154,22 +178,20 @@ class Prepare(unittest.TestCase):
     def test_inline_svg_backfilled_and_steps_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = _write_svg(tmp, "seg-a", SEG_A_SVG)
-            images = {"seg-a": {"src": src, "evolve": {"steps": [
+            images = {"seg-a": {"src": src, "animate": {"steps": [
                 {"at": 0, "target": "#base", "set": {"opacity": 1}}]}}}
             m = H.make_manifest()
-            errs, warns = [], []
-            G._evolve_prepare(images, m["segments"], tmp, None, errs, warns)
+            errs, warns = G.animate_prepare(images, m["segments"], tmp)
             self.assertEqual((errs, warns), ([], []))
             self.assertIn('id="dot"', images["seg-a"]["inline_svg"])
 
     def test_missing_target_fails_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = _write_svg(tmp, "seg-a", SEG_A_SVG)
-            images = {"seg-a": {"src": src, "evolve": {"steps": [
+            images = {"seg-a": {"src": src, "animate": {"steps": [
                 {"at": 0, "target": "#ghost", "set": {"opacity": 1}}]}}}
             m = H.make_manifest()
-            errs, warns = [], []
-            G._evolve_prepare(images, m["segments"], tmp, None, errs, warns)
+            errs, _warns = G.animate_prepare(images, m["segments"], tmp)
             self.assertTrue(any("#ghost" in e for e in errs))
 
 
@@ -181,14 +203,14 @@ class Renderer(unittest.TestCase):
             "seg-a": {"src": "images/seg-a.svg",
                       "inline_svg": '<svg viewBox="0 0 980 735"><g id="base"/>'
                                     '<circle id="dot"/></svg>',
-                      "evolve": {"steps": steps or [
+                      "animate": {"steps": steps or [
                           {"at": 0, "target": "#base", "set": {"opacity": 1}},
                           {"at": 1, "target": "#dot", "to": {"fill": "#f59e0b"},
                            "duration": 0.6}]}},
             "seg-b": {"src": "images/seg-b.svg"},
         }
 
-    def test_evolve_tweens_are_scoped_and_scheduled(self):
+    def test_tweens_are_scoped_and_scheduled(self):
         m = H.make_manifest()
         html = HR.generate_html(m, "audio/combined.wav", images=self._images(),
                                 aspect="portrait")
@@ -202,8 +224,7 @@ class Renderer(unittest.TestCase):
                       f', {t1:.2f})', html)
 
     def test_slot_layout_keeps_title_and_verse_layers(self):
-        # 这就是 evolve 存在的理由：演了图，字幕和标题都还在（director 那一档
-        # 整页交出版面，这两层都不生成）
+        # 槽位页演了图，字幕和标题都还在（满幅页才整页交出版面，这两层不生成）
         m = H.make_manifest()
         html = HR.generate_html(m, "audio/combined.wav", images=self._images(),
                                 aspect="portrait")
@@ -211,7 +232,7 @@ class Renderer(unittest.TestCase):
         self.assertIn('<div class="verse" id="verse-seg-a"', html)
         self.assertIn('<div class="verse-line"', html)
 
-    def test_no_evolve_means_plain_img(self):
+    def test_no_animate_means_plain_img(self):
         m = H.make_manifest()
         images = {"seg-a": {"src": "images/seg-a.svg"}, "seg-b": {"src": "images/seg-b.svg"}}
         html = HR.generate_html(m, "audio/combined.wav", images=images, aspect="portrait")

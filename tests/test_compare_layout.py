@@ -61,9 +61,9 @@ class TestPairContract(unittest.TestCase):
                 self.assertIn("正好 2 项", str(cm.exception))
 
     def test_single_image_keys_are_rejected_on_a_pair(self):
-        # 单图那套键（director/type/stage…）在一对图上是"写了不生效"，
+        # 单图那套键（animate/type/stage…）在一对图上是"写了不生效"，
         # 这一类静默丢弃正是契约层要拦的。
-        for key, val in (("director", {"steps": [{"at": 0, "target": "#a",
+        for key, val in (("animate", {"steps": [{"at": 0, "target": "#a",
                                                  "to": {"opacity": 1}}]}),
                          ("type", "image"), ("stage", "keep")):
             with self.subTest(key=key):
@@ -77,15 +77,15 @@ class TestPairContract(unittest.TestCase):
             validate_images_json({"seg-a": {"src": ["images/a.svg", "images/b.mp4"]}})
         self.assertIn("只收静态图与 SVG", str(cm.exception))
 
-    def test_panes_accept_director_and_evolve_per_side(self):
+    def test_panes_accept_animate_per_side(self):
         got = validate_images_json({"seg-a": {
             "src": list(PAIR),
-            "panes": [{"evolve": {"steps": [{"at": 0, "target": "#a",
-                                             "to": {"opacity": 0.4}}]}},
-                      {"director": {"steps": [{"at": 1, "target": "#b",
-                                               "to": {"opacity": 1}}]}}]}})
-        self.assertIn("evolve", got["seg-a"]["panes"][0])
-        self.assertIn("director", got["seg-a"]["panes"][1])
+            "panes": [{"animate": {"steps": [{"at": 0, "target": "#a",
+                                              "to": {"opacity": 0.4}}]}},
+                      {"animate": {"steps": [{"at": 1, "target": "#b",
+                                              "to": {"opacity": 1}}]}}]}})
+        self.assertIn("animate", got["seg-a"]["panes"][0])
+        self.assertIn("animate", got["seg-a"]["panes"][1])
 
     def test_panes_must_be_two(self):
         for bad in ([{}], [{}, {}, {}], {"a": 1}):
@@ -131,10 +131,10 @@ class TestAssembly(unittest.TestCase):
     def test_pane_tweens_are_scoped_per_side(self):
         html = _render({
             "seg-a": {"src": list(PAIR), "panes": [
-                {"evolve": {"steps": [{"at": 0, "target": "#dot",
-                                       "to": {"opacity": 0.4}}]}},
-                {"director": {"steps": [{"at": 1, "target": "#dot",
-                                         "to": {"opacity": 1}}]}}]},
+                {"animate": {"steps": [{"at": 0, "target": "#dot",
+                                        "to": {"opacity": 0.4}}]}},
+                {"animate": {"steps": [{"at": 1, "target": "#dot",
+                                        "to": {"opacity": 1}}]}}]},
             "seg-b": {"src": "images/seg-b.svg"}})
         # 两格都写了同名 target（#dot），必须各打各的格——否则右边那条覆盖左边。
         self.assertIn('#img-seg-a-0 #dot', html)

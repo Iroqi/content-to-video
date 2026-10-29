@@ -5,8 +5,8 @@
 0..1440 里，是相机 `scale` 把它推出去的。实测踩过的正是这一类：
 `scale:1.16 svgOrigin:"540 660"` 把 y=1362 映射到 y≈1477（>1440），底栏整条在成片里
 消失，源码与画面之间没有任何线索。`check_svg.py` 只看单文件、读不到 images.json 里的
-director steps，所以它没有判据；唯一同时握着 SVG 原文和运镜关键帧的地方是
-`gen_hyperframes.director_prepare`，检查就落在那里。
+animate steps，所以它没有判据；唯一同时握着 SVG 原文和运镜关键帧的地方是
+`gen_hyperframes.animate_prepare`，检查就落在那里。
 
 **口径（每一条都是故意的，别当漏检）**：
 

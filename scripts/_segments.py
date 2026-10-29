@@ -88,7 +88,7 @@ def sids_needing_image(manifest):
 # 图槽一分为二，两张图各自按旁白入场 / 演进）；"agenda" = 开屏/结尾那张纯文字页。
 # 只有 agenda 绑段 id：它是结构性页专属的投影卡（行来自全片其它段——作者能选这一
 # 档，选不了它印什么，见 seg_layout）；canvas / compare 两段通用。
-# 版式后果见 references/rendering.md「画面结构」，画布规格与选型判据见
+# 版式后果见 references/look.md「画面结构」，画布规格与选型判据见
 # references/canvas.md「整页画布」与同文件「并置对比」「字幕层」。
 LAYOUT_VALUES = ("canvas", "compare", "agenda")
 # 已并入别处的版式取值 → 现在该写什么。这里只负责把话说明白，"认不认"由调用方

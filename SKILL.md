@@ -24,7 +24,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 产物标 degraded）。打开 hf-project/index.html 看版式；配音后去掉 --until 才是出片。
 ```
 
-只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（模板自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`rendering.md`「动画」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
+只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（模板自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
 
 ## 这份文档怎么用
 
@@ -38,9 +38,9 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3 步 SVG 画什么（几何、对比度、字号、数据自查） | `references/canvas.md` | 不画 SVG 就不用读 |
 | 第 3 步 动效与编排：该不该动、动多快、`animate` 怎么写 | `references/motion.md` | 从不（写任何补间之前都要过） |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
-| 字幕怎么跟着念（焦点、换句、时钟） | `references/subtitles.md` | 全走默认模板时 |
+| 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认模板时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |
-| 想知道"这一页在屏幕上到底有没有东西" | [perceptual.md](references/perceptual.md) | 要 Node+Chrome+Pillow |
+| "这一页在屏幕上到底有没有东西"（观感门禁） | `look.md`「观感门禁」 | 要 Node+Chrome+Pillow |
 
 ## 核心规则
 

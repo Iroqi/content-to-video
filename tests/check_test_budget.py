@@ -85,7 +85,7 @@ def main():
     for _, name, path in rows:
         if ROUND_NAME.match(name):
             bad.append(f"{name} 以轮次编号命名 —— 一个测试文件应该对着一个契约"
-                       "（`svg-motion` / `animate-schema` / `render-backend`），"
+                       "（`motion` / `animate-schema` / `render-backend`），"
                        "不是收某一轮 review 的账")
 
     locks = sum(defect_locks(p) for _, _, p in rows)

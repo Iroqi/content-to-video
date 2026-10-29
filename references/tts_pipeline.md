@@ -7,7 +7,7 @@
 参数、默认值与语义的**唯一真源是 `python scripts/pipeline.py --help`**（每条 help 都带语义）。写稿/调参时记住三个默认值与四个 help 会说的连带：
 
 - 三个默认值：全局语速默认 `1.5`（`--speed`）；开场/结尾用 `1.2`（段级 `speed` 覆盖）；句间静音默认 `0.4`（`--gap`）。
-- 四个连带：`--gap` 同时决定转场宽度（见 `references/rendering.md`「动画」）；`--speed` 变速后字幕按实测时长对齐；`--resume` 日常调试建议始终加（缓存失效条件在 help 里）；`--on-fail silence` 的句子带 `synth_failed`，正式渲染须 `--allow-degraded`（见下节）。
+- 四个连带：`--gap` 同时决定转场宽度（见 `references/look.md`「动画：实现要点」）；`--speed` 变速后字幕按实测时长对齐；`--resume` 日常调试建议始终加（缓存失效条件在 help 里）；`--on-fail silence` 的句子带 `synth_failed`，正式渲染须 `--allow-degraded`（见下节）。
 
 ## 降级与补录
 
@@ -94,7 +94,7 @@ manifest 由 pipeline 自动产出，手写少见；确需手写/裁剪时按此
 它们被谁读：
 
 - **字幕换句**：cue 起点 = `start_time + onset`，人在开口那一刻才换字幕（否则字幕比话早半拍，页末句在没人说话时还亮着）。
-- **词级强调（卡拉OK）**：进度分母 = `voiced`，念完那一刻正好 100%（`references/rendering.md`「动画」）。
+- **词级强调（卡拉OK）**：进度分母 = `voiced`，念完那一刻正好 100%（`references/look.md`「动画：实现要点」）。
 
 三条边界都是契约层直接报错（不是 warn）：只写一个、`onset + voiced > duration`、给 `synth_failed` 的静音兜底句写 `voiced`——读出来都是"说半句"，而产物看起来正常。
 

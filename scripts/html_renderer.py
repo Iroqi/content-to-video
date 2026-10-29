@@ -1108,7 +1108,7 @@ def _verse_html(seg, sid, ac_text_attr):
     选得相近时，观众手里只剩一串分不清轮次的字幕。只在轮次首句挂，同一
     说话人连着说三句不刷三遍标签（那会让字幕行首变成一列复读的抬头）。
     """
-    # 三个豁免属性的继承规则不同，别按一套打（详见 references/rendering.md
+    # 三个豁免属性的继承规则不同，别按一套打（详见 references/look.md
     # rendering.md「官方校验命令」的 text_occluded 一条）：
     #   · allow-occlusion / allow-overlap —— 只认元素自己身上，**不继承祖先**，
     #     每行 .verse-line 与 .verse-who span 都得自带。
@@ -1779,7 +1779,7 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     # bbox 的左上角（实测，见 _cam_crop.cam_default_origin 的 docstring），那个角还跟着
     # 别的步的 from 瞬态飘 —— 出画 warn 与跨段烘焙算的取景就和成片不是一幅画。
     # 槽位版式不调机位（契约层已拒相机属性），原点注入对它没有意义：那里的镜头由
-    # 模板的入场收拢负责（配图不做持续推近，见 references/rendering.md），再钉一个
+    # 模板的入场收拢负责（配图不做持续推近，见 references/look.md），再钉一个
     # 原点只会让"图内原点"与"CSS transform-origin"两个中心打架。
     pin = (cam_default_origin(entry.get("opts", {}).get("inline_svg"), block["steps"])
            if pin_cam else None)
@@ -2420,7 +2420,7 @@ def _frame_arc_lines(rc, card, frame_sel, at, duration):
     - 标题与副标题：揭示边的语义要求**文字盒的左缘站定不动**，加横向分量就把它
       自己拆了（`_title_rhythm` 里"缩放档为什么被删"是同一条理由）。
     - 字幕换句：位移只写在列容器上，行自己一条补间都没有，加副轴就是给每句加一条
-      独立的飞行动作（`references/rendering.md`「三条换版式时会坏的」第一条）。
+      独立的飞行动作（`references/look.md`「三条换版式时会坏的」第一条）。
     **幅度只有一个真源**（`arc.x`），`arc.rhythm` 只轮换向。幅度也轮换一份的话，
     `arc.x = 0` 就关不掉这层——"关不掉"的旋钮等于没有旋钮。
 

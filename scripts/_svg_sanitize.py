@@ -4,7 +4,7 @@
 内联会让 SVG 成为同源活 DOM（`<img>` 载入时按 data 处理、脚本不执行），所以导演档
 （见 `references/motion.md`「契约」）**必须先净化**，让它回到 `<img>` 的安全水位。
 
-同时保证**逐帧 seek 的决定性**（见 rendering.md「动画」）：墙钟自走的东西（CSS
+同时保证**逐帧 seek 的决定性**（见 look.md「动画：实现要点」）：墙钟自走的东西（CSS
 `@keyframes`/`transition`、SMIL `<animate*>`）在成片里会漂移，一并剥掉。要氛围循环
 就别写 animate，走 `<img>`。
 

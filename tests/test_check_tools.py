@@ -946,7 +946,7 @@ class ImageSnippetChecker(unittest.TestCase):
     """文档里的 images.json 片段必须过契约层。
 
     这条此前**没有接线**：`check_image_snippets.py` 只在人手跑时才存在，示例跟着
-    文档搬家（`director.md` → `svg-motion.md`）后它静默失败了两条，而所有测试照旧
+    文档搬家（`director.md` → `svg-motion.md` → `motion.md`）后它静默失败了两条，而所有测试照旧
     全绿。断言的写法与上面两个检查器同一条：只调 main()。
     """
 

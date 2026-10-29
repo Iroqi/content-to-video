@@ -135,9 +135,9 @@ tests/       契约测试 ＋ 五道检查脚本
 | 第 3 步画 SVG：几何、对比度、字号、数据自查 | [`references/canvas.md`](references/canvas.md) |
 | 动效该不该有、动多快；`animate` 怎么写、镜头归谁、参数怎么推 | [`references/motion.md`](references/motion.md) |
 | 第 4 步预览、渲染、调性能、官方门禁 | [`references/rendering.md`](references/rendering.md) |
-| 字幕怎么跟着念 | [`references/subtitles.md`](references/subtitles.md) |
+| 第 4 步版式、动画落地、字幕怎么跟着念 | [`references/look.md`](references/look.md) |
 | 画面空 / 不动 / 换页没东西 | [`references/troubleshooting.md`](references/troubleshooting.md) |
-| "这一页在屏幕上到底有没有东西" | [`references/perceptual.md`](references/perceptual.md) |
+| "这一页在屏幕上到底有没有东西"（观感门禁） | [`look.md`](references/look.md)「观感门禁」 |
 
 `SKILL.md` 是给 agent 的入口与核心规则，不是给人读的教程。
 

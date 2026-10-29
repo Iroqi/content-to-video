@@ -133,7 +133,7 @@ def validate_segments_source(data):
                 _validate_text(spk_cfg.get(_key),
                                f"segments_source.json 的 speakers['{spk}'].{_key}")
             # label 现在是**上墙文字**：对话段轮次切换的首句行首会挂出这枚标签
-            # （见 references/rendering.md「画面结构」的 verse 一条）。所以它也
+            # （见 references/look.md「画面结构」的 verse 一条）。所以它也
             # 受上墙那三道管：不收分号、单行、字数有上限。
             # 判的是**最终上墙的那个值**而不是只判显式 label：label 缺省时回退
             # 成 speaker 名本身（build_from_structured 的 `label or spk`），key

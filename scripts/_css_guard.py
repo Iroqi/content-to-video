@@ -7,7 +7,7 @@ GSAP 把它们合成一条 inline `transform` 写进元素的 `style`。只要 C
 的"起点"也会跟着变。症状是**静默的**：那一页的标题/配图不进场，或者从半路弹出来，
 没有任何报错，`hyperframes check` 也看不见（它只判布局与可读性）。
 
-所以这条约束一直是文档里的红线（`references/rendering.md`「动画」、`templates/
+所以这条约束一直是文档里的红线（`references/look.md`「动画：实现要点」、`templates/
 composition.css` 里三处注释都在说"别声明 transform，居中走 auto 外边距"）。写成门禁
 只需要一次静态解析：**CSS 里声明 transform 的选择器** ∩ **这一版 HTML 真会补间到的
 元素选择器**。

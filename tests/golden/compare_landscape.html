@@ -19,7 +19,7 @@
 
    双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
    layout.vertical / layout.landscape 块）。画面结构与三档版式行为以
-   references/rendering.md「画面结构」为准，这里不复述。
+   references/look.md「画面结构」为准，这里不复述。
    ────────────────────────────────────────────────────────────────────── */
 
 *{margin:0;padding:0;box-sizing:border-box}
@@ -213,7 +213,7 @@ body{font-family:var(--ctv-font-family)}
    几何走 --ctv-verse-line（行内边距）而不是写死 px：垫片要比文字盒宽出一点，
    但不能宽到顶到页面边缘。右缘单独一个变量 --ctv-verse-pad-right：竖屏是页宽
    一整条（左右都出血），横屏收到 0（只垫到句子流行尾——宽垫在左栏垂中的时候
-   整块会读成一块悬浮暗块，见 references/rendering.md「画面结构」）。 */
+   整块会读成一块悬浮暗块，见 references/look.md「画面结构」）。 */
 .verse{isolation:isolate}
 .verse::before{content:"";display:var(--ctv-verse-shade,block);position:absolute;left:calc(-1 * var(--ctv-verse-line) * 2);right:var(--ctv-verse-pad-right);bottom:calc(-1 * var(--ctv-verse-line) * 5);height:calc(var(--ctv-verse-h) * 0.8);z-index:-1;pointer-events:none;background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--ctv-bg-color) 74%,transparent) 58%,color-mix(in srgb,var(--ctv-bg-color) 90%,transparent))}
 /* active/past 与 base 的 .verse-line 是 0,2,0 对 0,1,0，层叠自然压过，不用

@@ -33,8 +33,12 @@
   - 墙钟动画（SMIL <animate*> / CSS animation / transition）：无法与口播
     时间轴同步，提示改用 images.json 的 animate                        [warn]
   - 图元越出画布边界：rect/circle/ellipse/line/polygon/polyline 与 path 的
-    精确几何、以及文字的纵向（基线上下）与锚点位置超出 viewBox。cover 对
-    槽位图按框裁切、画布页就是成片的一页，越界内容必然被裁掉/出画——
+    精确几何、以及文字的**完整包围盒**（纵向基线上下 + 横向按锚点展开的字宽估算）
+    超出 viewBox。文字横向对 start/end/middle 三档锚点都按"锚点 + 估算字宽"算出的
+    整段区间查，不再只在锚点坐标本身出画布时才报——锚点进了画布、但文字整体向左/
+    向右探出被 cover 裁掉的那类截断也会拦下（本批日报 seg2/seg3/seg7 的条形图标签
+    就是漏在这条旧规则上）。cover 对槽位图按框裁切、画布页就是成片的一页，越界
+    内容必然被裁掉/出画——
     跟"比例不等"是同一类"贴边内容会丢"的失败模式。带 transform 祖先的
     元素跳过（最终位置静态算不出，不误报）                          [error]
   - 线条端点悬空：line/polyline/带描边的开 path，首尾端点在 4‰ 画幅内没有落到
@@ -279,10 +283,21 @@ def _shape_bounds(el, tag):
     return None if box is None else (box[0], box[2], box[1], box[3])
 
 
-def _text_oob(el, inherited, vb_w, vb_h):
-    """文字越界：纵向按基线 ± 字身（上方 fs、下方 0.3fs，与 _ink_band 同一
-    口径），横向按锚点。text-anchor=middle 的宽度静态算不出，只查纵向。
-    返回错误文案或 None。"""
+def _text_oob(el, inherited, vb_w, vb_h, content=""):
+    """文字越界：完整包围盒（纵向基线上下 + 横向按锚点展开的字宽估算）必须落在
+    viewBox 内，否则被 cover 裁切 / 出画。返回错误文案或 None。
+
+    横向三档锚点都查：
+    - start  向右展开 [x, x+est_w]
+    - end    向左展开 [x-est_w, x]   ← 本批日报 seg2/seg3/seg7 的条形图标签就是
+                                      锚点在画布内、文字向左伸出左缘被裁，旧规则只查
+                                      了 `x > vb_w`（锚点越过右缘）这一种，整段截断静默漏过
+    - middle 两侧展开 [x-est_w/2, x+est_w/2]
+
+    字宽用 `est_text_width` 的粗估（等宽 1em / 拉丁 0.55em）：偏低估，越界判定偏
+    于"放过去"。但像本批那种左端探到负坐标的整段截断必然触发；贴边的小溢出仍要
+    人眼复核（与空带自查同一条口径）。读不到字号时退化回旧行为（只查锚点坐标）。
+    """
     fs = inherited(el, "font-size")
     px = _parse_num(fs) if fs else None
     y = _parse_num(el.get("y")) or 0.0
@@ -298,7 +313,24 @@ def _text_oob(el, inherited, vb_w, vb_h):
                 f"（基线 y={y:g}，字身 {_fs}）——cover 会裁掉贴边内容，"
                 f"把文字整体移进画布")
     x = _parse_num(el.get("x"))
-    if x is not None:
+    if x is not None and px is not None:
+        # 字宽粗估 + 三档锚点展开：锚点进了画布、文字整体却探出去的截断也能抓到。
+        anchor = inherited(el, "text-anchor") or "start"
+        est_w = est_text_width(content, px)
+        if anchor == "end":
+            left, right = x - est_w, x
+        elif anchor == "middle":
+            left, right = x - est_w / 2, x + est_w / 2
+        else:
+            left, right = x, x + est_w
+        if left < -1e-6 or right > vb_w + 1e-6:
+            side = "左" if left < 0 else "右"
+            return (f"文字越出画布{side}边缘"
+                    f"（估算字宽 {est_w:g}px，{anchor} 锚点 x={x:g}，横向区间 "
+                    f"[{left:g}, {right:g}] 超出 0–{vb_w:g}）——锚点在画布内但文字"
+                    f"整体探出，cover 会裁掉。把文字移进画布，或缩短锚点到画布边的距离")
+    elif x is not None:
+        # 读不到字号：纵向已报，横向沿用旧锚点校验（astral 旧行为），避免退化为静默
         anchor = inherited(el, "text-anchor") or "start"
         if anchor == "start" and x < -1e-6:
             return f"文字起点 x={x:g} 在画布左缘之外——把文字移进画布"
@@ -593,7 +625,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             # （width/height 与 viewBox 差一个倍数的缩放写法）去比会把贴边裁掉的
             # 字放行——与图元越界那条（vb_w/vb_h）同一坐标系，不在这里另开一套。
             if vb_w and vb_h and not has_transform_ancestor(el):
-                msg = _text_oob(el, inherited, vb_w, vb_h)
+                msg = _text_oob(el, inherited, vb_w, vb_h, content)
                 if msg:
                     errors.append(msg)
                 ty = _parse_num(el.get("y")) or 0.0

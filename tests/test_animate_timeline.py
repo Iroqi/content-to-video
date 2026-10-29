@@ -1003,10 +1003,13 @@ class DirectorPrepare(unittest.TestCase):
         _, warns = G.animate_prepare(images, segs, self.tmp.name)
         self.assertEqual([w for w in warns if "起始帧全空" in w], [])
 
-    def test_keep_page_frame0_not_checked(self):
-        """接续页（stage:"keep"）起点 = 上一页演完的画面，不是盘上原图——全隐藏的
-        原图也不该替接续页报"起始帧全空"。同一张全隐藏的图：首页 canvas 导演报一条，
-        接续页共文件不添第二声。"""
+    def test_carried_page_frame0_not_checked(self):
+        """接续页起点 = 上一页演完的画面，不是盘上原图——全隐藏的原图也不该替接续页
+        报"起始帧全空"。同一张全隐藏的图：首页 canvas 导演报一条，接续页不添第二声。
+
+        seg-b 自己不写编排：上一页有 animate、两页同图，它就自动是接续页（判据只看
+        上一页，不看自己）。
+        """
         rel = _write_svg(self.tmp.name, "seg-a",
                          '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" '
                          'viewBox="0 0 1080 1440"><g id="node" opacity="0">'
@@ -1014,8 +1017,7 @@ class DirectorPrepare(unittest.TestCase):
         images = {
             "seg-a": {"src": rel, "animate": {
                 "steps": [{"at": 0, "target": "#node", "set": {"opacity": 1}}]}},
-            "seg-b": {"src": rel, "stage": "keep", "animate": {
-                "steps": [{"at": 0, "target": "#node", "to": {"opacity": 1}}]}},
+            "seg-b": {"src": rel},
         }
         segs = [self._seg("seg-a", "canvas"), self._seg("seg-b", "canvas")]
         errs, warns = G.animate_prepare(images, segs, self.tmp.name)

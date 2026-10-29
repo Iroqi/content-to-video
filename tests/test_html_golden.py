@@ -1005,6 +1005,9 @@ class CanvasPageAndVideoAttrs(unittest.TestCase):
         images = _normalize_images(H.sample_images(m))
         rc = _build_render_context(load_template(), "vertical", 1080, 1440,
                                    "dark", images)
+        # 接续页集合由 generate_html 算好挂上来（见 _is_keep_page）；这里单测卡片
+        # 装配，给一个空集合即可。
+        rc.carries = {}
         by_id = {seg["id"]: seg for seg in m["segments"]}
         clip = {"seg": by_id["seg-b"], "start": 7.2, "duration": 3.0,
                 "wipe": 0.0, "win_start": 7.2, "vis": 3.0,

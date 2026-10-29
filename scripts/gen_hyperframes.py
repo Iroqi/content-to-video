@@ -156,8 +156,9 @@ from _animate import animate_of, check_animate  # noqa: E402  编排的唯一入
 from _images_schema import (load_images_json, classify_media_path,  # noqa: E402
                             is_svg_path,
                             allow_infinite_loop as infinite_loop_allow)  # noqa: E402  宽松档开关
-from _segments import (is_full_bleed, sids_needing_image,  # noqa: E402
-                       seg_layout, seg_subtitle, STRUCTURAL_SIDS)
+from _segments import (is_full_bleed, is_next_page_continuing,  # noqa: E402
+                       sids_needing_image, seg_layout, seg_subtitle,
+                       STRUCTURAL_SIDS)
 from _css_guard import css_transform_leaks, leak_message  # noqa: E402  CSS↔GSAP 抢 transform
 from _script_utils import (setup_stdio, write_text_atomic, sha256_file,  # noqa: E402
                            is_inside, guard_not_in_skill_dir,
@@ -169,8 +170,8 @@ from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa
                            is_full_bleed_backdrop, sanitize_svg_for_inline,
                            root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
 from _cam_crop import crop_warnings  # noqa: E402
-from _stage_carry import (bake_settled_state, global_ref_leaks,  # noqa: E402
-                          infer_stage_keep)
+from _stage_carry import (bake_settled_state, carry_pages,  # noqa: E402
+                          global_ref_leaks)
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
                        beat_cycles, duration_tolerance)
 
@@ -570,7 +571,7 @@ def svg_background_warnings(images, segments, out_dir):
     时跑；这一遍保证不跑自查、直接 `gen_hyperframes` 也会按段落出声。判据与
     check_svg 共用 `_svg_sanitize.is_full_bleed_backdrop`（单一真源）。warn 不
     error：确实要自画满幅底（浅色页 / 照片感场景）是合法取舍，有意为之可忽略。
-    同一文件被 keep 链里多个段落引用时按路径只报一次。
+    同一文件被接续链里多个段落引用时按路径只报一次。
     """
     seen = set()
     warns = []
@@ -989,7 +990,7 @@ def _stagger_extra(step):
     return 0.0
 
 
-def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, keep=False):
+def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, carried=False):
     """beat 落在本页可见窗口之外（before/after/被切半路）→ warn 文案。
 
     引擎按 data-start/data-duration 硬切 clip 可见性（实测排在窗口外的补间等于没写），
@@ -999,7 +1000,7 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
     门禁算的时刻与渲染器用的时刻不可能漂移。
 
     除了起点出窗，还报**起点在内、终点越界**的那一类：补间演到一半就被下一页盖过来，
-    作者以为的终态在成片里从没出现过（`keep=True` 时更要紧——接续烘焙把时间轴折到最后
+    作者以为的终态在成片里从没出现过（`carried=True` 时更要紧——接续烘焙把时间轴折到最后
     一帧，它搬的正是那个没演到的终态）。这里只判时刻，不去算缓动走了几成：那要把 ease
     求值到页界，而"演到一半"本来就是该改节拍而不是该被精确复刻的东西。
     """
@@ -1037,8 +1038,8 @@ def _beat_window_warnings(steps, sentences, seg_start, next_start, dflt_dur, kee
                            f"过来——这一拍被切在半路，它要收的那个尾在成片里从没出现过（早 "
                            f"{pos + total - next_start:.2f}"
                            "s）。要么把 duration/delay/repeat 收紧到本页内，要么让它在接续页里重演一遍"
-                           + ("；这一页写了 stage:\"keep\"，接续烘焙搬走的就是那个没演到的终态"
-                              if keep else ""))
+                           + ("；这一页接续自上一页，接续烘焙搬走的就是那个没演到的终态"
+                              if carried else ""))
     return out
 
 
@@ -1197,13 +1198,14 @@ def animate_prepare(images, segments, out_dir):
     - **参数演绎的静态自检**：`bind` 落空、与本条目的属性补间抢同一个属性、起始帧
       读数与 `params` 初值不一致、端点算不出来（见 `_derive_checks`）。
 
-    最后按段序走第二遍烘焙 `stage:"keep"` 接续页（`_stage_carry_pass`），并替它补做
-    运镜自查——第一遍按盘上原图算的投影对接续页不成立。
+    最后按段序走第二遍烘焙接续页（`_stage_carry_pass`），并替它补做运镜自查——
+    第一遍按盘上原图算的投影对接续页不成立。
 
     非 SVG 写 animate 已由 `_images_schema` 在契约层拒掉，这里不重复。
     """
     errs, warns = [], []
     seg_by_id = {seg["id"]: seg for seg in segments}
+    seg_pos = {seg["id"]: i for i, seg in enumerate(segments)}
     dflt_dur = _beat_default_duration()   # 与渲染端同一份缺省，否则落点算错
     for sid, entry in (images or {}).items():
         seg = seg_by_id.get(sid)
@@ -1223,7 +1225,9 @@ def animate_prepare(images, segments, out_dir):
         raw, markup = out
         entry["inline_svg"] = markup
         # 接续页：起点不是盘上原图，而是上一页演完的画面（见 _stage_carry_pass）。
-        carried = entry.get("stage") == "keep"
+        # 判据是结构（同图 + 上一页有编排），不是某个字段——见 _segments。
+        carried = (sid in seg_pos
+                   and is_next_page_continuing(segments, seg_pos[sid]))
         _animate_checks(sid, src, raw, block, entry, seg, segments, dflt_dur,
                         full_bleed, carried, errs, warns)
     _stage_carry_pass(images, segments, dflt_dur, errs, warns)
@@ -1292,7 +1296,7 @@ def _animate_checks(sid, src, raw, block, holder, seg, segments, dflt_dur,
 
     # ③ 整页画布的起始帧钩子：画布页不生成标题层与句子流层，开头整片空白时观众
     #    对着空画面不知所以然；槽位页有标题和句子流兜底，不需要这条。
-    #    接续页（stage:"keep"）跳过：它的起点是上一页演完的画面，不是盘上原图。
+    #    接续页跳过：它的起点是上一页演完的画面，不是盘上原图。
     if not carried and seg_gap_is_canvas(seg):
         n_vis, n_all = _svg_frame0_visibility(raw)
         if n_all and n_vis == 0:
@@ -1316,7 +1320,7 @@ def _animate_checks(sid, src, raw, block, holder, seg, segments, dflt_dur,
     for w in _beat_window_warnings(block["steps"], seg["sentences"],
                                    float(seg["sentences"][0]["start_time"]),
                                    next_speech_start(segments, sid), dflt_dur,
-                                   keep=carried):
+                                   carried=carried):
         warns.append(f"{where} 的配图 {src}：{w}")
 
 
@@ -1515,61 +1519,40 @@ def _steps_beats(steps, seg, dflt_dur):
         return None
 
 
-def _infer_stage_keep(images, segments):
-    """接续页自动盖章：判据在 `_stage_carry.infer_stage_keep`（渲染端调同一份）。
-
-    这里只补两件生成期才有的事：按 manifest 段序传 id，以及给每个被盖章的段打
-    一行 `[notice]`——推断是"替作者写了默认值"，作者有权知道这页已经不是独立
-    起跑了（尤其在他本来就**想**让它独立重演的时候）。
-    """
-    stamped = infer_stage_keep(images, [seg["id"] for seg in segments])
-    for sid in stamped:
-        print(f"[notice] 段落 '{sid}'：与上一段同一张图、且上一段最后停在非原位的相机"
-              f"姿态，已自动按 stage:\"keep\" 接续（页界不换画、不重播入场）。要让这一页"
-              f"独立重演，把两页的 src 换开，或去掉上一段末拍那条运镜",
-              file=sys.stderr)
-    return stamped
-
-
 def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
     """跨段场景延续的生成期第二遍：上一页"演完之后"的画面 = 下一页的起点。
 
-    为什么要第二遍而不是就地做：下一页要的起点是**上一页烘焙之后**的副本（A→B→C 里 C
-    必须拿到 A+B 的叠加），所以只能沿 manifest 段序推进；第一遍走的是 images.json 的
-    键序，两者不保证一致，就地算会用到还没烘焙的前页。
+    为什么要第二遍而不是就地做：下一页要的起点是**上一页烘焙之后**的副本（A→B→C 里
+    C 必须拿到 A+B 的叠加），所以只能沿 manifest 段序推进；第一遍走的是 images.json
+    的键序，两者不保证一致，就地算会用到还没烘焙的前页。
 
-    烘焙本身在 _stage_carry（口径与边界写在那个模块头）。这里只回答"接的是谁"：
-    前一段存在吗、它内联得出来吗、两页是不是同一张图，以及接续页的运镜自查。
+    接的是谁由结构决定（`_stage_carry.carry_pages`：两页同一张 src、上一页有编排），
+    没有任何字段可写。烘焙本身在 _stage_carry（口径与边界写在那个模块头）；这里只做
+    生成期才做得到的两件事：把烘焙过的副本回写进条目，以及拿**烘焙后**的副本重跑一次
+    这一页的运镜自查（第一遍按盘上原图算的投影对接续页是假话）。
     """
     if not images:
         return
-    # 自动接续盖章：必须在这里（第一遍已把上一页净化内联完）——判据要看
-    # `inline_svg`，提前到第一遍之前就问等于永远问不到。
-    _infer_stage_keep(images, segments)
-    for i, seg in enumerate(segments):
-        sid = seg["id"]
-        entry = images.get(sid)
-        if not entry or entry.get("stage") != "keep":
-            continue
-        src = entry["src"]
-        where = f"段落 '{sid}' 写了 stage:\"keep\""
-        if i == 0:
-            errs.append(f"{where}，但它是 manifest 里的第一段——接续的起点是上一页演完的"
-                        "画面，第一页没有上一页。把 stage 挪到真正接续的那一页，或这一页"
-                        "独立成图")
-            continue
-        prev = segments[i - 1]
-        prev_entry = images.get(prev["id"]) or {}
+    # 段是 manifest 段 + images.json 那份条目（src / animate 都在条目上）：判据要看的
+    # 三个键只有合起来才齐，且必须合起来传——三处消费者（这里、渲染端、写稿门禁）
+    # 看到的是同一份结构，才会永远得出同一个答案。
+    merged = []
+    for seg in segments:
+        row = dict(seg)
+        entry = images.get(seg["id"]) or {}
+        row["src"] = entry.get("src")
+        row["animate"] = entry.get("animate")
+        merged.append(row)
+    for sid, prev_sid in carry_pages(images, merged).items():
+        seg = next(x for x in segments if x["id"] == sid)
+        prev = next(x for x in segments if x["id"] == prev_sid)
+        entry = images[sid]
+        prev_entry = images.get(prev_sid) or {}
+        where = f"段落 '{sid}' 接续自 '{prev_sid}'"
         prev_markup = prev_entry.get("inline_svg")
         if not prev_markup:
-            errs.append(f"{where}，但上一段 '{prev['id']}' 没有可接续的内联画面——它没写"
-                        " animate（写了才净化内联），或它的配图没读进来/没能内联。"
-                        " 接续页要的是上一页演完的那幅活画面，<img> 那份没有可烘焙的元素态")
-            continue
-        if prev_entry.get("src") != src:
-            errs.append(f"{where}，但它的 src={src!r} 和上一段 '{prev['id']}' 的 "
-                        f"{prev_entry.get('src')!r} 不是同一张图——接续的前提是同一幅画"
-                        " 跨页继续演。要换画面就别写 stage；要同一幅画就把两页的 src 对齐")
+            # 上一页写了 animate 却在第一遍没内联成功（图缺了、净化失败）：那条错误
+            # 已经报过，这里不再重复，只是这一页接不上。
             continue
         prev_steps = animate_of(prev_entry).get("steps") or []
         try:
@@ -1579,20 +1562,20 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
             errs.append(f"{where}，但烘焙上一页的收尾态失败: {e}")
             continue
         for n in notes:
-            warns.append(f"段落 '{sid}' 接续自 '{prev['id']}'：{n}")
+            warns.append(f"{where}：{n}")
         entry["inline_svg"] = markup
         # 接续页的运镜自查拿**烘焙后**的副本来算：这一页的相机姿态是在上一页推近的画
         # 面之上再乘一层，只看盘上原图会把已经出画的元素当成"在幅内"。
         own = animate_of(entry).get("steps")
         for w in crop_warnings(markup, own):
-            warns.append(f"段落 '{sid}' 的 animate 配图 {src}：{w}")
+            warns.append(f"段落 '{sid}' 的 animate 配图 {entry['src']}：{w}")
         # step_i 不叫 i：外层 for i, seg 用的是段序，内层复用 i 会静默把它
         # 换成 step 下标——今天块内不读外层 i 所以无害，下一行加一句用 i 的
         # 代码就会拿到错的值。
         for step_i, sel in global_ref_leaks(markup, own):
             errs.append(f"{where}，但它的 animate.steps[{step_i}]（target={sel}）打在了两份副本"
                         "共享的元素上——图里的 url(#id)/href=\"#id\" 按文档序只认第一份"
-                        f"（= 上一段 '{prev['id']}' 那一幅），所以这一拍打在本页这份上，本页"
+                        f"（= 上一段 '{prev_sid}' 那一幅），所以这一拍打在本页这份上，本页"
                         "没有任何图形会去读它。渐变/滤镜/marker 这类共享元素的补间请只在"
                         "前一段写，别在接续页重写")
     return

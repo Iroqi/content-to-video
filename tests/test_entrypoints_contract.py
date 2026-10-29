@@ -4,6 +4,8 @@
 （为什么是这两条、以及错代码是怎么被选出来的，见 scripts/_images_schema.py
 validate_images_json 与 gen_hyperframes._epilog 的注释。）
 """
+import contextlib
+import io
 import json
 import re
 import unittest
@@ -126,21 +128,27 @@ class ImagesJsonReportsEverythingAtOnce(unittest.TestCase):
         self.assertIn("license", err)
         self.assertIn("3 处问题", err)
 
-    def test_stage_and_animate_errors_are_not_masked_by_each_other(self):
-        """animate 与 stage 都挂在 PNG 上时两条都要报（互不依赖）。"""
-        err = err_of({"seg1": {
-            "src": "images/a.png", "animate": {"steps": []}, "stage": "carry",
-        }})
-        self.assertIn("animate", err)
-        self.assertIn("stage", err)
+    def test_animate_error_is_not_masked_by_a_stale_key(self):
+        """写了已删除的 stage 又写活动画：活动的错照报，旧键只出提示。
+
+        旧键的提示走 stderr（不阻断），所以它得在**报错之前**就打得出来——两条
+        都是"作者改这一处时该看见的话"，不该因为另一处先抛就消失。
+        """
+        buf = io.StringIO()
+        data = {"seg1": {"src": "images/a.png", "animate": {"steps": []},
+                         "stage": "carry"}}
+        with contextlib.redirect_stderr(buf):
+            with self.assertRaises(ValueError) as ctx:
+                validate_images_json(data)
+        self.assertIn("animate", str(ctx.exception))
 
     def test_one_group_error_does_not_hide_another_group(self):
-        """type 组错了不能遮住播放组、路径组、动画组的错。"""
+        """type 组错了不能遮住播放组、路径组。"""
         err = err_of({"seg1": {
             "src": "images/a.mp4", "type": "chart", "muted": "true",
-            "source_url": 3, "stage": "carry",
+            "source_url": 3,
         }})
-        for frag in ("'type'", "muted", "source_url", "stage"):
+        for frag in ("'type'", "muted", "source_url"):
             self.assertIn(frag, err)
 
     def test_dependent_checks_stay_fail_fast_instead_of_crashing(self):

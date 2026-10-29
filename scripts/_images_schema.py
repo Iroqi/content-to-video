@@ -56,6 +56,8 @@ def validate_relative_project_path(src, where):
 # 播放/音频/type——两格都是静态图或 SVG（理由见 _check_pair）。
 PANE_KEYS = ("animate", "source_url", "license", "attribution")
 
+# 条目键集（封闭）。已删除的键**不在这里**——它们由 RETIRED_ENTRY_KEYS 单列，报错时
+# 教作者现在该怎么表达同一件事（见 RETIRED_ENTRY_KEYS 与 unknown_media_keys 的提示）。
 MEDIA_ENTRY_KEYS = frozenset({
     "src", "type", "poster", "loop", "muted", "autoplay", "playsinline",
     "source_url", "license", "attribution", "query", "provider",
@@ -63,9 +65,6 @@ MEDIA_ENTRY_KEYS = frozenset({
     # steps 一拍改写某个元素（target）或推一个参数（param），带 params/bind 时几何
     # 按参数逐帧重算。
     "animate",
-    # stage："keep" = 本页从上一页演完的样子起跑（见 _stage_carry）。单取值枚举
-    # 而非布尔：将来加"只搬相机"这类档位不必改 keep:true 的语义。
-    "stage",
     # panes：并置对比（layout "compare"）的两格声明（见 _check_pair）。
     "panes",
     # inline_svg：**内部键**，由 gen_hyperframes 净化后回填。进这个集合只为不被
@@ -73,7 +72,7 @@ MEDIA_ENTRY_KEYS = frozenset({
     # 开了"绕过净化、把任意字符串塞进 DOM"的注入口）。
     "inline_svg",
     # 视频音轨四件套：前三个管响度与进出，media_start 管从第几秒起播。只对
-    # video 成立，写在非 video 上按"写了不会生效"拒掉（口径同 animate/stage）。
+    # video 成立，写在非 video 上按"写了不会生效"拒掉（口径同 animate）。
     # <video> 的音轨是唯一不经过 TTS 却混进成片的声音（见 html_renderer._media_html），
     # 没增益旋钮就等于原声压着口播一起播，且链上没有任何报错。
     "volume", "fade_in", "fade_out", "media_start",
@@ -104,8 +103,8 @@ MEDIA_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
 def is_svg_path(path):
-    """这条路径是不是 SVG。五处（缺图探测/整页画布/renderer bare-media/animate/
-    stage）共用这一份：各写一遍 splitext 时，改了大小写规则只会改到其中一处，
+    """这条路径是不是 SVG。四处（缺图探测/整页画布/renderer bare-media/animate）
+    共用这一份：各写一遍 splitext 时，改了大小写规则只会改到其中一处，
     症状是"契约说能挂 animate、渲染端却不内联"。
     """
     return os.path.splitext(str(path).lower())[1] == ".svg"
@@ -146,7 +145,7 @@ _PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
 # 并列。这是**跨模块真源**：接续烘焙（`_stage_carry`）从这里导入同一个键名。修复
 # 前两处各写一个 "attr" 字面量，只靠注释约定"两处必须指同一个东西"——但没有任何
 # 机制 enforce；一旦分家，"契约层放行的形状"和"烘焙认得的形状"就不是一回事，症状
-# 是 stage:"keep" 接续页第 0 帧就坏且生成期零报错。跨模块相等由
+# 是跨段接续页第 0 帧就坏且生成期零报错。跨模块相等由
 # `tests/test_shared_geometry.py` 钉住。
 ATTR_KEY = "attr"
 
@@ -202,7 +201,7 @@ def _validate_tween_vars(vars_, where):
             raise ValueError(
                 f"{where} 的 'attr' 必须是对象（SVG 属性名 → 值，如 "
                 f"{{\"d\": \"M0 0L1 1\"}}）（实际: {v!r}）——非对象写法不会当场报错，"
-                "只会在 stage:\"keep\" 的接续烘焙里被当成 CSS 属性写进 style，"
+                "只会在跨段接续的烘焙里被当成 CSS 属性写进 style，"
                 "让下一页的起始画面从第一帧就是坏的")
         _validate_tween_leaf(v, f"{where} 的 {k!r}")
 
@@ -520,6 +519,15 @@ def _validate_steps(key, block, what="steps"):
 
 
 
+# 已删除的键 → "现在怎么表达同一件事"。这些键不进键集（写了照样报未知键），但报错
+# 文案要替作者把路指对：只说"不认识 stage"等于把人留在原地。
+RETIRED_ENTRY_KEYS = {
+    "stage": ('"stage" 已删除——跨段接续不是选项，是结构性判据：两页同一张 src、且上一页'
+              '写了 animate，下一页就自动接续（页界不换画、不重播入场）。要让它独立重演，'
+              '把两页的 src 换开，或去掉上一页的 animate'),
+}
+
+
 def unknown_media_keys(entry):
     """该 images.json 条目里渲染端不会读的键（升序列表）。"""
     return sorted(set(entry) - MEDIA_ENTRY_KEYS)
@@ -560,6 +568,9 @@ def validate_images_json(data):
                 hint = (f"　── 其中 {'/'.join(legacy)} 是旧写法，三个键已归一为 animate："
                         "把它下面的 steps / params / bind 原样挪进 \"animate\" 就生效"
                         if legacy else "")
+                retired = sorted(set(unknown) & set(RETIRED_ENTRY_KEYS))
+                if retired:
+                    hint += "".join(f"　── {RETIRED_ENTRY_KEYS[k]}" for k in retired)
                 print(f"[warn] images.json 的 '{key}' 含渲染端不读的字段："
                       f"{', '.join(unknown)}——它们不会出现在画面上。{hint}"
                       f"　条目只认：{', '.join(sorted(MEDIA_ENTRY_KEYS))}；"
@@ -624,7 +635,6 @@ def _validate_entry(key, value, errs):
     _collect(errs, lambda: _check_poster(key, value))
     _collect(errs, lambda: _normalize_src(key, value, src))
     _collect(errs, lambda: _check_animate(key, value, src))
-    _collect(errs, lambda: _check_stage(key, value, src))
 
 
 def _check_pair(key, value, src):
@@ -667,7 +677,7 @@ def _check_pair(key, value, src):
     for _opt in ("type", "poster", "loop", "muted", "autoplay", "playsinline",
                  "volume", "fade_in", "fade_out", "media_start", "duck",
                  "source_url", "license", "attribution", "query", "provider",
-                 "stage", "animate"):
+                 "animate"):
         if _opt in value:
             raise ValueError(
                 f"images.json 的 '{key}' 是并置对比（src 为一对图），不接受 "
@@ -1061,28 +1071,6 @@ def _check_animate(key, value, src):
             _validate_steps(key, {"steps": tween_steps}, what="animate")
         return
     _validate_steps(key, {"steps": steps}, what="animate")
-
-
-def _check_stage(key, value, src):
-    """stage:"keep"：跨段场景延续（把上一段演完的画面当作本页的起点，见 _stage_carry）。
-
-    只挡"写了不会生效"的形态；"接的是谁"（前一段存在吗、是不是同一张图）只有读得到
-    manifest 的 gen_hyperframes 判得了。本页可以不写 animate：steps 为空的页面照样
-    接续（inline_svg 由接续烘焙给出）。
-    """
-    if "stage" not in value:
-        return
-    _errs = []
-    if value["stage"] != "keep":
-        _errs.append(
-            f"images.json 的 '{key}' 的 stage 只认字符串 \"keep\""
-            f"（实际: {value['stage']!r}）——keep=接着上一页演，不写=每页独立成片")
-    if not is_svg_path(src):
-        _errs.append(
-            f"images.json 的 '{key}' 写了 stage，但 src={src!r} 不是 SVG"
-            "——接续靠把上一页的收尾态烘焙进同一张 SVG 的内联副本，只对 .svg 生效")
-    if _errs:
-        raise ValueError("\n".join(_errs))
 
 
 def load_images_json(path):

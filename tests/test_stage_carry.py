@@ -1,4 +1,6 @@
 """跨段场景延续（persistent stage）：收尾态烘焙、相机折层、生成期接续门禁的回归。"""
+import contextlib
+import io
 import re
 import unittest
 import xml.etree.ElementTree as ET
@@ -9,7 +11,7 @@ import _stage_carry as SC
 import _cam_crop as CC
 import gen_hyperframes as G
 from _cam_crop import cam_content_center, cam_geometry, crop_warnings, decompose_transform
-from _images_schema import validate_images_json
+from _images_schema import MEDIA_ENTRY_KEYS, validate_images_json
 from test_animate_timeline import _write_svg
 
 NS = "http://www.w3.org/2000/svg"
@@ -441,13 +443,14 @@ class OriginSharedWithRenderer(unittest.TestCase):
 def _two_page_stage(tmp, svg=STAGE_SVG, steps_a=None, steps_b=None, src_b=None):
     """写一份"两页同一张图"的 images.json，跑 animate_prepare，返回 (images, errs, warns)。
 
-    两页都是满幅版式（canvas）：场景跨页接续只在版面归作者的页上有意义。
+    两页都是满幅版式（canvas）：场景跨页接续只在版面归作者的页上有意义。接续不用
+    写任何字段——同图 + 上一页有编排就成立（见 `_segments.is_next_page_continuing`）。
     """
     rel = _write_svg(tmp, "stage", svg)
     images = {
         "seg-a": {"src": rel, "animate": {"steps": steps_a or [
             {"at": 0, "target": "#plate", "to": {"opacity": 1}}]}},
-        "seg-b": {"src": src_b or rel, "stage": "keep"},
+        "seg-b": {"src": src_b or rel},
     }
     if steps_b:
         images["seg-b"]["animate"] = {"steps": steps_b}
@@ -491,32 +494,23 @@ class PrepareCarriesState(unittest.TestCase):
         self.assertIn("段落 'seg-b'", crop[0])
         self.assertIn("#num", crop[0])
 
-    def test_first_page_has_nothing_to_carry_from(self):
-        import tempfile
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        rel = _write_svg(tmp.name, "stage", STAGE_SVG)
-        images = {"seg-a": {"src": rel, "stage": "keep", "animate": {
-            "steps": [{"at": 0, "target": "#plate", "to": {"opacity": 1}}]}}}
-        segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]}]
-        errs, _ = G.animate_prepare(images, segs, tmp.name)
-        self.assertTrue(any("第一段" in e for e in errs), errs)
+    def test_different_src_is_not_carried(self):
+        """换开 src = 各画一份 = 独立成片，不是错误（接续判据自动不成立）。"""
+        other = _write_svg(self.tmp.name, "other", STAGE_SVG)
+        images, errs, _ = _two_page_stage(self.tmp.name, src_b=other)
+        self.assertEqual(errs, [])
+        self.assertEqual(images["seg-b"].get("inline_svg"), None)
+        self.assertNotEqual(images["seg-a"]["inline_svg"], None)
 
-    def test_previous_page_without_animate_is_an_error_not_a_silent_img(self):
-        images, errs, _ = _two_page_stage(
-            self.tmp.name, steps_a=None)
-        # steps_a=None 走默认（有 animate），这里另造一份"上一页没写 animate"的
-        images2 = {"seg-a": {"src": images["seg-a"]["src"]},
-                   "seg-b": {"src": images["seg-a"]["src"], "stage": "keep"}}
+    def test_previous_page_without_animate_is_not_carried(self):
+        """上一页是静图（没写 animate）：没有可搬的元素态，本页照常从原图起跑。"""
+        rel = _write_svg(self.tmp.name, "stage", STAGE_SVG)
+        images = {"seg-a": {"src": rel}, "seg-b": {"src": rel}}
         segs = [{"id": "seg-a", "sentences": [{"index": 0, "start_time": 0.0}]},
                 {"id": "seg-b", "sentences": [{"index": 1, "start_time": 2.4}]}]
-        errs, _ = G.animate_prepare(images2, segs, self.tmp.name)
-        self.assertTrue(any("没有可接续的内联画面" in e for e in errs), errs)
-
-    def test_different_src_on_the_two_pages_is_an_error(self):
-        other = _write_svg(self.tmp.name, "other", STAGE_SVG)
-        _, errs, _ = _two_page_stage(self.tmp.name, src_b=other)
-        self.assertTrue(any("不是同一张图" in e for e in errs), errs)
+        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
+        self.assertEqual(errs, [])
+        self.assertIsNone(images["seg-b"].get("inline_svg"))
 
 
 class SharedRefGate(unittest.TestCase):
@@ -557,161 +551,132 @@ class SharedRefGate(unittest.TestCase):
         self.assertEqual(errs, [])
 
 
-class StageContract(unittest.TestCase):
-    def _entry(self, **kw):
-        return {"seg-a": dict({"src": "images/a.svg"}, **kw)}
+class StageKeyIsGone(unittest.TestCase):
+    """`stage` 已删除：同图 + 上一页有编排就是接续，没有选项可写。
 
-    def test_only_keep_is_a_valid_stage(self):
-        validate_images_json(self._entry(stage="keep"))
-        with self.assertRaises(ValueError):
-            validate_images_json(self._entry(stage=True))
-        with self.assertRaises(ValueError):
-            validate_images_json(self._entry(stage="carry"))
+    删它的理由不是"少一个字段"，是它曾经是全场唯一"字面没写就一定是错的"的键。
+    留着它当"可选开关"，作者就得先知道它存在、再判断要不要写——而正确的默认行为
+    完全由稿子结构决定。现在写了它只会得到一条指路的提示，不是一个静默的选项。
+    """
 
-    def test_stage_needs_svg(self):
-        with self.assertRaises(ValueError):
-            validate_images_json(self._entry(src="images/a.mp4", type="video", stage="keep"))
+    def test_stage_is_not_an_entry_key(self):
+        self.assertNotIn("stage", MEDIA_ENTRY_KEYS)
 
-    def test_stage_does_not_require_its_own_steps(self):
-        validate_images_json(self._entry(stage="keep"))
+    def test_writing_stage_gets_a_hint_not_a_shrug(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            validate_images_json({"seg-a": {"src": "images/a.svg", "stage": "keep"}})
+        msg = buf.getvalue()
+        self.assertIn("已删除", msg)
+        self.assertIn("同一张 src", msg)
+        self.assertIn("src 换开", msg)
 
 
 class CarriedPageIsNotReintroduced(unittest.TestCase):
     """接续页不再"当新的一页演一遍"：不擦进来，配图也不再淡入上移。
 
     烘焙只保证**画面**连续；只要这一页还带 0.40s 擦除 + 配图 40px 滑入，页界处
-    就照样看得见回弹——而那正是 stage:"keep" 存在的理由。所以这两处听同一面旗。
+    就照样看得见回弹——而那正是跨段接续存在的理由。所以这两处听同一面旗。
     """
 
-    def _html(self, keep):
-        import contextlib
-        import io
+    def _html(self, carry):
         from html_renderer import generate_html
         m = H.make_manifest()
         images = H.sample_images(m)
-        if keep:
-            images["seg-a"]["stage"] = "keep"
+        # 造一对相邻的接续页：样稿的 seg-b / closing 都改成整页画布（画面主导的页
+        # 才谈得上"同一幅画跨页继续演"）。seg-b 挂编排，closing 用它那张时就是
+        # 接续页，用自己那张就是独立成片。
+        for seg in m["segments"]:
+            if seg["id"] in ("seg-b", "closing"):
+                seg["layout"] = "canvas"
+        own = images["seg-b"]["src"]
+        images["seg-b"]["animate"] = {"steps": [{"at": 0, "target": "#x",
+                                                "to": {"opacity": 1}}]}
+        images["closing"] = {"src": own if carry else "images/closing.svg"}
         with contextlib.redirect_stderr(io.StringIO()):
             return generate_html(m, "audio/combined.wav", images=images,
                                  aspect="portrait", theme="dark")
 
     def test_keep_page_hard_cuts_and_its_picture_is_already_in_place(self):
         html = self._html(True)
-        # 挂载即音频起点（2.40 = 首句 start_time），擦除时长取 0.01（瞬间切，
+        # 挂载即音频起点（7.20 = 首句 start_time），擦除时长取 0.01（瞬间切，
         # 见 html_renderer._card_timeline_lines 的注释：0 时长会被 GSAP 视作
         # set() 而让预览首帧提前显形）
-        self.assertIn('id="seg-a" class="clip seg-card" data-start="2.40"', html)
-        self.assertIn('tl.fromTo("#seg-a",{clipPath:"inset(100% 0 0 0)"},'
+        self.assertIn('id="closing" class="clip seg-card seg-canvas" data-start="12.00"',
+                      html)
+        self.assertIn('tl.fromTo("#closing",{clipPath:"inset(100% 0 0 0)"},'
                       '{clipPath:"inset(0% 0 0 0)",duration:0.01,'
-                      'ease:"power2.inOut"},2.40)', html)
+                      'ease:"power2.inOut"},12.00)', html)
         # 引导线整条不生成（DOM 与补间都没有），配图卡自己的滑入也撤掉
-        self.assertNotIn('id="line-seg-a"', html)
-        self.assertNotIn('tl.from("#img-seg-a"', html)
+        self.assertNotIn('id="line-closing"', html)
+        self.assertNotIn('tl.from("#img-closing"', html)
         # 进度条照常：它是这一段的时长，不是"新页感"
-        self.assertIn('tl.to("#prog-seg-a",{width:"100%"', html)
+        self.assertIn('tl.to("#prog-closing",{width:"100%"', html)
 
-    def test_without_the_flag_nothing_changes(self):
+    def test_without_the_carry_the_page_is_its_own_picture(self):
+        """换开 src = 独立成片：这一页用自己那张图，不被当成上一页的续页。"""
         html = self._html(False)
-        self.assertIn('id="seg-a" class="clip seg-card" data-start="2.00"', html)
-        # 不锁时长（容器层只占入场预算的 frameFrac，是派生量）——这条要守的是
-        # "不加 flag 时入场照旧存在"，时长由金样守。
-        self.assertIn('tl.from("#img-seg-a",{opacity:0,y:40,', html)
-        self.assertIn('id="line-seg-a"', html)
+        self.assertIn("images/closing.svg", html)
 
 
-class InferStageKeep(unittest.TestCase):
-    """接续页的**自动盖章**：漏写 `stage:"keep"` 不该让页面在接缝处回弹。
+class CarryPagesIsStructural(unittest.TestCase):
+    """接续页由结构决定，没有开关（`_segments.is_next_page_continuing`）。
 
-    锁四件事：
-    1. 上一页末拍停在非原位相机姿态 + 同一张图 → 盖章（这是唯一会漏写的真实场景）；
-    2. 收尾位回原位 → 不盖章（此时"接续"与"重演"是同一幅画，不盖章更诚实）；
-    3. 读不出姿态 / 永不停下 / 不同图 / 上一页没内联 → 一律不推断（宁可让作者
-       显式写，也不按编出来的姿态盖章）；
-    4. **显式声明不被覆盖**（推断只补空缺），且渲染端与生成期看到同一个答案。
+    锁三件事：
+    1. **同图 + 上一页有 animate** 就接续——这是唯一的成因，不需要作者写任何字段；
+    2. 换开 `src` / 上一页没编排 → 不接续（反悔方式是改稿，不是关开关）；
+    3. 生成期（`_stage_carry_pass`）与渲染端（`_is_keep_page`）看到同一个答案——
+       两边各判一次的话，就会出现"烘了却照样擦进来"。
     """
 
     SAME = "images/stage.svg"
 
-    def _imgs(self, steps_a, *, src_a=None, src_b=None, stage_b=None, svg=True):
-        a = {"src": src_a or self.SAME, "animate": {"steps": steps_a}}
-        if svg:
-            a["inline_svg"] = "<svg/>"
-        b = {"src": src_b or self.SAME}
-        if stage_b is not None:
-            b["stage"] = stage_b
-        return {"seg-a": a, "seg-b": b}
+    def _segs(self, *, src_b=None, animate_a=True, n=2):
+        a = {"id": "seg-a", "src": self.SAME}
+        if animate_a:
+            a["animate"] = {"steps": [{"at": 0, "target": "#plate",
+                                       "to": {"opacity": 1}}]}
+        b = {"id": "seg-b", "src": src_b or self.SAME}
+        return [a, b][:n]
 
-    def _stamp(self, imgs):
-        return SC.infer_stage_keep(imgs, ["seg-a", "seg-b"])
+    def _carry(self, **kw):
+        return SC.carry_pages({"seg-a": {}, "seg-b": {}}, self._segs(**kw))
 
-    def test_push_in_camera_gets_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6,
-                                                              "svgOrigin": "540 660"}}])
-        self.assertEqual(self._stamp(imgs), ["seg-b"])
-        self.assertEqual(imgs["seg-b"]["stage"], "keep")
+    def test_same_picture_after_an_animated_page_is_carried(self):
+        self.assertEqual(self._carry(), {"seg-b": "seg-a"})
 
-    def test_pan_only_camera_gets_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"x": -120}}])
-        self.assertEqual(self._stamp(imgs), ["seg-b"])
+    def test_camera_pose_is_irrelevant(self):
+        """判据不读相机姿态：同图 + 有编排就接续，回原位也一样（画面本来就一样）。"""
+        segs = self._segs()
+        segs[0]["animate"] = {"steps": [{"at": 0, "target": "#plate",
+                                         "to": {"opacity": 1}}]}
+        self.assertEqual(SC.carry_pages({"seg-a": {}, "seg-b": {}}, segs),
+                         {"seg-b": "seg-a"})
 
-    def test_resting_back_at_origin_is_not_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}},
-                           {"at": 1, "target": "#cam", "to": {"scale": 1, "x": 0, "y": 0}}])
-        self.assertEqual(self._stamp(imgs), [])
-        self.assertNotIn("stage", imgs["seg-b"])
+    def test_different_src_is_not_carried(self):
+        self.assertEqual(self._carry(src_b="images/other.svg"), {})
 
-    def test_no_camera_at_all_is_not_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#plate", "to": {"opacity": 1}}])
-        self.assertEqual(self._stamp(imgs), [])
+    def test_previous_page_without_animate_is_not_carried(self):
+        self.assertEqual(self._carry(animate_a=False), {})
 
-    def test_infinite_camera_loop_is_not_stamped(self):
-        """`repeat:-1` 没有收尾位——不按编出来的姿态盖章。"""
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.3},
-                            "repeat": -1}])
-        self.assertEqual(self._stamp(imgs), [])
+    def test_first_page_never_carries_and_last_page_never_carries(self):
+        self.assertEqual(self._carry(n=1), {})
 
-    def test_unresolved_pose_is_not_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": "/=0"}}])
-        self.assertEqual(self._stamp(imgs), [])
-
-    def test_different_src_is_not_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
-                          src_b="images/other.svg")
-        self.assertEqual(self._stamp(imgs), [])
-
-    def test_previous_page_not_inlined_is_not_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}], svg=False)
-        self.assertEqual(self._stamp(imgs), [])
-
-    def test_explicit_stage_is_never_overwritten(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
-                          stage_b="keep")
-        self.assertEqual(self._stamp(imgs), [])
-        # 契约层放行的只有 keep；写成别的值时也**不覆盖**——由契约层去报，
-        # 推断不该悄悄把作者的字改成"正确"的值。
-        imgs2 = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}],
-                           stage_b="carry")
-        self.assertEqual(self._stamp(imgs2), [])
-        self.assertEqual(imgs2["seg-b"]["stage"], "carry")
-
-    def test_first_page_is_never_stamped(self):
-        imgs = self._imgs([{"at": 0, "target": "#cam", "to": {"scale": 1.6}}])
-        self.assertEqual(SC.infer_stage_keep(imgs, ["seg-a"])[:1], [])
+    def test_page_without_a_media_entry_is_not_carried(self):
+        self.assertEqual(SC.carry_pages({"seg-a": {}}, self._segs()), {})
 
 
-class InferStageMatchesRenderer(unittest.TestCase):
-    """生成期盖的章必须让渲染端**也**认出来：否则烘了却照样擦进来。"""
+class CarryPagesMatchesRenderer(unittest.TestCase):
+    """生成期认的接续页，渲染端必须**也**认：否则烘了却照样擦进来。"""
 
     def setUp(self):
         import tempfile
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def test_carried_page_hard_cuts_without_an_explicit_stage(self):
-        import contextlib
-        import io
+    def test_carried_page_hard_cuts_with_no_field_written(self):
         from html_renderer import generate_html
-        rel = _write_svg(self.tmp.name, "stage", STAGE_SVG)
+        _write_svg(self.tmp.name, "stage", STAGE_SVG)
         # 句子必须带 text、段必须带 title：渲染端 `_verse_html` / `title_wrap`
         # 直接按这两个键取值，只给骨架会在这里 KeyError
         segs = [{"id": "seg-a", "title": "甲", "layout": "canvas",
@@ -720,55 +685,6 @@ class InferStageMatchesRenderer(unittest.TestCase):
                 {"id": "seg-b", "title": "乙", "layout": "canvas",
                  "sentences": [{"index": 1, "start_time": 2.4,
                                 "duration": 2.0, "text": "第二句。"}]}]
-        # str(rel) 而不是同一个对象：_write_svg 会**就地**把 src 改写成
-        # images/<name>.svg，两页共用同一个字符串实例时被改的会是同一份，
-        # 造出的"同一张图"其实是测试自己嫁接的
-        images = {
-            "seg-a": {"src": str(rel), "animate": {"steps": [
-                {"at": 0, "target": "#cam", "to": {"scale": 1.4}}]}},
-            "seg-b": {"src": str(rel)},
-        }
-        errs, _ = G.animate_prepare(images, segs, self.tmp.name)
-        self.assertEqual(errs, [])
-        # 生成期盖了章 → 第二页拿到烘焙后的副本
-        self.assertEqual(images["seg-b"].get("stage"), "keep")
-        self.assertIn("inline_svg", images["seg-b"])
-        m = {
-            "total_duration": 4.8,
-            "sentences": [
-                {"index": 0, "start_time": 0.0, "duration": 2.0, "text": "第一句。",
-                 "seg": "seg-a"},
-                {"index": 1, "start_time": 2.4, "duration": 2.0, "text": "第二句。",
-                 "seg": "seg-b"},
-            ],
-            "segments": segs,
-        }
-        with contextlib.redirect_stderr(io.StringIO()):
-            html = generate_html(m, "audio/combined.wav", images=images)
-        # 渲染端同样认成接续页：挂载即音频起点（硬切），不擦进来
-        self.assertIn('id="seg-b" class="clip seg-card', html)
-        self.assertIn('data-start="2.40"', html)
-        self.assertNotIn('tl.from("#img-seg-b"', html)
-
-    def test_renderer_stamps_on_its_own_before_normalizing(self):
-        """渲染端自己那次盖章必须真的生效——不是"判据落空的死代码"。
-
-        曾把 infer_stage_keep 排在 _normalize_images 之后：判据读的 inline_svg /
-        animate / stage 已被搬进 opts，条条落空；盖出来的 stage 写在顶层，而
-        _is_keep_page 读 opts["stage"]——于是渲染端永远看不见接续，烘好的副本
-        照样被当成新页擦进来重演一遍，烘焙的意义正好被抵消。
-        """
-        import contextlib
-        import io
-        from html_renderer import generate_html
-        segs = [{"id": "seg-a", "title": "甲", "layout": "canvas",
-                 "sentences": [{"index": 0, "start_time": 0.0,
-                                "duration": 2.0, "text": "第一句。"}]},
-                {"id": "seg-b", "title": "乙", "layout": "canvas",
-                 "sentences": [{"index": 1, "start_time": 2.4,
-                                "duration": 2.0, "text": "第二句。"}]}]
-        # 不经 animate_prepare：只有 inline_svg 与末拍推近的相机，模拟"生成期
-        # 之外直接调渲染端"的调用面。
         images = {
             "seg-a": {"src": "images/stage.svg", "inline_svg": "<svg/>",
                       "animate": {"steps": [
@@ -787,7 +703,6 @@ class InferStageMatchesRenderer(unittest.TestCase):
         }
         with contextlib.redirect_stderr(io.StringIO()):
             html = generate_html(m, "audio/combined.wav", images=images)
-        self.assertEqual(images["seg-b"].get("stage"), "keep")
         self.assertNotIn('tl.from("#img-seg-b"', html)
 
 

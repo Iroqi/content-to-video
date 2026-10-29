@@ -153,6 +153,25 @@ def seg_layout(seg):
     return "agenda" if seg["id"] in STRUCTURAL_SIDS else "slot"
 
 
+def is_next_page_continuing(segs, i):
+    """第 i 页之后紧接着的那一页，是不是**接着这一页的画面往下演**。
+
+    判据只有一条：两页同一张 `src`，且第 i 页写了 `animate`（没写的页没有可接续的
+    元素态，那张图就是一张静图）。三处消费者读同一份判据：渲染端（接续页不擦进来、
+    也不重播入场，否则页界回弹）、生成期接续烘焙（第 i 页的补间要在页界处先结算成
+    终态）、写稿门禁（第 i+1 页的台词板有没有落空）。
+
+    `segs[i]` 要带 `src` / `animate`（在 images.json 的条目上，调用方负责合进来）；
+    取不到就当"不接续"——宁可多演一遍，也不要凭空抹掉一页的出场。
+    """
+    if i + 1 >= len(segs):
+        return False
+    here, nxt = segs[i], segs[i + 1]
+    src = here.get("src")
+    return (bool(src) and src == nxt.get("src")
+            and bool((here.get("animate") or {}).get("steps")))
+
+
 def _validate_layout(value, where, *, content=False, retired_ok=True):
     """layout 取值校验（可选字段）。严格匹配：不做大小写归一、不 strip。
     放宽才是灾难——把 'Canvas' 猜成 'canvas' 猜错方向的那一段会静默按槽位版式

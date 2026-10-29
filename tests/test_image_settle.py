@@ -209,11 +209,17 @@ class WhoDoesNotSettle(unittest.TestCase):
         # seg-b 是整页画布；seg-a 是槽位
         self.assertEqual([s.group("sid") for s in settles(html)], ["seg-a"])
 
-    def test_keep_page_has_no_settle(self):
-        """接续页搬的是上一页演完的终态，收拢就是 _stage_carry 要消灭的页界回弹。"""
-        images = H.sample_images(H.make_manifest(source=_four_slot_source(), dur=6.0))
-        images["seg-b"]["stage"] = "keep"
-        _, html = render(images=images)
+    def test_carried_page_has_no_settle(self):
+        """接续页搬的是上一页演完的终态，收拢就是 _stage_carry 要消灭的页界回弹。
+
+        造法：让 seg-b 与 seg-a 同图、seg-a 带编排 —— 结构成立就是接续，不需要任何字段。
+        """
+        src = _four_slot_source()
+        images = H.sample_images(H.make_manifest(source=src, dur=6.0))
+        images["seg-b"]["src"] = images["seg-a"]["src"]
+        images["seg-a"]["animate"] = {"steps": [{"at": 0, "target": "#x",
+                                                "to": {"opacity": 1}}]}
+        _, html = render(source=src, images=images)
         self.assertNotIn("seg-b", [s.group("sid") for s in settles(html)])
 
     def test_scale_at_or_below_one_disables_the_layer(self):

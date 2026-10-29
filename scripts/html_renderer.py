@@ -32,7 +32,7 @@ from _ease import reject_overshoot as ease_reject_overshoot
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
-from _stage_carry import infer_stage_keep
+from _stage_carry import carry_pages
 
 
 DEFAULT_ACCENT = get_default_accent()
@@ -1175,13 +1175,15 @@ def _verse_html(seg, sid, ac_text_attr):
 
 
 def _is_keep_page(rc, sid):
-    """这一页是不是跨段接续页（images.json 的 ``stage: "keep"``）。
+    """这一页是不是跨段接续页（起点是上一页演完的那幅画面）。
 
-    烘焙本身在生成期的 ``gen_hyperframes.stage_prepare``（见 ``_stage_carry``），
-    渲染端只读这一个布尔：它决定"还要不要把这一页当新页再演一遍"。
+    判据在 `_segments.is_next_page_continuing`（同图 + 上一页有编排），由
+    `generate_html` 一次算好挂在 ``rc.carries`` 上：生成期烘焙、渲染端"要不要当新页
+    再演一遍"、写稿门禁三处必须看同一个答案，各算一次必然分家。
+
+    烘焙本身在生成期的 ``gen_hyperframes.animate_prepare``（见 ``_stage_carry``）。
     """
-    entry = rc.images.get(sid)
-    return bool(entry) and entry["opts"].get("stage") == "keep"
+    return sid in rc.carries
 
 
 def is_full_bleed_card(card):
@@ -2567,7 +2569,7 @@ def _card_timeline_lines(rc, card):
         # 出空页、再浮出海报"的两段式（实测 15.9s 帧）。整页画布是"这一页就是那张画"，
         # 它的进场只有两种合法写法——硬切（转场负责），或作者在 SVG 里自己演（运镜
         # / 自绘）。模板给它"框先落位、图在框里收拢"是错的：满幅页根本没有框。
-        # 接续页（stage:"keep"）同样跳过：这一页的画面是上一页演完的样子，
+        # 接续页同样跳过：这一页的画面是上一页演完的样子，
         # 再淡入+上移 40px 就是 _stage_carry 要消灭的那种"页界回弹"。
         # 两类的共同点：**页面第一帧就必须是完成态**。
         #
@@ -2640,12 +2642,15 @@ def generate_html(manifest, audio_src, images=None,
 
     # ── 配图/视频归一化（只做一次，后续阶段复用这份结果）───────────
     images = images or {}
-    # 接续页自动盖章，判据唯一真源在 `_stage_carry.infer_stage_keep`：生成期据此
-    # 决定"烘不烘焙"、渲染端据此决定"要不要擦进来"，两边各判一次必然分家。
-    #
-    # 必须在归一化**之前**盖章：判据读的是 images.json 顶层键，归一化会把它们搬进
-    # `opts`——顺序反了判据条条落空，盖出来的 stage 渲染端永远看不见。
-    infer_stage_keep(images, [seg["id"] for seg in manifest["segments"]])
+    # 接续页判据读的是 images.json 的顶层键（src / animate），所以要在归一化**之前**
+    # 把答案算出来——归一化会把除 src/type 之外的键搬进 `opts`。生成期据此决定
+    # "烘不烘焙"、渲染端据此决定"要不要当新页再演一遍"，两边看的是同一个 dict。
+    raw_images = images or {}
+    carries = carry_pages(
+        raw_images,
+        [dict(seg, src=(raw_images.get(seg["id"]) or {}).get("src"),
+              animate=(raw_images.get(seg["id"]) or {}).get("animate"))
+         for seg in manifest["segments"]])
     images = _normalize_images(images)
     total_dur = manifest["total_duration"]
     sentences = manifest["sentences"]
@@ -2657,6 +2662,8 @@ def generate_html(manifest, audio_src, images=None,
 
     rc = _build_render_context(tpl, aspect, width, height, theme, images, fps=fps,
                                film_span=total_dur, no_image=slot_no_image)
+    # 接续页集合（见 _is_keep_page）：上面一次算好的那份，不再重算。
+    rc.carries = carries
 
     # 段落分组只有一份：manifest["segments"]（_manifest_schema 已保证非空、每段自带
     # 非空 sentences）。gen_hyperframes 的孤儿键判定与缺图统计读的是同一个字段，
@@ -2692,7 +2699,7 @@ def generate_html(manifest, audio_src, images=None,
         # 把 wipe 归零即命中既有的"瞬间切"路径——_reveal_line_html、_line_timeline_lines、
         # peel 三处都以 wipe<=0 为闸自动不生成，这一页在自己的音频起点整页出现、运动
         # 全由 animate 驱动（对标 3b1b 的连续镜头，而非翻页）。
-        # 接续页（stage:"keep"）同理且更要紧：这一页的画面是上一页演完的样子，
+        # 接续页同理且更要紧：这一页的画面是上一页演完的样子，
         # 擦进来就是把同一幅画"翻页"了一次，正好抵消 _stage_carry 烘焙的意义。
         if (is_full_bleed(clip["seg"])
                 or _is_keep_page(rc, clip["seg"]["id"])):

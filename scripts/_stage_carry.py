@@ -17,6 +17,15 @@ _images_schema._validate_tween_vars），所以每一步的结束态只由它的
 的说话）。`from`-only 步骤的结束态 = 演之前的样子，而"演之前的样子"已经是上一段烘焙的
 结果——所以它天然是 no-op，不用碰。
 
+**谁接谁的（没有旋钮）**：两页同一张 `src`、且上一段写了 `animate`，就是接续
+（`carry_pages`，判据唯一真源在 `_segments.is_next_page_continuing`）。这里曾经有一个
+`images.json` 的 `stage:"keep"` 开关——它是全场唯一"字面没写就一定是错的"的字段，漏写
+的代价是页界回弹而生成期全绿。选项删掉之后，那个失败模式也不存在了。
+
+**为什么这条链不能只靠"作者在 SVG 里写死起始态"**：起始态写在 SVG 里就得手抄一遍
+上一页的终态，两处数字迟早分家；而收尾态是**算出来**的（上面那条"可算"），所以只在
+一处维护。
+
 **搬运的边界（故意的，别当漏检）**：
 
 - 搬：CSS 样式（opacity/fill/visibility/…，含 GSAP 的 autoAlpha 展开）、`attr:{}` 属性、
@@ -46,6 +55,7 @@ from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
 from _svg_sanitize import (_local, _style_map,  # noqa: E402  SVG DOM 的读法只有一份
                            SVG_NS)  # noqa: E402  命名空间串也随净化同一份，不在这里重声明
 from _script_utils import NUMERIC_ONLY, num_fmt  # noqa: E402
+from _segments import is_next_page_continuing  # noqa: E402  接续判据只有一份
 from _timeline import beat_cycles, ends_at_start
 # GSAP 的 attr 通道名不在这里重新声明：真源在契约层 `_images_schema`（它决定
 # images.json 里什么形状放行）。两处曾经各写一个 "attr" 字面量——契约层放行的
@@ -478,62 +488,36 @@ def global_ref_leaks(markup, steps):
     return out
 
 
-def infer_stage_keep(images, seg_ids):
-    """给"上一页推近、本页同一张图继续讲"的接续页自动盖章 `stage:"keep"`。
+def carry_pages(images, segments):
+    """按 manifest 段序找出**跨段接续页**：返回 {段 id: 提出它的上一段 id}。
 
-    **为什么让机器推断**：`stage:"keep"` 曾是唯一一处"字面没写就一定是错的"的
-    字段——作者把一张 SVG 切成两页、第一页末拍把 `#cam` 推到局部、第二页接着讲
-    那个局部，漏写 `stage` 的代价是页界处整幅回弹（观众看到的是"换了一幅画"），
-    而生成期全绿、`hyperframes check` 也看不见。触发条件完全从稿子结构推得出来，
-    就不该让作者记住（与 ken burns 的收尾钉住、`draw` 的收起态前置同一类）。
+    判据完全从稿子结构推得出来，一条旋钮都不需要（`_segments.is_next_page_continuing`）：
 
-    **判据（三条同时成立；任何一条不成立就维持原样）**：
+    1. 本页与上一段**同一张 `src`**——接续唯一的前提，同一幅画跨页继续演；
+    2. 上一段**有 `animate`**（生成期已净化内联）——没编排的页没有可搬的元素态。
 
-    1. 本页 `src` 与上一段 `src` **完全相同**（不同图无从烘焙，硬写也是 error）；
-    2. 上一段**已内联**（写了 animate 且净化过——没内联就没有可烘焙的元素态）；
-    3. 上一段 `#cam` 的**收尾位不是原位**：推近、平移，或显式给了原点都算。
-       收尾位回原位时"从原图起跑"与"从上一页收尾起跑"是同一幅画，不盖章更诚实。
-       收尾位读不出（`resolved=False`）或永不停下（`repeat:-1`）一律不推断——宁可
-       让作者显式写 stage，也不按一个编出来的姿态盖章。
+    两条同时成立就接续：把上一页的收尾画面烘焙进本页的内联副本，页界处不换画、不
+    重播入场。它不是一个"选项"——同图 + 上一页有编排，而本页却要独立起跑，等于让
+    同一幅画在页界回弹一次，那正是这个模块要消灭的东西。
 
-    **不覆盖显式声明**：本页自己写了 `stage` 就一个字不动。推断只补空缺。
-
-    **为什么不是 error**：漏写 stage 是默认值问题，不是数据错误；按 error 拦只会
-    让作者学会"无脑加一行"。盖章之后，这个字段从"必须记住"变成"只在想要非默认
-    行为时才需要写"——而那正是默认值该有的样子。
-
-    **只在归一化之前调用**：判据读的 `inline_svg` / `animate` / `stage` 都是
-    images.json 的顶层键。`html_renderer._normalize_images` 会把除 `src`/`type`
-    之外的键搬进 `opts`，搬完之后这三条判据条条落空（`inline_svg` 永远读不到），
-    盖出来的 `stage` 写在顶层也不会被 `_is_keep_page`（读 `opts["stage"]`）看见
-    ——所以调用点必须排在归一化之前，而不该给本函数加一个"从 opts 取值"的入口。
+    **反悔靠改稿**：要让本页独立重演，就换开两页的 `src`（各画一份），或去掉上一页的
+    编排。曾经有一个 `stage:"keep"` 开关来表达"我要接续"，结果是它成了唯一一处"字面
+    没写就一定是错的"的字段——漏写的代价是页界回弹，而生成期全绿。选项消失之后，那个
+    失败模式也不存在了。
 
     Args:
-        images: {段 id: 媒体条目}（同一份会被就地盖章）；
-        seg_ids: manifest 段序里的 id 列表。
+        images: {段 id: 媒体条目}；判据缺字段时当"不接续"；
+        segments: manifest 的段序（每段要带 `src` / `animate`，即 images.json 里那份）。
 
     Returns:
-        list[str]：本次被盖章的段 id（调用方据此打一行 `[notice]`）。
+        dict，键为接续页 id、值为它接的上一段 id（按段序）。
     """
-    stamped = []
-    for i, sid in enumerate(seg_ids):
-        if i == 0:
+    carries = {}
+    for i in range(len(segments or []) - 1):
+        if not is_next_page_continuing(segments, i):
             continue
-        entry = images.get(sid)
-        if not entry or entry.get("stage"):
+        sid = segments[i + 1].get("id")
+        if not images or sid not in images:
             continue
-        prev_entry = images.get(seg_ids[i - 1]) or {}
-        if not prev_entry.get("inline_svg"):
-            continue
-        src = entry.get("src")
-        if not src or src != prev_entry.get("src"):
-            continue
-        steps = (prev_entry.get("animate") or {}).get("steps") or []
-        pose = cam_resting_pose(steps)
-        if not pose or not pose.get("resolved") or not pose.get("rests"):
-            continue
-        if _pose_is_identity(pose) and pose.get("origin") is None:
-            continue
-        entry["stage"] = "keep"
-        stamped.append(sid)
-    return stamped
+        carries[sid] = segments[i].get("id")
+    return carries

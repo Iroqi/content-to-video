@@ -246,9 +246,9 @@ def count(manifest):
 def _declares_motion(images, sid):
     """images.json 里这一段声明了补间没有。
 
-    只认 `animate`（图内编排：属性补间与参数推进同一个字段）。`stage: keep` 只搬上一
-    页的收尾态、本身不产生新的拍，所以不算——写了 keep 而没有 steps 的段落，台词板照样
-    落空。
+    只认 `animate`（图内编排：属性补间与参数推进同一个字段）。跨段接续只搬上一页的
+    收尾态、本身不产生新的拍，所以不算——接着上一页演、自己没写 steps 的段落，台词板
+    照样落空。
     """
     entry = images.get(sid)
     if not isinstance(entry, dict):

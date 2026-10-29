@@ -212,10 +212,11 @@ class WindowWarnings(unittest.TestCase):
         self.assertIn("被切在半路", warns[0])
         self.assertIn("重演", warns[0])                            # 文案要给出路
 
-    def test_keep_page_says_the_bake_carries_the_unseen_end(self):
+    def test_carried_page_says_the_bake_carries_the_unseen_end(self):
         warns = G._beat_window_warnings([{"at_time": 4.6, "target": "#a1"}],
-                                        SEGS[0]["sentences"], 0.0, 5.0, 0.5, keep=True)
-        self.assertIn('stage:"keep"', warns[0])
+                                        SEGS[0]["sentences"], 0.0, 5.0, 0.5,
+                                        carried=True)
+        self.assertIn("接续自上一页", warns[0])
 
     def test_beat_that_ends_exactly_at_the_boundary_stays_silent(self):
         self.assertEqual(self._w([{"at_time": 4.5, "target": "#a1"}]), [])

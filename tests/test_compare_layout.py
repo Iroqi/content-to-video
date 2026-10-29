@@ -61,11 +61,11 @@ class TestPairContract(unittest.TestCase):
                 self.assertIn("正好 2 项", str(cm.exception))
 
     def test_single_image_keys_are_rejected_on_a_pair(self):
-        # 单图那套键（animate/type/stage…）在一对图上是"写了不生效"，
+        # 单图那套键（animate/type/audio…）在一对图上是"写了不生效"，
         # 这一类静默丢弃正是契约层要拦的。
         for key, val in (("animate", {"steps": [{"at": 0, "target": "#a",
                                                  "to": {"opacity": 1}}]}),
-                         ("type", "image"), ("stage", "keep")):
+                         ("type", "image"), ("duck", False)):
             with self.subTest(key=key):
                 with self.assertRaises(ValueError) as cm:
                     validate_images_json({"seg-a": {"src": list(PAIR), key: val}})

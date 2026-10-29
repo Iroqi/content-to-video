@@ -154,10 +154,10 @@ class TestAudit(unittest.TestCase):
         errs, warns, _ = audit(m, images=images)
         self.assertEqual((errs, warns), ([], []))
 
-    def test_stage_keep_alone_does_not_count_as_motion(self):
-        # keep 只搬上一页的收尾态，本身不产生新的拍：这一段的台词板照样落空。
+    def test_a_carried_page_alone_does_not_count_as_motion(self):
+        # 接续只搬上一页的收尾态，本身不产生新的拍：这一段的台词板照样落空。
         m = _manifest([_seg("seg1", ["一"], beats=[{"on": 0, "change": "接着演"}])])
-        images = {"seg1": {"src": "images/seg1.svg", "stage": "keep"}}
+        images = {"seg1": {"src": "images/seg1.svg"}}
         _errs, warns, _ = audit(m, images=images)
         self.assertEqual(len(warns), 1)
 

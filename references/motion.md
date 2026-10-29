@@ -24,7 +24,7 @@
 | 职务 | 回答 | 例子 | 反例 |
 |---|---|---|---|
 | 引导视线 | 现在该看哪里 | 焦点衰减五维、karaoke、入场后收拢 | 无休止漂浮/呼吸/旋转 |
-| 展示变化 | 什么变成了什么 | `animate` 的补间、`morph`、`count`、`draw`、`stage:"keep"` | 弹一下又弹回去 |
+| 展示变化 | 什么变成了什么 | `animate` 的补间、`morph`、`count`、`draw`、跨段接续 | 弹一下又弹回去 |
 | 推进叙事 | 接下来发生了什么 | 段落 wipe、整页画布推镜、标题揭示边 | 与内容无关的花活 |
 | 操作反馈 | 我刚那下生效没有 | **只在网页预览**（`preview.js`） | 把这份手感带进成片 |
 
@@ -124,7 +124,7 @@ P(t) = (A·(1 − f_主(t)),  B·(1 − f_副(t)))      终点在 (0,0)
 - **要** → 给该段写 `animate`：SVG 经 `_svg_sanitize` 净化（删 `<script>`/`on*`/`<foreignObject>`/带 scheme 的 href、外链 `url()` 换 `about:blank`、剥掉 SMIL 与 CSS animation）后内联成活 DOM，由 GSAP 按 `timing_manifest` 逐句驱动。这是**唯一**允许内联进交付 HTML 的情形，也是唯一能与口播同步、逐帧可复现的动法。
 - **不要** → 不写 `animate`，图就是静的。整段只有氛围在动也可以用墙钟动画（CSS `@keyframes` / SMIL），但它与旁白无关、逐帧不可复现，`check_svg.py` 会 warn，成片里不采用——只许留在氛围层。
 
-"先静后动"不是另一种配置：把第一拍放到要动的那句话上即可。键表、镜头归谁、参数演绎、跨段接续（`stage:"keep"`）都在 `references/svg-motion.md`。
+"先静后动"不是另一种配置：把第一拍放到要动的那句话上即可。键表、镜头归谁、参数演绎、跨段接续都在 `references/svg-motion.md`。
 
 ## 官方校验命令
 

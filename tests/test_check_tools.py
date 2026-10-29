@@ -923,6 +923,25 @@ class LayoutAuto(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("canvas.svg", out.split("[FAIL]")[1].split("\n")[0])
 
+    def test_retired_layout_normalizes_to_canvas(self):
+        """`plate` 已并入 canvas：不改几何、不跳过只属于满幅的那三道检查。
+
+        不归一的话它走的是 4:3 槽位分支——对一张 1080×1440 的满幅图报假的
+        "比例不等比"，同时静默跳过安全边距/空带/对比度三道。
+        """
+        write(self.tmp.name, "c.svg", self.CANVAS_SVG)
+        p = os.path.join(self.tmp.name, "c.svg")
+        rc, out, err = self._main([self.tmp.name, "--layout", "plate"])
+        self.assertEqual(rc, 0, out + err)
+        with contextlib.redirect_stdout(io.StringIO()):
+            as_plate = check_svg.check_file(p, "plate", "portrait", "dark")
+            as_canvas = check_svg.check_file(p, "canvas", "portrait", "dark")
+        self.assertEqual(as_plate[0], [], as_plate)
+        # plate ≡ canvas：两个入口必须给出同一份结论（同一份 errs/warns），
+        # 否则"退役"就只是改了文案、没改判据。
+        self.assertEqual(as_plate, as_canvas,
+                         "plate 与 canvas 判据不一致 —— 退役档没有真正归一")
+
     def test_auto_pins_aspect_for_full_canvas(self):
         """整页画布的比例自带画幅信息：--aspect 写反时按图本身的比例定画幅，
         不拿另一档的框（安全边距、折算字号）去量它。"""

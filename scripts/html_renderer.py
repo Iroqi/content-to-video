@@ -2813,8 +2813,15 @@ def generate_html(manifest, audio_src, images=None,
 
     # 只在真会演时改写收束变量（0 值已在上下文写好，替换串同长）。
     if _settle_s > 0:
-        rc.root_vars = rc.root_vars.replace(
-            "--ctv-ved-settle:0.00s;", f"--ctv-ved-settle:{_settle_s:.2f}s;")
+        # replace 命中不到就是静默失效：`--ctv-ved-settle` 卡在 0，句尾收束那一拍
+        # 整条不演，而没有任何一道门禁会问（--until html 照样绿）。改坏了就让生成期
+        # 自己喊出来，别把账留到逐帧 diff 那天。
+        _old, _new = "--ctv-ved-settle:0.00s;", f"--ctv-ved-settle:{_settle_s:.2f}s;"
+        if _old in rc.root_vars:
+            rc.root_vars = rc.root_vars.replace(_old, _new)
+        else:
+            print("[warn] 收束变量 --ctv-ved-settle 的 0 值占位没找到，"
+                  f"句尾收束将整条不演（期望 {_new!r}）", file=sys.stderr)
     gsap_code = "\n  ".join(gsap_lines)
 
     # ── 装配最终 HTML ────────────────────────────────────

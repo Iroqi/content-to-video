@@ -52,7 +52,8 @@ import re
 import sys
 import unicodedata
 
-from _segments import FULL_BLEED_LAYOUTS as FULL_BLEED
+from _segments import (FULL_BLEED_LAYOUTS as FULL_BLEED,  # noqa: E401
+                       RETIRED_LAYOUTS, seg_layout)
 from _path_morph import path_endpoints, path_segments, y_span
 from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
                            _css_unescape, _is_external_href,   # 外链/墙钟判据与净化器同一份
@@ -453,13 +454,27 @@ def _check_loose_ends(strokes, segs, dots, rings, discs, boxes, tol):
     return warns
 
 
+def _canonical_layout(layout):
+    """退役档 → 它并入的那一档（plate → canvas）；映射的真源是 seg_layout。
+
+    退役文案（RETIRED_LAYOUTS）只说"已并入 XX"，不含机器可读的目标档位；照抄成
+    第二份映射就会在下次退役时改一处漏一处。
+    """
+    return seg_layout({"layout": layout}) if layout in RETIRED_LAYOUTS else layout
+
+
 def check_file(path, layout, aspect, theme, resolved=None, draft=False):
     """查一个 SVG；`resolved` 给 dict 时写入 `--layout auto` 实际用的 (档位, 画幅)，
     调用方要把"按哪一档查的"打给人看。
 
     `draft` 松开四条只有定稿才有资格判死的判据：槽位比例与槽位对比度 error 降
     warn、端点悬空静音、满幅底板提示合并。安全类与画布档的比例/越界照旧 error。
+
+    退役档（plate）在**这里**归一，不在 CLI 入口：下面所有判据都靠
+    `layout in FULL_BLEED` 分流，而 FULL_BLEED 里早已没有 plate。归一跟着 argparse
+    走的话，直接 import check_file 的调用方绕过 argparse 就照样拿错几何。
     """
+    layout = _canonical_layout(layout)
     errors, warns = [], []
     fb_counts = {"slot": 0, "canvas": 0}   # 满幅底板元素计数：draft 档合并成一条提示
     try:
@@ -500,7 +515,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
             # 所以框尺寸、安全边距、内容盒全都按画幅算——按槽位的 980×735 去量一张
             # 1080×1440 的图，比例会判错、字号会少算一档。
             cw, ch_ = canvas_sizes()[aspect]
-            label = f"{cw}×{ch_}（{aspect} {'整页画布' if layout == 'canvas' else '图版'}）"
+            label = f"{cw}×{ch_}（{aspect} 整页画布）"
         else:
             # 槽位框随画幅变（竖屏 980×735 / 横屏 1067×800，都是 4:3）。
             # 折算字号与建议尺寸都必须按当前画幅算——拿竖屏的 980 去折横屏的
@@ -834,7 +849,7 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                      "「随某句话变化」的时间轴同步动画，改用 images.json 的 animate（净化内联后由 GSAP 补间驱动；"
                      "内联时这些墙钟动画会被剥离，见 references/motion.md「契约」）")
     if layout in FULL_BLEED:
-        warns.append(("整页画布" if layout == "canvas" else "图版") + "：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
+        warns.append("整页画布：字面色的对比度已经按主题页底的最坏一档查过了（上面那几条就是），"
                      "剩下两样静态查不到——压在自己画的局部底板上的那些字（按页底算对它不成立）、"
                      "以及文字是否真的溢出。用 canvas.md「图内文字的对比度」的内联副本 "
                      "+ `hyperframes check` 量一次")
@@ -879,11 +894,13 @@ def collect(paths):
 def main():
     ap = argparse.ArgumentParser(description="手绘 SVG 配图静态自查（尽力而为，不替代人眼复核）")
     ap.add_argument("paths", nargs="+", help="SVG 文件或目录")
-    ap.add_argument("--layout", choices=["slot", "canvas", "plate", "auto"], default="slot",
-                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；plate = 图版"
-                         "（满幅图 + 标题 + 一句字幕，图槽几何与整页画布相同）；"
-                         "auto = 按每个文件自身的比例推断（混用目录一次跑完，"
-                         "整页画布还会连画幅一起定下来）")
+    ap.add_argument("--layout", choices=["slot", "canvas", "auto"]
+                    + sorted(RETIRED_LAYOUTS), default="slot",
+                    help="slot = 4:3 槽位配图（默认）；canvas = 整页画布；"
+                         + "；".join(f"{k} 同 canvas（已退役：{v.split('：', 1)[0]}）"
+                                     for k, v in RETIRED_LAYOUTS.items())
+                         + "；auto = 按每个文件自身的比例推断（混用目录一次跑完，"
+                           "整页画布还会连画幅一起定下来）")
     ap.add_argument("--aspect", choices=list(canvas_sizes()), default="portrait",
                     help="画幅（默认 portrait）。显式 --layout 时按它取框；"
                          "--layout auto 下整页画布的比例能定画幅，会覆盖它")

@@ -11,7 +11,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import urllib.request
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
@@ -57,7 +56,10 @@ def _download_to_cache(cache_path, url, *, asset, validate):
     """
     cache_dir = os.path.dirname(cache_path)
     os.makedirs(cache_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+    # 中转走 unique_tmp 而不是裸 mkstemp：它在同一份 Prefix 之下还负责把 0600
+    # 补成 0644。这里的中转随后 replace 成 `cache_path` 里的 GSAP（要换 uid 下的
+    # 渲染进程读），漏掉 chmod 的产物在本机永远看不出问题、换台机器才炸。
+    tmp_path = unique_tmp(cache_dir, prefix=".vendor-", suffix=".tmp")
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "content-to-video"},
@@ -67,19 +69,13 @@ def _download_to_cache(cache_path, url, *, asset, validate):
         if len(data) > _MAX_VENDOR_BYTES:
             raise ValueError(f"downloaded file too large ({len(data)} bytes)")
         validate(data)
-        with os.fdopen(fd, "wb") as f:
-            fd = None
+        with open(tmp_path, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, cache_path)
         return True
     except Exception as exc:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
         try:
             os.remove(tmp_path)
         except OSError:
@@ -215,10 +211,10 @@ def _stage_audio_file(audio_path, out_dir):
     # 目标若是指向项目外的软链接，不能把它当成"同一文件"跳过复制；
     # 用临时文件 + replace 替换链接本身，避免写穿链接目标。
     if os.path.islink(dst) or not _file_identical(audio_path, dst):
-        # 临时名用 mkstemp 而非固定的 dst+".tmp"：两个 run 并跑同一项目目录
-        # （如双画幅）时固定名会互相踩掉对方的中转文件。
-        fd, tmp = tempfile.mkstemp(dir=audio_dir, prefix=".stage-", suffix=".tmp")
-        os.close(fd)
+        # 中转名必须唯一（同上：并跑的两个 run 会踩掉对方的中转），也必须是
+        # 0644——它随后 replace 成 audio/combined.wav，渲染进程的 Chrome/ffmpeg
+        # 常常挂着另一个 uid 去读它。两件事都由 unique_tmp 一次性给到。
+        tmp = unique_tmp(audio_dir, prefix=".stage-", suffix=".tmp")
         try:
             shutil.copy2(audio_path, tmp)
             os.replace(tmp, dst)
@@ -1472,12 +1468,17 @@ def _composition_css_text():
 
     只读**源文件**，不读产物里的内联副本：产物已经把 `var(--ctv-*)` 与占位符替换
     过一遍，选择器却是同一条；读源文件省掉"从 HTML 里切 <style> 再反解"的一段脆逻辑。
-    文件不在时返回空串——门禁退化成不判，而不是崩。
+    文件不在时返回空串——门禁退化成不判，而不是崩。但必须喊出来：读不到就等于
+    `css_transform_leaks("", html)` 恒为 `[]`，那一整道硬约束从此永绿——页面照样
+    生成、退出码 0，而 CSS 抢走 transform 的那一拍已经在成片里静默不演。
     """
     try:
         with open(ASSETS_DIR / "composition.css", encoding="utf-8") as f:
             return f.read()
-    except OSError:
+    except OSError as exc:
+        print(f"[warn] 读不到模板样式表 {ASSETS_DIR / 'composition.css'}：{exc}"
+              "——CSS ↔ GSAP 抢 transform 这道门禁本次判不了（退化为不判）",
+              file=sys.stderr)
         return ""
 
 

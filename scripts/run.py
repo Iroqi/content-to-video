@@ -249,7 +249,10 @@ def _load_manifest_or_exit(manifest_path):
 
 
 def _image_coverage(manifest_path, images_json):
-    """返回 (tm, all_sids, missing_keys, missing_files)。
+    """返回 (tm, all_sids, missing_keys, missing_files, mapping)。
+
+    `mapping` 是 images.json 读完的那一遍（文件不存在时为 None）：台词板核对要用
+    同一份映射，再 load 一次等于给"两次读到的不是同一个文件"留位置。
 
     `tm` 是已校验的 manifest（主流程的降级检测直接复用，不在一次 run 里 load 两遍）；
     `all_sids` 是需要配图的段落全集（`_segments.needs_image`：内容段一律需要；
@@ -266,9 +269,9 @@ def _image_coverage(manifest_path, images_json):
     # _segments.sids_needing_image（与 gen_hyperframes 的缺图提示同一函数）。
     sids = sids_needing_image(manifest)
     if not sids:
-        return manifest, [], [], []
+        return manifest, [], [], [], None
     if not os.path.isfile(images_json):
-        return manifest, sids, sids, []
+        return manifest, sids, sids, [], None
     # 读不出来的三种原因（不存在/不是 UTF-8/语法错误）已由 load_images_json 统一
     # 成点名文件的 ValueError；这里只补一句"该补图/该重写映射"的行动指引——
     # 上次写入被中断留下的截断 JSON，裸 json.load 的 traceback 指不到真实原因。
@@ -299,7 +302,7 @@ def _image_coverage(manifest_path, images_json):
                    for k in ("src", "poster") if entry.get(k))
 
     missing_files = [s for s in sids if s in mapping and _entry_unusable(mapping[s])]
-    return manifest, sids, missing_keys, missing_files
+    return manifest, sids, missing_keys, missing_files, mapping
 
 
 # 默认 help 里不出现的参数：调参、低配兜底、以及"关掉某道闸"的逃生口。
@@ -589,7 +592,8 @@ def main():
     # 会把全部内容段落都报成缺图（不能因为文件不存在就跳过统计——那样
     # missing 恒空、缺图拦截形同虚设，会静默渲染出无图成片）。
     # dry-run / --until tts 已在上方提前 return，走到这里必然要统计。
-    _tm, all_sids, missing_keys, missing_files = _image_coverage(manifest, images_json)
+    _tm, all_sids, missing_keys, missing_files, images_map = _image_coverage(
+        manifest, images_json)
     _missing_union = sorted(set(missing_keys) | set(missing_files))
     _REPORT["images"] = {
         "total": len(all_sids), "matched": len(all_sids) - len(_missing_union),
@@ -727,8 +731,7 @@ def main():
     # 校验之后、生成 HTML 之前：早一点拿不到最终句数，晚一点已经烧进产物。
     #
     # 越界是 error（会让整段台词板错位，成片看不出来），其余是 warn。
-    _beats_errs, _beats_warns, _beats_total = beats.audit(
-        _tm, load_images_json(images_json) if has_images else None)
+    _beats_errs, _beats_warns, _beats_total = beats.audit(_tm, images_map)
     for _e in _beats_errs:
         print(f"[run][error] 台词板：{_e}", file=sys.stderr)
     for _w in _beats_warns:

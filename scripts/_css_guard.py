@@ -35,7 +35,7 @@ _CSS_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 _CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
 _CSS_AT_RULE_RE = re.compile(r"^@")
 _PLACEHOLDER_RE = re.compile(r"__CTV_[A-Z_]+__")
-_TRANSFORM_DECL_RE = re.compile(r"(?:^|[;\s])transform\s*:", re.I)
+_TRANSFORM_DECL_RE = re.compile(r"(?:^|[;\s])(?:-\w+-)?transform\s*:", re.I)
 _PSEUDO_RE = re.compile(r"::?(?:before|after)\b", re.I)
 
 # GSAP 时间线调用里第一个参数是选择器的那几个函数。只认 `tl.` 前缀：产物里的补间
@@ -65,13 +65,20 @@ def transform_rules(css):
         head, body = m.group(1).strip(), m.group(2)
         if not head or _CSS_AT_RULE_RE.match(head):
             continue
-        # 选择器列表取**最后一个换行之后**的那一段：样式表里的规则常写成
-        # `/* 说明 */\n__CTV_ROOT_VARS__\n\n.seg-title{…}`，前一行是占位符而不是选择器；
-        # 真正的选择器永远紧贴 `{`，所以整段按行取末尾即可（`:is(a,\n b)` 这类跨行
-        # 括号写法本样式表不用，真用了也只会少认一个选择器、不会误报）。
-        # head 非空由上方 `if not head` 保证，非空串 splitlines() 恒有末行
-        head = head.splitlines()[-1].strip()
-        if not head or _PLACEHOLDER_RE.search(head):
+        # 选择器列表：先按逗号拆段，段内再逐行删占位符，最后归成一行。
+        # 拆逗号在前是因为选择器会跨行写（`.a,\n.b{…}`）——按行取末段只认得 `.b`，
+        # `.a` 上的冲突整个查不出来；占位符按**行**删而不是按段删：`__CTV_ROOT_VARS__`
+        # 紧贴着真选择器（中间只隔一个换行，同属一个逗号段），按段删会把真选择器
+        # 一起丢掉、这条规则从此不再上升为门禁。
+        parts = []
+        for chunk in head.split(","):
+            keep = [ln for ln in
+                    (ln.strip() for ln in chunk.splitlines())
+                    if ln and not _PLACEHOLDER_RE.search(ln)]
+            if keep:
+                parts.append(re.sub(r"\s+", " ", " ".join(keep)))
+        head = ",".join(parts)
+        if not head:
             continue
         if not _TRANSFORM_DECL_RE.search(body):
             continue
@@ -116,29 +123,28 @@ def transform_tween_kind(sel):
 def _matches(tween_sel, css_sel):
     """一条 GSAP 选择器是否可能命中被 CSS 声明了 `transform` 的元素。
 
-    只做保守的**字符串包含**判定：CSS 选择器出现在 GSAP 选择器里（`.seg-title`
-    ⊂ `#seg-a .seg-title`）就算命中。会漏（`.a > .b` 与 `.b` 写法不同不会互相包含），
-    但不会误报——门禁宁可漏报也不要把干净产物判红，误报一次就会有人来加豁免开关。
+    判定按**后代链的后缀**而不是子串：两侧各拆成复合选择器片段，一方是另一方的
+    后缀（`.verse-line` ⊂ `#seg-a .verse-line`）才可能命中同一个元素。
+    子串不行——CSS 的 `.seg` 与补间的 `.seg-title` 是两个不同的类，`.seg` 却是
+    `.seg-title` 的子串，按子串判会把清白产物判红，而这道门禁一红就是 exit 1
+    （误报一次就会有人来加豁免开关，所以宁可漏报）。
     """
     if tween_sel == css_sel:
         return True
-    # 元素级兜底：CSS 或 GSAP 任一侧是"选择器链的最后一个复合选择器"时，按**尾词**
-    # 比。`.verse-line` 与 `#seg-a .verse-line` 是两个写法、同一个元素；只比整串包含
-    # 会漏掉后者（`.verse-line` 确实是 `… .verse-line` 的子串，但反过来
-    # `[data-aspect="vertical"] .verse-line` 里的 `.verse-line` 就比不出来）。
-    # 尾词比对不引入误报：尾词相同意味着最后一个复合选择器相同，而元素要么命中
-    # 要么不命中——命中才可能冲突，没命中的那条本来就不写 transform。
-    if _tail_compound(tween_sel) == _tail_compound(css_sel):
-        return bool(_tail_compound(css_sel))
     if not css_sel.startswith(("#", ".", "[")):
-        return False          # 元素名/伪类选择器（:root 等）比不出可靠子串
-    return css_sel in tween_sel
+        return False          # 元素名/伪类选择器（:root 等）比不出可靠片段
+    a, b = _chain(tween_sel), _chain(css_sel)
+    n = min(len(a), len(b))
+    return bool(n) and (a[-n:] == b[-n:])
 
 
-def _tail_compound(sel):
-    """选择器链的最后一个复合选择器（`.a > .b` → `.b`，`#x .y:hover` → `.y`）。"""
-    toks = re.findall(r"[#.][A-Za-z0-9_-]+|\[[^\]]*\]", sel)
-    return toks[-1] if toks else ""
+def _chain(sel):
+    """选择器链 → 复合选择器片段列表（`#x .y:hover` → [`#x`, `.y`]）。
+
+    只看 `.`/`#`/`[]` 落的片段，丢掉 `>`/`+`/`~` 这些组合符：它们是"如何选"，
+    不改变"最终选中谁"。少认一个片段的代价是漏报，符合这道门禁的取舍。
+    """
+    return re.findall(r"[#.][A-Za-z0-9_-]+|\[[^\]]*\]", sel)
 
 
 def css_transform_leaks(css, html):

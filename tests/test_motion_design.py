@@ -185,6 +185,35 @@ class CssTransformLeak(unittest.TestCase):
     def test_unrelated_selector_is_not_reported(self):
         self.assertEqual(self.leaks(self.css + "\n.img{transform:none}\n", self.html), [])
 
+    def test_sibling_class_is_not_the_same_element(self):
+        """.seg 与 .seg-title 是两个类：前者是后者的子串，但不是同一个元素。
+
+        按子串判会把清白产物判红，而这道门禁一红就是 exit 1——判词的取舍是
+        "宁可漏报"，保守只到"选择器链的后缀"。
+        """
+        self.assertEqual(
+            self.leaks(self.css + "\n.seg{transform:translateZ(0)}\n", self.html), [])
+
+    def test_descendant_of_tweened_chain_is_reported(self):
+        """`#a .b` 命中 `.b` 的那批元素——后缀相同，必须报。"""
+        from _css_guard import _matches
+        self.assertTrue(_matches("#seg-a .seg-title", ".seg-title"))
+        self.assertTrue(_matches(".seg-title", "#seg-a .seg-title"))
+        self.assertFalse(_matches("#seg-a .seg-title", "#seg-a"))  # 祖先与后代不相交
+
+    def test_prefixed_transform_declaration_is_seen(self):
+        """`-webkit-transform` 同样往元素上写 transform，漏认等于门禁开天窗。"""
+        got = self.leaks(self.css + "\n.seg-title{-webkit-transform:translateZ(0)}\n",
+                         self.html)
+        self.assertEqual(len(got), 1, got)
+        self.assertEqual(got[0][0], ".seg-title")
+
+    def test_line_wrapped_selector_list_is_seen(self):
+        """选择器跨行写在逗号之后：`.a,\\n.b{…}` 里的两段都得认，不只最后一行那一段。"""
+        got = self.leaks(self.css + "\n.seg-title,\n#seg-a{transform:translateZ(0)}\n",
+                         self.html)
+        self.assertEqual(sorted(c for c, *_ in got), ["#seg-a", ".seg-title"])
+
 
 # ── 弧线：一条位移的两条轴 ────────────────────────────────────────────────
 # 判据的刻度与「首帧位移 ≥ 4px」同源，都是 30fps 下"这一帧看得出吗"的分界：

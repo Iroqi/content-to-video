@@ -171,8 +171,12 @@ def has_tts_key():
                              env.get("MIMO_BASE_URL") or DEFAULT_BASE_URL)
     except ValueError:
         return False
-    return bool(api_key_for_provider(
-        type("A", (), {"api_key": None})(), env, client))
+    key = api_key_for_provider(
+        type("A", (), {"api_key": None})(), env, client)
+    # 本地/离线提供方的 `api_key_for_provider` 恒返回空串（那是它的正常状态），
+    # 直接 bool() 会把"不需要 key"判成"没 key"，预览档于是白降级一次 --no-tts。
+    # 要不要 key 与有没有 key 是两件事，分开判。
+    return True if not provider_needs_api_key(client) else bool(key)
 
 
 # ===================================================================

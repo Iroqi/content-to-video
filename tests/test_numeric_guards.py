@@ -14,6 +14,7 @@ import unittest
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
 from _images_schema import validate_images_json
+from _script_utils import num_fmt
 
 BAD = (float("nan"), float("inf"), float("-inf"))
 # -inf 会被"非负/≥0"那一顺带拦下（-inf < 0 为真），另外两个（NaN、+inf）只能靠
@@ -106,6 +107,21 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
             ]}}})
         validate_images_json({"seg-b": {"src": "images/b.mp4", "volume": 0.25,
                                         "fade_in": 0.5}})
+
+
+class NumFmtHasOneAnswerPerNumber(unittest.TestCase):
+    """写进 CSS/SVG 的数值必须只有一个答案——同一个 0 不许有两种写法。"""
+
+    def test_negative_underflow_is_zero(self):
+        """`-0` 是合法值，但 transform 里它就是 0，留着只会给逐帧 diff 添噪声。"""
+        self.assertEqual(num_fmt(-0.0001), "0")
+        self.assertEqual(num_fmt(-0.0), "0")
+        self.assertEqual(num_fmt(-0.0000001, 6), "0")
+
+    def test_normal_values_keep_their_sign_and_digits(self):
+        self.assertEqual(num_fmt(-1.5), "-1.5")
+        self.assertEqual(num_fmt(1.0), "1")
+        self.assertEqual(num_fmt(0.4 + 0.2), "0.6")
 
 
 if __name__ == "__main__":

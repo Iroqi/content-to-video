@@ -121,7 +121,9 @@ def num_fmt(v, nd=3):
         return "1" if v else "0"
     if isinstance(v, (int, float)):
         s = f"{float(v):.{nd}f}".rstrip("0").rstrip(".")
-        return s if s not in ("", "-") else "0"
+        # `""`/`"-"` 是 rstrip 把 0.000 剥干净后的样子；`"-0"` 来自负的下溢
+        # （-0.0001 → "-0.000" → "-0"）。三者都压成 "0"，免得同一个 0 有两种写法。
+        return "0" if s in ("", "-", "-0") else s
     return str(v)
 
 

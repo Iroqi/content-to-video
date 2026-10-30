@@ -18,6 +18,9 @@
 - `EntranceLadder` / `EntranceLadderInProduct`：同一屏的多层入场有先后——层序按读序、
   相邻层错开 ≥2 帧、后一拍压在前一拍里。三处（容器入场 / 内容层收拢 / 持续运镜）
   的起点是**同一个阶梯**，改一个 `step` 三处一起动。
+- `StaggerDistribute` / `StaggerDistributeInProduct`：一组元素的错峰不是逐项等差，
+  而是"揭示窗口 × 分配曲线"（GSAP 原生的 `stagger:{amount, ease}`）。判据按 GSAP
+  逐点实测的口径算出每一项的出发延迟，再按产物里真正写出的 `amount` 复核。
 """
 import contextlib
 import io
@@ -393,9 +396,13 @@ class FrameArcInProduct(unittest.TestCase):
 LADDER_MIN_STEP_FRAMES = 2
 LADDER_MAX_STEP = 0.30
 # 补间行的形状：`tl.from("#img-seg-a",{opacity:0,y:40,duration:0.44,ease:"…"},2.76)`
-# fromTo 多一组 `{…}`，所以第三组是可选的；`[^}]*` 够用——补间里不会出现嵌套花括号。
+# fromTo 多一组 `{…}`，所以第三组是可选的。组内可以出现一层嵌套花括号
+# （错峰写成 `stagger:{amount:…,ease:…}` 之后才有这件事），所以用非贪婪的
+# `.*?`：先试着在第一个 `}` 收口，收不住（后面不是 `,时刻)`）就继续往后找。
+# 写成 `[^}]*` 会让带错峰的那几条补间**整条匹配不上**——按照中间的补间名字
+# 做判据那一天，它们会被静默跳过：那不是通过，是失明。
 _TWEEN_RE = re.compile(
-    r'tl\.(?:from|fromTo|to)\("([^"]+)",\{([^}]*)\}(?:,\{([^}]*)\})?,([\d.]+)\)')
+    r'tl\.(?:from|fromTo|to)\("([^"]+)",\{(.*?)\}(?:,\{(.*?)\})?,([\d.]+)\)')
 
 
 def _tweens(html):
@@ -551,3 +558,148 @@ class EntranceLadderInProduct(unittest.TestCase):
             self.assertTrue(layers, f"{name}: 没解析到入场层")
             self.assertEqual(_ladder_verdicts(layers), [],
                              f"{name}: 入场阶梯不合格 {[round(x['at'], 2) for x in layers]}")
+
+
+# ── 错峰的分配：揭示窗口 × 曲线，不是逐项等差 ──────────────────────────────────
+# 前沿揭示的边不是一个匀速的节拍器。Apple 发布会大标题、Framer 的 staggered
+# container transform、现代 UI 的列表入场，顺序都是"先疏后密"：最先几个各自站定让
+# 人读出来，后面的连成一条线扫过收尾。GSAP 原生就有这一枚旋钮——
+# `stagger:{amount: W, ease: "…"}`，`amount` 是**整组的揭示窗口**、`ease` 把这一个
+# 窗口按曲线分给各项。两条书面性质的判据：
+#
+#   1. 相邻间隔不得等差：等差的边是匀速推进，那是扫描线、不是被推上来的字；
+#   2. 揭示快慢不得由项数决定：写"每项隔多久"时总时长 = 步长 ×（项数−1），同一个
+#      模板在 4 字标题上是 0.036s、12 字上是 0.132s。
+#
+# 下方 `_distribute_delays` 的口径是对着钉固的 gsap-3.14.2 实测出来的（沙箱里
+# 加载那份 bundle 跑 `gsap.utils.distribute({amount:0.4,ease:"power2.out"})`，5 项返回
+# [0,.231,.350,.394,.400]、12 项仍以 .400 收尾），不是照文档抄的。
+DISTRIBUTE_GAP_RATIO = 2.0     # 最疏/最密的相邻间隔比；等差恒为 1.0
+
+
+def _distribute_delays(window, ease, n):
+    """GSAP `stagger:{amount:W,ease:…}` 的逐项出发延迟：`W × f(i/(n−1))`。"""
+    if n <= 1:
+        return [0.0]
+    f = E.curve(ease, "none")
+    return [window * f(i / float(n - 1)) for i in range(n)]
+
+
+def _gaps(delays):
+    return [b - a for a, b in zip(delays, delays[1:])]
+
+
+class StaggerDistribute(unittest.TestCase):
+    """一组元素的错峰：**窗口 + 分配曲线**，两者都只有一个真源。"""
+
+    def setUp(self):
+        _anim = T.load_template()["animation"]
+        self.ease = _anim["staggerDistribute"]["ease"]
+        self.apple = _anim["opening"]["apple"]
+
+    def test_ease_is_in_the_pinned_catalog(self):
+        """分配曲线必须能解析：GSAP 认不出的档不报错、直接退回缺省缓动——
+        作者以为"先疏后密"，成片里是等差，而那正是这一层要消灭的东西。"""
+        self.assertIsNotNone(E.split_ease(self.ease),
+                             f"staggerDistribute.ease={self.ease!r} 不在钉固 GSAP 的目录里")
+
+    def test_steps_are_not_evenly_spaced(self):
+        """最疏的那个间隔至少是最密的两倍：等于 1 就是匀速推进的节拍器。"""
+        gaps = _gaps(_distribute_delays(1.0, self.ease, 12))
+        ratio = max(gaps) / min(gaps)
+        self.assertGreaterEqual(
+            ratio, DISTRIBUTE_GAP_RATIO,
+            f"相邻间隔只差 {ratio:.2f} 倍（{self.ease}）：那条边是匀速的，"
+            f"读出来是扫描线而不是揭示")
+
+    def test_steps_decay_so_the_front_of_the_line_can_be_read(self):
+        """先疏后密、单调递减：开头的几个各自站定，末尾连成一片扫过。
+
+        反过来（`power*.in`）是"开头几乎同时、末尾越拖越开"——同一句话的后半截
+        被逐个甩出来，而观众正等着念它。
+        """
+        gaps = _gaps(_distribute_delays(1.0, self.ease, 12))
+        self.assertEqual(gaps, sorted(gaps, reverse=True),
+                         f"间隔不是单调递减：{[round(g, 4) for g in gaps]}")
+        self.assertGreater(gaps[0], gaps[-1] * DISTRIBUTE_GAP_RATIO)
+
+    def test_window_does_not_grow_with_item_count(self):
+        """最后一项的出发延迟恒为窗口本身：揭示快慢不由标题有几个字决定。
+
+        换成等差写法就不是这样了：同样留着"第一个间隔"，12 项的跨度会变成
+        （项数−1）×它，字数一改揭示节奏就跟着改。
+        """
+        for n in (2, 6, 12, 40):
+            with self.subTest(n=n):
+                out = _distribute_delays(0.4, self.ease, n)
+                self.assertAlmostEqual(out[0], 0.0, places=9)
+                self.assertAlmostEqual(out[-1], 0.4, places=9,
+                                       msg=f"{n} 项的揭示跨度不等于窗口")
+
+    def test_even_steps_are_reachable_by_turning_the_ease_off(self):
+        """曲线写成 `none` 就退回等差——"这一层关得掉"，旋钮不是单向门。"""
+        gaps = _gaps(_distribute_delays(0.5, "none", 5))
+        self.assertEqual(len(gaps), 4)
+        self.assertAlmostEqual(gaps[0], 0.125, places=6)
+        self.assertGreater(max(gaps) - min(gaps), -1e-9)
+        self.assertLess(max(gaps) - min(gaps), 1e-9)
+
+    def test_template_declares_windows_not_per_item_steps(self):
+        """模板里不得再出现"每项一格"的错峰：两组都写 `window`。两层各留一份
+        口径的下场是"改了窗口只有一处在动"——正是 `entranceLadder.step` 之前
+        那三条补间各算一份起点的同一件事。"""
+        for where, group in (("rows", self.apple["rows"]),
+                             ("title.chars.mask", self.apple["title"]["chars"]["mask"])):
+            self.assertNotIn("stagger", group, f"{where} 还留着逐项 stagger")
+            self.assertGreater(group.get("window") or 0.0, 0.0,
+                               f"{where} 没写揭示窗口")
+
+
+class StaggerDistributeInProduct(unittest.TestCase):
+    """产物那一头：写进时间线的错峰同样是"窗口 + 曲线"，且窗口不随字数动。"""
+
+    def _html(self, opening_title="本期内容"):
+        src = H.sample_source()
+        src["opening_title"] = opening_title
+        m = H.make_manifest(src)
+        with contextlib.redirect_stderr(io.StringIO()):
+            return generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m),
+                                 aspect="portrait", theme="dark")
+
+    @staticmethod
+    def _stagger_amount(html, sel):
+        m = re.search(r'tl\.from\("' + sel + r'",\{.*?'
+                      r'stagger:\{amount:([\d.]+),ease:"([^"]+)"\}', html)
+        return (float(m.group(1)), m.group(2)) if m else (None, None)
+
+    def test_timeline_carries_the_window_and_the_curve(self):
+        """ `.t-in`（逐字揭示边）与 `.ag-name`（行列表）两条都写出窗口 + 曲线，
+        且不再是单个数字（`stagger:0.01` 那种写法会随字数放大揭示跨度）。"""
+        html = self._html()
+        for sel in (r'#opening \.t-in', r'#opening \.agenda-row \.ag-name'):
+            amount, ease = self._stagger_amount(html, sel)
+            self.assertIsNotNone(amount, f"{sel} 没写出错峰窗口")
+            self.assertEqual(ease, "power2.out", f"{sel} 的分配曲线不是共享的那一枚")
+            self.assertGreater(amount, 0.0, f"{sel} 的窗口是 0")
+        self.assertNotIn("stagger:0.", html)
+
+    def test_title_length_does_not_change_the_reveal(self):
+        """标题 2 个字与 14 个字，最后一个字的出发延迟相同。
+
+        改之前这个延迟 = 步长 ×（字数−1）：同一份模板在长标题上把揭示拖慢 13
+        倍，而"这一页的揭示多久"是这一页的属性，不是标题有几个字。
+        """
+        short = self._stagger_amount(self._html("开场"), r'#opening \.t-in')
+        long_ = self._stagger_amount(self._html("本期我们要聊的十四个字"),
+                                     r'#opening \.t-in')
+        self.assertEqual(short, long_,
+                         f"揭示窗口跟着字数走了：{short} vs {long_}")
+
+    def test_turning_the_shared_curve_off_shows_up_in_the_product(self):
+        """共享旋钮一动，两组错峰同时变——它们在产物里读同一枚 `staggerDistribute.ease`。"""
+        with T.override_layer(['animation.staggerDistribute.ease="none"']):
+            html = self._html()
+        for sel in (r'#opening \.t-in', r'#opening \.agenda-row \.ag-name'):
+            _, ease = self._stagger_amount(html, sel)
+            self.assertEqual(ease, "none", f"{sel} 没跟着共享旋钮走")

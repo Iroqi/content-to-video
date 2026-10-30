@@ -2068,6 +2068,44 @@ def _kicker_entrance_lines(rc, card):
             f'ease:"{a_k["ease"]}"}},{card.s + start:.2f})']
 
 
+def _stagger_window(group, k=1.0):
+    """这一组的**揭示窗口**（秒）：最后一项比第一项晚出发多久。0 = 不错峰。
+
+    只看窗口、不看"每项隔多久"，是因为后者的总时长 = 每项间隔 ×（项数−1）——同一个
+    模板在 4 字标题上是 0.036s、12 字标题上是 0.132s，**揭示的快慢被字数决定**，
+    而"一句话揭示多久"是这一页的节奏，不是标题有多长。
+    """
+    try:
+        return max(0.0, float((group or {}).get("window") or 0.0) * float(k or 1.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stagger_vars(rc, group, k=1.0):
+    """一组元素的错峰：**窗口 × 分配曲线**，不是逐项等差。
+
+    前沿揭示的边不是一个匀速的节拍器。Apple 发布会大标题、Framer 的 staggered
+    container transform、现代 UI 的列表入场，顺序都是"先疏后密"——最先几个各自站
+    定让人读出来，后面的连成一条线扫过收尾。GSAP 原生就有这一枚旋钮：
+    `stagger:{amount: W, ease: "…"}`，`amount` 是整组的揭示窗口、`ease` 把这一个
+    窗口**按曲线分给各项**（对着钉固的 gsap-3.14.2 实测：`{amount:0.4,
+    ease:"power2.out"}` 在 5 项上是 [0, .231, .350, .394, .400]、12 项上仍以 .400
+    收尾；不写 `ease` 则退回 [0, .1, .2, .3, .4] 的等差）。
+
+    曲线取 `power2.out`（递减），理由与系统里其余入场同族：揭示是一条有去有收的
+    动作，先到的先各自读取，末尾连成一片扫过——`sine.inOut` 那种两端慢中间快的
+    分配反过来会让开头几个字几乎同时动、中间忽然拉开，读出来是"卡了一下"。
+
+    曲线只有**一个真源**（`animation.staggerDistribute.ease`），两组错峰共用它——
+    同一支舞里的标题与行列表各自写一条分配曲线，读出来是两种节奏在打架。
+    """
+    amount = _stagger_window(group, k)
+    if amount <= 0.0:
+        return ""
+    ease = ((rc.anim.get("staggerDistribute") or {}).get("ease")) or "power2.out"
+    return 'stagger:{amount:%s,ease:"%s"},' % (num_fmt(amount, 3), ease)
+
+
 def _apple_opening_budget(rc, card):
     """苹果风开场的等比压缩系数（1.0 = 原速不压）。
 
@@ -2086,24 +2124,24 @@ def _apple_opening_budget(rc, card):
     title = card.seg.get("title") or ""
     n_chars = len(re.sub(r"\s", "", title))
     # 收尾时刻只数**真会生成**的那几条补间：没写 tagline 就没有 kicker 那条；
-    # 空格字符（.t-sp）不参与字符 stagger；idx 与 content 两拍都生成（编号
-    # 先行、内容跟上），各自算收尾——曾漏过 idx 那条，模板里 content 的
-    # delay+duration 数值较大时永远盖得住，一旦被调小，预算就对着一个比真实
-    # 收尾更早的时刻开灯，压不压、压多少全凭巧合。
-    # 标题那条按**揭示边**算（mask.stagger 比 chars.stagger 密，收尾更早），行级
-    # 显影 1.6× 的时长与它同起跑、更晚收——两者取大，不另开一项：
+    # idx 与 content 两拍都生成（编号先行、内容跟上），各自算收尾——曾漏过 idx
+    # 那条，模板里 content 的 delay+duration 数值较大时永远盖得住，一旦被调小，
+    # 预算就对着一个比真实收尾更早的时刻开灯，压不压、压多少全凭巧合。
+    # 两组错峰的收尾现在是**窗口**（`_stagger_window`）：最后一项的出发延迟恒为
+    # 窗口本身，与这一组有几项无关——所以这里不再乘项数。
+    # 标题那条按**揭示边**算（它比整支舞的窗口短，收尾更早），行级
     # 预算要对着"最后一个字站定"那一帧，不是对着某个已经不再使用的参数。
     # 模板里缺 `mask` 块（手写模板 / 老 --set 覆写）时按旧口径算：缺省值不在这里
     # 编第二份，直接用 chars 自己那三个数——宁可把预算算贵一点（多压一点），
     # 也不要因为一个可选键不在就整条开场算不出预算。
     a_m = a_t["chars"].get("mask") or a_t["chars"]
+    _mask_window = _stagger_window(a_m)
+    _row_window = _stagger_window(a_r)
     ends = [a_t["chars"]["delay"] + max(
-                a_m["stagger"] * max(0, n_chars - 1) + a_m["duration"],
+                _mask_window + a_m["duration"],
                 a_m["duration"] * (1.6 if "mask" in a_t["chars"] else 1.0)),
-            a_r["idx"]["delay"] + a_r["stagger"] * (n - 1)
-            + a_r["idx"]["duration"],
-            a_r["content"]["delay"] + a_r["stagger"] * (n - 1)
-            + a_r["content"]["duration"]]
+            a_r["idx"]["delay"] + _row_window + a_r["idx"]["duration"],
+            a_r["content"]["delay"] + _row_window + a_r["content"]["duration"]]
     if has_kicker:
         ends.append(a_k["delay"] + a_k["duration"])
     need = max(ends)
@@ -2195,7 +2233,8 @@ def _apple_opening_lines(rc, card):
     # 改之前是逐字 `opacity 0→1` + 各自的 y/scale/blur，每个字都有自己的出生时刻，
     # 观众数得出字数——那是"打字机"，不是"镜头"。现在字**不透明**，只做位移：
     #   · `.t-in` 从 `mask.rise × 字高` 落到位（overflow 窗在 `.t-mk` 上裁出边），
-    #   · 每字错峰 `mask.stagger`，且比 `chars.stagger` 更密——边是斜的不是阶梯，
+    #   · 每字按**窗口 + 分配曲线**错峰（`_stagger_vars`）：边是斜的不是阶梯，
+    #     且窗口恒等于最后那一字的出发延迟——收尾不被字数牵着走，
     #   · 缓动 `expo.out`：起手就是全速、末端收得很慢，边走过之后字已经站定，
     #     读起来是"这句话被推上来并且站住了"，而不是"一个个字弹出来"。
     # 行级那一下（整行从 blur 12px 收到实焦）仍保留在这条边之外：它负责"这一页
@@ -2206,7 +2245,7 @@ def _apple_opening_lines(rc, card):
     lines.append(
         f'tl.from("#{sid} .t-in",{{y:{rise_px},'
         f'duration:{a_m["duration"] * k:.2f},'
-        f'stagger:{a_m["stagger"] * k:.2f},'
+        f'{_stagger_vars(rc, a_m, k)}'
         f'ease:"{a_m["ease"]}"}},{t + a_t["delay"] * k:.2f})'
     )
     lines.append(
@@ -2238,21 +2277,22 @@ def _apple_opening_lines(rc, card):
             f'duration:{a_k["duration"] * k:.2f},'
             f'ease:"{a_k["ease"]}"}},{t + a_k["delay"] * k:.2f})'
         )
-    # agenda 行两拍：编号先行 scale+blur 落定，行内容随后 x 滑入，同 stagger
-    # 波次，idx 的 delay 略先于 content——编号先"钉"住，名字再跟上。
+    # agenda 行两拍：编号先行 scale+blur 落定，行内容随后 x 滑入，同一个错峰
+    # 波次（`_stagger_vars` 只有一份），idx 的 delay 略先于 content——编号先"钉"住，
+    # 名字再跟上。
     a_r = ap["rows"]
     a_i, a_c = a_r["idx"], a_r["content"]
     lines.append(
         f'tl.from("#{sid} .agenda-row .ag-idx",{{opacity:0,'
         f'scale:{a_i["scale"]},filter:"blur({a_i["blur"]}px)",'
         f'duration:{a_i["duration"] * k:.2f},'
-        f'stagger:{a_r["stagger"] * k:.2f},'
+        f'{_stagger_vars(rc, a_r, k)}'
         f'ease:"{a_i["ease"]}"}},{t + a_i["delay"] * k:.2f})'
     )
     lines.append(
         f'tl.from("#{sid} .agenda-row .ag-name",{{opacity:0,'
         f'x:{a_c["x"]},duration:{a_c["duration"] * k:.2f},'
-        f'stagger:{a_r["stagger"] * k:.2f},'
+        f'{_stagger_vars(rc, a_r, k)}'
         f'ease:"{a_c["ease"]}"}},{t + a_c["delay"] * k:.2f})'
     )
     return lines

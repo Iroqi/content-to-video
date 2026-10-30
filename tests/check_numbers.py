@@ -275,6 +275,19 @@ FACTS = [
         "题头组与画面的错峰幅度，文档必须跟着说清当前是哪一档",
     ),
     (
+        "canvas-mix-min-segments",
+        ("const", "scripts/_segments.py", "CANVAS_MIN_SEGMENTS"), 2,
+        [("references/writing.md", r"至少 \*\*2 段\*\*用整页画布")],
+        "整页画布的段数下限：内容段够多时它至少要占几段——版式全在稿件侧决定，"
+        "没有这个下限，「不写 layout = 槽位」这条最稳的默认会把整页画布挤到边缘",
+    ),
+    (
+        "canvas-mix-trigger-segments",
+        ("const", "scripts/_segments.py", "CANVAS_TRIGGER_SEGMENTS"), 5,
+        [("references/writing.md", r"内容段 ≥ 5 段时")],
+        "配比提醒的触发段数：内容段到这个数才谈整页画布配比，此前由作者按内容判断",
+    ),
+    (
         "subtitle-scroll-ease",
         ("json", "scripts/_template.py", "subtitle.scroll.ease"), "sine.out",
         [("references/look.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],

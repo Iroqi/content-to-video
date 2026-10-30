@@ -26,8 +26,8 @@ from _template import get_canvas, overrides  # noqa: E402  画幅/生效覆写�
 from _timeline import (DEFAULT_FPS, DEFAULT_GAP, DEFAULT_SPEED,  # noqa: E402
                        duration_tolerance, validate_speed)
 from _voices import list_voice_ids  # noqa: E402
-from _segments import (FULL_BLEED_LAYOUTS, sids_needing_image,  # noqa: E402
-                       seg_layout)
+from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
+                       sids_needing_image, seg_layout)
 from _manifest_schema import load_timing_manifest, MANIFEST_FILENAME  # noqa: E402
 from _images_schema import load_images_json  # noqa: E402
 from _degraded import items as degraded_items  # noqa: E402  降级注册表（词汇/人话同源）
@@ -49,7 +49,7 @@ import gen_hyperframes  # noqa: E402  进程内直调 HTML 生成步骤
 # 自己的 stdout 里，人工翻起来很累。这里不改任何步骤的行为，只在旁路记一份轻量
 # 流水账，跑完打印小结 + 写 production_report.json，让"这次跑得正不正常"一眼可
 # 判。任何一步失败退出前也会把已记录的部分写盘。
-_REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
+_REPORT = {"steps": [], "images": None, "layouts": None, "skipped": [], "degraded": []}
 # 制作报告的 out 目录：main() 一解析出 -o/--output 就赋值
 _REPORT_DIR = None
 # 制作报告的文件名（写进 out 目录，跟 timing_manifest.json 放一起）。
@@ -91,6 +91,34 @@ def _write_report(path):
         print(f"[run] 写制作报告失败（不影响主流程产出）：{e}", file=sys.stderr)
 
 
+def _layout_distribution(manifest):
+    """版式分布：各档版式占几段、整页画布占多少时长。
+
+    为什么要有这一栏：版式 100% 由稿件侧决定（不写 `layout` = 槽位），代码里
+    没有任何配平机制。缺了这一栏，作者写完稿看不到"整页画布到底占了几段"，
+    "出镜率低"就是一件永远没人知道的事——规则只提醒一次，可见的事实才管得久。
+
+    口径两套，都给出来，因为它们回答不同的问题：
+      段数 —— 作者能改的（几段换版式），也是写稿门禁用的那套
+      时长 —— 成片里观众实际看到的（整页画布铺满一帧，槽位只占半屏）
+    时长用 `html_renderer.segment_duration`（与 generate_html 的 clip 计时同口径，
+    不另造）；还没配音时算不出来，那就不给数——宁可没有，也不报一个假的 0%。
+    """
+    from html_renderer import segment_duration
+    rows = {}
+    for seg in manifest.get("segments", []):
+        if not is_content_sid(seg["id"]):
+            continue                      # 只统计内容段：开屏/结尾是结构性页
+        lay = seg_layout(seg)
+        row = rows.setdefault(lay, {"segments": 0, "seconds": 0.0})
+        row["segments"] += 1
+        row["seconds"] += segment_duration(seg)
+    total = sum(r["seconds"] for r in rows.values())
+    for r in rows.values():
+        r["share"] = (round(r["seconds"] / total, 4) if total > 0 else None)
+    return rows
+
+
 def _backfill_degraded():
     """manifest 已存在而报告还没记降级时，从 manifest 补一份。
 
@@ -125,6 +153,17 @@ def _print_report_summary():
         img = _REPORT["images"]
         print(f"  配图：{img['matched']}/{img['total']} 条内容已定稿"
               + (f"，{img['missing']} 条待人工审阅/兜底" if img.get("missing") else ""))
+    if _REPORT.get("layouts"):
+        lay = _REPORT["layouts"]
+        # 只列真的出现过的档（与报告 JSON 同一口径）：不存在的档报"0 段"会被
+        # 读成"这一档出场过但没画面"，与事实不符。
+        names = {"canvas": "整页画布", "slot": "槽位", "compare": "并置对比"}
+        parts = [f"{names.get(k, k)} {lay[k]['segments']} 段" for k in sorted(lay)]
+        line = "  版式：" + " / ".join(parts)
+        cv = lay.get("canvas")
+        if cv and cv.get("share") is not None:
+            line += f"（整页画布时长占比 {cv['share']:.0%}）"
+        print(line)
     if _REPORT.get("video"):
         v = _REPORT["video"]
         _got = "未测量" if v["seconds"] is None else f"{v['seconds']:.2f}s"
@@ -461,7 +500,7 @@ def main():
     # 同一进程里重复调用 main()（import run 后直接调用的测试/嵌入式用法）
     # 时，模块级 _REPORT 不能累积上一次的 steps/skipped——每次都从空白
     # 报告开始。
-    _REPORT = {"steps": [], "images": None, "skipped": [], "degraded": []}
+    _REPORT = {"steps": [], "images": None, "layouts": None, "skipped": [], "degraded": []}
     _DRY_RUN = False
     _RUN_T0 = time.monotonic()
     parser = _build_parser()
@@ -598,6 +637,10 @@ def main():
     _REPORT["images"] = {
         "total": len(all_sids), "matched": len(all_sids) - len(_missing_union),
         "missing": len(_missing_union)}
+    # 版式分布：与配图覆盖率同一个真源（manifest），同一时刻记——两栏都
+    # 从这一份 manifest 来，分开记就会有"报告说图齐了、版面却不是那版"的
+    # 自相矛盾。_image_coverage 已经在上面校验过 manifest，这里直接用。
+    _REPORT["layouts"] = _layout_distribution(_tm)
 
     # --until images：配图阶段到此为止即正常结束（exit 0）。必须放在缺图拦截
     # 之前——调试意图是"看看覆盖率如何"，被 exit 2 劫持就和"要渲染到底但缺图"

@@ -518,10 +518,12 @@ _TEMPLATE_JSON = r'''
       "minFactor": 0.45,
       "normSeconds": 4.0
     },
+    "entranceLadder": {
+      "step": 0.14
+    },
     "imageEntrance": {
       "duration": 0.8,
       "ease": "power2.out",
-      "startDelay": 0.2,
       "vert_y": 40,
       "arc": {
         "x": 16,

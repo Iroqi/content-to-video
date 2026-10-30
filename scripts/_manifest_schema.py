@@ -42,6 +42,11 @@ MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
                          "speed", "layout",
                          "voice_id", "voice_style",
                          "takeaway", "turns",
+                         # 页底字幕开关（整页画布）：build_from_structured 透传、
+                         # pipeline 写盘前自校验都用这个键，键集漏了它就变成"写了
+                         # 就报未知字段"，而本文件第 300 行那条布尔校验永远执行不到
+                         # ——文档里让作者写的 `"subtitle": false` 直接撞死。
+                         "subtitle",
                          # 台词板（可选）：从 source 透传，不进 HTML。它是
                          # 意图层，_beats.audit 拿它和本文件的句子时间轴对账。
                          "beats")

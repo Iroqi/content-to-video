@@ -55,7 +55,8 @@ import unicodedata
 from _segments import (FULL_BLEED_LAYOUTS as FULL_BLEED,  # noqa: E401
                        RETIRED_LAYOUTS, seg_layout)
 from _path_morph import path_endpoints, path_segments, y_span
-from _svg_sanitize import (_CSS_COMMENT, _EXT_URL, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
+from _svg_sanitize import (_CSS_COMMENT, _DROP_TAGS, _EXT_URL,  # noqa: E402
+                           _WALLCLOCK_TAGS, _WALLCLOCK_CSS as _CSS_WALLCLOCK,  # noqa: E402
                            _css_unescape, _is_external_href,   # 外链/墙钟判据与净化器同一份
                            _local, _parse_num, _style_map,  # noqa: E402  与净化同一份 DOM 读法
                            is_full_bleed_backdrop, parse_svg_strict, svg_points,
@@ -575,12 +576,19 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
     boxes = []        # 落点目标：文字盒（粗估宽，只用于根住判定）
     for el in root.iter():
         tag = _local(el.tag)
+        # 标签名**先折小写**再比：内联进 HTML 时 tokenizer 统一转小写，<SCRIPT> 与
+        # <script> 在浏览器眼里是同一个标签。折小写前，大写写法整类绕过下面三条
+        # 安全判据（自查报"通过"、净化层照样删——两道门对同一份输入给两个答案）。
+        # 判据集合直接借净化器的 _DROP_TAGS / _WALLCLOCK_TAGS，不在这里另抄一份
+        # 字面量：抄一份就是口径漂移的入口，上次漂移正是这么进来的。
+        ltag = tag.lower()
 
-        if tag == "script":
-            errors.append("含 <script>（内联后会在页面里执行）")
-        if tag == "foreignObject":
-            errors.append("含 <foreignObject>（渲染不可控，且可嵌入 HTML）")
-        if tag in ("animate", "animateTransform", "animateMotion", "set"):
+        if ltag in _DROP_TAGS:
+            if ltag == "script":
+                errors.append("含 <script>（内联后会在页面里执行）")
+            else:
+                errors.append("含 <foreignObject>（渲染不可控，且可嵌入 HTML）")
+        if ltag in _WALLCLOCK_TAGS:
             has_wallclock = True
         for k, v in el.attrib.items():
             lk = _local(k).lower()
@@ -594,6 +602,15 @@ def check_file(path, layout, aspect, theme, resolved=None, draft=False):
                 # 引用混淆在浏览器眼里就是 javascript:），自查的正则不抹就看不见
                 # 它，于是报"通过"而净化层照样删：两道门对同一份输入给两个答案。
                 errors.append(f"<{tag}> 引用外链/脚本/本地文件资源 {v[:60]}")
+            elif lk != "style" and _EXT_URL.search(
+                    _css_unescape(v) if "\\" in v else v):
+                # 呈现属性里的 url()：`style=""` 与 <style> 那两条路都管不到
+                # fill / stroke / filter / mask / clip-path / marker-* 这些**属性**，
+                # 而它们同样能放 url(`file:///…`)，浏览器照样去取。判据与预处理
+                # 照抄净化器那条路（先还原 CSS 转义再比），连"只中和 url()、不删
+                # 属性"的边界也对齐：内部的 url(#id) 正则不命中，不受影响。
+                # `style` 属性由紧随其后的那条单独查，这里跳过以免同一处报两遍。
+                errors.append(f"<{tag}> 的 {lk} 属性引用外链 url() {v[:60]}")
         # <style> / style 的外链判定与净化器共用同一份预处理与判据（_EXT_URL /
         # @import），自查里不写简化版正则：净化器先剥注释、还原 CSS 转义再判，
         # 简化版看不见 `url(\68ttp://…)`、`url( "https://…")` 这类浏览器眼里的

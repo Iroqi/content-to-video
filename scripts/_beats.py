@@ -86,6 +86,16 @@ def validate_beats(raw, where):
         return []
 
     kinds = {_kind_of(item) for item in raw}
+    # **先**逐项报"类型不对"，**再**判整体"混用写法"：前者能定位到第几条、病因
+    # 明确，后者是整体形态问题。顺序反过来的话 `["…", 5]` 会报"混用了两种写法
+    # （short）"——作者照提示去统一写法，而真正的病因是第 2 条是数字，下面那条
+    # 正确的报错永远执行不到（kinds 里 None 也算一种，凑够 len>1 就走混用分支）。
+    if None in kinds:
+        for i, item in enumerate(raw):
+            if _kind_of(item) is None:
+                raise ValueError(
+                    f"{where}[{i}] 必须是字符串（简写）或 {{on, change}} 对象（全写），"
+                    f"实际是 {type(item).__name__}")
     if len(kinds) > 1:
         bad = sorted(k for k in kinds if k is not None)
         raise ValueError(

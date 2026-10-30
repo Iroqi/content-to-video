@@ -48,6 +48,22 @@ class TestShape(unittest.TestCase):
             validate_beats(["点亮 a", {"on": 3, "change": "推到第三态"}], "seg1 的 beats")
         self.assertIn("混用", str(cm.exception))
 
+    def test_bad_item_type_is_reported_before_mixing(self):
+        """修复前：`["点亮 a", 5]` 报"混用了两种写法（short）"。
+
+        病因是第 2 条是数字，但 kinds 里 None 也凑一个数，len>1 先命中混用
+        分支并 raise，那条逐项定位的"必须是字符串或 {on, change} 对象"永远
+        执行不到——作者照"混用"的提示去统一写法，改不掉真病因。
+        """
+        for bad in (5, None, [], True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as cm:
+                    validate_beats(["点亮 a", bad], "seg1 的 beats")
+                msg = str(cm.exception)
+                self.assertNotIn("混用", msg)
+                self.assertIn("beats[1]", msg)
+                self.assertIn("实际是", msg)
+
     def test_missing_on_is_rejected_with_a_reason(self):
         with self.assertRaises(ValueError) as cm:
             validate_beats([{"change": "点亮 a"}], "seg1 的 beats")

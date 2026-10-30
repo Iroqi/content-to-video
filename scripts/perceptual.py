@@ -551,7 +551,14 @@ def _snapshot(project, times, outdir, command):
     cmd = resolve_command(list(command) + ["snapshot", project, "--at", ts,
                                            "-o", outdir])
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        # encoding/errors 必须与 _audio._run_ff / _speech._run_silencedetect 同款
+        # 显式指定：text=True 默认按 locale 解码，中文 Windows 是 cp936，而
+        # hyperframes 的输出含非 ASCII（中文项目路径、中文报错）时直接抛
+        # UnicodeDecodeError。它既不在下面的 except 名单里，run.py 也没兜
+        # Exception——成片渲完了、报告还没落盘，整条 run.py 裸栈退出。
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=900)
     except FileNotFoundError:
         raise RuntimeError("找不到 npx：本门禁要 Node.js 才能取帧（见 SKILL.md「环境」）")
     except subprocess.TimeoutExpired:

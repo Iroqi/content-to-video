@@ -264,6 +264,24 @@ class ManifestValidation(unittest.TestCase):
         self._seg(m)["speed"] = 1.5
         MAN.validate_timing_manifest(m)
 
+    def test_segment_subtitle_is_a_declared_key(self):
+        """修复前：`"subtitle": false` 先被 _reject_unknown_keys 拦成"未知字段"。
+
+        build_from_structured 透传这个键、本文件第 300 行那条布尔校验也认它，
+        唯独封闭键集漏了它——于是那条校验永远执行不到（死代码），而文档里教
+        作者写的 `"subtitle": false`（关掉页底字幕）直接撞死在"未知字段"上。
+        """
+        m = H.make_manifest()
+        self._seg(m, "seg-a")["subtitle"] = False
+        MAN.validate_timing_manifest(m)          # 布尔 false：合法，放行
+        m = H.make_manifest()
+        self._seg(m, "seg-a")["subtitle"] = True
+        MAN.validate_timing_manifest(m)
+        # 字符串 "false" 仍要被布尔校验拦下（写它会被当真值）
+        m = H.make_manifest()
+        self._seg(m, "seg-a")["subtitle"] = "false"
+        bad(MAN.validate_timing_manifest, m, contains="subtitle")
+
     def test_segment_voice_style_must_be_string(self):
         m = H.make_manifest()
         self._seg(m)["voice_style"] = 123

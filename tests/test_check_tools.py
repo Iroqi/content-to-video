@@ -152,6 +152,62 @@ class SvgChecker(unittest.TestCase):
                          '<style>.a{background:url(file:///etc/motd)}</style></svg>'))
         self.assertTrue(any("外链 url()" in e for e in errs), errs)
 
+    def test_drop_tags_are_case_insensitive(self):
+        """修复前：`<SCRIPT>` / `<foreignobject>` 整类绕过安全判据。
+
+        SVG 走 XML 解析时标签名大小写敏感，但内联进 HTML 后 tokenizer 统一转
+        小写——`<SCRIPT>` 在成片里照样执行。折小写前，自查报"通过"而净化层
+        （它折小写）照删：两道门对同一份输入给两个答案。
+        """
+        for tag, needle in (("SCRIPT", "<script>"),
+                            ("foreignobject", "foreignObject"),
+                            ("ForeignObject", "foreignObject")):
+            with self.subTest(tag=tag):
+                body = "1" if "script" in tag.lower() else "<div/>"
+                errs, _ = self.run_check(
+                    GOOD.replace("</svg>", f"<{tag}>{body}</{tag}></svg>"))
+                self.assertTrue(any(needle in e for e in errs),
+                                f"<{tag}> 没被拦：{errs}")
+
+    def test_wallclock_tags_are_case_insensitive(self):
+        """反向同源：`<ANIMATE>` 也要像 `<animate>` 一样出墙钟 warn。
+
+        大写写法漏判时 has_wallclock 一直是 False，作者拿不到"SMIL 按墙钟自走、
+        逐帧 seek 下不可复现"这条提示。
+        """
+        for tag in ("animate", "ANIMATE", "AnimateTransform", "SET"):
+            with self.subTest(tag=tag):
+                errs, warns = self.run_check(
+                    GOOD.replace("</svg>", f'<{tag} attributeName="x" to="9"/></svg>'))
+                self.assertTrue(any("墙钟" in m for m in errs + warns),
+                                f"<{tag}> 没出墙钟提示：{errs}{warns}")
+
+    def test_presentation_attribute_url_is_error(self):
+        """呈现属性里的 url()：<style> 与 `style=""` 两条路都管不到 fill /
+        filter / mask 这些**属性**，而浏览器照样去取那个地址（`file:` 还能触
+        及本机磁盘）。判据与净化器同一份（含 CSS 转义还原）。
+        """
+        bs = chr(92)
+        for attr in ("fill", "filter", "stroke", "mask", "clip-path"):
+            with self.subTest(attr=attr):
+                errs, _ = self.run_check(
+                    GOOD.replace("</svg>",
+                                 f'<rect width="10" height="10" {attr}='
+                                 f'"url(https://evil.com/x.svg#a)"/></svg>'))
+                self.assertTrue(any("外链 url()" in e for e in errs),
+                                f"{attr} 里的外链 url() 没报：{errs}")
+        # CSS 转义版（浏览器眼里是 http://，裸值比对看不见）
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         f'<rect width="10" height="10" fill='
+                         f'"url({bs}68ttp://evil.com/a)"/></svg>'))
+        self.assertTrue(any("外链 url()" in e for e in errs), errs)
+        # 反向：内部片段引用不是外链，不该报
+        errs, _ = self.run_check(
+            GOOD.replace("</svg>",
+                         '<rect width="10" height="10" fill="url(#grad)"/></svg>'))
+        self.assertFalse(any("外链" in e for e in errs), errs)
+
     def test_entity_declaration_refused(self):
         errs, _ = self.run_check('<!DOCTYPE svg [<!ENTITY a "b">]><svg xmlns="http://www.w3.org/2000/svg"/>')
         self.assertTrue(errs)

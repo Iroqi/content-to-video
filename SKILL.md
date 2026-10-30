@@ -57,7 +57,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 **③ 视觉契约**（违反则画面就散）
 - **视觉真源**：版式/字体/动画参数在 `scripts/_template.py`（经 `--ctv-*` 注入），配色在 `scripts/_theme.py`，`scripts/_assets/` 只放样式表与运行时脚本。随画幅变的观感常量写那两个 py，别在 CSS 里存第二份。令牌两侧必须对得上：CSS/JS 用到的每一枚都得注进 `:root`，注进去的每一枚都得有人读——`var()` 取不到值是静默失效，页面照样生成、门禁照样全绿。
 - **双画幅**：`--aspect portrait|landscape`，默认 portrait（1080×1440），landscape 为 1920×1080。画幅在生成 HTML 时一次性确定。
-- **先定编排，再选版式**：`canvas` = 整页一张 SVG 按旁白逐拍演；不写 `layout` = 槽位版式（标题区 + 配图槽 + 句子流），agenda 卡兜开局与收尾。选型见 `references/writing.md`「哪些段值得交给 canvas」。
+- **先定编排，再选版式**：`canvas` = 整页一张画面（可以静态，不必逐拍演）；不写 `layout` = 槽位版式（标题区 + 配图槽 + 句子流），agenda 卡兜开局与收尾。选型见 `references/writing.md`「哪些段值得交给 canvas」。
 
 **④ 交付纪律**（违反则出片没验过）
 - **演的决策在第 1 步定**：画面要跟着旁白变，就在写稿时把 `beats`（第几句旁白时画面变成什么，人话）写进那一段，再落 `animate`。`on` 必填，写不出说明这一拍没想清楚；句序只按终止标点切、由文本定死，配音不改句子也不改编号，配音后核一遍只是兜底（越界 exit 2）。见 `references/writing.md` 与 `references/motion.md`。

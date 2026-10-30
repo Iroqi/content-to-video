@@ -12,7 +12,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _beats import validate_beats  # noqa: E402  台词板（beats）形状校验
-from _segments import (CONTENT_SID_PREFIX, _validate_layout, _validate_sid,  # noqa: E402
+from _segments import (CANVAS_MIN_SEGMENTS, CANVAS_TRIGGER_SEGMENTS,  # noqa: E402
+                       CONTENT_SID_PREFIX, _validate_layout, _validate_sid,
                        is_content_sid, ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
@@ -271,6 +272,7 @@ def validate_segments_source(data):
                     raise ValueError(f"segments[{i}].dialogue[{j}] 引用了说话人 {spk!r}，"
                                      "但顶层 'speakers' 里没有声明它，或声明里缺少 'voice_id'")
     _warn_agenda_overflow(data)
+    _warn_canvas_mix(data)
     return data
 
 
@@ -308,6 +310,45 @@ def _warn_agenda_overflow(data):
           f"开屏/结尾 agenda 的行预算是 {max_rows} 行——超 {over} 行，"
           "成片时开屏章节列表与结尾要点总结会按「要点优先」丢掉尾部几行"
           "（渲染层还会再报一次）。写稿时压段数或合并要点，见 references/writing.md",
+          file=sys.stderr)
+
+
+def _warn_canvas_mix(data):
+    """内容段够多却一段整页画布都没有时，在写稿阶段就提醒一次。
+
+    为什么要有这条：版式 100% 由稿件侧决定（不写 `layout` = 槽位），代码里没有
+    任何配平机制。不写 `layout` 又"最稳"，于是整页画布在成片里几乎不出场——那档
+    版式形同虚设。这条把"出镜率"变成写稿那一刻能看见的事。
+
+    为什么是 warn 不是 error：整页画布不是配额，是**画面承担全部内容**的一种方式。
+    确实没有可上图内容的稿子（纯口播、清单式要点）该保持槽位，硬拦会挡掉合法稿。
+    所以文案里写明何时该忽略本条——提醒负责"第一次告知"，不负责"必须照办"。
+
+    判据不重抄：下限与触发段数直接读 `_segments` 的常量，改了那里这里跟着改。
+    用段数口径而不是时长占比——写稿这一刻还没配音，时长算不出来；段数是作者
+    那一刻就能改的（换几段版式），判据与作者能做的事对齐。
+
+    开屏/结尾写成整页海报时豁免整条提醒：那一页整页就是画面，作者显然知道整页
+    画布这档版式。**不**把它算进"内容段里的整幅数"——海报页是结构性页，不在内容
+    段序列里，两种口径混在一起数出来的数没有意义。
+    """
+    content = [seg for seg in data.get("segments", [])
+               if isinstance(seg, dict)
+               and (not seg.get("id") or is_content_sid(seg["id"]))]
+    if len(content) < CANVAS_TRIGGER_SEGMENTS:
+        return          # 稿子短，没有配比的余地——不打扰
+    if (data.get("opening_layout") or "agenda") == "canvas" \
+            or (data.get("closing_layout") or "agenda") == "canvas":
+        return          # 整篇已经有整页画布主视觉：不用再要求内容段里穿插
+    n_canvas = sum(1 for seg in content if seg.get("layout") == "canvas")
+    if n_canvas >= CANVAS_MIN_SEGMENTS:
+        return
+    print(f"[warn] segments_source.json 有 {len(content)} 个内容段，整页画布只有 "
+          f"{n_canvas} 段（下限 {CANVAS_MIN_SEGMENTS} 段）。整页画布不是「高级感」，"
+          "是「这一页的画面承担全部内容」的方式：一屏能讲清一件事的段（关系图、"
+          "时间轴、海报、现场照片）写成 layout:\"canvas\"；它可以只放一张静态图，"
+          "不必手绘、不必逐拍演。判据见 references/writing.md「先定编排」。"
+          "如果这些段确实只是要点清单、该边听边读，保持槽位并忽略本条。",
           file=sys.stderr)
 
 

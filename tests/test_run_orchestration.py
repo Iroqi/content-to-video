@@ -629,6 +629,53 @@ class ReportBackfillsDegraded(unittest.TestCase):
                          f"报告没记下 unvoiced_preview：{rep['degraded']}")
 
 
+class LayoutDistributionInReport(unittest.TestCase):
+    """制作报告里必须有版式分布——"整页画布出镜率低"要看得见才改得动。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_report_shows_how_many_pages_are_full_bleed(self):
+        """报告要报出各档版式占几段。
+
+        证伪：版式 100% 由稿件侧决定（不写 layout = 槽位），代码里没有配平机制。
+        没有这一栏，作者写完稿看不到"整页画布到底占了几段"，出镜率低就是一件
+        永远没人知道的事——规则只提醒一次，可见的事实才管得久。
+        """
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"])
+        lay = self.h.report()["layouts"]
+        self.assertEqual(lay["canvas"]["segments"], 1,
+                         f"样例稿有 1 段整页画布，报告说 {lay}")
+        self.assertEqual(lay["slot"]["segments"], 1,
+                         f"样例稿有 1 段槽位，报告说 {lay}")
+
+    def test_report_says_nothing_about_a_layout_that_has_no_pages(self):
+        """某一档版式一段都没有时，报告只报存在的那些档。
+
+        不可达的场景先说清：manifest 缺席时 run.py 会 SystemExit（连配图覆盖率
+        都算不了），所以"没有 manifest 却报出版式分布"在真实流程里不会发生。
+        可达的是"某一档一段都没有"——比如整稿都是槽位。这时报告该只列存在的
+        档，不能报出一个整页画布 0 段/0% 的空行（那会被读成"这一档出场过但
+        没画面"，与事实不符）。
+        """
+        for seg in self.h.manifest["segments"]:
+            if seg["id"].startswith("seg"):
+                seg.pop("layout", None)      # 不写 layout = 槽位（manifest 层不认 "slot"）
+        self.h.make_images_complete()
+        out, _ = self.h.invoke(["--until", "html"])
+        lay = self.h.report()["layouts"]
+        self.assertNotIn("canvas", lay,
+                         f"一段整页画布都没有却报了这一档：{lay}")
+        self.assertEqual(lay["slot"]["segments"], 2, f"样例稿有两段内容段：{lay}")
+        # 摘要那行同样只列存在的档，且带着版式名（"1 段 / 1 段"分不清谁是谁）
+        line = [ln for ln in out.splitlines() if "版式" in ln]
+        self.assertTrue(line, "摘要里没有版式这一行")
+        self.assertIn("槽位", line[0])
+        self.assertNotIn("整页画布", line[0])
+
+
 class HappyPath(unittest.TestCase):
     def setUp(self):
         self.h = Harness()

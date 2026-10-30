@@ -608,6 +608,57 @@ class ContractSinking(unittest.TestCase):
         quiet = self._stderr_of(SRC.validate_segments_source, H.sample_source())
         self.assertNotIn("agenda", quiet)
 
+    def _mix_source(self, n_segments, n_canvas, **extra):
+        """造一份 n_segments 个内容段、其中 n_canvas 段写 layout:"canvas" 的稿子。"""
+        src = H.sample_source()
+        src["segments"] = [
+            {"id": "seg%d" % i, "title": "第%d段" % i, "text": "正文。",
+             **({"layout": "canvas"} if i <= n_canvas else {})}
+            for i in range(1, n_segments + 1)
+        ]
+        src.update(extra)
+        return src
+
+    def test_canvas_mix_warns_when_full_bleed_never_appears(self):
+        """内容段够多却一段整页画布都没有时，写稿阶段就要提醒。
+
+        证伪：版式 100% 由稿件侧决定（不写 layout = 槽位），代码里没有配平机制。
+        不写 layout 又"最稳"，于是整页画布在成片里几乎不出场——那档版式形同虚设，
+        而作者写完稿看不到这件事。这条提醒把出镜率变成写稿那一刻能看见的事实。
+        """
+        from _segments import CANVAS_MIN_SEGMENTS, CANVAS_TRIGGER_SEGMENTS
+        out = self._stderr_of(SRC.validate_segments_source,
+                              self._mix_source(CANVAS_TRIGGER_SEGMENTS, 0))
+        self.assertIn("整页画布", out)
+        self.assertIn(str(CANVAS_MIN_SEGMENTS), out)
+        self.assertIn("layout:", out)   # 给出可操作的改法，不只是数落作者
+
+    def test_canvas_mix_stays_quiet_on_a_legit_draft(self):
+        """该安静的两种稿子必须安静：配额够了，或稿子本来就短。
+
+        这条判据自己得会闭——否则它就是一条永远在叫的噪音，噪音的下场是被无视，
+        等于没有判据。
+        """
+        from _segments import CANVAS_MIN_SEGMENTS, CANVAS_TRIGGER_SEGMENTS
+        got = self._stderr_of(SRC.validate_segments_source,
+                              self._mix_source(CANVAS_TRIGGER_SEGMENTS,
+                                               CANVAS_MIN_SEGMENTS))
+        self.assertNotIn("整页画布", got)
+        short = self._stderr_of(SRC.validate_segments_source,
+                                 self._mix_source(CANVAS_TRIGGER_SEGMENTS - 2, 0))
+        self.assertNotIn("整页画布", short)
+
+    def test_canvas_mix_counts_a_poster_opening_as_full_bleed(self):
+        """开屏写成整页海报时，那一页就是整页画布——不该再提醒"你没写整页画布"。
+
+        海报开屏的稿子拿到的若是"你没用整页画布"，是荒唐的提醒：它明明用了。
+        """
+        from _segments import CANVAS_MIN_SEGMENTS, CANVAS_TRIGGER_SEGMENTS
+        src = self._mix_source(CANVAS_TRIGGER_SEGMENTS, 0)
+        src["opening_layout"] = "canvas"
+        out = self._stderr_of(SRC.validate_segments_source, src)
+        self.assertNotIn("整页画布只有", out)
+
 
 if __name__ == "__main__":
     unittest.main()

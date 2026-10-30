@@ -521,6 +521,9 @@ _TEMPLATE_JSON = r'''
     "entranceLadder": {
       "step": 0.14
     },
+    "staggerDistribute": {
+      "ease": "power2.out"
+    },
     "imageEntrance": {
       "duration": 0.8,
       "ease": "power2.out",
@@ -564,7 +567,7 @@ _TEMPLATE_JSON = r'''
             "blur": 12,
             "ease": "power3.out",
             "mask": {
-              "stagger": 0.012,
+              "window": 0.05,
               "duration": 0.5,
               "blur": 9,
               "rise": 0.34,
@@ -594,7 +597,7 @@ _TEMPLATE_JSON = r'''
             "x": 10,
             "ease": "power2.out"
           },
-          "stagger": 0.12
+          "window": 0.3
         },
         "halo": {
           "in": 1.2,

@@ -655,10 +655,10 @@ class AppleOpening(unittest.TestCase):
         # 门禁红线：reflow 属性（letterSpacing 等）不许进补间——它是 error，
         # 且 Lint 有 error 时 browser 五阶段整个被跳过（半副门禁失明）
         self.assertNotIn("letterSpacing", html)
-        # agenda 行两拍：编号先行 scale+blur、行内容随后 x 滑入，同 stagger 波次
+        # agenda 行两拍：编号先行 scale+blur、行内容随后 x 滑入，同一个错峰波次
         self.assertIn('#opening .agenda-row .ag-idx', html)
         self.assertIn('#opening .agenda-row .ag-name', html)
-        self.assertIn('stagger:0.12', html)
+        self.assertIn('stagger:{amount:0.3,ease:"power2.out"}', html)
 
     def test_kicker_char_spread_step_matches_template(self):
         """逐字 x 的步长 = (tracking − rest) × 画幅 kicker 字号。
@@ -896,27 +896,46 @@ class AppleOpeningBudget(unittest.TestCase):
         return round(dur / 0.55, 4)
 
     @staticmethod
-    def _char_stagger(html):
-        """标题揭示边的逐字错峰（`.t-in` 那条；旧版是 `.t-ch` 的 opacity 波次）。"""
-        return float(re.search(
-            r'#opening \.t-in",\{y:[\d.]+,duration:[\d.]+,'
-            r'stagger:([\d.]+)', html).group(1))
+    def _stage_tail(html, selpat):
+        """这一组的收尾时刻（相对擦除起点）：起点 + 揭示窗口 + 单项时长。
+
+        错峰现在是**窗口**（`stagger:{amount:…,ease:…}`），最后一项的出发延迟
+        恒等于窗口本身——所以这一组的收尾不再出现"项数"这个乘数。
+        """
+        m = re.search(r'tl\.from\("' + selpat + r'",\{(.*?)\}(?:,\{.*?\})?,([\d.]+)\)',
+                      html)
+        if m is None:
+            raise AssertionError(f"抓不到这一组补间：{selpat}")
+        amount = float(re.search(r'stagger:\{amount:([\d.]+)', m.group(1)).group(1))
+        dur = float(re.search(r'duration:([\d.]+)', m.group(1)).group(1))
+        return float(m.group(2)) + amount + dur
 
     def test_enough_window_keeps_original_speed(self):
         """窗口装得下就原速——归一化不能变成"一律压缩"，那会让正常开场变味。"""
         html, vis, err = self._render(3.0, 2)
         self.assertEqual(self._k(html), 1.0)
-        self.assertIn("duration:0.50,stagger:0.01", html)
+        # 两组错峰原样写出窗口 + 分配曲线（`_stagger_vars` 只有一份）
+        self.assertIn('duration:0.50,stagger:{amount:0.05,ease:"power2.out"}', html)
+        self.assertIn('duration:0.55,stagger:{amount:0.3,ease:"power2.out"}', html)
         self.assertIn("ease:\"expo.out\"}", html)
-        self.assertIn("stagger:0.12", html)
         self.assertNotIn("可见窗口", err)
 
     def test_short_window_compresses_every_stage_by_one_factor(self):
         """压缩是**等比**的：标题字符、kicker、行编号、行内容时长乘同一个系数。
-        只有这样节奏比例不变——只压尾巴或只压错峰都读得出是"被赶过"。"""
-        html, vis, err = self._render(0.8, 7)
+        只有这样节奏比例不变——只压尾巴或只压错峰都读得出是"被赶过"。
+
+        这两组错峰改写成"窗口"之后整支舞需要的时长变短了（不再乘项数），所以
+        要把它压下来得给一个更紧的可见窗口——`gap=0.1` 就是为此留的。
+        """
+        html, vis, err = self._render(0.8, 7, gap=0.1)
         k = self._k(html)
         self.assertLess(k, 1.0)
+        # 错峰也跟着同一个系数走：写出的窗口 = 模板值 × k（窗口保留 3 位小数）
+        for sel, win in ((r'#opening \.t-in', 0.05),
+                         (r'#opening \.agenda-row \.ag-name', 0.3)):
+            got = float(re.search(r'tl\.from\("' + sel + r'",\{.*?'
+                                  r'stagger:\{amount:([\d.]+)', html).group(1))
+            self.assertAlmostEqual(got, win * k, delta=0.002, msg=sel)
         # 逐项对账：模板原值 → 写出的值（补间参数保留 2 位小数，比对留 0.01）
         for pat, orig in (
             (r'#opening \.t-in",\{y:[\d.]+,duration:([\d.]+)', 0.50),  # 标题揭示边
@@ -938,22 +957,19 @@ class AppleOpeningBudget(unittest.TestCase):
         for open_dur, n_rows in ((1.0, 7), (1.2, 4), (1.5, 7), (1.0, 1)):
             with self.subTest(open_dur=open_dur, n_rows=n_rows):
                 html, vis, err = self._render(open_dur, n_rows)
+                # 标题"开场"= 2 字 → 字符波次收尾 = 窗口 + duration；行收尾
+                # = content.delay + 窗口 + content.duration。两组都不再乘项数。
+                tail = max(self._stage_tail(html, r'#opening \.t-in'),
+                           self._stage_tail(html, r'#opening \.agenda-row \.ag-idx'),
+                           self._stage_tail(html, r'#opening \.agenda-row \.ag-name'))
                 k = self._k(html)
-                stag_char = self._char_stagger(html)
-                stag_row = float(re.search(
-                    r'#opening \.agenda-row \.ag-name",\{[^}]*stagger:([\d.]+)',
-                    html).group(1))
-                # 标题"开场"= 2 字 → 字符波次收尾 = stagger×1 + duration；行收尾
-                # = content.delay(0.3×k) + stagger×(n−1) + content.duration(0.55×k)
-                tail = max(stag_char * 1 + 0.55 * k,
-                           0.3 * k + stag_row * (n_rows - 1) + 0.55 * k)
                 self.assertLessEqual(tail, vis + 0.02,
                                      f"{tail:.2f}s 收尾超出窗口 {vis:.2f}s（k={k}）")
 
     def test_floor_and_warning_when_even_compressed_it_cannot_fit(self):
         """压到地板还装不下时必须出声：地板 0.5 是"不再往下压"的承诺，
         剩下的缺口靠告警说清楚，并给出三条可操作的方向。"""
-        html, vis, err = self._render(0.6, 7, gap=0.1)
+        html, vis, err = self._render(0.3, 7, gap=0.1)
         # duration 保留 2 位小数：0.55×0.5=0.275 写出 0.28，反解回来有 0.009 舍入
         self.assertAlmostEqual(self._k(html), 0.5, delta=0.02)
         self.assertIn("可见窗口", err)
@@ -961,12 +977,21 @@ class AppleOpeningBudget(unittest.TestCase):
         for advice in ("opening", "内容段数", "opening_layout"):
             self.assertIn(advice, err)
 
-    def test_more_rows_need_more_room(self):
-        """行数多 → 收尾晚 → 同样窗口下压缩得更狠。守住"预算由行数驱动"。"""
-        k_one = self._k(self._render(1.0, 1)[0])
-        k_seven = self._k(self._render(1.0, 7)[0])
-        self.assertLess(k_seven, k_one)
-        self.assertEqual(k_one, 1.0)
+    def test_row_count_does_not_move_the_tail(self):
+        """行数不再决定收尾时刻：错峰是一条**窗口**，不是"每行一个步长"。
+
+        证伪（改之前）：n 行的收尾 = stagger ×（n−1），7 行比 1 行晚 0.72s——
+        同一个模板在长稿上把整支行列表拖慢，而"这一页的旋律揭示多久"是那一页
+        的属性，不是它有几行。换成窗口之后两组不再差行数这一项。
+        """
+        html_one = self._render(1.0, 1)[0]
+        html_seven = self._render(1.0, 7)[0]
+        self.assertEqual(self._k(html_one), self._k(html_seven))
+        for sel in (r'#opening \.agenda-row \.ag-idx',
+                    r'#opening \.agenda-row \.ag-name'):
+            self.assertEqual(self._stage_tail(html_one, sel),
+                             self._stage_tail(html_seven, sel),
+                             f"{sel} 的收尾跟着行数走了")
 
     def test_breathe_and_glow_drift_cycles_are_not_compressed(self):
         """主光呼吸与副光漂移的**时长**不参与压缩：它们是淡入之后的稳态循环，

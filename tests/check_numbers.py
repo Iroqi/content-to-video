@@ -275,6 +275,14 @@ FACTS = [
         "题头组与画面的错峰幅度，文档必须跟着说清当前是哪一档",
     ),
     (
+        "stagger-distribute-ease",
+        ("json", "scripts/_template.py", "animation.staggerDistribute.ease"),
+        "power2.out",
+        [("references/motion.md", r'\{"amount": 0\.3, "ease": "power2\.out"\}')],
+        "错峰的分配曲线：一组元素揭示时先疏后密的形状由它决定，改窗口不改观感；"
+        "作者按文档抄这一枚时，文档必须还是这个值",
+    ),
+    (
         "canvas-mix-min-segments",
         ("const", "scripts/_segments.py", "CANVAS_MIN_SEGMENTS"), 2,
         [("references/writing.md", r"至少 \*\*2 段\*\*用整页画布")],

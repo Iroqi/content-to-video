@@ -133,6 +133,36 @@ body{font-family:var(--ctv-font-family)}
    轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
    只会多出一次同步维护，没有第二种取值可表达。 */
 .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+/* 页底只有一个进度条：两条读数同框就是两条同色不同长的亮条并排，谁读不出自己
+   那条的含义（1080 宽的成片里像故障条）。于是按档互斥——
+     bar（默认）：条子读章节进度（--cap-mask 裁到"第几章/共几章"）；本段播放进度
+       改由刻度排里"当前格"的长度承担，信息一条不少。
+     off：条子退回页内进度（.seg-progress 的 fill），刻度层整体不出现。
+   所以 .seg-progress 在编号卡片里隐掉，.seg-card::after 只在编号卡片里存在。 */
+
+/* 刻度本身不画，改画它**上方那一排短横**：页底是进度条的地盘，任何压在线上的竖线
+   读起来都像"进度条断了一节"（实测竖线在 4px 轨道上被当成亮条的空洞）。所以刻度
+   站在轨道上方 chapterTickHeight 的高度里（盒子底边 = 轨道顶边），画成一格宽、
+   3px 高的短横（1024 宽的成片缩下来还有 1px 以上），横在那一格的中线上——这是唱片转速灯 / 取景器刻度那一路 HUD 的
+   语汇，也让"进度"与"章节"两件事在视觉上彻底分开：长度说进度，位置说章节。
+   点亮走 `--tick-on`（0→1，由 _chapter_tick_lines 推）：底色从 26% 中灰混到 accent。
+   逐格单独点亮而非整段染色——"我在第几章"是单数，一条渐变读不出单数。 */
+.chapter-tick{position:absolute;bottom:var(--ctv-prog-height);z-index:4;height:var(--ctv-ch-tick-h);pointer-events:none;
+  --tick-on:0;--tick-fill:1}
+.chapter-tick::after{content:"";position:absolute;left:0;bottom:5px;height:3px;border-radius:1.5px;
+  /* 已走到的格子整条亮（--tick-fill = 1）；当前这格从 0 长到满（见 _chapter_tick_lines
+     末尾那条补间）——格内长度就是"这一章演到哪儿"。 */
+  width:calc(100% * var(--tick-fill,1));
+  /* 未点亮档相对**卡片背景**（--ctv-bg-color）提亮，而不是往当前 accent 上掺：
+     accent 因段而异，掺出来的"灰"会跟着换色，一排刻度就变成四段不同颜色的线。
+     用 bg 混文字色，未点亮是中性灰、点亮才上 accent，颜色语义只有一档。 */
+  background:color-mix(in srgb,var(--seg-accent) calc(var(--tick-on) * 100%),color-mix(in srgb,var(--ctv-text-color) 34%,var(--ctv-bg-color)));
+  box-shadow:0 0 calc(var(--ctv-prog-height) * 3 * var(--tick-on)) color-mix(in srgb,var(--seg-accent) calc(var(--tick-on) * 70%),transparent)}
+/* 未编号的卡片（开屏/结尾/接续页/画布页）里即使误留刻度也不画：编号与刻度同生同灭；
+   同样的道理，编号卡片里页内进度 fill 也隐掉（见 ── 页底的三个层 ── 那条注释）。 */
+.seg-card:not([data-chapter]) .chapter-tick{display:none}
+.seg-card[data-chapter]>.seg-progress{display:none}
+
 /* 槽位不铺底色，素材直接落在页面背景上。
    外发光从祖先 seg-card 注入的 --seg-accent 派生（半径走 --ctv-img-glow），
    两画幅同款、三个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
@@ -349,6 +379,15 @@ body{font-family:var(--ctv-font-family)}
    仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
    栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。 */
 [data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
+/* 章节编号：标题上沿右对齐的 `03/12`。它是"读到哪儿"的读数，不是装饰——
+   位置贴着标题带的顶边（多段视频里所有被编号的页共用同一条水平线，与标题
+   各自折几行无关），走 mono 字体、字距放开，与 tagline/kicker 同一套字面。
+   前缀那一横（::before）是编号与画面的缝合线：编号不是浮在标题上的标签，
+   而是从标题左上角引出来的一条边。颜色取 --seg-accent-text（对比度已兜底），
+   不用装饰色 --seg-accent——这是要读的字。 */
+.chapter-num{position:absolute;top:var(--ctv-v-title-top);right:var(--ctv-v-pad-left);font-family:var(--ctv-font-mono);font-size:calc(var(--ctv-tagline-font) * 0.62);font-weight:700;letter-spacing:.12em;color:var(--seg-accent-text);font-variant-numeric:tabular-nums;white-space:nowrap;z-index:2}
+.chapter-num::before{content:"";position:absolute;right:calc(100% + .6em);top:50%;width:1.1em;height:1px;background:currentColor;opacity:.55}
+[data-aspect="landscape"] .chapter-num{top:calc(var(--ctv-l-margin) * 0.42);right:var(--ctv-l-margin)}
 [data-aspect="landscape"] .seg-title-wrap{position:static}
 /* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
    左栏是垂直居中的 flex 列，长标题按 text-wrap:balance 自由折行，长度守卫只

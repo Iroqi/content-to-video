@@ -311,7 +311,9 @@ _TEMPLATE_JSON = r'''
         "relay": 0.32
       },
       "progressBar": {
-        "height": 4
+        "height": 4,
+        "chapterTickHeight": 14,
+        "chapterTickGap": 6
       },
       "grid": {
         "size": 60
@@ -393,7 +395,9 @@ _TEMPLATE_JSON = r'''
         "relay": 0.32
       },
       "progressBar": {
-        "height": 5
+        "height": 5,
+        "chapterTickHeight": 16,
+        "chapterTickGap": 8
       },
       "grid": {
         "size": 60
@@ -504,6 +508,11 @@ _TEMPLATE_JSON = r'''
       "ease": "expo.out",
       "alt": true,
       "hold": 0.92
+    },
+    "chapterIndex": {
+      "mode": "bar",
+      "duration": 0.34,
+      "ease": "power2.out"
     },
     "propLine": {
       "thickness": 6,

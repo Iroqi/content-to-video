@@ -742,7 +742,11 @@ def _anchor_delays(window, ease, n, anchor="start"):
         d = [float(i) for i in range(n)]
     lo, hi = min(d), max(d)
     if hi <= lo:
-        return [0.0] * n
+        # 距离全相等时 GSAP 的退化不是一种：`center` 的两项各距中点 0.5，归一化后
+        # 都是 0（窗口塌掉、同时出发）；`edges` 的两项**都算端点**、距离全 0，
+        # 实测整组被推到窗口末尾（[.4, .4]，时间线 0.5s→0.9s）。照抄一个"都归零"
+        # 会让门禁以为这一组立刻开始，而屏幕上先空一整个窗口。
+        return [window] * n if anchor == "edges" else [0.0] * n
     f = E.curve(ease, "none")
     return [window * f((x - lo) / (hi - lo)) for x in d]
 
@@ -814,15 +818,21 @@ class StaggerAnchor(unittest.TestCase):
         self.assertEqual([round(x, 6) for x in d], [round(x, 6) for x in reversed(d)])
 
     def test_two_items_have_no_middle(self):
-        """两项的 `center` 退化成同时出发——锚点要"数得出中间"才有意义。
+        """两项的 `center` / `edges` 都"同时出发"，但落在窗口的两端——不是一个时刻。
 
-        这条不是 bug、是数学：距离相等 → 归一化后都落在 0。文档据此写"5 项以下
-        先问一句这组到底是不是一排"，而这里把那条说法钉住。
+        真值是钉固 gsap@3.14.2 实测（W=.4、ease=none，n=2）：
+        - `center` → [0, 0]：两项距中点各 0.5，归一化后都 0，时间线 0.5s；
+        - `edges`  → [.4, .4]：两项都算端点、距离全 0，GSAP 把整组推到窗口末尾，
+          时间线 0.9s——屏幕上先空一整个窗口再一起出现。
+
+        修复前把两者都写成 [0, 0]：`edges` 那条会让作者以为这一组立刻开始（实际
+        晚 `amount`），与文档"两项没有中间"的读法也对不上。
         """
-        for anchor in ("center", "edges"):
-            self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 2, anchor),
-                             [0.0, 0.0],
-                             f"2 项 {anchor} 应当退化成同时出发")
+        self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 2, "center"),
+                         [0.0, 0.0], "2 项 center 应当退化成同时出发")
+        self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 2, "edges"),
+                         [self.WINDOW, self.WINDOW],
+                         "2 项 edges 是同时出发，但整组被推到窗口末尾")
 
     def test_default_anchor_is_reading_order(self):
         """不写 from 与写 start 完全一致：缺省行为不变。"""

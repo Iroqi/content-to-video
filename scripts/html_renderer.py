@@ -209,6 +209,70 @@ def _agenda_rows(seg_id, clips, manifest, ag):
     return rows, tail_rows
 
 
+# 单行/两行的 agenda 页：列表区按 space-evenly 把剩余高度均摊给「行上/行下/行间」，
+# 行越少摊得越开。实测（竖屏 1440、1 行）题头底→首行顶 390px、末行底→句子流顶
+# 374px——一页只有一行字，却被拆到一屏的首/中/尾三处，读起来是散的。
+# 这条 warn 量的就是**那份留白**：有余量不是错（行少的页面本来就该松），但均摊
+# 到一屏四分之一就是"这一页撑不起 agenda 版式"的信号，该换版式或补内容。
+# 阈值落在 2 行（每份留白 213px）：3 行 132px 仍能成段，2 行起开始明显漂开。
+AGENDA_SPARSE_ROWS = 2
+
+
+def _agenda_list_budget(ag, aspect, verse_h):
+    """agenda 列表区（`.agenda`）在给定行数下会用掉的固定高度与可用高度。
+
+    纯静态算，不启动浏览器：竖向预算是模板里几个确定数值的加减，与运行期一致
+    （实测校核见 tests/test_agenda_rhythm.py 的钉固表——1 行时题头→首行 390px，
+    解析式给出同一个数）。量不出的场合一律返回 None，绝不猜一个值去报错。
+
+    行高按 `nameSize * NAME_LINE` 算：`nameSize * 1.4` 是 `.ag-name` 的行盒，
+    加上 `.agenda-row` 上下各 `rowPad`，再加两条 1px 描边。1.4 与
+    `_assets/composition.css` 里 `.ag-name{line-height:1.4}` 是同一份依据
+    （那里也写了为什么不能更低：墨迹会被 overflow 裁掉）。
+    """
+    NAME_LINE = 1.4
+    BORDER = 1          # .agenda-row 的 border-top + border-bottom
+    canvas_h = get_canvas(aspect)[1]
+    head_h = ag["titleSize"] * float(ag["titleLineHeight"]) + ag["titleMarginTop"]
+    # 题头 = 标题（当前行数下按 1 行估）+ 间距；kicker 有的话还要加一行。
+    # 只用它做"列表区还剩多少"的估算，误差落在阈值一侧，不影响判词方向。
+    list_h = (canvas_h - ag["insetTop"] - ag["insetBottom"]
+              - head_h - ag["listMarginTop"] - verse_h)
+    return list_h, ag["nameSize"] * NAME_LINE + ag["rowPad"] * 2 + BORDER * 2
+
+
+def _warn_sparse_agenda(sid, rc, n_rows):
+    """行数少到撑不起 agenda 版式时出声（warn，不拦）。
+
+    只对竖屏判：横屏的 agenda 列是左栏文档流的一部分，列表下方跟着句子流与
+    媒体卡，剩余空间不由 `.agenda` 的 space-evenly 独占，摊开的观感来源不同。
+    """
+    if n_rows <= 0 or n_rows > AGENDA_SPARSE_ROWS:
+        return
+    if rc.aspect != "vertical":
+        return
+    ag = rc.ag
+    # 单独构造 rc 的调用方（测试/工具）可能没有 verse_h：取不到就跳过，不猜。
+    verse_h = getattr(rc, "verse_h", None)
+    if verse_h is None:
+        return
+    try:
+        list_h, row_h = _agenda_list_budget(ag, rc.aspect, verse_h)
+    except (TypeError, KeyError, ValueError):
+        return
+    free = list_h - n_rows * row_h - (n_rows - 1) * ag["rowGap"]
+    if free <= 0:
+        return                       # 行数吃满了预算，没有留白可摊
+    per_gap = free / (n_rows + 1)    # space-evenly：行上、行下、行间各一份
+    head_to_first = per_gap + ag["listMarginTop"]
+    print(f"[warn] agenda（{sid}）只有 {n_rows} 行，列表区把 {free:.0f}px 余量均摊成"
+          f"每处 {per_gap:.0f}px 留白：题头底到首行顶 {head_to_first:.0f}px"
+          f"（占屏高 {head_to_first / get_canvas(rc.aspect)[1] * 100:.0f}%），"
+          f"末行底到句子流再有 {per_gap:.0f}px。一页只有这么些字却被拆到画面三处，"
+          "读起来是散的。行数少本来就撑不起 agenda 版式：给这一页补一个能形成对比的"
+          "内容段，或改用别的版式（见 references/look.md「agenda 卡的行数」）", file=sys.stderr)
+
+
 def _agenda_row_html(rows):
     return "".join(
         f'<div class="agenda-row"><span class="ag-idx">{idx}</span>'
@@ -219,7 +283,7 @@ def _agenda_row_html(rows):
 
 
 def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
-                     title_size, bgs, apple_opening=False, card=None):
+                     title_size, bgs, apple_opening=False, card=None, rc=None):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流后再闭合 .agenda-col：flex 列"题头在顶、agenda 垂直居中、
@@ -252,6 +316,10 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
         # 截断后的真实行数（正文 + cta 尾行）。苹果开场按它算 stagger 的收尾时刻，
         # 必须是**画在画面上**的行数，不是稿件里想写的行数。
         card.agenda_row_count = len(rows) + len(tail_rows)
+    # rc 只在从 _assemble_card 进来时给（那里握有句子流窗口高）；单独调这个
+    # 函数拼片段的调用方传 None，"列表区剩多少"就算不出来，判据自动跳过。
+    if rc is not None:
+        _warn_sparse_agenda(sid, rc, len(rows) + len(tail_rows))
     agenda_html = (f'<div class="agenda">{_agenda_row_html(rows)}</div>'
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
@@ -552,7 +620,11 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
                          # 公开片长：稳态循环折遍数要用它（见 _loop_repeat）。
                          # 单独构造 rc 的调用方（测试/工具）不传就是 0，循环退回
                          # 只走一遍——能渲染、只是不循环，不会静默算错。
-                         film_span=float(film_span or 0))
+                         film_span=float(film_span or 0),
+                         # 句子流窗口高：agenda 列表区的剩余空间要减掉它才算得准
+                         # （见 _agenda_list_budget）。取值口径与 :root 的
+                         # --ctv-verse-h 同一处派生，不在这里重算一遍。
+                         verse_h=0)
 
     # 主题配色（背景/网格/文字），accent 色不受主题影响
     rc.theme_colors = get_theme_colors(theme)
@@ -597,6 +669,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     # vertical 分支里赋值会让 --ctv-verse-h 悄悄退回模板值（无图档就失效了，
     # 而且没有任何报错）。
     _verse_h, _verse_bottom = slot_verse_geometry(tpl, aspect, no_image)
+    # agenda 列表区的剩余空间要减掉句子流窗口高（_warn_sparse_agenda）。
+    # 挂在 rc 上而不是各调用点重算：两处必须看同一个值。
+    rc.verse_h = _verse_h
     if aspect == "vertical":
         # 竖屏（3:4）：只有 verse 一种字幕形态，参数全部读模板 vertical 块。
         # 卡片左右内边距（CSS padding 简写取横向值）：卡片内容盒由它内缩，标题
@@ -1464,7 +1539,7 @@ def _assemble_card(rc, card, clips, manifest):
         return (card.card_open
                 + _agenda_col_html(card.seg, clips, manifest, rc.ag,
                                    card.ac, card.ac_attr, card.title_size,
-                                   rc.bgs, card.apple_opening, card)
+                                   rc.bgs, card.apple_opening, card, rc)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html
                 + '  </div>')

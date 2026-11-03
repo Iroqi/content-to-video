@@ -258,9 +258,11 @@ class Schema(unittest.TestCase):
         self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "odometer": 1}})
 
     def test_type_accepted(self):
-        # 打字机：type 只认空对象 {}，快慢用 step 级 duration/ease（这里给了 duration）
+        # 打字机：type 收 {} 或 {"chunk": …}，快慢用 step 级 duration/ease
         validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
             {"at_time": 0.5, "target": "#cap", "type": {}, "duration": 1.2}]}}})
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+            {"at_time": 0.5, "target": "#cap", "type": {"chunk": "word"}, "duration": 1.2}]}}})
 
     def test_type_with_count_rejected(self):
         self._one_step({"at": 0, "target": "#c", "type": {}, "count": {"to": 5}})
@@ -271,9 +273,14 @@ class Schema(unittest.TestCase):
     def test_type_non_empty_object_rejected(self):
         self._one_step({"at": 0, "target": "#c", "type": {"speed": 2}})
 
-    def test_type_non_object_rejected(self):
+    def test_type_bad_shape_rejected(self):
+        # 非对象（True / 字符串）与坏的 chunk 值（拼错 "words"、写 True/1）都是同一类
+        # 静默失效：渲染端按 .get("chunk") 判档，写歪了只会悄悄退回逐字。
         self._one_step({"at": 0, "target": "#c", "type": True})
         self._one_step({"at": 0, "target": "#c", "type": "熵"})
+        self._one_step({"at": 0, "target": "#c", "type": {"chunk": "words"}})
+        self._one_step({"at": 0, "target": "#c", "type": {"chunk": True}})
+        self._one_step({"at": 0, "target": "#c", "type": {"chunk": 1}})
 
     def test_stagger_accepted_number_and_object(self):
         validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [

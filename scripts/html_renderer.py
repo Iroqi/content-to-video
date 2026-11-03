@@ -2051,6 +2051,55 @@ def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
         + f"{pos:.2f}" + ");})();")
 
 
+def _type_word_js(sel_js, dur, ease, cycle_js, pos):
+    """`type` 的按单元跳格档：一次写回一个语义单元，不在字与字之间切。
+
+    缺省的 `type` 每 tick 写回一个字符，字一多就露馅——观众数得出字数、也看得出
+    "机器在匀速敲"（look.md 把这条列为常见犯法）。按单元跳格的读感是"一组一组念出来"：
+    观众读到的是短语，节奏靠 step 级 ease 塑形，而不是被字数决定。
+
+    切分在运行时做（正文取自 `<text>`，与缺省档同一前提），规则三条：
+    - 拉丁词与数字整词一组，词内允许 `. _ - ' /`（`3.5` / `e-mail` / `don't` / `A/B` 不拆）；
+    - CJK（含假名、谚文）两字一组——单字跳读成"逐字蹦"，四字一组又接近整句直出；
+    - 空白与标点**附着到前一组**，否则会多出一跳纯粹的空白，读成一个多余的重音。
+
+    判定全走 `charCodeAt` 区间，不用正则字面量：这段 JS 要原样嵌进 `<script>` 与
+    JSON 序列化后的字符串里，斜杠、反斜杠、`]` 在正则里各有一套转义规则，抄错一处就是
+    全片脚本解析失败（而且只在某些字符出现时才炸）。
+
+    代理量是"已完成组数" `p.g`，取 `floor(p.g + 1e-6)` 落组——与 odometer 同理，
+    用 floor 而不是 round：这一组没走完就不许提前露下一组。末尾 `+1e-6` 吸收缓动
+    停在 `N - 1e-13` 这类尾差，收尾才不会少一组。
+    """
+    return (
+        ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+        "var s=e.textContent||'',G=[],i=0,L=s.length;"
+        # 三条区间判定：拉丁字母与数字（含 Latin-1/扩展 A-B）、CJK（含假名谚文）、
+        # 标点与空白（ASCII 三段 + 通用/CJK/全角标点区）。
+        "var isW=function(c){var u=c.charCodeAt(0);"
+        "return (u>=48&&u<=57)||(u>=65&&u<=90)||(u>=97&&u<=122)||(u>=192&&u<=591);};"
+        "var isC=function(c){var u=c.charCodeAt(0);"
+        "return (u>=0x3400&&u<=0x9fff)||(u>=0x3040&&u<=0x30ff)||(u>=0xac00&&u<=0xd7af);};"
+        "var isT=function(c){var u=c.charCodeAt(0);"
+        "return u<=32||(u>=33&&u<=47)||(u>=58&&u<=64)||(u>=91&&u<=96)"
+        "||(u>=123&&u<=126)||(u>=0x2010&&u<=0x2015)||u===0x2026"
+        "||(u>=0x3000&&u<=0x303f)||(u>=0xff00&&u<=0xff65);};"
+        "var J=\"._-'/\";"
+        "while(i<L){var c=s.charAt(i),j=i;"
+        "if(isW(c)){while(j<L&&(isW(s.charAt(j))||J.indexOf(s.charAt(j))>=0))j++;}"
+        "else if(isC(c)){j=Math.min(i+2,L);}"
+        "else{j=i+1;}"
+        # 把紧随其后的空白/标点并进这一组：不让它们各占一跳。
+        "while(j<L&&isT(s.charAt(j)))j++;"
+        "G.push(j);i=j;}"
+        "var N=G.length,p={g:0};"
+        "var f=function(){var n=Math.floor(p.g+1e-6);"
+        "if(n>N)n=N;e.textContent=n?s.slice(0,G[n-1]):'';};"
+        "f();tl.to(p,{g:N,duration:" + json.dumps(dur)
+        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
+
+
 def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
@@ -2202,11 +2251,18 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             continue
 
         if "type" in step:
-            # 打字机逐字揭示：运行时读该 <text> 现有整段文本 s，代理 p.k 从 0 补到
-            # s.length，onUpdate 把 s.slice(0, round(p.k)) 写回——和 count 复用同一条
-            # onUpdate 代理补间路：零 DOM 改写、零新净化面，逐帧 seek 可复现（依赖渲染
-            # harness 触发 onUpdate，与字幕高亮/count 同一前提）。build 期 f() 先把文本
-            # 收成空串（未打出），seek 越过 pos 才逐字长回。前导 `;` 同 count 的 ASI 护栏。
+            # 打字机式揭示：运行时读该 <text> 现有整段文本 s，代理 p 从 0 补到总进度，
+            # onUpdate 把已写到的前缀写回——和 count 复用同一条 onUpdate 代理补间路：
+            # 零 DOM 改写、零新净化面，逐帧 seek 可复现（依赖渲染 harness 触发 onUpdate，
+            # 与字幕高亮/count 同一前提）。build 期 f() 先把文本收成空串（未打出），seek
+            # 越过 pos 才逐字长回。前导 `;` 同 count 的 ASI 护栏。
+            #
+            # 两档：`char`（缺省，一个字符一跳）与 `word`（一个语义单元一跳，见
+            # _type_word_js）。缺省档的产物保持原样不动，golden 快照因此不受影响。
+            chunk = (step.get("type") or {}).get("chunk", "char")
+            if chunk == "word":
+                lines.append(_type_word_js(sel_js, dur, ease, _cycle_js(step), pos))
+                continue
             lines.append(
                 ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
                 "var s=e.textContent||'';"

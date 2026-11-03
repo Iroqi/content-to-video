@@ -103,7 +103,7 @@
 
 动笔前有两件报错替代不了的事：**`axis` 的 `from`/`to` 是轴两端的像素坐标、不是起止数据值**（竖轴把较大的 y 写在 `from`、数值就朝上长；`at` 是那条轴所在的像素线）；**`tier` 只有三档**（要更大的字就手写 SVG 绕过脚手架）。
 
-   **它只收机械部分**（画布几何、三档字号、线宽、取色压暗、初始 `opacity` 分档——`draw`/`count`/`type` 不写 `opacity="0"`，写了就永远不亮）。`duration`/`ease`/`stagger`/`repeat`/`yoyo` 写进元素即可（`yoyo` 必须带 `repeat`）；`roughness` 0–10 只作用于 `panel`/`polyline`/`bars`/`circle`/`rule` 的坐标（按 `roughness × 该画幅线宽` seeded 抖动），**坐标轴与文字不吃这个键**。
+   **它只收机械部分**（画布几何、三档字号、线宽、取色压暗、初始 `opacity` 分档——`draw`/`count`/`type` 不写 `opacity="0"`，写了就永远不亮）。`duration`/`ease`/`stagger`/`repeat`/`yoyo`/`odometer` 写进元素即可（`yoyo` 必须带 `repeat`；`odometer` 只对 `count` 节点生效，逐个走表）；`roughness` 0–10 只作用于 `panel`/`polyline`/`bars`/`circle`/`rule` 的坐标（按 `roughness × 该画幅线宽` seeded 抖动），**坐标轴与文字不吃这个键**。
 
    **给上 `--sentences <该段句数>`，草稿才真能用**：不给时按元素顺序一路 `at=0,1,2…`，内容元素比旁白句子多时最后几拍落到句序之外，生成期按 `error` 整条拒掉（"at=N 越界：该段只有 M 句旁白"）。给了句数，游标按它取模回绕；**显式钉拍**（元素里写 `beat`）的越界提前打 `[warn]`。`--emit-steps <path>` 另存 `{"steps": […]}`，直接当 `"animate"` 的值。
 

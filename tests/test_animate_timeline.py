@@ -239,6 +239,24 @@ class Schema(unittest.TestCase):
         self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "decimals": 99}})
         self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "decimals": True}})
 
+    def test_count_odometer_accepted(self):
+        # 进位档：只加一个布尔名，其余键照旧
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+            {"at_time": 0.5, "target": "#num",
+             "count": {"from": 9, "to": 10, "odometer": True}, "duration": 1.2}]}}})
+
+    def test_count_odometer_must_be_bool(self):
+        # 字符串 "true" / 1 会让渲染端走 `cnt.get("odometer")` 的真值分支，
+        # 作者以为在调档位、实际写进去的是个没人读的标量
+        self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "odometer": "true"}})
+        self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "odometer": 1}})
+
+    def test_count_odometer_must_be_bool(self):
+        # 字符串 "true" / 1 会让渲染端走 `cnt.get("odometer")` 的真值分支，
+        # 作者以为在调档位、实际写进去的是个没人读的标量
+        self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "odometer": "true"}})
+        self._one_step({"at": 0, "target": "#n", "count": {"to": 5, "odometer": 1}})
+
     def test_type_accepted(self):
         # 打字机：type 只认空对象 {}，快慢用 step 级 duration/ease（这里给了 duration）
         validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [

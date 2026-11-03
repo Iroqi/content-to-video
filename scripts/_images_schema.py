@@ -243,13 +243,19 @@ def _validate_count(count, where):
 
     渲染端展开成"代理对象补间 + onUpdate 写 textContent"——那个 onUpdate 是我们
     生成的，不是信源塞进来的回调。除 to 外全可选：decimals 控制小数位，
-    prefix/suffix 裹数字。
+    prefix/suffix 裹数字，odometer 决定高位是否滚过去。
+
+    `odometer` 是"进位档"：缺省（false）每个数字同时滚，高位从 0 往上爬；
+    打开后低位先自己滚满一轮，进位那一下才把高位推进一格（里程表）。缺省的写法
+    在 `9→10` 上是"0 变成 1、个位 9 滑到 0"，读作两个独立变化；真机取帧见过
+    "本月 9% → 10%"那半秒像误帧。
     """
     if not isinstance(count, dict):
         raise ValueError(f"{where} 必须是对象 {{\"to\": 数字, ...}}（实际: {type(count).__name__}）")
-    unknown = set(count) - {"to", "from", "decimals", "prefix", "suffix"}
+    unknown = set(count) - {"to", "from", "decimals", "prefix", "suffix", "odometer"}
     if unknown:
-        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 to / from / decimals / prefix / suffix")
+        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 to / from / decimals / "
+                         "prefix / suffix / odometer")
     for nm in ("to", "from"):
         if nm in count:
             v = count[nm]
@@ -265,6 +271,9 @@ def _validate_count(count, where):
         v = count.get(nm)
         if v is not None and not isinstance(v, str):
             raise ValueError(f"{where} 的 {nm} 必须是字符串（实际: {v!r}）")
+    odo = count.get("odometer")
+    if odo is not None and not isinstance(odo, bool):
+        raise ValueError(f"{where} 的 odometer 必须是 JSON 布尔 true/false（实际: {odo!r}）")
     return count
 
 

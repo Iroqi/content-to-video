@@ -2001,6 +2001,56 @@ def _animate_timeline_lines(rc, card):
             + _derive_timeline_lines(rc, card))
 
 
+def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
+    """`count` 的里程表档：每一位单独一格轮盘，低位滚满、进位才推高位。
+
+    缺省的 count 是"一个数从 a 补到 b、整片数字同时滚"：`9 → 10` 那半秒个位从 9 滑向
+    0、同时十位那一格从无到有，读起来是两个互不相干的变化（真机取帧看过，"9% → 10%"
+    的进位帧像误帧）。里程表把这件事拆成"低位走满一轮、上一位才进一格"：
+
+    - 定长串从尾往前数位，第 k 位（0 是个位，-1 是小数首位）的周期是 `10**k` 个单位；
+      第 k 位每走满一格就翻一格——个位滚 10 格、十位才动 1 格；
+    - 读的是"已走满几格"（`floor`）而不是"走到第几格"（`round`）：个位没走满一整格，
+      十位就不许动，否则 9.4 的四舍会抢在进位之前把十位点成 1；
+    - 小数位与个位同一套，所以 `10.4 → 10.6` 只滚末位，`9 → 10` 是个位滚满后十位才翻；
+    - 高位零不印（`0 → 1286` 走到 148 时是"148"），跨档那一下整段从一片 9 翻成新档，
+      读作进位，而不是"左边突然挂了个 0"；
+    - 负数取绝对值滚、符号留在最前——`-3 → 2` 硬切比"倒退着滚"好读，也不出现三个字符
+      宽的中间态（"-0.4" 比 "1.6" 宽一格，会把后面的单位顶走）。
+
+    所有量（from/to/decimals/prefix/suffix）都来自契约层校验过的标量，一个字节都不从
+    DOM 反推，逐帧 seek 可复现——与缺省档同一前提（渲染 harness 触发 onUpdate）。
+    前导 `;` 同缺省档的 ASI 护栏（见 count 分支的注释）。
+    """
+    dec = int(cnt.get("decimals", 0))
+    from_v = float(cnt.get("from", 0))
+    to_v = float(cnt["to"])
+    pre, suf = cnt.get("prefix", ""), cnt.get("suffix", "")
+    # 第 k 位此刻印几：把 |v| 截到这一位的刻度 `10**k`，乘 10 再对 10 取整——等于
+    # `floor(|v|/10**k) % 10`，也就是"这一位走满了几格"。用 floor 不用 round：个位没
+    # 走满一整格，十位就不许动（round 会抢在进位之前把 9.4 点成 1）。末尾 +1e-9 吸收
+    # 浮点尾差（0.7×10 = 6.999… 不该被 floor 成 6）。
+    return (
+        ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+        "var p={v:" + json.dumps(from_v) + "};"
+        "var D=" + str(dec) + ",P=" + json.dumps(pre) + ",S=" + json.dumps(suf) + ";"
+        "var lv=function(v){var k=0;while(v>=Math.pow(10,k+1))k++;return k;};"
+        "var dd=function(k){var m=Math.pow(10,k);"
+        "return Math.floor(Math.floor(Math.abs(p.v)/m+1e-9)%10);};"
+        "var f=function(){"
+        "var v=Math.abs(p.v),out='';"
+        "for(var k=lv(Math.floor(v));k>=0;k--){out+=dd(k)%10;}"
+        "if(D>0){out+='.';for(var j=1;j<=D;j++){out+=dd(-j)%10;}}"
+        "e.textContent=(p.v<0?'-':'')+P+out+S;};"
+        # 收尾钉在终点写法上：缓动停在 9.999 时末位会差一格，最后一帧必须是 to 的值。
+        # 位数与 decimals 由生成期算好写死，不用运行时反推。
+        "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
+        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        + "onUpdate:f,onComplete:function(){"
+        "e.textContent=P+(" + json.dumps(to_v) + ").toFixed(" + str(dec) + ")+S;}},"
+        + f"{pos:.2f}" + ");})();")
+
+
 def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
@@ -2081,6 +2131,36 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             out.update(_cycle_vars(step))
             return _pin(out)
 
+        if "count" in step:
+            # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>
+            # 的 textContent。这是**渲染端生成**的回调（只读上面校验过的标量），不是
+            # 信源塞的 on* ——GSAP 逐帧 seek 时会重算 p.v 并调 onUpdate，故 seek 可复现。
+            #
+            # 两条合成：缺省是"整片数字一起滚"，`odometer:true` 换成逐位进位的里程表
+            # （见 _odometer_js）。分岔只在这一处——代理补间、节拍、repeat 全共用。
+            cnt = step["count"]
+            if cnt.get("odometer"):
+                lines.append(_odometer_js(cnt, sel_js, _cycle_js(step), pos, dur, ease))
+            else:
+                from_v = float(cnt.get("from", 0))
+                to_v = float(cnt["to"])
+                dec = int(cnt.get("decimals", 0))
+                pre = json.dumps(cnt.get("prefix", ""))
+                suf = json.dumps(cnt.get("suffix", ""))
+                lines.append(
+                    # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
+                    # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
+                    # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
+                    # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
+                    ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+                    "var p={v:" + json.dumps(from_v) + "};"
+                    "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
+                    "f();"
+                    "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
+                    + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                    + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
+            continue
+
         if "morph" in step:
             # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
             # 时间均匀推进（t=pos+u·span），形状进度 k=ease(每一遍内的位置)——因为 GSAP
@@ -2119,30 +2199,6 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 t = round(pos + u * span, 2)
                 lines.append(
                     f"tl.set({sel_js}, {json.dumps({ATTR_KEY: {'d': d}})}, {t:.2f})")
-            continue
-
-        if "count" in step:
-            # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>
-            # 的 textContent。这是**渲染端生成**的回调（只读上面校验过的标量），不是
-            # 信源塞的 on* ——GSAP 逐帧 seek 时会重算 p.v 并调 onUpdate，故 seek 可复现。
-            cnt = step["count"]
-            from_v = float(cnt.get("from", 0))
-            to_v = float(cnt["to"])
-            dec = int(cnt.get("decimals", 0))
-            pre = json.dumps(cnt.get("prefix", ""))
-            suf = json.dumps(cnt.get("suffix", ""))
-            lines.append(
-                # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
-                # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
-                # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
-                # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
-                ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
-                "var p={v:" + json.dumps(from_v) + "};"
-                "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
-                "f();"
-                "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
-                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if "type" in step:

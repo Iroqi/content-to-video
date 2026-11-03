@@ -134,13 +134,31 @@
 | `draw` | 描边自绘（目标必须带 `stroke`）。收起态要写在段起点，否则切页第一秒线先亮满再缩回去 |
 | `morph` | 同拓扑 path 形变：命令序列与每命令数值个数一致，`from` 等于 SVG 里的 `d` |
 | `set` / `to` / `from` | GSAP 补间变量，至少一个。只收 JSON 可序列化值；非 CSS 属性走 `attr:{}`（**必须是对象**，标量会在跨段烘焙时被当 CSS 写进 `style`）。禁一切 `on*` 回调 |
-| `count` | 数字滚动（`to`/`from`/`decimals`/`prefix`/`suffix`），target 指 `<text>` |
+| `count` | 数字滚动（`to`/`from`/`decimals`/`prefix`/`suffix`），target 指 `<text>`。**整段替换**：单位必须单独包一层（见下） |
 | `type` | 逐字揭示，只认 `{}`，读 `<text>` 现成文本 |
 | `stagger` | 配 `.class` 目标错峰揭示，只对有补间的拍生效。一组元素写对象形式：**窗口 + 分配曲线 + 锚点**（见 `stagger.md`），别用 `each` |
 | `duration` / `ease` / `delay` | 缺省取模板 `animation.animate`。**只能写拍级**，塞进补间变量表会被拒 |
 | `repeat` / `yoyo` | `repeat:N` = 再演 N 遍（`-1` 是 error：循环要在片长内收尾，遍数由生成期按片长算），跨度按 `duration × 遍数` |
 
 `param` 拍只收窄表：`at` / `at_time` / `param` / `from` / `to` / `duration` / `ease` / `delay`。
+
+#### 数字带单位：数字单独包一层
+
+`count` 与 `type` 都靠 `textContent = …` 写入，那是**整条子树替换**——同一 `<text>` 里的 `<tspan>` 会在第一帧之前就被抹掉（`f()` 在建时间线时无条件调一次）。所以这条是错的：
+
+```svg
+<text id="num">0<tspan font-size="72"> 万</tspan></text>   <!-- 成片滚出 "1286"，"万"没了 -->
+```
+
+成片滚到 `1286` 而不是 `1286 万`，量级差 10⁴，而生成期本来全绿。要写成：
+
+```svg
+<text><tspan id="num">0</tspan><tspan font-size="72"> 万</tspan></text>
+```
+
+`target` 指 `#num`，单位那段留在外面不动。字号/颜色的差别照旧由 `<tspan>` 自己带。生成期会读 SVG 原文的树形，命中带 `<tspan>` 的 `<text>` 直接 error（判据见 `tests/test_animate_timeline.py` `CountEatsLabel`）。
+
+同一件事的另外两面：`prefix`/`suffix` 是**纯文本**（不能带样式），要样式就分开包；接续页烘焙同一个语义，所以这条错了在页界处也不是"回弹"，是"字从来就不在"。
 
 ### 镜头：谁能调机位
 

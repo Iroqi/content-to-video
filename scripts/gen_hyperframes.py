@@ -913,6 +913,65 @@ def _svg_selectable_tokens(raw):
     return toks
 
 
+_TEXT_TAGS_NESTABLE = frozenset({"text", "tspan", "textPath"})
+
+
+def _text_children(raw, selector):
+    """选择器命中的文本元素里，`count`/`type` 会连带抹掉的**旁支内容**。
+
+    渲染端这两个原语都是 `e.textContent = …`（见 html_renderer 的 count/type 分支，
+    与 _stage_carry._settle_step 的烘焙同语义）。`textContent` 的赋值是**整条子树替换**：
+    子 `<tspan>`、尾文本全部消失。所以作者写成
+
+        <text id="num">0<tspan font-size="72"> 万</tspan></text>
+
+    再对 `#num` 写 count，成片里读到的是"1286"而不是"1286 万"——单位连同量级一起没了。
+    实测见 tests/test_count_label.py：`f()` 在建时间线时无条件调用一次，连 t=0 都被抹。
+
+    真正的问题不是清子节点——那只在"数字和单位挤在同一条 `<text>`"时才有代价，
+    而那恰恰是最自然的写法（单位要小一号、要换颜色，只能写 `<tspan>`）。渲染端无法
+    只改一半（改 .firstChild.nodeValue 会留下 `<tspan>` 但丢掉数字与单位之间的空格，
+    同样错、且更隐蔽），所以这条判据放在生成期：让作者把数字段单独包出来。
+
+    返回 (命中的标签名们, 命中元素的标签名)：
+      - 标签名们：这条 `<text>` 里除它自己以外的文本子元素（tspan/textPath）——
+        这些才是被 `textContent = …` 抹掉的旁支；
+      - 命中元素的标签名：调用方据此区分「命中 `<text>` 容器」与「命中 `<tspan>` 数字段」
+        （后者自己那份文本本来就是要被替换的，不该报）。
+
+    命中元素**自身**的文本不算旁支：target 指到 `<tspan id="num">0</tspan>` 时，"0"
+    正是要滚的那一段。起初这一条没区分，把推荐写法自己也拦了下来——判据必须放行它
+    建议的解法，否则作者无路可走。
+
+    选择器只认 `#id` / `.class`（契约层已限定），所以这里按同口径扫。
+    落空的选择器（一条也没命中）不在这里报——那是 check_animate 的 target 存在性判据，
+    两边都报会给出两条信息量相同的错。
+    """
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return [], ""
+    kids, hit_tag = [], ""
+    for el in root.iter():
+        tag = _local(el.tag)
+        if tag not in _TEXT_TAGS_NESTABLE:
+            continue
+        if selector.startswith("#"):
+            hit = el.get("id") == selector[1:]
+        elif selector.startswith("."):
+            hit = selector[1:] in (el.get("class") or "").split()
+        else:
+            hit = False
+        if not hit:
+            continue
+        hit_tag = tag
+        for child in list(el):
+            ctag = _local(child.tag)
+            if ctag in ("tspan", "textPath"):
+                kids.append(ctag)
+    return kids, hit_tag
+
+
 # ── 导演节拍 ↔ 旁白对轴───────────────────────────────────────────
 # 落点解析在 _timeline.beat_positions（与渲染端同一函数），这里只说人话：窗外判定与
 # --beat-report 的每拍落句表。放在生成期而非 check_svg：判据要 manifest 的句子时间。
@@ -1284,6 +1343,28 @@ def _animate_checks(sid, src, raw, block, holder, seg, segments, dflt_dur,
     if seg is None:
         errs.append(f"{where} 写了 animate，但 manifest 里没有这一段")
         return
+    # ②' count / type 抹子节点：这两条是整段文本替换（textContent = …），会把同一
+    #     <text> 里的 <tspan> 单位、尾文本一起抹掉。判据要读 SVG 原文的树形，契约层
+    #     只有选择器字符串、读不到图，所以只能在这里查（详见 _text_children）。
+    for i, step in enumerate(block["steps"]):
+        kind = "count" if "count" in step else ("type" if "type" in step else None)
+        if kind is None:
+            continue
+        kids, hit_tag = _text_children(raw, step["target"])
+        # 命中 <tspan> 数字段：它自己那份文本正是要被换掉的，子节点才是旁支。
+        # 命中 <text> 容器：它直接持有的非空白文本（数字）也一起没——也是错的。
+        if hit_tag == "" or not kids:
+            continue
+        tail = "、".join(f"<{t}>" for t in sorted(set(kids)))
+        if hit_tag == "text":
+            tail += "（以及这条 <text> 自己持有的数字文本）"
+        errs.append(
+            f"{where} 的 animate.steps[{i}] 对 {step['target']} 写了 {kind}，但那条 "
+            f"<{hit_tag}> 里还有 {tail}——{kind} 是整段替换（运行时 textContent = …，"
+            f"接续页烘焙同一个语义），这些内容会从第一帧起就消失，不是一个动画瑕疵，"
+            f"是画面上的字没了。把要滚的数字单独包成 "
+            f"<tspan id=\"…\">{{原数字}}</tspan> 并把 target 指过去（单位那个 <tspan> "
+            f"留在原位、不参与 {kind}）")
     n_sent = len(seg["sentences"])
     for i, step in enumerate(block["steps"]):
         # at 才有句序越界可验；at_time 锚在段落绝对时间（含相对串），与旁白句数无关。

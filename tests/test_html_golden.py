@@ -383,7 +383,9 @@ class Structure(unittest.TestCase):
         vertical = self._render_with_style("vertical")
         self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.01,ease:"expo.out"},7.20)',
                       vertical)
-        self.assertIn('clipPath:"inset(0% 0 0 0)",duration:0.28,ease:"expo.out"},2.12)',
+        # 第 2.12s 那次换页是**奇数页**（方向档自页顶遮下来），走显式属性键
+        # `"clip-path"` 那条通道，见 `_card_wipe_alt_style`
+        self.assertIn('"clip-path":"inset(0 0% 0 0)",duration:0.28,ease:"expo.out"},2.12)',
                       vertical)
 
     def test_canvas_page_keeps_the_three_background_layers(self):

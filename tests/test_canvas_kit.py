@@ -571,6 +571,30 @@ class DirectorDraft(unittest.TestCase):
         self.assertEqual(by["#kicker"]["from"], {"opacity": 0})
         self.assertEqual(by["#kicker"]["to"], {"opacity": 1})
 
+    def test_odometer_is_node_level_and_only_reaches_its_own_step(self):
+        """`odometer` 写在节点上（与 duration/ease 同级），只进它自己那条 count。
+
+        写进共享的 count 契约里就会让"页面上每个数字都走表"——混排页面常常只有
+        一两个数该走表；而漏展开则是静默失效（作者写了、成片里照旧整片滚）。
+        """
+        spec = spec_for("portrait")
+        for el in spec["elements"]:
+            if el.get("id") == "bignum":
+                el["odometer"] = True
+        by = {s["target"]: s for s in self.fragment(spec)["steps"]}
+        self.assertTrue(by["#bignum"]["count"]["odometer"])
+        self.assertEqual(by["#bignum"]["count"]["to"], 13.5)   # 其余键一个不丢
+        self.assertNotIn("odometer", by["#motto"])
+
+    def test_odometer_must_be_bool(self):
+        spec = spec_for("portrait")
+        for el in spec["elements"]:
+            if el.get("id") == "bignum":
+                el["odometer"] = "yes"
+        with self.assertRaises(ValueError) as cm:
+            self.fragment(spec)
+        self.assertIn("odometer", str(cm.exception))
+
     def test_content_panel_with_explicit_opacity_stays_legal_xml(self):
         """panel 显式 opacity + 第 0 帧藏身：两处 opacity 合成一处，不许重复属性。
 

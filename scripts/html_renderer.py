@@ -1437,7 +1437,12 @@ def _prepare_card(rc, clip):
         + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
         + (" text-only" if no_image_slot else "")
         + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
-        f'data-track-index="1" style="clip-path:{_wipe_pair(rc)[0]};--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr}">\n'
+        # 内联 clip-path 必须与开场补间的 from 值同型（方向档：奇数页自页顶遮下来），
+        # 否则 JS 加载那一瞬间整页先按默认边露一次再跳回去。
+        f'data-track-index="1" style="--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr};'
+        # 内联 clip-path 与开场补间的 from 同源（偶数页 = 缺省档，奇数页 = 它自己的
+        # 那一条）；奇数页另写一对变量供 `style.clipPath` 那条通道取用。
+        f'clip-path:{_card_wipe_from(rc, clip)[0]};{_card_wipe_alt_style(rc, clip)}">\n'
         '    <div class="bg"></div>\n    <div class="grid"></div>\n'
     )
     progress_html = (
@@ -1464,6 +1469,7 @@ def _prepare_card(rc, clip):
         # 擦除起点，可用时长里还含着入场那段 wipe，短开场段里两者差一整个 gap。
         vis=vis_d,
         peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
+        wipe_alt=clip.get("wipe_alt"), wipe_alt_prev=clip.get("wipe_alt_prev"),
         gets_line=clip["gets_line"],
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
@@ -1599,6 +1605,117 @@ def _wipe_pair(rc):
     return _WIPES[style]
 
 
+def _card_wipe_from(rc, clip):
+    """这一页的 (from, to)：方向档取反向那一组，否则取 `_wipe_pair` 的正向。
+
+    内联的起始 clip-path、开场补间的 from、退场补间的终点**三处都从这一份取**——
+    分家就是"JS 加载时露一次、退场时走错边"。
+    """
+    alt = clip.get("wipe_alt")
+    return alt if alt else _wipe_pair(rc)
+
+
+def _card_wipe_alt_style(rc, clip):
+    """奇数页（自页顶遮下来的那一次）的**两条通道**写法；偶数页返回空串。
+
+    GSAP 给 `clipPath` 补间时，CSS 插件把它写回 `style.clipPath`——那枚属性一旦有值
+    就压过内联的 `clip-path`，于是"自页顶遮下来"在 JS 加载那一帧失效，页面先按
+    缺省 key（自页底）装一次再跳回来。所以：
+      - 缺省 key（`clipPath` 补间）走 `style.clip-path`，由 CSS 变体提供值；
+      - 显式 key（`"clip-path"` 补间，仅奇数页）走 `style.clipPath`。
+    同一帧里两条通道各写各的，谁也不覆盖谁。
+    """
+    if not clip.get("wipe_alt"):
+        return ""
+    frm, to = clip["wipe_alt"]
+    return (f"--ctv-wipe-from:{frm};--ctv-wipe-to:{to};"
+            f"clip-path:var(--ctv-wipe-from)")
+
+
+def _wipe_from_vars(rc, card):
+    """擦除的起点变量串。
+
+    GSAP 对同一个属性写两遍只认最后一处（对象字面量重复键），所以"上一页反向下场"
+    **不能**靠给新页再多写一枚 clip-path——那样两枚互相覆盖，新页要么不走、要么
+    从同一侧走。新页这里只有一枚 clipPath，值就是本次该从哪一侧来
+    （`clip["wipe_alt"][0]`，与内联的起始 clip-path 同源）。
+    """
+    alt = getattr(card, "wipe_alt", None)
+    return f'{{clipPath:"{alt[0] if alt else _wipe_pair(rc)[0]}"}}'
+
+
+def _slice_pcts(shape):
+    """把 clip-path 里的百分比按**出现顺序**抽成数表（含位置与半径）。"""
+    return [float(x) for x in re.findall(r"(-?\d+(?:\.\d+)?)%", shape)]
+
+
+def _reverse_of(rc, shape):
+    """`_WIPES` 里与 `shape` 同属一档的那组 (from, to)。
+
+    反向档的 from/to 是原档反写出来的，所以"这条边是从哪一档遮进来的"在表里查得到；
+    查不到就是有人绕过了 `_alternate_wipe_pair` 自己拼了几何——直接报错，别猜。
+    """
+    for frm, to in _WIPES.values():
+        if shape in (frm, to) or shape in (_wipe_reverse(frm), _wipe_reverse(to)):
+            return frm, to
+    raise ValueError(f"这条擦除几何不在 _WIPES 任何一档里：{shape!r}")
+
+
+def _wipe_hold_point(w_from, w_to, hold):
+    """退场停在哪：把 `w_from → w_to` 推到 `hold` 进度处的形状。
+
+    旧页退场的终点不是「全遮蔽」而是「停在 `hold` 处」——走满就会有一帧页底。
+    按**出现顺序**逐个数线性插值（几何两端的数表同型，见 `_wipe_reverse`），
+    不是让旧页多走一段：停在半路读作"被压到边上去"，走下去读作"这页没了"。
+    """
+    num = re.compile(r"-?\d+(?:\.\d+)?%")
+    a, b = _slice_pcts(w_from), _slice_pcts(w_to)
+    if len(a) != len(b) or not a:
+        return w_to
+    it = iter(a[i] + (b[i] - a[i]) * hold for i in range(len(a)))  # noqa: C416
+    return num.sub(lambda m: f"{next(it):.3f}".rstrip("0").rstrip(".") + "%", w_from)
+
+
+def _wipe_alternate_lines(rc, card, wipe_dur):
+    """方向感知转场：新页揭开的同时，旧页朝**同一个方向**退场。
+
+    为什么要有这一条：只有新页自下而上揭开时，换页读作"新的一页盖上来"——
+    观众读不到"我们在往下走"。补齐旧页的退场之后，相邻两次换页方向相反
+    （`segmentWipe.alt`），序列读作"一阵一阵往前翻"，滑动感来自两页的相对
+    运动，而不是任何一页自己的位移（任何一页自己的 transform 都会把字幕拖斜）。
+
+    三条判据（`tests/test_motion_design.py` `TransitionDirection` 钉住）：
+
+    - **方向恒相反**：第 i 页与第 i+1 页的揭示边从两端来，不靠 `from` 值自己转
+      —— 值本身是 `_WIPES` 的反向档，方向来源只有一个；
+    - **同步到帧**：两条补间同起点、同时长、同曲线（`_wipe_ease` 唯一口径），
+      错一帧读作"先盖后走"，两段动作首尾相接；
+    - **旧页停在 `hold`（0.92）**：走满等于旧页先消失再换新页，中间留一帧页底。
+
+    只在**几何档**生效：`line` 档的旧页退场是"被线犁走"（peel，见
+    `_line_timeline_lines`），那是同一件事的手写版，两套同屏是两种节奏打架。
+    瞬时切（画布页 / 接续页，`wipe` 归零）同样不生成——它没有"运动"可言。
+    """
+    alt = getattr(card, "wipe_alt", None)
+    if alt is None:
+        return []
+    prev_sid, _prev_w = card.wipe_alt_prev
+    # 上一页退到**它自己遮进来的那一侧**：它起手是全遮蔽、收在全覆盖，所以终点就是
+    # 从它自己的 from 反推出来的那个 `hold` 形状——偶数次自页底来，停
+    # `inset(92% 0 0 0)`；奇数次自页顶来，停 `inset(8% 0 0 0)`。两张表各读各的，
+    # 不按序号另算一份（序号一变，两页的方向就可能同时错）。
+    # 停在"正好让出这页遮进来那一侧"的 `hold` 形状上：自页顶遮下来的那一次停在
+    # `inset(92% 0 0 0)`，自页底掀上去的那一次停在 `inset(8% 0 0 0)`。
+    rev_from = _wipe_reverse(alt[0])
+    covered = _wipe_reverse(alt[1])
+    stop = _wipe_hold_point(covered, rev_from,
+                            float(rc.anim["segmentWipe"]["hold"]))
+    return [
+        f'tl.to("#{prev_sid}",{{clipPath:"{stop}",duration:{wipe_dur:.2f},'
+        f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
+    ]
+
+
 def _wipe_ease(rc):
     """揭开曲线唯一口径：clip-path 与引导线必须同一条（线骑边缘的咬合靠它，
     两处各读各的=漂移穿帮）。line 档走 propLine.ease 的书写节奏（慢起—快行—
@@ -1607,6 +1724,44 @@ def _wipe_ease(rc):
     if a_["segmentWipe"]["style"] == "line":
         return a_["propLine"]["ease"]
     return a_["segmentWipe"]["ease"]
+
+
+def _wipe_reverse(shape):
+    """同一几何、反方向：`inset(a b c d)` ↔ `inset(b a d c)`。"""
+    m = re.fullmatch(r"inset\(([^)]*)\)", shape)
+    if m:
+        p = m.group(1).split()
+        if len(p) == 4:
+            top, right, bottom, left = p
+            return f"inset({right} {top} {left} {bottom})"
+        if len(p) == 1:
+            return shape
+        raise ValueError(f"inset 收了 {len(p)} 个分量：{shape!r}")
+    m = re.fullmatch(r"polygon\(([^)]*)\)", shape)
+    if m:
+        pts = [q.strip() for q in m.group(1).split(",")]
+        if len(pts) % 2 or len(pts) < 4:
+            raise ValueError(f"polygon 点数不是偶数：{shape!r}")
+        half = len(pts) // 2
+        # 反向 = 沿前进方向把折线倒过来写（首尾相接的环反着走）
+        pts = [pts[0]] + list(reversed(pts[1:half + 1])) + list(reversed(pts[half + 1:]))
+        return "polygon(" + ", ".join(pts) + ")"
+    if re.fullmatch(r"circle\(([-\d.]+)%(.*)\)", shape):
+        # 圆形擦除没有第二个方向：圆心与半径不变，反向档退化成原值。
+        return shape
+    raise ValueError(f"转场反向档认不出这串几何：{shape!r}")
+
+
+def _alternate_wipe_pair(rc, k, _wipe):
+    """第 k 次换页的 (from, to)：奇数页反向从页顶揭下来。
+
+    方向的真源只有 `_WIPES` 一张表：反向档 = from/to 各过一遍 `_wipe_reverse`，
+    新增一档几何不用另写"反向写法"。`segmentWipe.alt` 关掉即全片同向。
+    """
+    frm, to = _wipe_pair(rc)
+    if k % 2 == 0:
+        return frm, to
+    return _wipe_reverse(frm), _wipe_reverse(to)
 
 
 def _reveal_line_html(rc, card):
@@ -1846,6 +2001,56 @@ def _animate_timeline_lines(rc, card):
             + _derive_timeline_lines(rc, card))
 
 
+def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
+    """`count` 的里程表档：每一位单独一格轮盘，低位滚满、进位才推高位。
+
+    缺省的 count 是"一个数从 a 补到 b、整片数字同时滚"：`9 → 10` 那半秒个位从 9 滑向
+    0、同时十位那一格从无到有，读起来是两个互不相干的变化（真机取帧看过，"9% → 10%"
+    的进位帧像误帧）。里程表把这件事拆成"低位走满一轮、上一位才进一格"：
+
+    - 定长串从尾往前数位，第 k 位（0 是个位，-1 是小数首位）的周期是 `10**k` 个单位；
+      第 k 位每走满一格就翻一格——个位滚 10 格、十位才动 1 格；
+    - 读的是"已走满几格"（`floor`）而不是"走到第几格"（`round`）：个位没走满一整格，
+      十位就不许动，否则 9.4 的四舍会抢在进位之前把十位点成 1；
+    - 小数位与个位同一套，所以 `10.4 → 10.6` 只滚末位，`9 → 10` 是个位滚满后十位才翻；
+    - 高位零不印（`0 → 1286` 走到 148 时是"148"），跨档那一下整段从一片 9 翻成新档，
+      读作进位，而不是"左边突然挂了个 0"；
+    - 负数取绝对值滚、符号留在最前——`-3 → 2` 硬切比"倒退着滚"好读，也不出现三个字符
+      宽的中间态（"-0.4" 比 "1.6" 宽一格，会把后面的单位顶走）。
+
+    所有量（from/to/decimals/prefix/suffix）都来自契约层校验过的标量，一个字节都不从
+    DOM 反推，逐帧 seek 可复现——与缺省档同一前提（渲染 harness 触发 onUpdate）。
+    前导 `;` 同缺省档的 ASI 护栏（见 count 分支的注释）。
+    """
+    dec = int(cnt.get("decimals", 0))
+    from_v = float(cnt.get("from", 0))
+    to_v = float(cnt["to"])
+    pre, suf = cnt.get("prefix", ""), cnt.get("suffix", "")
+    # 第 k 位此刻印几：把 |v| 截到这一位的刻度 `10**k`，乘 10 再对 10 取整——等于
+    # `floor(|v|/10**k) % 10`，也就是"这一位走满了几格"。用 floor 不用 round：个位没
+    # 走满一整格，十位就不许动（round 会抢在进位之前把 9.4 点成 1）。末尾 +1e-9 吸收
+    # 浮点尾差（0.7×10 = 6.999… 不该被 floor 成 6）。
+    return (
+        ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+        "var p={v:" + json.dumps(from_v) + "};"
+        "var D=" + str(dec) + ",P=" + json.dumps(pre) + ",S=" + json.dumps(suf) + ";"
+        "var lv=function(v){var k=0;while(v>=Math.pow(10,k+1))k++;return k;};"
+        "var dd=function(k){var m=Math.pow(10,k);"
+        "return Math.floor(Math.floor(Math.abs(p.v)/m+1e-9)%10);};"
+        "var f=function(){"
+        "var v=Math.abs(p.v),out='';"
+        "for(var k=lv(Math.floor(v));k>=0;k--){out+=dd(k)%10;}"
+        "if(D>0){out+='.';for(var j=1;j<=D;j++){out+=dd(-j)%10;}}"
+        "e.textContent=(p.v<0?'-':'')+P+out+S;};"
+        # 收尾钉在终点写法上：缓动停在 9.999 时末位会差一格，最后一帧必须是 to 的值。
+        # 位数与 decimals 由生成期算好写死，不用运行时反推。
+        "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
+        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        + "onUpdate:f,onComplete:function(){"
+        "e.textContent=P+(" + json.dumps(to_v) + ").toFixed(" + str(dec) + ")+S;}},"
+        + f"{pos:.2f}" + ");})();")
+
+
 def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
@@ -1926,6 +2131,36 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             out.update(_cycle_vars(step))
             return _pin(out)
 
+        if "count" in step:
+            # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>
+            # 的 textContent。这是**渲染端生成**的回调（只读上面校验过的标量），不是
+            # 信源塞的 on* ——GSAP 逐帧 seek 时会重算 p.v 并调 onUpdate，故 seek 可复现。
+            #
+            # 两条合成：缺省是"整片数字一起滚"，`odometer:true` 换成逐位进位的里程表
+            # （见 _odometer_js）。分岔只在这一处——代理补间、节拍、repeat 全共用。
+            cnt = step["count"]
+            if cnt.get("odometer"):
+                lines.append(_odometer_js(cnt, sel_js, _cycle_js(step), pos, dur, ease))
+            else:
+                from_v = float(cnt.get("from", 0))
+                to_v = float(cnt["to"])
+                dec = int(cnt.get("decimals", 0))
+                pre = json.dumps(cnt.get("prefix", ""))
+                suf = json.dumps(cnt.get("suffix", ""))
+                lines.append(
+                    # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
+                    # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
+                    # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
+                    # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
+                    ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+                    "var p={v:" + json.dumps(from_v) + "};"
+                    "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
+                    "f();"
+                    "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
+                    + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                    + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
+            continue
+
         if "morph" in step:
             # path 形变：生成期按渲染帧率的 2 倍采样成离散 tl.set(attr:{d}) 关键帧。
             # 时间均匀推进（t=pos+u·span），形状进度 k=ease(每一遍内的位置)——因为 GSAP
@@ -1964,30 +2199,6 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 t = round(pos + u * span, 2)
                 lines.append(
                     f"tl.set({sel_js}, {json.dumps({ATTR_KEY: {'d': d}})}, {t:.2f})")
-            continue
-
-        if "count" in step:
-            # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>
-            # 的 textContent。这是**渲染端生成**的回调（只读上面校验过的标量），不是
-            # 信源塞的 on* ——GSAP 逐帧 seek 时会重算 p.v 并调 onUpdate，故 seek 可复现。
-            cnt = step["count"]
-            from_v = float(cnt.get("from", 0))
-            to_v = float(cnt["to"])
-            dec = int(cnt.get("decimals", 0))
-            pre = json.dumps(cnt.get("prefix", ""))
-            suf = json.dumps(cnt.get("suffix", ""))
-            lines.append(
-                # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
-                # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
-                # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
-                # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
-                ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
-                "var p={v:" + json.dumps(from_v) + "};"
-                "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
-                "f();"
-                "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
-                + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
         if "type" in step:
@@ -2740,11 +2951,22 @@ def _card_timeline_lines(rc, card):
     # 两端口径一致；0.01s 在 30fps 下不足一帧，视觉上仍是"瞬间切"。
     w_from, w_to = _wipe_pair(rc)
     wipe_dur = max(card.wipe, 0.01)
-    lines.append(
-        f'tl.fromTo("#{sid}",{{clipPath:"{w_from}"}},'
-        f'{{clipPath:"{w_to}",duration:{wipe_dur:.2f},'
-        f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
-    )
+    alt = getattr(card, "wipe_alt", None)
+    if alt is None:
+        lines.append(
+            f'tl.fromTo("#{sid}",{{clipPath:"{w_from}"}},'
+            f'{{clipPath:"{w_to}",duration:{wipe_dur:.2f},'
+            f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
+        )
+    else:
+        # 奇数页：显式属性键 `"clip-path"`（连字符那一条）→ 写到 `style.clipPath`，
+        # 与内联的缺省通道互不覆盖（见 `_card_wipe_alt_style`）。
+        lines.append(
+            f'tl.fromTo("#{sid}",{{clipPath:"{alt[0]}"}},'
+            f'{{"clip-path":"{alt[1]}",duration:{wipe_dur:.2f},'
+            f'ease:"{_wipe_ease(rc)}"}},{card.win_start:.2f})'
+        )
+    lines.extend(_wipe_alternate_lines(rc, card, wipe_dur))
     lines.extend(_line_timeline_lines(rc, card))
     # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
     _k = _entrance_k(rc, card)
@@ -2892,6 +3114,8 @@ def generate_html(manifest, audio_src, images=None,
             "duration": round(segment_duration(seg), 2),
             "gets_peeled": False,
             "gets_line": False,
+            "wipe_alt": None,      # (from, to) 反向档；None = 全片同向
+            "wipe_alt_prev": None,  # (上一页 sid, 窗口)：上一页的反向下场
         })
     # 擦除转场几何一次算齐（_prepare_card 与 timeline 共用）。引擎按
     # data-start/data-duration 硬切 clip 可见性（实测补间排在窗口外等于没写，
@@ -2901,6 +3125,8 @@ def generate_html(manifest, audio_src, images=None,
     # line 档自带时长档（0.40 > 几何档 0.28）：书写感需要更多笔程，gap 钳制兜底。
     _wd = (rc.anim["propLine"]["duration"] if _is_line
            else rc.anim["segmentWipe"]["duration"])
+    # line 档的"旧页反向下场"由 peel 承担（同一件事的手写版），两套同屏是两种节奏打架
+    _is_geometric_wipe = not _is_line
     for i, clip in enumerate(clips):
         s_i = clip["start"]
         prev_end = (clips[i - 1]["start"] + clips[i - 1]["duration"]) if i else None
@@ -2930,6 +3156,16 @@ def generate_html(manifest, audio_src, images=None,
         # accent 横杠），画面照出、全流程零报错。
         clip["gets_line"] = bool(_is_line and clip["wipe"] > 0)
         clip["peel"] = None
+        # 方向感知转场（几何档专属）：第 i 页的 from 取自 `_alternate_wipe_pair`，
+        # 同时给**上一页**排一条反向下场（压在同一窗口里，停在 hold 处）。
+        # 两件事的闸门在这里一次算定，与 gets_line 同理——补间与 from 值必须同源，
+        # 一处按奇偶、一处按窗口，分家就是"揭到一半两页的边不咬合"。
+        clip["wipe_alt"] = None
+        clip["wipe_alt_prev"] = None
+        if (_is_geometric_wipe and i and clip["wipe"] > 0
+                and bool(rc.anim["segmentWipe"].get("alt", True))):
+            clip["wipe_alt"] = _alternate_wipe_pair(rc, i, clip["wipe"])
+            clip["wipe_alt_prev"] = (clips[i - 1]["seg"]["id"], clip["wipe"])
         if (_is_line and i and clip["wipe"] > 0
                 and not is_full_bleed(clips[i - 1]["seg"])):
             prev_sid = clips[i - 1]["seg"]["id"]  # sid 由契约把守，见 _prepare_card

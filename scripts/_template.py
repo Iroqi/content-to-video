@@ -501,7 +501,9 @@ _TEMPLATE_JSON = r'''
     "segmentWipe": {
       "style": "line",
       "duration": 0.28,
-      "ease": "expo.out"
+      "ease": "expo.out",
+      "alt": true,
+      "hold": 0.92
     },
     "propLine": {
       "thickness": 6,

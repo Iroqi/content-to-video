@@ -926,3 +926,183 @@ class StaggerAnchorInProduct(unittest.TestCase):
                                         aspect="portrait", theme="dark")
         self.assertIn('"from": "center"', html,
                       "锚点没进时间线：稿件里写了 from，成片里那组元素照旧按读序演")
+
+
+# ── 方向感知转场：两页朝同一个方向相对运动 ───────────────────────────────────
+# 只有新页自下而上揭开时，换页读作"新的一页盖上来"——观众读不到"我们在往下走"。
+# 前沿 MG 的换页从来是**两页的相对运动**：新页推进、旧页退场，同一窗口、同一方向、
+# 同一曲线；相邻两次换页方向相反，序列才读得出"一阵一阵往前翻"。
+#
+# 三条判据：
+#
+#   1. 方向恒相反：第 i 次换页的揭示边从 from 那一侧来，i+1 次从另一侧来；
+#   2. 同步到帧：新页的 fromTo 与旧页的 to 同起点、同时长、同曲线——错一帧读作
+#      "先盖后走"，两段动作首尾相接（与 `motion.md`「弧顶贴着端点」同一条毛病）；
+#   3. 旧页停在 `hold`（0.92）：走满 100% 会留一帧页底，走不满会在页界那帧把两页
+#      的揭示边错开成一道缝。
+#
+# 只在几何档生效：`line` 档的旧页退场是 peel（同一件事的手写版），瞬时切没有运动。
+WIPE_HOLD_MIN = 0.85          # 低于它就停在半路，观众会看清"旧页还在"两级台阶
+WIPE_HOLD_MAX = 1.0 - 0.01    # 走满 = 页界那一帧是页底
+
+
+def _render_geometric(style, aspect="portrait"):
+    """按指定擦除档出一次 HTML（`override_layer` 与 CLI `--set` 同一条路）。"""
+    m = H.make_manifest()
+    with T.override_layer([f'animation.segmentWipe.style="{style}"']):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return generate_html(m, "audio/combined.wav",
+                                 images=H.sample_images(m), aspect=aspect)
+
+
+def _wipe_tweens(html):
+    """从产物里抽出**卡片级**换页补间：新页揭开与旧页退场。
+
+    只认"第一段变量里只有 clipPath、目标不是 `rev-*/img-*/plate-*`"的那些：
+    标题裁窗、配图框同样是 clipPath 补间，但它们不叫换页（混进来"每次换页一次
+    退场"的账就永远对不上）。揭开那一条的属性键可能是 `clipPath`（偶数页）或
+    `"clip-path"`（奇数页，显式键走另一条 CSS 通道，见 `_card_wipe_alt_style`）。
+    """
+    out = []
+    call = re.compile(r'tl\.(fromTo|to)\(\s*"#([^"]+)"\s*,\s*')
+    for m in call.finditer(html):
+        kind, sid = m.group(1), m.group(2)
+        if re.match(r"(rev-|img-|plate-)", sid):
+            continue
+        # 以本次调用的参数为窗口，避免跨行匹配
+        seg = html[m.end():m.end() + 400]
+        args = []
+        depth, cur = 0, ""
+        for ch in seg:
+            if ch == "{" and depth == 0 and args:
+                pass
+            if depth == 0 and ch in ",)":
+                args.append(cur)
+                cur = ""
+                if ch == ")":
+                    break
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            cur += ch
+        if len(args) < 2:
+            continue
+        first = args[0]
+        if "clipPath" not in first.replace("clip-path", "clipPath"):
+            continue
+        if kind == "to":
+            body = first
+            at = args[1]
+        else:
+            body = args[1]
+            at = args[2] if len(args) > 2 else ""
+        d = re.search(r"duration:([\d.]+)", body)
+        e = re.search(r'ease:"([^"]+)"', body)
+        if not (d and e and at):
+            continue
+        out.append({"kind": kind, "sid": sid, "duration": float(d.group(1)),
+                    "ease": e.group(1), "at": float(at)})
+    return out
+
+
+class TransitionDirection(unittest.TestCase):
+    def setUp(self):
+        self.tpl = T.load_template()["animation"]["segmentWipe"]
+        self.hold = float(self.tpl["hold"])
+
+    def test_hold_leaves_exactly_one_sliver_for_the_handover(self):
+        """`hold` 只能落在"停半路"与"走满"之间：两端都是看得见的坏。"""
+        self.assertGreaterEqual(self.hold, WIPE_HOLD_MIN,
+                                "旧页只走到一半就停，页界前会看到两页压成一条缝")
+        self.assertLess(self.hold, WIPE_HOLD_MAX,
+                        "hold=1 等于旧页先消失、新页再出现，中间一帧页底")
+
+    def test_alternate_reverses_the_geometry(self):
+        """反向档是**同一张表的反写**，不是另抄一份几何。"""
+        import html_renderer as hr
+        for frm, to in hr._WIPES.values():
+            self.assertEqual(hr._wipe_reverse(hr._wipe_reverse(frm)), frm,
+                             f"{frm} 反两次回不到原值")
+            if frm.startswith("inset") or frm.startswith("polygon"):
+                self.assertNotEqual(hr._wipe_reverse(frm), frm,
+                                    f"{frm} 的反向档与正档相同：方向不会换")
+
+    def test_reverse_table_covers_every_registered_shape(self):
+        """`_WIPES` 里每一档的 from/to 都必须能反写——新增几何不许有盲区。"""
+        import html_renderer as hr
+        for style, (frm, to) in hr._WIPES.items():
+            for shape in (frm, to):
+                hr._wipe_reverse(shape)          # 认不出就会抛
+
+    def test_inset_reverse_starts_from_the_opposite_edge(self):
+        """`inset(100% 0 0 0)`（自下而上）的反向档必须自页顶遮下来。"""
+        import html_renderer as hr
+        rev = hr._wipe_reverse("inset(100% 0 0 0)")
+        self.assertEqual(rev, "inset(0 100% 0 0)",
+                         "反向档没换到另一条边：两页会从同一侧来")
+
+
+class TransitionDirectionInProduct(unittest.TestCase):
+    """产物那一头：换页补间真的成对出现、同步、方向交替。"""
+
+    def test_every_geometric_style_hands_over_directionally(self):
+        for style in ("vertical", "diagonal", "circle"):
+            with self.subTest(style=style):
+                tw = _wipe_tweens(_render_geometric(style))
+                opens = [t for t in tw if t["kind"] == "fromTo"]
+                closes = [t for t in tw if t["kind"] == "to"]
+                n_hard_cuts = sum(1 for t in opens if t["duration"] <= 0.02)
+                # 画布页（瞬时切）没有擦除补间、也不参与反向下场，所以按"有擦除
+                # 的那几次换页"记账，而不是按段数
+                self.assertGreaterEqual(len(opens), 2, f"{style}: 换页补间太少")
+                # 开屏页从"没有页面"里擦出来，它前面那一页不是卡片：退场条数 =
+                # 揭开条数 − 1（开屏那一次）− 画布页硬切的次数
+                self.assertEqual(len(closes) + n_hard_cuts + 1, len(opens),
+                                 f"{style}: 每次换页应有且只有一次旧页退场")
+
+    def test_handover_is_frame_synchronised(self):
+        """退场与新页揭开：同起点、同时长、同曲线。"""
+        for style in ("vertical", "diagonal", "circle"):
+            with self.subTest(style=style):
+                tw = _wipe_tweens(_render_geometric(style))
+                opens = [t for t in tw if t["kind"] == "fromTo"]
+                closes = [t for t in tw if t["kind"] == "to"]
+                n_hard_cuts = sum(1 for t in opens if t["duration"] <= 0.02)
+                self.assertTrue(closes, f"{style}: 一条退场都没有")
+                pairs = 0
+                for c in closes:
+                    # 同一页可以多次登场（重演），配上的是**同一时刻**开场的那一条
+                    # 揭开是**下一页**的，退场挂在**上一页**上：按时刻配对
+                    o = [t for t in opens if abs(t["at"] - c["at"]) < 1e-6]
+                    self.assertEqual(len(o), 1,
+                                     f"{c['sid']}: {c['at']:.2f}s 退场没有同刻的新页揭开")
+                    pairs += 1
+                    o = o[0]
+                    self.assertAlmostEqual(o["duration"], c["duration"], places=2,
+                                           msg=f"{c['sid']}: 退场时长方差")
+                    self.assertEqual(o["ease"], c["ease"],
+                                     f"{c['sid']}: 两页各走一条曲线，读作脱节")
+                self.assertGreater(pairs, 0, f"{style}: 一对揭开/退场都没配上")
+
+    def test_line_style_keeps_the_peel_as_its_only_exit(self):
+        """`line` 档不生成反向下场：它的旧页退场是 peel，两套同屏是两种节奏打架。"""
+        tw = _wipe_tweens(_render_geometric("line"))
+        self.assertEqual([t for t in tw if t["kind"] == "to"], [],
+                         "line 档同时排了 peel 与反向下场")
+
+    def test_alt_off_restores_single_direction(self):
+        """`segmentWipe.alt=false` 是全片同向的开关：退场整层不生成。
+
+        覆写走 `override_layer`（与 CLI `--set` 同一条路），不是改 `load_template`
+        的返回值——渲染器读的是 `load_template` 本身，改返回值什么也没改。
+        """
+        m = H.make_manifest()
+        with T.override_layer(['animation.segmentWipe.style="vertical"',
+                               "animation.segmentWipe.alt=false"]):
+            with contextlib.redirect_stderr(io.StringIO()):
+                html = generate_html(m, "audio/combined.wav",
+                                     images=H.sample_images(m))
+        self.assertEqual([t for t in _wipe_tweens(html) if t["kind"] == "to"], [],
+                         "alt=false 仍在生成反向下场")

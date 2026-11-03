@@ -117,7 +117,8 @@ ELEMENT_KEYS = {
     "polyline": ("id", "points", "stroke", "width", "fill", "draw"),
     "bars": ("id", "base_y", "bars", "fill"),
     "circle": ("id", "cx", "cy", "r", "fill"),
-    "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count"),
+    "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count",
+             "odometer"),
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
 COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
@@ -513,6 +514,9 @@ def _validate_kind_keys(el, kind, where):
             # count 与 content 互斥：数字节点的初始文本就是 from 那一档的渲染值，
             # 另给一句 content 等于让屏幕上先印一个和滚动无关的数（frame 0 撒谎）。
             _validate_count(el["count"], f"{where} 的 count")
+            if el.get("odometer") is not None and not isinstance(el["odometer"], bool):
+                raise ValueError(f"{where} 的 odometer 必须是 JSON 布尔 true/false"
+                                 f"（实际: {el['odometer']!r}）")
             if el.get("content") is not None:
                 raise ValueError(f"{where} 写了 count 就不要再写 content——"
                                  "第 0 帧的文本由 count 的 from/decimals/prefix/suffix 算出")
@@ -1015,7 +1019,10 @@ def build_animate(spec, sentences=None):
         if el.get("draw"):
             step["draw"] = True
         elif "count" in el:
-            step["count"] = el["count"]
+            # 进位档是**节点级**的调档（与 duration/ease 同级），不是 count 契约的一部分：
+            # 写进 count 会让每个数字节点都滚成走表，而混排页面里常常只有一两个数该走表。
+            step["count"] = (dict(el["count"], odometer=True) if el.get("odometer")
+                             else el["count"])
         elif el.get("type"):
             step["type"] = {}
         else:

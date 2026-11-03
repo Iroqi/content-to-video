@@ -703,3 +703,148 @@ class StaggerDistributeInProduct(unittest.TestCase):
         for sel in (r'#opening \.t-in', r'#opening \.agenda-row \.ag-name'):
             _, ease = self._stagger_amount(html, sel)
             self.assertEqual(ease, "none", f"{sel} 没跟着共享旋钮走")
+
+
+def _anchor_delays(window, ease, n, anchor="start"):
+    """`stagger:{amount, ease, from}` 的逐项出发延迟——GSAP `distribute` 的口径。
+
+    GSAP 先按锚点算每一项到锚点的**距离**，把距离归一化，再用 ease 摊到窗口上：
+    `delay_i = W × f((d_i − min d) / (max d − min d))`。`start` 时 `d_i = i`，
+    退化成 `_distribute_delays`；`center` 在 2 项上 max == min，整组同时出发
+    （GSAP 除零前先判等，这里照抄——那条退化由下面的用例钉住）。
+    """
+    if n <= 1:
+        return [0.0]
+    if anchor == "center":
+        d = [abs(i - (n - 1) / 2.0) for i in range(n)]
+    elif anchor == "end":
+        d = [float(n - 1 - i) for i in range(n)]
+    elif anchor == "edges":
+        d = [float(min(i, n - 1 - i)) for i in range(n)]
+    else:
+        d = [float(i) for i in range(n)]
+    lo, hi = min(d), max(d)
+    if hi <= lo:
+        return [0.0] * n
+    f = E.curve(ease, "none")
+    return [window * f((x - lo) / (hi - lo)) for x in d]
+
+
+class StaggerAnchor(unittest.TestCase):
+    """错峰的第三维：`from` —— 这一组从哪一头起，先后就归谁。
+
+    真值是钉固 gsap@3.14.2 的 `gsap.utils.distribute` 在 Chrome 里逐项采出来的
+    （n=7、amount=0.4、ease=power2.out）。写成表是因为这几行同时钉住三件事：
+    **窗口不变**（最晚那项恒为 0.4）、**按到锚点的距离单调**、**端点是 0 与 W**。
+    """
+
+    WINDOW = 0.4
+    EASE = "power2.out"
+    PINNED = {
+        "start": [0.0, 0.1685, 0.2815, 0.35, 0.3852, 0.3981, 0.4],
+        "center": [0.4, 0.3852, 0.2815, 0.0, 0.2815, 0.3852, 0.4],
+        "end": [0.4, 0.3981, 0.3852, 0.35, 0.2815, 0.1685, 0.0],
+        "edges": [0.0, 0.2815, 0.3852, 0.4, 0.3852, 0.2815, 0.0],
+    }
+
+    def test_matches_pinned_gsap_for_every_anchor(self):
+        for anchor, want in self.PINNED.items():
+            with self.subTest(anchor=anchor):
+                got = _anchor_delays(self.WINDOW, self.EASE, 7, anchor)
+                for a, b in zip(got, want):
+                    self.assertAlmostEqual(a, b, places=3,
+                                           msg=f"{anchor}: {[round(x,3) for x in got]}")
+
+    def test_window_survives_the_anchor(self):
+        """锚点只改"谁先动"，不改"这一组演多久"：最后一项恒落在窗口上。
+
+        这是上一节那条判据在第二维上的延续——换锚点若把跨度拉长，作者为这一页
+        排的节奏（以及"演完没有"的预算）就跟着锚点漂了。
+        """
+        for anchor in ("start", "center", "end", "edges"):
+            for n in (2, 3, 6, 7, 12):
+                if n == 2 and anchor in ("center", "edges"):
+                    continue      # 两项没有"中间"与"两端"之分，窗口整个塌掉（见下一条）
+                with self.subTest(anchor=anchor, n=n):
+                    d = _anchor_delays(self.WINDOW, self.EASE, n, anchor)
+                    self.assertAlmostEqual(max(d), self.WINDOW, places=9)
+                    self.assertAlmostEqual(min(d), 0.0, places=9)
+
+    def test_order_is_monotone_in_distance_from_the_anchor(self):
+        """离锚点越近越先动——锚点的全部语义都在这一条上。"""
+        for anchor in ("center", "end", "edges"):
+            d = _anchor_delays(self.WINDOW, self.EASE, 7, anchor)
+            dist = ([abs(i - 3) for i in range(7)] if anchor == "center" else
+                    [6 - i for i in range(7)] if anchor == "end" else
+                    [min(i, 6 - i) for i in range(7)])
+            pairs = sorted(zip(dist, d))
+            self.assertEqual([p[1] for p in pairs], sorted(p[1] for p in pairs),
+                             f"{anchor}: 先后没跟着距离走——{pairs}")
+
+    def test_center_lands_the_middle_first(self):
+        d = _anchor_delays(self.WINDOW, self.EASE, 7, "center")
+        self.assertAlmostEqual(d[3], 0.0, places=9)
+        self.assertEqual(d[:3], list(reversed(d[4:])), "中心锚点不对称")
+        self.assertAlmostEqual(d[0], self.WINDOW, places=9)
+
+    def test_edges_converge_on_the_middle(self):
+        """6 项（没有正中项）：两端先起、中间两项最后落，且左右对称。"""
+        d = _anchor_delays(self.WINDOW, self.EASE, 6, "edges")
+        self.assertAlmostEqual(d[0], 0.0, places=9)
+        self.assertAlmostEqual(d[-1], 0.0, places=9)
+        self.assertAlmostEqual(d[2], self.WINDOW, places=9)
+        self.assertAlmostEqual(d[3], self.WINDOW, places=9)
+        self.assertEqual([round(x, 6) for x in d], [round(x, 6) for x in reversed(d)])
+
+    def test_two_items_have_no_middle(self):
+        """两项的 `center` 退化成同时出发——锚点要"数得出中间"才有意义。
+
+        这条不是 bug、是数学：距离相等 → 归一化后都落在 0。文档据此写"5 项以下
+        先问一句这组到底是不是一排"，而这里把那条说法钉住。
+        """
+        for anchor in ("center", "edges"):
+            self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 2, anchor),
+                             [0.0, 0.0],
+                             f"2 项 {anchor} 应当退化成同时出发")
+
+    def test_default_anchor_is_reading_order(self):
+        """不写 from 与写 start 完全一致：缺省行为不变。"""
+        self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 9),
+                         _anchor_delays(self.WINDOW, self.EASE, 9, "start"))
+
+    def test_anchor_is_a_whitelist_not_a_passthrough(self):
+        """锚点名只有四枚，且与契约层共用同一份白名单。"""
+        from _images_schema import STAGGER_ANCHORS
+        self.assertEqual(set(STAGGER_ANCHORS), set(self.PINNED))
+
+
+class StaggerAnchorInProduct(unittest.TestCase):
+    """产物那一头：`from` 要真的写进时间线，不能只停在稿件里。"""
+
+    def test_anchor_reaches_the_timeline(self):
+        import tempfile
+        import os
+        import html_renderer as HR
+
+        src = H.sample_source()
+        # 第二段改成槽位版式：画布段缺图会直接 error，这条用例只想看时间线
+        src["segments"][1].pop("layout", None)
+        m = H.make_manifest(src)
+        with tempfile.TemporaryDirectory() as tmp:
+            d = os.path.join(tmp, "images")
+            os.makedirs(d)
+            with open(os.path.join(d, "seg-a.svg"), "w", encoding="utf-8") as f:
+                f.write('<svg xmlns="http://www.w3.org/2000/svg" width="980" '
+                        'height="735" viewBox="0 0 980 735">'
+                        + "".join(f'<circle id="n{i}" class="node" cx="{i*40}" cy="40" r="8"/>'
+                                  for i in range(5))
+                        + "</svg>")
+            imgs = {"seg-a": {"src": "images/seg-a.svg", "animate": {"steps": [
+                {"at": 0, "target": ".node", "from": {"opacity": 0},
+                 "to": {"opacity": 1},
+                 "stagger": {"amount": 0.36, "ease": "power2.out", "from": "center"}}]}}}
+            with contextlib.redirect_stderr(io.StringIO()):
+                html = HR.generate_html(m, "audio/combined.wav", images=imgs,
+                                        aspect="portrait", theme="dark")
+        self.assertIn('"from": "center"', html,
+                      "锚点没进时间线：稿件里写了 from，成片里那组元素照旧按读序演")

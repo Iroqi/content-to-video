@@ -426,6 +426,30 @@ class CropWarnAtGeneration(unittest.TestCase):
         self.assertIn("50%", out)
         self.assertIn("不是 contain 留黑边", out)
 
+    def test_exif_rotated_portrait_warns_crop(self):
+        """手机竖拍：像素横存 400×300 + Orientation=6，屏幕上是 300×400 竖图。
+
+        修复前按存储尺寸当成横图，裁切算成 0——一条"要裁掉 44%"的告警静默消失。
+        """
+        try:
+            from PIL import Image
+        except Exception:  # noqa: BLE001
+            self.skipTest("本机没有 Pillow，无法写出带 EXIF 的样本")
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "seg-a.jpg")
+        im = Image.new("RGB", (400, 300), (90, 40, 40))
+        exif = im.getexif()
+        exif[0x0112] = 6
+        im.save(p, format="JPEG", exif=exif)
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            GH.validate_images_files({"seg-a": {"src": "seg-a.jpg"}}, d,
+                                     seg_boxes={"seg-a": (980, 735)})
+        out = buf.getvalue()
+        self.assertIn("比例不贴合", out)
+        self.assertIn("44%", out)
+
     def test_recommended_tier_stays_silent(self):
         """1536×1024 只裁 ~11%、还要缩小：两条 warn 都不该响。"""
         out = self._run("seg-a.png", _png(1536, 1024), (980, 735))
@@ -444,6 +468,99 @@ class CropWarnAtGeneration(unittest.TestCase):
                                          seg_boxes={"seg-a": (980, 735)})
             self.assertNotIn("比例不贴合", buf.getvalue())
 
+
+
+def _exif_app1(orientation, endian="<"):
+    """APP1 段：`Exif\\0\\0` + 最小 TIFF，IFD0 里只有一条 Orientation。"""
+    order = b"II" if endian == "<" else b"MM"
+    entry = (struct.pack(endian + "HHI", 0x0112, 3, 1)
+             + struct.pack(endian + "H", orientation) + b"\x00\x00")
+    ifd = struct.pack(endian + "H", 1) + entry + struct.pack(endian + "I", 0)
+    tiff = order + struct.pack(endian + "H", 42) + struct.pack(endian + "I", 8) + ifd
+    payload = b"Exif\x00\x00" + tiff
+    return b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload
+
+
+def _jpeg_with_exif(w, h, orientation, endian="<"):
+    base = _jpeg(w, h)                       # SOI + APP0 + SOF0
+    return base[:2] + _exif_app1(orientation, endian) + base[2:]
+
+
+class ExifOrientation(unittest.TestCase):
+    """尺寸必须是**显示尺寸**：EXIF 5–8 的图在浏览器里被转 90°，宽高要交换。
+
+    手机竖拍照片常把像素横着存（400×300）+ Orientation=6，屏幕上却是 300×400。
+    照存储尺寸算，一张进 4:3 槽要裁掉 44% 的竖图会被算成同比例、一声不吭——
+    而"裁掉多少"正是本模块唯一的存在理由。
+    """
+
+    def test_header_parser_swaps_for_rotating_orientations(self):
+        import _media_size as M
+        for o in (5, 6, 7, 8):
+            with self.subTest(orientation=o):
+                self.assertEqual(M._jpeg_size(_jpeg_with_exif(400, 300, o)),
+                                 (300, 400))
+        for o in (1, 2, 3, 4):
+            with self.subTest(orientation=o):
+                self.assertEqual(M._jpeg_size(_jpeg_with_exif(400, 300, o)),
+                                 (400, 300))
+
+    def test_big_endian_tiff_is_read(self):
+        """相机也会写 MM（大端）TIFF；只认 II 的话一半素材会漏。"""
+        import _media_size as M
+        self.assertEqual(M._jpeg_size(_jpeg_with_exif(400, 300, 6, ">")), (300, 400))
+
+    def test_non_exif_app1_is_ignored(self):
+        """APP1 也可能是 XMP：载荷不认就保持原方向，不能当成 Orientation=0。"""
+        import _media_size as M
+        xmp = b"\xff\xe1" + struct.pack(">H", 10) + b"http://ns"
+        base = _jpeg(400, 300)
+        self.assertEqual(M._jpeg_size(base[:2] + xmp + base[2:]), (400, 300))
+
+    def test_truncated_or_invalid_exif_falls_back_to_stored_dims(self):
+        """坏 EXIF 不能把整张图判成"读不出"，也不能乱换宽高。"""
+        import _media_size as M
+        payload = _exif_app1(6)[4:]
+        for bad in (payload[:8], payload[:10], b"Exif\x00\x00" + b"XX" + bytes(6)):
+            self.assertIsNone(M._exif_orientation(bad), bad)
+        # 只有 "Exif\0\0" 的短载荷：段长自洽、TIFF 头缺失 → 按存储尺寸读
+        base = _jpeg(400, 300)
+        short = b"\xff\xe1" + struct.pack(">H", 8) + b"Exif\x00\x00"
+        self.assertEqual(M._jpeg_size(base[:2] + short + base[2:]), (400, 300))
+
+
+class ExifOrientationThroughRasterSize(unittest.TestCase):
+    """两条读取路径都要给出同一份显示尺寸：Pillow 主路径与无 Pillow 的头解析。"""
+
+    def _rotated_jpeg(self, size=(400, 300), orientation=6):
+        try:
+            from PIL import Image
+        except Exception:  # noqa: BLE001
+            self.skipTest("本机没有 Pillow，无法写出带 EXIF 的样本")
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        p = os.path.join(d, "rotated.jpg")
+        im = Image.new("RGB", size, (90, 40, 40))
+        exif = im.getexif()
+        exif[0x0112] = orientation
+        im.save(p, format="JPEG", exif=exif)
+        return p
+
+    def test_pillow_path_returns_display_size(self):
+        p = self._rotated_jpeg()
+        self.assertEqual(raster_size(p), (300, 400))
+
+    def test_header_path_returns_the_same_display_size(self):
+        """把 Pillow 摘掉：同一条路径不能给出另一份数字。"""
+        import _media_size as M
+        p = self._rotated_jpeg()
+        self.addCleanup(setattr, M, "_PILImage", M.__dict__["_PILImage"])
+        M._PILImage = None
+        self.assertEqual(M.raster_size(p), (300, 400))
+
+    def test_upright_photo_is_not_swapped(self):
+        p = self._rotated_jpeg(orientation=1)
+        self.assertEqual(raster_size(p), (400, 300))
 
 
 class JpegSizeAtBufferEnd(unittest.TestCase):

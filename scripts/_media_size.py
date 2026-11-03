@@ -16,7 +16,13 @@
 
 **Pillow 是主路径**：手写头解析只认 PNG/JPEG/WebP/GIF 四种，而"读不出"在这里
 等于静默放行——AVIF/HEIC/JPEG XL/TIFF 会绕过全部判据。Pillow 一条 `Image.open`
-覆盖全部格式、顺带处理 EXIF 旋转，读惰性头不解码像素。没有 Pillow 才退回头解析。
+覆盖全部格式，读惰性头不解码像素。没有 Pillow 才退回头解析。
+
+**尺寸是"显示尺寸"**：手机竖拍的照片常把像素横着存（400×300）、再把 EXIF
+`Orientation` 写成 6/8 让浏览器转 90° 显示。`<img>` 按 EXIF 转，所以真正铺进
+槽位的是 300×400——若照存储尺寸算，一张"会被裁掉 44%"的竖图会被算成同比例、
+一声不吭。两条路都要把 5–8 的宽高交换（Pillow 问 `getexif`，头解析读 APP1 的
+IFD0 0x0112）；只交换尺寸，不做像素旋转——这里从不解码。
 """
 import struct
 
@@ -72,8 +78,48 @@ def _gif_size(buf):
     return _le16(buf, 6), _le16(buf, 8)
 
 
+def _exif_orientation(payload):
+    """APP1 段载荷里的 EXIF `Orientation`（1–8）；不是 EXIF、读不出、值非法返回 None。
+
+    只认 IFD0 的 0x0112（SHORT）。5–8 是"显示时转 90°/270°"（含镜像），像素被
+    横着存——调用方据此交换宽高。所有长度都先查再 unpack：截断的 APP1 是正常文件
+    （相机在段末截断过），不该让整张图变成"读不出"。
+    """
+    if len(payload) < 14 or payload[:6] != b"Exif\x00\x00":
+        return None
+    tiff = payload[6:]
+    if len(tiff) < 8:
+        return None
+    if tiff[:2] == b"II":
+        endian = "<"
+    elif tiff[:2] == b"MM":
+        endian = ">"
+    else:
+        return None
+    try:
+        if struct.unpack_from(endian + "H", tiff, 2)[0] != 42:
+            return None
+        off = struct.unpack_from(endian + "I", tiff, 4)[0]
+        if off + 2 > len(tiff):
+            return None
+        count = struct.unpack_from(endian + "H", tiff, off)[0]
+        for i in range(count):
+            entry = off + 2 + i * 12
+            if entry + 12 > len(tiff):
+                return None
+            if struct.unpack_from(endian + "H", tiff, entry)[0] != 0x0112:
+                continue
+            if struct.unpack_from(endian + "H", tiff, entry + 2)[0] != 3:
+                return None       # Orientation 按规范是 SHORT；别的类型不猜
+            val = struct.unpack_from(endian + "H", tiff, entry + 8)[0]
+            return val if 1 <= val <= 8 else None
+    except struct.error:
+        return None
+    return None
+
+
 def _jpeg_size(buf):
-    """JPEG：扫段找 SOFn。
+    """JPEG：扫段找 SOFn；尺寸按 EXIF Orientation 换算成显示宽高。
 
     只认 0xC0~0xCF 里除 C4（DHT）、C8（JPG）、CC（DAC）以外的帧起始标记，
     其余（APPn / DQT / EXIF…）按段长跳过。渐进式 JPEG 的 SOF2 同样命中。
@@ -82,6 +128,7 @@ def _jpeg_size(buf):
         return None
     pos = 2
     n = len(buf)
+    orientation = 1
     # `<= n` 不是 `< n`：SOF 要读到 buf[pos+8]，差一个字节就会把正好落在
     # 读块末端的 SOF 判成"读不出"——而"读不出"在这模块里等于静默放行。
     while pos + 9 <= n:
@@ -101,9 +148,17 @@ def _jpeg_size(buf):
             pos += 2          # 无长度字段的独立标记
             continue
         if marker in (0xC4, 0xC8, 0xCC) or not (0xC0 <= marker <= 0xCF):
+            if marker == 0xE1:
+                # APP1 里可能是 EXIF（也可能只是 XMP）：载荷不认就保持原方向。
+                seg_end = pos + 2 + _be16(buf, pos + 2)
+                if seg_end <= n:
+                    got = _exif_orientation(buf[pos + 4:seg_end])
+                    if got is not None:
+                        orientation = got
             pos += 2 + _be16(buf, pos + 2)
             continue
-        return _be16(buf, pos + 7), _be16(buf, pos + 5)   # SOF：高在前
+        w, h = _be16(buf, pos + 7), _be16(buf, pos + 5)   # SOF：高在前
+        return (h, w) if orientation in (5, 6, 7, 8) else (w, h)
     return None
 
 
@@ -135,24 +190,35 @@ _PARSERS = (_png_size, _jpeg_size, _webp_size, _gif_size)
 
 
 def _pil_size(path):
-    """问 Pillow 要尺寸；没装、打不开、返回非正数都返回 None。"""
+    """问 Pillow 要**显示尺寸**；没装、打不开、返回非正数都返回 None。
+
+    `Image.size` 是存储尺寸，不替 EXIF 转。手机竖拍图（存储 400×300、Orientation=6）
+    在浏览器里显示成 300×400，照存储尺寸算会把"裁掉 44%"算成"同比例"——一条该响的
+    告警静默消失。这里只交换宽高，不解码像素（`Image.open` 仍是惰性头）。
+    """
     if _PILImage is None:
         return None
     try:
         # with 打开：不 close 会留着文件句柄，Windows 上随后删临时目录会失败
         with _PILImage.open(path) as im:
             w, h = im.size
+            try:
+                orientation = int(im.getexif().get(0x0112, 1) or 1)
+            except Exception:  # noqa: BLE001  EXIF 坏了按"没写方向"处理
+                orientation = 1
     except Exception:  # noqa: BLE001  Pillow 的异常类型按格式各不相同，一律"读不出"
         return None
+    if orientation in (5, 6, 7, 8):
+        w, h = h, w
     return (int(w), int(h)) if w > 0 and h > 0 else None
 
 
 def raster_size(path):
-    """栅格图的固有像素尺寸 (w, h)；读不出返回 None。
+    """栅格图的**显示**像素尺寸 (w, h)（EXIF Orientation 已应用）；读不出返回 None。
 
     Pillow 先答（覆盖全部格式），没有 Pillow 才按头解析四种常见格式。
     不解码、不校验——"图是不是坏的"由 `gen_hyperframes` 的 ffmpeg 全解码探测
-    管，这里只回答"它有多少像素"。调用方对 None 按"没法验"处理（不报，不猜）。
+    管，这里只回答"它在屏幕上占多少像素"。调用方对 None 按"没法验"处理（不报，不猜）。
     """
     got = _pil_size(path)
     if got:

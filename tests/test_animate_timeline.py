@@ -298,7 +298,11 @@ class Schema(unittest.TestCase):
         self.assertIn("amount", str(cm.exception))
 
     def test_fractional_anchor_index_is_rejected(self):
-        """小数项号在 GSAP 里算出非单调的出发时刻（中间项比两端还晚）。"""
+        """小数坐标会让相邻两项落在同一帧（实测 5 项 → [0.2, 0, 0, 0.2, 0.4]）。
+
+        旧说法是"非单调、中间项比两端还晚"——错的：延迟始终单调不减，毛病在
+        "一次两根"与窗口被压短。判据不变（拒收），文案已按实测重写。
+        """
         for bad in (1.5, -1, -0.5):
             with self.subTest(from_=bad):
                 self._one_step({"at": 0, "target": ".a", "to": {"opacity": 1},

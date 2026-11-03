@@ -712,9 +712,26 @@ def _anchor_delays(window, ease, n, anchor="start"):
     `delay_i = W × f((d_i − min d) / (max d − min d))`。`start` 时 `d_i = i`，
     退化成 `_distribute_delays`；`center` 在 2 项上 max == min，整组同时出发
     （GSAP 除零前先判等，这里照抄——那条退化由下面的用例钉住）。
+
+    数字 `anchor` 走另一条路（GSAP 的 axis 分支）：单行时位置从**末尾**倒数，
+    `d_i = |n − 1 − T − i|`，归一化分母是 `max d = n − 1 − T`，所以窗口会被压短。
+    实测 n=5、W=.4、ease=none：`T=1` → [.1333, 0, .1333, .2667, .4]；
+    `T=1.5` → [.2, 0, 0, .2, .4]（第 2、3 项同帧）。见 `NumericFrom`。
     """
     if n <= 1:
         return [0.0]
+    if not isinstance(anchor, str):
+        # 轴分支：位置按"从末尾倒数"编成 `s = n − 1 − i`，再减 `T`；等价于对
+        # 第 ⌊T⌋+1 项取距离 `|i − T|`，但分母是 `max|s − T| = n − 1 − T`，
+        # 所以整组窗口被压短（实测 n=5、T=1 → 窗口只剩 0.3）。
+        # 越界坐标夹到末项（实测 n=5、from=4/6 → [.4,.3,.2,.1,0]）。
+        idx = min(anchor, n - 1)
+        d = [abs(i - idx) for i in range(n)]
+        hi = max(d)
+        if hi <= 0:
+            return [0.0] * n
+        f = E.curve(ease, "none")
+        return [window * f(x / hi) for x in d]
     if anchor == "center":
         d = [abs(i - (n - 1) / 2.0) for i in range(n)]
     elif anchor == "end":
@@ -816,6 +833,57 @@ class StaggerAnchor(unittest.TestCase):
         """锚点名只有四枚，且与契约层共用同一份白名单。"""
         from _images_schema import STAGGER_ANCHORS
         self.assertEqual(set(STAGGER_ANCHORS), set(self.PINNED))
+
+    def test_center_puts_both_ends_on_the_full_window(self):
+        """`center` 的两端落在整窗口上、中项才是 0——"从中间长出来"要按这个读。
+
+        实测 n=7、W=.4、ease=power2.out：[.4, .3852, .2815, 0, .2815, .3852, .4]。
+        中心项距离 0，端点距离 `(n−1)/2` 归一化到 1，所以两端各走满一个窗口，
+        读起来比 `start` 慢一倍。文档必须这么写，否则作者会以为锚点只改先后。
+        """
+        d = _anchor_delays(self.WINDOW, self.EASE, 7, "center")
+        self.assertAlmostEqual(d[3], 0.0, places=9)
+        self.assertAlmostEqual(d[0], self.WINDOW, places=9)
+        self.assertAlmostEqual(d[-1], self.WINDOW, places=9)
+
+
+class NumericFrom(unittest.TestCase):
+    """数字 `from` 不是"项号锚点"，是**网格坐标**：起点从末尾倒数、窗口随之缩短。
+
+    实测（钉固 gsap@3.14.2、W=0.4、ease=none、n=5）：
+    - `from:0`   → [0, .1, .2, .3, .4]（与 start 等价）
+    - `from:1`   → [.1333, 0, .1333, .2667, .4]（第 2 项单独先动，窗口 0.3）
+    - `from:1.5` → [.2, 0, 0, .2, .4]（第 2、3 项**同一帧**）
+    - `from:2`   → [.4, .2, 0, .2, .4]（中项先动，与 center 同形）
+    旧文档把 `from:1` 写成"从第 3 项起往两边扩散"——方向反了，已按实测改正。
+    """
+
+    W = 0.4
+
+    def _delays(self, anchor):
+        return _anchor_delays(self.W, "none", 5, anchor)
+
+    def test_zero_equals_reading_order(self):
+        self.assertEqual(self._delays(0), self._delays("start"))
+
+    def test_index_starts_from_the_tail_not_the_head(self):
+        d = self._delays(1)
+        for got, want in zip(d, [0.1333, 0.0, 0.1333, 0.2667, 0.4]):
+            self.assertAlmostEqual(got, want, places=3, msg=f"{d}")
+        self.assertAlmostEqual(d[1], 0.0, places=9, msg="第 2 项应当是唯一起点")
+
+    def test_out_of_range_index_clamps_to_the_last_item(self):
+        """坐标越界夹到末项：与 `end` 等价，不是"整组同时出发"（实测 n=5、from=4/6）。"""
+        tail = _anchor_delays(self.W, "none", 5, "end")
+        for f in (4, 6, 99):
+            self.assertEqual(_anchor_delays(self.W, "none", 5, f), tail)
+
+    def test_fractional_index_collapses_neighbours_onto_one_frame(self):
+        """小数 from 的代价：相邻两项同帧，整组窗口同时被压短（不是"非单调"）。"""
+        d = self._delays(1.5)
+        self.assertAlmostEqual(d[1], d[2], places=9, msg="相邻两项没能同帧")
+        self.assertAlmostEqual(max(d), self.W, places=9, msg="最晚一项仍落在窗口上")
+        self.assertEqual(d[0], d[3], msg="两侧对称项应当同帧（起点在第 2、3 项之间）")
 
 
 class StaggerAnchorInProduct(unittest.TestCase):

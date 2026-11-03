@@ -230,10 +230,16 @@ class VoiceoverDuck(unittest.TestCase):
         self.assertIn("duck:false", err)
 
     def test_duck_false_and_volume_stays_quiet(self):
-        """两个旋钮都显式拧过 = 混音完全由人做主，不必再刷告警。"""
+        """两个旋钮都显式拧过 = 混音完全由人做主，不必再刷告警。
+
+        断言只针对**混音**那条：整页 stderr 归零会把别的判据（比如 agenda 行数
+        稀薄的 warn）一起算进来，那条与混音无关，一改就误伤——这条用例要守的是
+        "替人改混音却不说话"，不是"渲染整条链路一句话都不许说"。
+        """
         _tag, err = self._stderr_of({"muted": False, "volume": 1.0,
                                      "duck": False})
-        self.assertEqual(err, "")
+        self.assertNotIn("让路默认", err)
+        self.assertNotIn("data-fx-chain", err)
 
     def test_duck_warn_says_how_to_take_control_back(self):
         """替他压下去就得说清怎么改回来，否则这个默认就是不可逆的。"""

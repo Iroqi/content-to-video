@@ -1451,20 +1451,22 @@ def _prepare_card(rc, clip):
     # `chapter_attr` 挂在卡片上给页底刻度用，`chapter_html` 是标题上沿那枚
     # `03/12` 的盒子；画布页与 agenda 卡不生成它（画面主导 / 封面不编号）。
     _ch = clip.get("chapter")
-    if _ch and not (is_canvas or is_agenda):
-        # --ctv-ch-n 是刻度周期（每章一格）：挂在卡上而不是 :root，因为开屏/结尾
+    # 两个闸门拆开：`data-chapter` 管**页底刻度层**（有页底就画得下），`chapter-num`
+    # 管题头那枚编号（要有标题带的版式才放得进去）。结尾页只要前者——它把全片刻度
+    # 亮满作收束，但没有"我这是第几章"可报（给它编号等于把封面算成一章）。
+    _has_tally = bool(_ch) and not is_canvas
+    if _has_tally:
+        # --ctv-ch-n 是刻度周期（每章一格）：挂在卡上而不是 :root，因为开屏/画布
         # 不参与编号，它们不该从祖先继承到一个"共几章"的读数。
         # 编号盒的类名刻意不叫 seg-chapter——进度条 fill 的 id 已经是 `prog-{sid}`，
         # 两个名字只差一个字母，读代码的人迟早会把"章节号"和"页内进度"看混。
         chapter_attr = f'data-chapter="{_ch[0]}" data-chapters="{_ch[1]}" '
         chapter_style = f'--ctv-ch-n:{_ch[1]};'
-        chapter_html = (f'    <div class="chapter-num" id="cap-{sid}">'
-                        f'{_ch[0]:02d}/{_ch[1]:02d}</div>\n')
         # 刻度们：每章一枚 <i>，落在 k/n 处（右缘对齐分格线，-1.5px 补线宽）。
-        # 它们不靠遮罩，而是由 _chapter_tick_lines 逐枚挂 class="on"——遮罩只能表达
-        # "从左亮到右"，而"当前这一格单独提亮"需要逐枚控制。
+        # 点亮由 _chapter_tick_lines 逐枚推 `--tick-on`——遮罩只能表达"从左亮到
+        # 右"，而"当前这一格单独提亮"需要逐枚控制。
         # 每一格一格宽、居中留缝（gap 走模板的 chapterTickGap，两画幅同一档）：
-        # left 从第 k 格的左边界起算，short 横线因此落在格中线上。
+        # left 从第 k 格的左边界起算，短横因此落在格中线上。
         _tick_gap = float(rc.layout["progressBar"]["chapterTickGap"])
         ticks_html = "".join(
             f'    <i class="chapter-tick" data-ch="{k}" '
@@ -1475,8 +1477,13 @@ def _prepare_card(rc, clip):
     else:
         chapter_attr = ""
         chapter_style = ""
-        chapter_html = ""
         ticks_html = ""
+    # 编号只在"有标题带"的版式上生成：agenda（含结尾页）与画布页的题头不是
+    # `.seg-title-wrap`，编号贴不到任何一条边上。
+    chapter_html = (
+        f'    <div class="chapter-num" id="cap-{sid}">'
+        f'{_ch[0]:02d}/{_ch[1]:02d}</div>\n'
+        if (_has_tally and clip.get("chapter_num") and not is_agenda) else "")
     # 卡片属性区一次拼完：data-* 与 style 各**只能出现一次**（重复的属性浏览器
     # 只认第一个，第二个静默丢弃——章节刻度会整层不画，而产物看起来完全正常）。
     card_attrs = (
@@ -1522,6 +1529,7 @@ def _prepare_card(rc, clip):
         peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
         wipe_alt=clip.get("wipe_alt"), wipe_alt_prev=clip.get("wipe_alt_prev"),
         gets_line=clip["gets_line"],
+        is_closure=bool(clip.get("closure")),
         ac=ac, ac_attr=ac_attr,
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, is_caption=has_caption,
@@ -2874,22 +2882,24 @@ def _reveal_tween_lines(sel_clip, sel_inner, y, duration, ease, at):
 
 
 def _chapter_tick_lines(rc, card, s, d):
-    """页底轨道上的章节刻度：本段起点就把"已经走到第几章"点亮。
+    """页底那排刻度的读数：亮到第几格 = 走到第几章，当前格的长度 = 本段进度。
 
     Opus 5.5 那批作品里 HUD 几乎是共同语：观众**随时知道这一段在第几章**。缺省的
     进度条只说明"这一段演了多久"，换一段就归零，读者没有位置感。
 
-    刻度画在 `.seg-card[data-chapter]::after` 的 repeating-gradient 里（第 k 条落在
-    `k/n × 屏宽` 处）；**已走到的章**由 `--cap-lit` 遮罩的 `inset()` 右端裁出来——
-    一张遮罩决定"亮到第几条"，不需要每格一条补间。
-
-    - 起点一个 `tl.set` 推遮罩，之后**整段不动**：章节在时间轴上只增不减，而它
-      变化的那一帧恰好是换页那一帧——让遮罩再补 0.34s，会在新页开头露出"上一章
-      的刻度还亮着、上一章标题已经走了"的叠影。翻亮的那一下交给换页本身的运动，
-      读起来才是"翻过一章"，而不是"标记追着画面跑"。
-    - 当前章那一格补 accent 强调（`--cap-on` 从 0 到 1）：这是"我在这一章"的唯一
-      读数，其它格保持中性色。它随本段起点起、`chapterIndex.duration` 内到位，
-      是这一页唯一会动的那一点。
+    - **亮度说"哪一章"**：已过的格子整条亮（`--tick-on` 写常量 1，随后不动），
+      当前这格从 0 升到 1，后面的保持 CSS 缺省 0。逐格单独点亮而非整段染色——
+      "我在第几章"是单数，一条渐变读不出单数。
+    - **长度说"这一章演到哪儿"**：当前格从格左边界长到右边界（`--tick-fill`，
+      `ease:none` 匀速）。页内进度条在编号卡片里被隐掉了（见 CSS 那条注释），
+      "这段还剩多少"由它承担，信息一条不少。
+    - **收束页整排依次亮**：结尾页（`is_closure`）把 n 格按 `chapterIndex.duration
+      均分` 逐格点亮，像把全片数一遍；其余页的已过格子在段起点就已经是亮的
+      （它们在前几页里亮过了，这里只是这一页刻度的初始状态）。
+    - 走 `--tick-on` / `--tick-fill` 两个**自定义属性**，不走 class：GSAP 的
+      `className` 插件写 `+=on` 会把字符串原样塞进 class 属性（3.14.2 实测），
+      `tl.call` 回调在 `seek()` 下干脆不触发——两条都只在实时播放时"看着对"，
+      而逐帧 seek 是这个工程唯一的验证手段。
     - 只在 `chapterIndex.mode == "bar"` 时生成；`off` 连刻度层都不画（不挂
       `data-chapter`，CSS 选择器自然不命中）。
     """
@@ -2897,41 +2907,29 @@ def _chapter_tick_lines(rc, card, s, d):
         return []
     cfg = rc.anim["chapterIndex"]
     ch, n = card.chapter
-    right = (n - ch) / n * 100
     # 选择器里的属性值走单引号：它要整段塞进 `tl.set("…")` 的双引号里。
     ticks = [f"#{card.sid} .chapter-tick[data-ch='{k}']" for k in range(1, n + 1)]
     dur = float(cfg["duration"])
-    lines = [
-        f'tl.set("#{card.sid}",{{"--cap-mask":"inset(0 {right:.4f}% 0 0)"}},{s:.2f})',
-        f'tl.fromTo("#{card.sid}",{{"--cap-on":0}},'
-        f'{{"--cap-on":1,duration:{dur:.2f},'
-        f'ease:"{cfg["ease"]}"}},{s:.2f})',
-    ]
-    # 逐枚刻度：已过的整格点亮（set，不动），当前这枚随 --cap-on 同一拍淡入，
-    # 后面那些保持中性。用 class 而不是内联样式，是因为 CSS 里"亮/不亮"还有
-    # 光晕与配色两件事，写进 JS 就把样式拆成两处。
-    # 点亮走 **CSS 自定义属性**（`--tick-on`），不走 class：
-    #   · GSAP 的 `className` 插件即使写 `+=on` 也会把 "+=on" 原样写进 class 属性
-    #     （3.14.2 实测），不解析成追加；
-    #   · `tl.call` 回调在 `seek()` 下不触发（实测），而逐帧 seek 是这个工程唯一
-    #     的验证手段——一条只有实时播放才对的表现，测不出来也留不住。
-    # 自定义属性走的是与整条时间线其余部分同一条补间通道：seek 到哪一帧，属性就是
-    # 哪一帧的值。已过的格子写常量 1（`tl.set`，随后不动），当前这格随
-    # `--cap-on` 同拍从 0 升到 1，后面的格子保持 CSS 缺省 0。
+    ease = cfg["ease"]
+    # 收束页的逐格步距：把一章的点亮时长均摊到 n 格，单格不超过 0.08s
+    # （12 章时也只用 0.96s，不会把结尾页的开场拖长）。
+    step = min(dur / max(n, 1), 0.08) if card.is_closure else 0.0
+    lines = []
     for k in range(1, n + 1):
         sel = ticks[k - 1]
+        at = s + (k - 1) * step
         if k < ch:
-            lines.append(f'tl.set("{sel}",{{"--tick-on":1}},{s:.2f})')
+            # 走过的格子写 `--tick-past`（中性白）而不是 `--tick-on`（accent）：
+            # 走过的章是记录、当前章才是状态，两档颜色必须能分开（见 CSS 那条）。
+            lines.append(f'tl.set("{sel}",{{"--tick-past":1}},{at:.2f})')
         elif k == ch:
             lines.append(f'tl.fromTo("{sel}",{{"--tick-on":0}},'
                          f'{{"--tick-on":1,duration:{dur:.2f},'
-                         f'ease:"{cfg["ease"]}"}},{s:.2f})')
-    # 当前这一格的**播放进度**：短横从格左边界长到格右边界，走完 = 这一段播完。
-    # 页内进度条在编号卡片里被隐掉了（见 CSS 那条注释），"这段还剩多少"由它承担——
-    # 于是"第几章"（格数）与"这一章演到哪儿"（格内长度）在同一排刻度上同时可读，
-    # 而且天然是"疏密有节奏"的读数，不做任何额外装饰。
+                         f'ease:"{ease}"}},{at:.2f})')
     lines.append(f'tl.fromTo("{ticks[ch - 1]}",{{"--tick-fill":0}},'
-                 f'{{"--tick-fill":1,duration:{d:.2f},ease:"none"}},{s:.2f})')
+                 f'{{"--tick-fill":1,'
+                 f'duration:{max(d - (ch - 1) * step, 0.01):.2f},'
+                 f'ease:"none"}},{s + (ch - 1) * step:.2f})')
     return lines
 
 
@@ -3380,12 +3378,27 @@ def generate_html(manifest, audio_src, images=None,
     _ch = 0
     for c in clips:
         sid_ = c["seg"]["id"]
+        c["chapter_num"] = False
+        c["closure"] = False
+        if chapter_mode == "off":
+            c["chapter"] = None
+            continue
+        # 结尾页：**收束**——不编号，但页底刻度整排亮满。前面每一页点亮一格，
+        # 到这里所有格子一起亮，全片的结构在同一处合上。这是"有收束"那一层
+        # 唯一落在版式上的东西：不新增任何元素，只把读者已经看熟的读数推到终点。
+        # 整页海报式的结尾（closing_layout: "canvas"）不挂：画布页硬切、画面
+        # 主导，页底不该出现一条模板的尺子。
+        if sid_ == "closing" and chapter_total and not is_full_bleed(c["seg"]):
+            c["chapter"] = (chapter_total, chapter_total)
+            c["closure"] = True
+            continue
         if (sid_ in ("opening", "closing") or is_full_bleed(c["seg"])
-                or _is_keep_page(rc, sid_) or chapter_mode == "off"):
+                or _is_keep_page(rc, sid_)):
             c["chapter"] = None
             continue
         _ch += 1
         c["chapter"] = (_ch, chapter_total)
+        c["chapter_num"] = True
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
     # closing_cta 只有结尾 agenda 卡这一个消费者：没有 closing 段、或那一页被作者

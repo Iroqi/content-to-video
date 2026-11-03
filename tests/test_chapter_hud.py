@@ -70,10 +70,21 @@ class ChapterReadout(unittest.TestCase):
                 f"{sid} 的编号没有入场补间")
         self.assertEqual(html.count('tl.from("#cap-c1"'), 1,
                          "编号入场只该有一条补间（落位后不动）")
-        # 开屏/结尾不参与编号（整页画布与接续页同理：画面主导、没有题目）
-        for sid in ("opening", "closing"):
-            self.assertNotIn("data-chapter", card(html, sid), f"{sid} 不该参与编号")
-            self.assertNotIn(f'id="cap-{sid}"', html)
+        # 开屏不参与（封面不编号）；结尾页**挂刻度但不编号**——它把全片刻度亮满
+        # 作收束，却没有"我这是第几章"可报（给它编号等于把封面算成一章）。
+        self.assertNotIn("data-chapter", card(html, "opening"))
+        self.assertNotIn('id="cap-opening"', html)
+        self.assertIn('data-chapter="3" data-chapters="3"', card(html, "closing"))
+        self.assertNotIn('id="cap-closing"', html)
+        # 收束是**逐格**点亮（前 n-1 格 set、末格 fromTo），不是同一帧全亮：
+        # "把全片数一遍"要靠先后关系读出来，一次全亮只是"这一页有个满格刻度"。
+        close_sets = re.findall(
+            r'tl\.set\("#closing \.chapter-tick\[data-ch=\'(\d)\'\]",'
+            r'\{"--tick-past":1\},([\d.]+)\)', html)
+        self.assertEqual([k for k, _ in close_sets], ["1", "2"],
+                         "结尾页应逐格点亮前 n-1 格")
+        ats = [float(t) for _, t in close_sets]
+        self.assertLess(ats[0], ats[1], "收束是逐格亮，不是同一帧全亮")
         # `off` 只关读数：CSS 骨架仍在，DOM 上一枚编号、一格刻度都不生成
         off = render(dict(THREE, animation={"chapterIndex": {"mode": "off"}}))
         for frag in ('class="chapter-num"', 'class="chapter-tick"', 'data-chapter="'):
@@ -90,10 +101,11 @@ class ChapterReadout(unittest.TestCase):
         self.assertGreater(gap, 0)
         self.assertAlmostEqual(double, gap * 2, places=3)
 
-        # 亮度说"哪一章"：已过的格子写常量、当前格从 0 升到 1、未来的格子无补间
+        # 亮度说"哪一章"：已过的格子写 `--tick-past`（中性白）、当前格 `--tick-on`
+        # 从 0 升到 1（accent）、未来的格子无补间
         for k in (1, 2):
             self.assertIn('tl.set("#c3 .chapter-tick[data-ch=\'%d\']",'
-                          '{"--tick-on":1}' % k, html)
+                          '{"--tick-past":1}' % k, html)
         self.assertIn('tl.fromTo("#c3 .chapter-tick[data-ch=\'3\']",{"--tick-on":0},'
                       '{"--tick-on":1', html)
         self.assertNotIn(".chapter-tick[data-ch='4']", html)

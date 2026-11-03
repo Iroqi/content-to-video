@@ -140,12 +140,13 @@ body{font-family:var(--ctv-font-family)}
    轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
    只会多出一次同步维护，没有第二种取值可表达。 */
 .seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
-/* 页底只有一个进度条：两条读数同框就是两条同色不同长的亮条并排，谁读不出自己
-   那条的含义（1080 宽的成片里像故障条）。于是按档互斥——
-     bar（默认）：条子读章节进度（--cap-mask 裁到"第几章/共几章"）；本段播放进度
-       改由刻度排里"当前格"的长度承担，信息一条不少。
-     off：条子退回页内进度（.seg-progress 的 fill），刻度层整体不出现。
-   所以 .seg-progress 在编号卡片里隐掉，.seg-card::after 只在编号卡片里存在。 */
+/* 页底那一条到底读什么，按档互斥：
+     bar（默认）：页底**只有刻度排**（下面那排短横），没有进度条。长度说"这一章
+       演到哪儿"、位置说"在第几章"——两个读数各占一个维度，不抢同一条线。
+     off：进度条退回页内进度（.seg-progress 自己的 fill），刻度层整体不出现。
+   两条读数同框试过：同色不同长的两条亮条并排，谁也读不出自己那条的含义，
+   1080 宽的成片里像故障条（实测）。所以 `.seg-progress` 在编号卡片里隐掉，
+   `.chapter-tick` 只在挂了 data-chapter 的卡片里存在。 */
 
 /* 刻度本身不画，改画它**上方那一排短横**：页底是进度条的地盘，任何压在线上的竖线
    读起来都像"进度条断了一节"（实测竖线在 4px 轨道上被当成亮条的空洞）。所以刻度
@@ -155,15 +156,22 @@ body{font-family:var(--ctv-font-family)}
    点亮走 `--tick-on`（0→1，由 _chapter_tick_lines 推）：底色从 26% 中灰混到 accent。
    逐格单独点亮而非整段染色——"我在第几章"是单数，一条渐变读不出单数。 */
 .chapter-tick{position:absolute;bottom:var(--ctv-prog-height);z-index:4;height:var(--ctv-ch-tick-h);pointer-events:none;
-  --tick-on:0;--tick-fill:1}
+  --tick-on:0;--tick-past:0;--tick-fill:1}
 .chapter-tick::after{content:"";position:absolute;left:0;bottom:5px;height:3px;border-radius:1.5px;
   /* 已走到的格子整条亮（--tick-fill = 1）；当前这格从 0 长到满（见 _chapter_tick_lines
      末尾那条补间）——格内长度就是"这一章演到哪儿"。 */
   width:calc(100% * var(--tick-fill,1));
-  /* 未点亮档相对**卡片背景**（--ctv-bg-color）提亮，而不是往当前 accent 上掺：
-     accent 因段而异，掺出来的"灰"会跟着换色，一排刻度就变成四段不同颜色的线。
-     用 bg 混文字色，未点亮是中性灰、点亮才上 accent，颜色语义只有一档。 */
-  background:color-mix(in srgb,var(--seg-accent) calc(var(--tick-on) * 100%),color-mix(in srgb,var(--ctv-text-color) 34%,var(--ctv-bg-color)));
+  /* 三档颜色，各管一件事（都从 --tick-past / --tick-on 两个 0/1 变量推，不加新类）：
+       未走到  中性灰     = 文字色 34% 混底色
+       已走过  **文字色** = 62% 混，中性白，不随页换色——走过的章是记录，不是状态
+       当前章  **accent** = 这一页的强调色，只有这一格会发亮
+     已走过的格子若也用 accent，整排就会随每一页重新上色，读作"换了一把尺子"；
+     而"走过 + 当前"两档同色又分不出哪一格是现在。 */
+  background:color-mix(in srgb,
+      var(--seg-accent) calc(var(--tick-on) * 100%),
+      color-mix(in srgb,
+          var(--ctv-text-color) calc(var(--tick-past) * 62%),
+          color-mix(in srgb, var(--ctv-text-color) 34%, var(--ctv-bg-color))));
   box-shadow:0 0 calc(var(--ctv-prog-height) * 3 * var(--tick-on)) color-mix(in srgb,var(--seg-accent) calc(var(--tick-on) * 70%),transparent)}
 /* 未编号的卡片（开屏/结尾/接续页/画布页）里即使误留刻度也不画：编号与刻度同生同灭；
    同样的道理，编号卡片里页内进度 fill 也隐掉（见 ── 页底的三个层 ── 那条注释）。 */
@@ -667,9 +675,10 @@ body{font-family:var(--ctv-font-family)}
     
     <div class="plate-caption" id="cap-seg-b" data-layout-allow-overflow data-layout-allow-overlap data-layout-allow-occlusion><div class="plate-clip" data-accent="#f59e0b"><div class="plate-lines" id="pl-seg-b"><div class="plate-slot"><div class="plate-line" data-i="3" data-t0="7.20" data-t1="9.20" data-layout-allow-overlap data-layout-allow-occlusion>这一段是整页画布。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="这一段是整页画布。"></div></div></div><div class="plate-slot"><div class="plate-line" data-i="4" data-t0="9.60" data-t1="11.60" data-layout-allow-overlap data-layout-allow-occlusion>它没有字幕。<span class="verse-em"></span><div class="verse-ved" aria-hidden="true" data-layout-allow-overlap data-layout-allow-occlusion data-text="它没有字幕。"></div></div></div></div></div></div>
   </div>
-  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" style="--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf;clip-path:inset(100% 0 0 0);">
+  <div id="closing" class="clip seg-card agenda-card" data-start="11.60" data-duration="2.40" data-accent="#2dd4bf" data-track-index="1" data-chapter="1" data-chapters="1" style="--ctv-ch-n:1;--seg-accent:#2dd4bf;--seg-accent-text:#2dd4bf;clip-path:inset(100% 0 0 0);">
     <div class="bg"></div>
     <div class="grid"></div>
+    <i class="chapter-tick" data-ch="1" style="left:calc(0.0000% + 6.0px);width:calc(100.0000% - 12.0px)"></i>
     <div class="agenda-col">
       <div class="agenda-head"><div class="title-reveal" id="rev-title-closing"><div class="seg-title" id="title-closing" style="font-size:84px;text-shadow:0 0 48px #2dd4bf40">小结</div></div></div>
       <div class="agenda"><div class="agenda-row"><span class="ag-idx">01</span><span class="ag-name">记住第一件事</span></div><div class="agenda-row"><span class="ag-idx">02</span><span class="ag-name">第二件事</span></div></div><div class="agenda-tail"><div class="agenda-row"><span class="ag-idx">→</span><span class="ag-name">关注我们</span></div></div>
@@ -718,8 +727,6 @@ tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",
   tl.from("#img-seg-a",{x:16,duration:0.44,ease:"sine.inOut"},2.76)
   tl.fromTo("#img-seg-a > img",{scale:1.06,x:0,y:13.23},{scale:1,x:0,y:0,duration:0.60,ease:"power2.out"},2.96)
   tl.to("#prog-seg-a",{width:"100%",duration:4.40,ease:"none"},2.40)
-  tl.set("#seg-a",{"--cap-mask":"inset(0 0.0000% 0 0)"},2.40)
-  tl.fromTo("#seg-a",{"--cap-on":0},{"--cap-on":1,duration:0.34,ease:"power2.out"},2.40)
   tl.fromTo("#seg-a .chapter-tick[data-ch='1']",{"--tick-on":0},{"--tick-on":1,duration:0.34,ease:"power2.out"},2.40)
   tl.fromTo("#seg-a .chapter-tick[data-ch='1']",{"--tick-fill":0},{"--tick-fill":1,duration:4.40,ease:"none"},2.40)
   tl.fromTo("#seg-b",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.01,ease:"power2.inOut"},7.20)
@@ -730,6 +737,8 @@ tl.fromTo("#opening",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",
   tl.fromTo("#rev-title-closing",{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(0% 0 0 0)",duration:0.25,ease:"expo.out"},12.00)
   tl.from("#title-closing",{y:62,duration:0.25,ease:"expo.out"},12.00)
   tl.to("#prog-closing",{width:"100%",duration:2.00,ease:"none"},12.00)
+  tl.fromTo("#closing .chapter-tick[data-ch='1']",{"--tick-on":0},{"--tick-on":1,duration:0.34,ease:"power2.out"},12.00)
+  tl.fromTo("#closing .chapter-tick[data-ch='1']",{"--tick-fill":0},{"--tick-fill":1,duration:2.00,ease:"none"},12.00)
 
 // Sentence-flow sync via onUpdate
 const cues = [

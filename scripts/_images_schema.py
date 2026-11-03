@@ -5,6 +5,7 @@
 validate_images_json fail-fast；路径语义由 validate_relative_project_path 收口。
 媒体类型判定（扩展名 → image/video/gif）也在这里，与 html_renderer 共用。
 """
+import json
 import os
 import re
 import sys
@@ -277,17 +278,32 @@ def _validate_count(count, where):
     return count
 
 
+# type 的切分档。白名单是唯一真源：渲染端按它分岔、文档照抄这份口径。
+# - `char`：一次一个字符（缺省，也是 `type:{}` 的写法）；
+# - `word`：一次一个语义单元——拉丁词整词、CJK 两字一组、空白与标点附着到前一组。
+#   逐字时观众数得出字数（见 look.md「动画：实现要点」），按单元跳格读起来是
+#   "一组一组念出来"，字多的句子尤其明显。
+TYPE_CHUNKS = ("char", "word")
+
+
 def _validate_type(typ, where):
-    """编排步骤的 type：打字机逐字揭示——把 <text> 里现成的整段文本按进度
-    逐字写回。只收空对象 `{}`：字数取自那条 <text>（运行时读 textContent），节奏
-    走 step 级 duration/ease。
+    """编排步骤的 type：打字机式揭示——把 <text> 里现成的整段文本按进度写回。
+
+    正文取自那条 <text>（运行时读 textContent），节奏走 step 级 duration/ease。
+    可选的 `chunk` 只换"一次写回多少"：`char` 一个字符、`word` 一个语义单元。
     """
     if not isinstance(typ, dict):
-        raise ValueError(f"{where} 必须是空对象 {{}}（节奏用 step 级 duration/ease 调；"
-                         f"实际: {type(typ).__name__}）")
-    if typ:
-        raise ValueError(f"{where} 只认空对象 {{}}，未知键 {sorted(typ)}——"
-                         "字数取自 <text> 本身，快慢用 duration/ease")
+        raise ValueError(f"{where} 必须是对象 {{}} 或 {{\"chunk\": …}}"
+                         f"（节奏用 step 级 duration/ease 调；实际: {type(typ).__name__}）")
+    unknown = set(typ) - {"chunk"}
+    if unknown:
+        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 chunk"
+                         "（字数取自 <text> 本身，快慢用 duration/ease）")
+    chunk = typ.get("chunk", "char")
+    if chunk not in TYPE_CHUNKS:
+        raise ValueError(f"{where} 的 chunk 只能是 "
+                         + " / ".join(json.dumps(c) for c in TYPE_CHUNKS)
+                         + f"（实际: {chunk!r}）")
     return typ
 
 

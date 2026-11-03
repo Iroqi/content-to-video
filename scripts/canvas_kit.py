@@ -118,7 +118,7 @@ ELEMENT_KEYS = {
     "bars": ("id", "base_y", "bars", "fill"),
     "circle": ("id", "cx", "cy", "r", "fill"),
     "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count",
-             "odometer"),
+             "odometer", "chunk"),
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
 COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
@@ -1024,7 +1024,9 @@ def build_animate(spec, sentences=None):
             step["count"] = (dict(el["count"], odometer=True) if el.get("odometer")
                              else el["count"])
         elif el.get("type"):
-            step["type"] = {}
+            # 切分档同样是**节点级**调档：一页里往往只有一两句该按词跳，
+            # 把它写进 type 契约就得整页跟着变。
+            step["type"] = {"chunk": el["chunk"]} if el.get("chunk") else {}
         else:
             # 仍给全 from：删掉 SVG 那行 opacity 之后草稿还得演得对（fromTo 不依赖
             # 元素当前值）。to 带作者写的落定透明度。

@@ -37,6 +37,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3a 步选形式：这一页要不要演、配图从哪来；缺图 / 图糊 / 被裁 / 生图崩字 | `references/imagery.md` | 全片都是手绘 SVG 时 |
 | 第 3b 步画 SVG：几何、对比度、字号、数据自查 | `references/canvas.md` | 不画 SVG 就不用读 |
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、每一拍怎么写 | `references/motion.md` | 该段不演时就跳过（演什么已在第 1 步定完） |
+| 第 3b 步一组元素逐个出场：多久演完、怎么分、从哪头起（`stagger`） | `references/stagger.md` | 这一拍只改一个元素时 |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认版式时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |

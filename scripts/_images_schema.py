@@ -282,11 +282,29 @@ def _validate_type(typ, where):
     return typ
 
 
+# 错峰的四枚**具名锚点**（GSAP `stagger.from` 的字符串档）。白名单是唯一真源：
+# 消费侧（html_renderer 透传给 GSAP）与文档都从这里取，不各抄一份字面量。
+STAGGER_ANCHORS = ("start", "center", "end", "edges")
+
+
 def _validate_stagger(stagger, where):
     """编排步骤的 stagger：一条 step 命中一组元素时，逐个之间的时间间隔。
 
     收数字（每个间隔秒数）或对象（GSAP stagger 配置：each/amount/from/grid/ease）。
     值走标量/数组校验、禁 on*。
+
+    三处**只透传不校验**曾经各自静默失效，全部按实测钉在这里（口径是钉固
+    gsap@3.14.2 的 `gsap.utils.distribute`，见 tests/test_motion_design.py
+    `StaggerAnchor`）：
+
+    1. `from` 写错一个字母就退回读序。实测 `from:"middle"` 不报错、按 start 排——
+       作者以为"从中间展开"，成片里那组元素照旧从左扫到右，而这一层恰恰是唯一
+       决定"先看哪个"的旋钮。
+    2. `each` 与 `amount` 并写时 GSAP **只认 each**，`amount`（整组窗口）被丢掉。
+       5 项时两者收尾都是 0.4s、看不出破绽；12 项就变成 1.1s——"这一页揭示多久"
+       被项数决定了，正是上一轮把 `each` 换成窗口要消灭的那件事。
+    3. `from` 收小数会算出非单调的出发时刻（实测 n=5、`from:1.5` → [0.2, 0, 0,
+       0.2, 0.4]：中间的比两头的还晚，读出来是「卡了一下」）。索引只收非负整数。
     """
     if not isinstance(stagger, dict):
         if not is_finite_number(stagger):
@@ -299,15 +317,32 @@ def _validate_stagger(stagger, where):
     if unknown:
         raise ValueError(f"{where} 含未知键 {sorted(unknown)}"
                          "——只认 each / amount / from / grid / ease")
+    if "each" in stagger and "amount" in stagger:
+        raise ValueError(
+            f"{where} 同时写了 each 与 amount——这是两套口径（每项步长 / 整组窗口），"
+            "GSAP 只认 each、amount 被静默丢掉：项数一多，揭示跨度就跟着项数长"
+            "（5 项都是 0.4s，12 项变成 1.1s），而作者以为自己钉死了窗口。"
+            "要窗口就只写 amount，要每项步长就只写 each")
     for k, v in stagger.items():
         if k == "grid":
             if (not isinstance(v, (list, tuple)) or len(v) != 2
                     or any(isinstance(x, bool) or not isinstance(x, int) or x < 1 for x in v)):
                 raise ValueError(f"{where} 的 grid 必须是两个 ≥1 的整数 [列, 行]（实际: {v!r}）")
         elif k == "from":
-            if not (isinstance(v, str) or is_finite_number(v)):
-                raise ValueError(f"{where} 的 from 必须是字符串或有限数字"
+            if isinstance(v, str):
+                if v not in STAGGER_ANCHORS:
+                    raise ValueError(
+                        f"{where} 的 from={v!r} 不是可用的锚点——只认 "
+                        f"{' / '.join(STAGGER_ANCHORS)}（读序 / 中心 / 末项 / 两端），"
+                        "或一个非负整数项号。拼错的锚点 GSAP **不报错**，直接按读序排："
+                        "成片里那组元素照旧从头到尾，与作者写的「从中间展开」相反")
+            elif not is_finite_number(v):
+                raise ValueError(f"{where} 的 from 必须是锚点名或非负整数项号"
                                  f"（NaN/Infinity 不算数；实际: {v!r}）")
+            elif float(v) != int(v) or v < 0:
+                raise ValueError(f"{where} 的 from={v!r} 必须是**整数**项号且 ≥0"
+                                 "——小数项号在 GSAP 里算出的是非单调的出发时刻"
+                                 "（中间项比两端还晚），读出来是「卡了一下」")
         elif k == "ease":
             validate_ease(v, f"{where} 的 ease")
         else:  # each / amount

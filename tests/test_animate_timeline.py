@@ -269,6 +269,41 @@ class Schema(unittest.TestCase):
         self._one_step({"at": 0, "target": ".a", "to": {"opacity": 1},
                         "stagger": {"each": 0.2, "bogus": 1}})
 
+    def test_stagger_accepts_every_named_anchor_and_integer_index(self):
+        from _images_schema import STAGGER_ANCHORS
+        for anchor in STAGGER_ANCHORS:
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+                {"at": 0, "target": ".a", "to": {"opacity": 1},
+                 "stagger": {"amount": 0.3, "from": anchor}}]}}})
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+            {"at": 0, "target": ".a", "to": {"opacity": 1},
+             "stagger": {"amount": 0.3, "from": 2}}]}}})
+
+    def test_misspelled_anchor_is_rejected_not_silently_ignored(self):
+        """`from:"middle"` 在 GSAP 里不报错、按 start 排——那组元素照旧从左扫到右，
+        而作者以为自己写的是从中间展开。这一层必须给答案。"""
+        with self.assertRaises(ValueError) as cm:
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+                {"at": 0, "target": ".a", "to": {"opacity": 1},
+                 "stagger": {"amount": 0.3, "from": "middle"}}]}}})
+        self.assertIn("锚点", str(cm.exception))
+        self.assertIn("center", str(cm.exception))
+
+    def test_each_and_amount_together_are_rejected(self):
+        """两套口径并写时 GSAP 只认 each、amount 被丢掉：项数一多，揭示跨度就跟着项数长。"""
+        with self.assertRaises(ValueError) as cm:
+            validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+                {"at": 0, "target": ".a", "to": {"opacity": 1},
+                 "stagger": {"each": 0.1, "amount": 0.4}}]}}})
+        self.assertIn("amount", str(cm.exception))
+
+    def test_fractional_anchor_index_is_rejected(self):
+        """小数项号在 GSAP 里算出非单调的出发时刻（中间项比两端还晚）。"""
+        for bad in (1.5, -1, -0.5):
+            with self.subTest(from_=bad):
+                self._one_step({"at": 0, "target": ".a", "to": {"opacity": 1},
+                                "stagger": {"amount": 0.3, "from": bad}})
+
 
 class TweenKnobContract(unittest.TestCase):
     """step 级旋钮的唯一位置 + 缓动档名必须是钉固的 GSAP 真认的那些。

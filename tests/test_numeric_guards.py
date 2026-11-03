@@ -85,8 +85,9 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
                 with self.subTest(key=key, bad=bad):
                     self._assert_rejected(_step(stagger={key: bad}), "≥0")
             with self.subTest(key="from", bad=bad):
+                # from 现在是有语义的锚点：NaN/Infinity 不是锚点名、也不是项号
                 self._assert_rejected(_step(stagger={"from": bad}),
-                                      "字符串或有限数字", bad=bad)
+                                      "锚点名或非负整数项号", bad=bad)
 
     def test_video_audio_opts(self):
         for bad in BAD:
@@ -101,7 +102,7 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
         validate_images_json({
             "seg-a": {"src": "images/a.svg", "animate": {"steps": [
                 {"at": 0, "target": "#a", "duration": 1.5, "delay": 0,
-                 "stagger": {"each": 0.2, "from": "center", "amount": 1},
+                 "stagger": {"amount": 1, "from": "center"},
                  "to": {"opacity": 0}},
                 {"at_time": "+0.5", "target": "#a", "count": {"to": 68.5}},
             ]}}})

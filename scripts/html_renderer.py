@@ -634,6 +634,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
 
     # 从模板加载布局/动画/字体参数
     tpl_layout = tpl["layout"][aspect]
+    # 分画幅几何整块挂在 rc 上：卡片装配阶段（_prepare_card）手里只有 rc，量格子
+    # 宽度时还得再摸一次模板，就等于给同一个数开了第二个入口。
+    rc.layout = tpl_layout
     rc.anim = tpl["animation"]
     tpl_typo = tpl["typography"]
 
@@ -809,6 +812,17 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
                          f"（应落在 [0, 1)）")
     _prog = tpl_layout["progressBar"]
     css_prog_height = _prog["height"]
+    # 章节刻度比进度条高一档：4px 的格子在 1440 高的画面里读不出"分了几章"。
+    # 它只是刻度层自己的盒子高度，底边仍与进度条同线，不改变进度条本身的口径。
+    if not 0 < float(_prog["chapterTickHeight"]) <= 40:
+        raise ValueError("[template] layout.*.progressBar.chapterTickHeight 应为"
+                         f" (0, 40] 内的像素数，实为 {_prog['chapterTickHeight']!r}")
+    # 章节编号的两档开关：`bar` 画页底刻度，`off` 整层不画（连 data-chapter 都不挂）。
+    # 白名单是唯一真源，写错拼法在这里就炸，不留成"悄悄退回 bar"的静默失效。
+    _cap_mode = str(tpl["animation"]["chapterIndex"]["mode"])
+    if _cap_mode not in ("bar", "off"):
+        raise ValueError(f"[template] animation.chapterIndex.mode = {_cap_mode!r}"
+                         ' 只能是 "bar"（页底刻度）或 "off"（不画）')
     # 字体排印
     css_title_weight = tpl_typo["titleWeight"]
     css_title_lh = tpl_typo["titleLineHeight"]
@@ -837,7 +851,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-tagline-font:{css_tagline_font};--ctv-tagline-mt:{css_tagline_mt}px;
   --ctv-tagline-lh:{css_tagline_lh};--ctv-tagline-weight:{css_tagline_weight};
   --ctv-tagline-indent:{_tgl["indent"]}px;--ctv-tagline-tick:{_tgl["tickWidth"]}px;
-  --ctv-prog-height:{css_prog_height}px;
+  --ctv-prog-height:{css_prog_height}px;--ctv-ch-tick-h:{_prog["chapterTickHeight"]}px;
   --ctv-sub-font:{css_sub_font};
   --ctv-verse-h:{_verse_h}px;--ctv-verse-clip:{_vv["clipPad"]}px;
   --ctv-verse-line:{_vv["linePad"]}px;--ctv-verse-lh:{_vv["lineHeight"]};
@@ -845,6 +859,7 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-verse-rule:{_vv["activeRule"]}em;
   --ctv-verse-who-font:{_vv["whoFontSize"]}px;--ctv-verse-who-gap:{_vv["whoGap"]}px;
   --ctv-ag-x:{_ag["insetX"]}px;--ctv-ag-t:{_ag["insetTop"]}px;--ctv-ag-b:{_ag["insetBottom"]}px;
+
   --ctv-ag-title-lh:{_ag["titleLineHeight"]};--ctv-ag-title-mt:{_ag["titleMarginTop"]}px;
   --ctv-ag-kicker:{_ag["kickerSize"]}px;--ctv-ag-idx:{_ag["idxSize"]}px;
   --ctv-ag-kern-pad:{_kicker_pad:.2f}px;
@@ -1432,19 +1447,55 @@ def _prepare_card(rc, clip):
     # Remotion slide）。几何与 root 那两层逐像素一致（inset:0、同网格尺寸/掩膜），
     # 擦除时网格严丝合缝，只有内容在换。z-index:-2 排在卡内 accent 光晕(::after,-1)
     # 之下、卡片背景色之上。
-    card_open = (
+    # 章节编号（_chapters 在 clips 预处理里一次算定）。两件产物：
+    # `chapter_attr` 挂在卡片上给页底刻度用，`chapter_html` 是标题上沿那枚
+    # `03/12` 的盒子；画布页与 agenda 卡不生成它（画面主导 / 封面不编号）。
+    _ch = clip.get("chapter")
+    if _ch and not (is_canvas or is_agenda):
+        # --ctv-ch-n 是刻度周期（每章一格）：挂在卡上而不是 :root，因为开屏/结尾
+        # 不参与编号，它们不该从祖先继承到一个"共几章"的读数。
+        # 编号盒的类名刻意不叫 seg-chapter——进度条 fill 的 id 已经是 `prog-{sid}`，
+        # 两个名字只差一个字母，读代码的人迟早会把"章节号"和"页内进度"看混。
+        chapter_attr = f'data-chapter="{_ch[0]}" data-chapters="{_ch[1]}" '
+        chapter_style = f'--ctv-ch-n:{_ch[1]};'
+        chapter_html = (f'    <div class="chapter-num" id="cap-{sid}">'
+                        f'{_ch[0]:02d}/{_ch[1]:02d}</div>\n')
+        # 刻度们：每章一枚 <i>，落在 k/n 处（右缘对齐分格线，-1.5px 补线宽）。
+        # 它们不靠遮罩，而是由 _chapter_tick_lines 逐枚挂 class="on"——遮罩只能表达
+        # "从左亮到右"，而"当前这一格单独提亮"需要逐枚控制。
+        # 每一格一格宽、居中留缝（gap 走模板的 chapterTickGap，两画幅同一档）：
+        # left 从第 k 格的左边界起算，short 横线因此落在格中线上。
+        _tick_gap = float(rc.layout["progressBar"]["chapterTickGap"])
+        ticks_html = "".join(
+            f'    <i class="chapter-tick" data-ch="{k}" '
+            f'style="left:calc({100 * (k - 1) / _ch[1]:.4f}% + {_tick_gap:.1f}px);'
+            f'width:calc({100 / _ch[1]:.4f}% - {_tick_gap * 2:.1f}px)"></i>\n'
+            for k in range(1, _ch[1] + 1)
+        )
+    else:
+        chapter_attr = ""
+        chapter_style = ""
+        chapter_html = ""
+        ticks_html = ""
+    # 卡片属性区一次拼完：data-* 与 style 各**只能出现一次**（重复的属性浏览器
+    # 只认第一个，第二个静默丢弃——章节刻度会整层不画，而产物看起来完全正常）。
+    card_attrs = (
         f'  <div id="{sid}" class="clip seg-card'
         + (" agenda-card" if is_agenda else " seg-canvas" if is_canvas else "")
         + (" text-only" if no_image_slot else "")
-        + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" data-accent="{ac_attr}" '
+        + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" '
+        + f'data-accent="{ac_attr}" data-track-index="1" '
+        + chapter_attr
         # 内联 clip-path 必须与开场补间的 from 值同型（方向档：奇数页自页顶遮下来），
         # 否则 JS 加载那一瞬间整页先按默认边露一次再跳回去。
-        f'data-track-index="1" style="--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr};'
         # 内联 clip-path 与开场补间的 from 同源（偶数页 = 缺省档，奇数页 = 它自己的
         # 那一条）；奇数页另写一对变量供 `style.clipPath` 那条通道取用。
-        f'clip-path:{_card_wipe_from(rc, clip)[0]};{_card_wipe_alt_style(rc, clip)}">\n'
-        '    <div class="bg"></div>\n    <div class="grid"></div>\n'
+        + f'style="{chapter_style}--seg-accent:{ac_attr};--seg-accent-text:{ac_text_attr};'
+        + f'clip-path:{_card_wipe_from(rc, clip)[0]};{_card_wipe_alt_style(rc, clip)}">\n'
+        + '    <div class="bg"></div>\n    <div class="grid"></div>\n'
+        + ticks_html
     )
+    card_open = card_attrs
     progress_html = (
         f'    <div class="seg-progress" id="prog-{sid}" '
         f'style="background:{ac_attr};width:0"></div>\n'
@@ -1484,7 +1535,8 @@ def _prepare_card(rc, clip):
         tagline_html=tagline_html, image_html=image_html,
         kicker_html=kicker_html,
         verse_html=verse_html, card_open=card_open,
-        progress_html=progress_html, title_wrap=title_wrap)
+        progress_html=progress_html, title_wrap=title_wrap,
+        chapter_html=chapter_html, chapter=_ch)
 
 
 def _plate_caption_html(seg, sid, ac_text_attr):
@@ -1562,6 +1614,7 @@ def _assemble_card(rc, card, clips, manifest):
     if rc.aspect == "landscape":
         # 横屏内容段：左栏（标题组+句子流）垂直居中成一块，媒体卡居右。
         return (card.card_open
+                + card.chapter_html
                 + '    <div class="text-col">\n'
                 + card.title_wrap
                 + f'\n    {card.verse_html}\n'
@@ -1573,6 +1626,7 @@ def _assemble_card(rc, card, clips, manifest):
     # （`.seg-compare` 里两格），四层纵向顺序与槽位版式完全一致——所以这里
     # 不另开分支。
     return (card.card_open
+            + card.chapter_html
             + card.title_wrap
             + f'{card.image_html}\n'
             + card.progress_html
@@ -2819,6 +2873,88 @@ def _reveal_tween_lines(sel_clip, sel_inner, y, duration, ease, at):
     ]
 
 
+def _chapter_tick_lines(rc, card, s, d):
+    """页底轨道上的章节刻度：本段起点就把"已经走到第几章"点亮。
+
+    Opus 5.5 那批作品里 HUD 几乎是共同语：观众**随时知道这一段在第几章**。缺省的
+    进度条只说明"这一段演了多久"，换一段就归零，读者没有位置感。
+
+    刻度画在 `.seg-card[data-chapter]::after` 的 repeating-gradient 里（第 k 条落在
+    `k/n × 屏宽` 处）；**已走到的章**由 `--cap-lit` 遮罩的 `inset()` 右端裁出来——
+    一张遮罩决定"亮到第几条"，不需要每格一条补间。
+
+    - 起点一个 `tl.set` 推遮罩，之后**整段不动**：章节在时间轴上只增不减，而它
+      变化的那一帧恰好是换页那一帧——让遮罩再补 0.34s，会在新页开头露出"上一章
+      的刻度还亮着、上一章标题已经走了"的叠影。翻亮的那一下交给换页本身的运动，
+      读起来才是"翻过一章"，而不是"标记追着画面跑"。
+    - 当前章那一格补 accent 强调（`--cap-on` 从 0 到 1）：这是"我在这一章"的唯一
+      读数，其它格保持中性色。它随本段起点起、`chapterIndex.duration` 内到位，
+      是这一页唯一会动的那一点。
+    - 只在 `chapterIndex.mode == "bar"` 时生成；`off` 连刻度层都不画（不挂
+      `data-chapter`，CSS 选择器自然不命中）。
+    """
+    if not card.chapter or str(rc.anim["chapterIndex"]["mode"]) != "bar":
+        return []
+    cfg = rc.anim["chapterIndex"]
+    ch, n = card.chapter
+    right = (n - ch) / n * 100
+    # 选择器里的属性值走单引号：它要整段塞进 `tl.set("…")` 的双引号里。
+    ticks = [f"#{card.sid} .chapter-tick[data-ch='{k}']" for k in range(1, n + 1)]
+    dur = float(cfg["duration"])
+    lines = [
+        f'tl.set("#{card.sid}",{{"--cap-mask":"inset(0 {right:.4f}% 0 0)"}},{s:.2f})',
+        f'tl.fromTo("#{card.sid}",{{"--cap-on":0}},'
+        f'{{"--cap-on":1,duration:{dur:.2f},'
+        f'ease:"{cfg["ease"]}"}},{s:.2f})',
+    ]
+    # 逐枚刻度：已过的整格点亮（set，不动），当前这枚随 --cap-on 同一拍淡入，
+    # 后面那些保持中性。用 class 而不是内联样式，是因为 CSS 里"亮/不亮"还有
+    # 光晕与配色两件事，写进 JS 就把样式拆成两处。
+    # 点亮走 **CSS 自定义属性**（`--tick-on`），不走 class：
+    #   · GSAP 的 `className` 插件即使写 `+=on` 也会把 "+=on" 原样写进 class 属性
+    #     （3.14.2 实测），不解析成追加；
+    #   · `tl.call` 回调在 `seek()` 下不触发（实测），而逐帧 seek 是这个工程唯一
+    #     的验证手段——一条只有实时播放才对的表现，测不出来也留不住。
+    # 自定义属性走的是与整条时间线其余部分同一条补间通道：seek 到哪一帧，属性就是
+    # 哪一帧的值。已过的格子写常量 1（`tl.set`，随后不动），当前这格随
+    # `--cap-on` 同拍从 0 升到 1，后面的格子保持 CSS 缺省 0。
+    for k in range(1, n + 1):
+        sel = ticks[k - 1]
+        if k < ch:
+            lines.append(f'tl.set("{sel}",{{"--tick-on":1}},{s:.2f})')
+        elif k == ch:
+            lines.append(f'tl.fromTo("{sel}",{{"--tick-on":0}},'
+                         f'{{"--tick-on":1,duration:{dur:.2f},'
+                         f'ease:"{cfg["ease"]}"}},{s:.2f})')
+    # 当前这一格的**播放进度**：短横从格左边界长到格右边界，走完 = 这一段播完。
+    # 页内进度条在编号卡片里被隐掉了（见 CSS 那条注释），"这段还剩多少"由它承担——
+    # 于是"第几章"（格数）与"这一章演到哪儿"（格内长度）在同一排刻度上同时可读，
+    # 而且天然是"疏密有节奏"的读数，不做任何额外装饰。
+    lines.append(f'tl.fromTo("{ticks[ch - 1]}",{{"--tick-fill":0}},'
+                 f'{{"--tick-fill":1,duration:{d:.2f},ease:"none"}},{s:.2f})')
+    return lines
+
+
+def _chapter_entrance_lines(rc, card):
+    """章节编号的入场：`03/12` 从右侧一小段走过来，比标题晚半个身位。
+
+    它属于题头组，但不与标题同时起——两行同时到位是"一块东西浮上来"。晚
+    `titleEntrance.duration × delayFrac` 起、时长同标题档，落位后**不再动**
+    （没有呼吸、没有循环：这是个读数，不是装饰）。
+
+    为什么不做逐字或数字滚动：这是"第几章 / 共几章"，观众要的是一次性读进来的
+    定位，翻滚会把它读成"数字还在变"。
+    """
+    if not getattr(card, "chapter_html", ""):
+        return []
+    a = rc.anim["titleEntrance"]
+    k = _entrance_k(rc, card)
+    dur = a["duration"] * k
+    at = card.s + dur * float(a["tagline"]["delayFrac"])
+    return [f'tl.from("#cap-{card.sid}",{{x:{num_fmt(a["tagline"]["ampFrac"] * 18)},'
+            f'opacity:0,duration:{dur:.2f},ease:"{a["tagline"]["ease"]}"}},{at:.2f})']
+
+
 def _tagline_entrance_lines(rc, card, rh):
     """副标题行的入场：跟着标题那一档进来，幅度小一号、起点错峰。
 
@@ -3040,6 +3176,7 @@ def _card_timeline_lines(rc, card):
         # 到位就还是"一块东西浮上来"。参数挂在标题档位上而不是另开一组，理由见
         # `_tagline_entrance_lines`。
         lines.extend(_tagline_entrance_lines(rc, card, _rh))
+        lines.extend(_chapter_entrance_lines(rc, card))
     # 结尾页（非苹果开场的 agenda 卡）的 kicker：题头组的第一行，跟标题同一拍。
     # 苹果开场不在这里——那一行由下面 _apple_opening_lines 逐字演。
     lines.extend(_kicker_entrance_lines(rc, card))
@@ -3096,6 +3233,7 @@ def _card_timeline_lines(rc, card):
     lines.append(
         f'tl.to("#prog-{sid}",{{width:"100%",duration:{d:.2f},ease:"none"}},{s:.2f})'
     )
+    lines.extend(_chapter_tick_lines(rc, card, s, d))
     # 图内编排（images.json 的 animate）挂在本卡时间线末尾：位置各自取句子起点，
     # 与上面的入场/进度条互不干扰。属性补间与参数演绎都在这一条里——一拍要么改
     # 某个元素、要么推某个参数，同一个字段。
@@ -3227,6 +3365,27 @@ def generate_html(manifest, audio_src, images=None,
             prev_sid = clips[i - 1]["seg"]["id"]  # sid 由契约把守，见 _prepare_card
             clip["peel"] = (prev_sid, clip["wipe"])
             clips[i - 1]["gets_peeled"] = True  # 旧卡要挂底缘暗边（_peel_shade_html）
+
+    # 章节编号：只给"有标题、要读、并且整页都在画面上"的内容段编号。
+    # 编号一次算定（编号与总数同源，不能在卡片里各算一遍——一处跳号就是
+    # "03/12 之后跟着 05/12"，而观众只会以为自己看漏了一段）。
+    # 不编号的三类各有理由：开屏/结尾是封面，给它编号等于把封面算成一章；
+    # 整页画布的画面主导、文字由作者画进 SVG，再叠一个 HTML 编号就是两层排版；
+    # 接续页是上一页的延续，同一章不该出现两个号。
+    chapter_total = sum(
+        1 for c in clips
+        if not (c["seg"]["id"] in ("opening", "closing")
+                or is_full_bleed(c["seg"]) or _is_keep_page(rc, c["seg"]["id"])))
+    chapter_mode = str(rc.anim["chapterIndex"]["mode"])
+    _ch = 0
+    for c in clips:
+        sid_ = c["seg"]["id"]
+        if (sid_ in ("opening", "closing") or is_full_bleed(c["seg"])
+                or _is_keep_page(rc, sid_) or chapter_mode == "off"):
+            c["chapter"] = None
+            continue
+        _ch += 1
+        c["chapter"] = (_ch, chapter_total)
 
     # ── 段落卡片 HTML + GSAP 时间线 ──────────────────────
     # closing_cta 只有结尾 agenda 卡这一个消费者：没有 closing 段、或那一页被作者

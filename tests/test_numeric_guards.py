@@ -85,9 +85,9 @@ class NumericGuardsRejectNonFinite(unittest.TestCase):
                 with self.subTest(key=key, bad=bad):
                     self._assert_rejected(_step(stagger={key: bad}), "≥0")
             with self.subTest(key="from", bad=bad):
-                # from 现在是有语义的锚点：NaN/Infinity 不是锚点名、也不是项号
+                # from 现在是有语义的锚点：NaN/Infinity 不是锚点名、也不是网格坐标
                 self._assert_rejected(_step(stagger={"from": bad}),
-                                      "锚点名或非负整数项号", bad=bad)
+                                      "锚点名或 ≥0 的整数网格坐标", bad=bad)
 
     def test_video_audio_opts(self):
         for bad in BAD:

@@ -297,14 +297,23 @@ def _validate_stagger(stagger, where):
     gsap@3.14.2 的 `gsap.utils.distribute`，见 tests/test_motion_design.py
     `StaggerAnchor`）：
 
-    1. `from` 写错一个字母就退回读序。实测 `from:"middle"` 不报错、按 start 排——
-       作者以为"从中间展开"，成片里那组元素照旧从左扫到右，而这一层恰恰是唯一
-       决定"先看哪个"的旋钮。
+    1. `from` 写错一个字母就静默退化成读序。实测 `from:"middle"` 不报错——
+       `distribute` 对认不出的字符串取 `0`，逐项延迟与 `start` 逐个相等。作者以为
+       "从中间展开"，成片里那组元素照旧从左扫到右，而这一层恰恰是唯一决定
+       "先看哪个"的旋钮。
     2. `each` 与 `amount` 并写时 GSAP **只认 each**，`amount`（整组窗口）被丢掉。
        5 项时两者收尾都是 0.4s、看不出破绽；12 项就变成 1.1s——"这一页揭示多久"
        被项数决定了，正是上一轮把 `each` 换成窗口要消灭的那件事。
-    3. `from` 收小数会算出非单调的出发时刻（实测 n=5、`from:1.5` → [0.2, 0, 0,
-       0.2, 0.4]：中间的比两头的还晚，读出来是「卡了一下」）。索引只收非负整数。
+    3. `from` 收小数会让**相邻两项落在同一帧**出发，整组窗口同时被压短。
+       实测 n=5、W=0.4：`from:1.5` → [0.2, 0, 0, 0.2, 0.4]，第 2、3 项同时起。
+       读出来是「一次两根」，而作者写的是"逐个错峰"。整数坐标没有这层含义，
+       所以小数直接拒收（报错文案给出「改成整数或锚点名」）。
+
+    **数字 `from` 不是项号**：GSAP 把它当二维**网格坐标**，单行时第 i 项的距离
+    是 `|i − from|`，分母是 `(n−1) − from`——所以它不只改起点，还把整组窗口
+    压短。n=5、`from:1` 实测 → [0.1333, 0, 0.1333, 0.2667, 0.4]：第 2 项先动、
+    其余按 1/3、2/3 铺开，窗口只剩 0.3。"从某一项往外扩散、又保住整窗"要的是
+    `from:"center"` 或把该项排到中位，不是写数字。文档必须按网格坐标解释它。
     """
     if not isinstance(stagger, dict):
         if not is_finite_number(stagger):
@@ -334,15 +343,23 @@ def _validate_stagger(stagger, where):
                     raise ValueError(
                         f"{where} 的 from={v!r} 不是可用的锚点——只认 "
                         f"{' / '.join(STAGGER_ANCHORS)}（读序 / 中心 / 末项 / 两端），"
-                        "或一个非负整数项号。拼错的锚点 GSAP **不报错**，直接按读序排："
-                        "成片里那组元素照旧从头到尾，与作者写的「从中间展开」相反")
+                        "或一个 ≥0 的整数网格坐标。拼错的锚点 GSAP **不报错**，"
+                        "直接按读序排：成片里那组元素照旧从头到尾，与作者写的"
+                        "「从中间展开」相反")
             elif not is_finite_number(v):
-                raise ValueError(f"{where} 的 from 必须是锚点名或非负整数项号"
+                raise ValueError(f"{where} 的 from 必须是锚点名或 ≥0 的整数网格坐标"
                                  f"（NaN/Infinity 不算数；实际: {v!r}）")
-            elif float(v) != int(v) or v < 0:
-                raise ValueError(f"{where} 的 from={v!r} 必须是**整数**项号且 ≥0"
-                                 "——小数项号在 GSAP 里算出的是非单调的出发时刻"
-                                 "（中间项比两端还晚），读出来是「卡了一下」")
+            elif float(v) != int(v):
+                raise ValueError(
+                    f"{where} 的 from={v!r} 必须写成整数：GSAP 拿它当网格坐标，"
+                    "小数会让相邻两项落在同一帧出发（实测 5 项、from:1.5 → "
+                    "[0.2, 0, 0, 0.2, 0.4]），读出来是「一次两根」，而作者写的是"
+                    "逐个错峰。逐项错峰请用整数坐标或 "
+                    f"{' / '.join(STAGGER_ANCHORS)}")
+            elif v < 0:
+                raise ValueError(
+                    f"{where} 的 from={v!r} 不能为负——GSAP 把负坐标夹回起点，"
+                    "成片里与不写 from 完全一样（静默失效）")
         elif k == "ease":
             validate_ease(v, f"{where} 的 ease")
         else:  # each / amount

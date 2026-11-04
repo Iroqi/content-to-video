@@ -133,18 +133,18 @@ class FullBleedEntrance(unittest.TestCase):
             return generate_html(m, "audio/combined.wav", images=imgs,
                                  aspect="portrait", theme="dark")
 
-    def test_plate_has_no_image_entrance(self):
-        html = self._html("plate")
-        self.assertNotIn('tl.from("#img-seg-a"', html,
-                         "图版页仍在演配图入场：图版没有'配图框'，"
-                         "框落位+图收拢读成'海报浮上来'")
-        self.assertNotIn('tl.fromTo("#img-seg-a > img",{scale:1.06', html,
-                         "图版页仍在演收拢（Ken Burns 起手）：满幅页的进场只有硬切"
-                         "与作者在 SVG 里自己演两种")
+    def test_full_bleed_has_no_image_entrance(self):
+        """图版与整页画布都不演配图入场。
 
-    def test_canvas_has_no_image_entrance(self):
-        html = self._html("canvas")
-        self.assertNotIn('tl.from("#img-seg-a"', html)
+        图版根本没有"配图框"，给它"框先落位、图在框里收拢"是在替作者演他不想演
+        的动作；整页画布的进场只有硬切与作者在 SVG 里自己演两种。
+        """
+        for layout in ("plate", "canvas"):
+            html = self._html(layout)
+            self.assertNotIn('tl.from("#img-seg-a"', html,
+                             f"{layout} 页仍在演配图入场：满幅页没有'配图框'")
+            self.assertNotIn('tl.fromTo("#img-seg-a > img",{scale:1.06', html,
+                             f"{layout} 页仍在演收拢（Ken Burns 起手）")
 
     def test_slot_layout_still_has_image_entrance(self):
         """反面：槽位版式照旧要演——判据不能一刀切掉所有配图入场。"""
@@ -487,18 +487,20 @@ class EntranceLadder(unittest.TestCase):
         self.assertEqual(len(at), 3, f"槽位页应当有三层入场，实到 {at}")
         self.assertEqual(at, sorted(at), f"层序不是读序：{at}")
 
-    def test_ladder_catches_a_sub_frame_gap(self):
-        """判据自己要能红：把步距写成 1 帧，同一套函数必须报出来。"""
-        layers = _ladder_layers(self._html(), "seg-a")
-        layers[-1] = dict(layers[-1], at=layers[-2]["at"] + 1.0 / FPS)
-        self.assertTrue(_ladder_verdicts(layers),
-                        "1 帧的间隔被判据放过：这条判据等于没写")
+    def test_ladder_catches_a_broken_ladder(self):
+        """判据自己要能红：两种坏形状都必须被报出来。
 
-    def test_ladder_catches_tail_to_tail(self):
-        """后一拍压在前一拍里；首尾相接（PPT 的逐条出现）要被报出来。"""
+        - 间隔压到 1 帧 —— 观众读到的是同一拍；
+        - 首尾相接 —— 那是逐条出现，不是错峰。
+        """
         layers = _ladder_layers(self._html(), "seg-a")
-        layers[-1] = dict(layers[-1], at=layers[-2]["at"] + layers[-2]["dur"] + 0.2)
-        self.assertTrue(_ladder_verdicts(layers), "首尾相接被判据放过")
+        sub = dict(layers[-1], at=layers[-2]["at"] + 1.0 / FPS)
+        self.assertTrue(_ladder_verdicts(layers[:-1] + [sub]),
+                        "1 帧的间隔被判据放过：这条判据等于没写")
+        tail = dict(layers[-1],
+                    at=layers[-2]["at"] + layers[-2]["dur"] + 0.2)
+        self.assertTrue(_ladder_verdicts(layers[:-1] + [tail]),
+                        "首尾相接被判据放过")
 
     def test_full_bleed_has_no_picture_rung(self):
         """满幅页没有画面层：那一页第一帧就必须是完成态。
@@ -802,11 +804,18 @@ class StaggerAnchor(unittest.TestCase):
             self.assertEqual([p[1] for p in pairs], sorted(p[1] for p in pairs),
                              f"{anchor}: 先后没跟着距离走——{pairs}")
 
-    def test_center_lands_the_middle_first(self):
+    def test_center_puts_both_ends_on_the_full_window(self):
+        """`center` 的两端落在整窗口上、中项才是 0——"从中间长出来"要按这个读。
+
+        实测 n=7、W=.4、ease=power2.out：[.4, .3852, .2815, 0, .2815, .3852, .4]。
+        中心项距离 0，端点距离 `(n−1)/2` 归一化到 1，所以两端各走满一个窗口，
+        读起来比 `start` 慢一倍。文档必须这么写，否则作者会以为锚点只改先后。
+        """
         d = _anchor_delays(self.WINDOW, self.EASE, 7, "center")
         self.assertAlmostEqual(d[3], 0.0, places=9)
-        self.assertEqual(d[:3], list(reversed(d[4:])), "中心锚点不对称")
         self.assertAlmostEqual(d[0], self.WINDOW, places=9)
+        self.assertAlmostEqual(d[-1], self.WINDOW, places=9)
+        self.assertEqual(d[:3], list(reversed(d[4:])), "中心锚点不对称")
 
     def test_edges_converge_on_the_middle(self):
         """6 项（没有正中项）：两端先起、中间两项最后落，且左右对称。"""
@@ -833,28 +842,13 @@ class StaggerAnchor(unittest.TestCase):
         self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 2, "edges"),
                          [self.WINDOW, self.WINDOW],
                          "2 项 edges 是同时出发，但整组被推到窗口末尾")
-
     def test_default_anchor_is_reading_order(self):
         """不写 from 与写 start 完全一致：缺省行为不变。"""
         self.assertEqual(_anchor_delays(self.WINDOW, self.EASE, 9),
                          _anchor_delays(self.WINDOW, self.EASE, 9, "start"))
-
-    def test_anchor_is_a_whitelist_not_a_passthrough(self):
-        """锚点名只有四枚，且与契约层共用同一份白名单。"""
         from _images_schema import STAGGER_ANCHORS
-        self.assertEqual(set(STAGGER_ANCHORS), set(self.PINNED))
-
-    def test_center_puts_both_ends_on_the_full_window(self):
-        """`center` 的两端落在整窗口上、中项才是 0——"从中间长出来"要按这个读。
-
-        实测 n=7、W=.4、ease=power2.out：[.4, .3852, .2815, 0, .2815, .3852, .4]。
-        中心项距离 0，端点距离 `(n−1)/2` 归一化到 1，所以两端各走满一个窗口，
-        读起来比 `start` 慢一倍。文档必须这么写，否则作者会以为锚点只改先后。
-        """
-        d = _anchor_delays(self.WINDOW, self.EASE, 7, "center")
-        self.assertAlmostEqual(d[3], 0.0, places=9)
-        self.assertAlmostEqual(d[0], self.WINDOW, places=9)
-        self.assertAlmostEqual(d[-1], self.WINDOW, places=9)
+        self.assertEqual(set(STAGGER_ANCHORS), set(self.PINNED),
+                         "锚点名只有四枚，且与契约层共用同一份白名单")
 
 
 class NumericFrom(unittest.TestCase):

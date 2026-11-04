@@ -546,10 +546,16 @@ _TEMPLATE_JSON = r'''
     },
     "entranceBudget": {
       "minFactor": 0.45,
-      "normSeconds": 4.0
+      "normSeconds": 4.0,
+      "calmSeconds": 12.0,
+      "calmFactor": 1.25
     },
     "entranceLadder": {
-      "step": 0.14
+      "step": 0.14,
+      "spread": 0.12,
+      "maxStep": 0.30,
+      "fromSeconds": 4.0,
+      "toSeconds": 12.0
     },
     "staggerDistribute": {
       "ease": "power2.out"

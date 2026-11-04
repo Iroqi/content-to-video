@@ -20,7 +20,13 @@ _SID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # 清单只此一份：`_source_schema`（写稿入口）与 `_manifest_schema`（手写
 # manifest 入口）都从这儿取——此前 manifest 侧根本没走这条约束，手写 manifest
 # 的 `title` 带分号时，同一句话在写稿入口被拒、在手写入口静默上墙。
-ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway")
+ON_SCREEN_SEGMENT_KEYS = ("title", "tagline", "takeaway", "kicker")
+# 题头小字行（eyebrow）的字数上限：两画幅同值。这一行是 `white-space:nowrap`
+# + `overflow:hidden`，超长的部分**没有省略号、直接消失**（它是一条标签，补一个
+# "…" 会把"完整分类"读成"还有下文"）。竖屏可用宽 980px、字距 0.18em、字号 21px
+# → 单字约 24.8px，加引线 34px 后 18 字排到 480px；横屏列宽 613px、单字约 22px，
+# 18 字排到 428px——两侧都留得住。
+KICKER_MAX_CHARS = 18
 # 同一条规则的对外说法。报错文案在 3 个调用点（source/manifest 的
 # _validate_sid、images.json key）各写一份汉字副本时
 # 已经漂过三次（"下划线/连字符" vs "-/_"、有无"1–64

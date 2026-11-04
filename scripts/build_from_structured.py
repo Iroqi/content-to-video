@@ -186,6 +186,10 @@ def _collect_blocks(source):
         # 结尾 agenda 要点总结用的"一句话结论"：缺省回退标题（renderer 处理）。
         if seg.get("takeaway") is not None:
             extra["takeaway"] = seg["takeaway"].strip()
+        # 题头上沿的分类小字行（可选字段，规范见 references/writing.md）：
+        # 与 takeaway 同为上墙字段，校验在 _source_schema，这里只做透传。
+        if seg.get("kicker") is not None:
+            extra["kicker"] = seg["kicker"].strip()
         # 整页画布开关（取值由 _segments._validate_layout 把守，这里只透传）：
         # 不写就不进 extra，下游按槽位版式渲染。
         if seg.get("layout") is not None:

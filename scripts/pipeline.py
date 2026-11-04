@@ -914,7 +914,7 @@ def _reconcile_timeline(manifest_sentences, total_dur, degraded):
 # build_from_structured 把它们收进 Block.extra，这里决定哪些真的落进 manifest。
 # 加新字段只改这一行——漏在这里的键不报错，只会让下游那道闸门悄悄读不到输入。
 PASSTHROUGH_SEG_KEYS = ("speed", "layout", "voice_id", "voice_style",
-                        "takeaway", "turns", "beats")
+                        "takeaway", "kicker", "turns", "beats")
 
 
 def _group_segments(seg_config, manifest_sentences, degraded):

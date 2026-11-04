@@ -288,7 +288,14 @@ _TEMPLATE_JSON = r'''
         "top": 80,
         "fontSize": 64,
         "maxLines": 2,
-        "glow": 40
+        "glow": 40,
+        "kicker": {
+          "fontSize": 20,
+          "tracking": 0.18,
+          "ruleWidth": 24,
+          "ruleGap": 10,
+          "marginBottom": 13
+        }
       },
       "tagline": {
         "fontSize": 32,
@@ -368,7 +375,14 @@ _TEMPLATE_JSON = r'''
         "guardSize1": 54,
         "guardChars2": 22,
         "guardSize2": 48,
-        "glow": 40
+        "glow": 40,
+        "kicker": {
+          "fontSize": 19,
+          "tracking": 0.16,
+          "ruleWidth": 22,
+          "ruleGap": 9,
+          "marginBottom": 12
+        }
       },
       "tagline": {
         "fontSize": 28,
@@ -499,6 +513,11 @@ _TEMPLATE_JSON = r'''
         "delayFrac": 0.3,
         "durationFrac": 0.9,
         "easeFrac": 0.6,
+        "ease": "power2.out"
+      },
+      "eyebrow": {
+        "durationFrac": 0.5,
+        "rise": 6,
         "ease": "power2.out"
       }
     },

@@ -121,6 +121,26 @@ body{font-family:var(--ctv-font-family)}
    才能左对齐、也才能让 2 行钳制生效）。 */
 .title-reveal{position:relative;width:100%}
 .seg-title-wrap{position:absolute}
+/* 题头上沿的小字行（eyebrow）。读序的第一级：一行宽字距的分类标签 → 大标题 →
+   正文。它比 tagline 更小、颜色更暗、字距更开——字号梯度与色彩梯度一起说
+   "这一行是引子，不是内容"。
+   与 tagline 的分工：tagline 是**这一页的副标题**（跟在标题下面，与标题同属
+   一个句子），kicker 是**这一页属于哪一类**（主语之外的语境）。两者都在场时
+   观众读到的顺序是 分类 → 主句 → 注脚，三层各自不同字号。
+   竖屏那条绝对定位在题头带**上方的留白**里（见下方 [data-aspect="vertical"]
+   规则）：不进 .seg-title-wrap 是因为那个盒子定高且 overflow:hidden，塞进去
+   要么挤掉标题一行、要么自己被裁。 */
+.seg-kicker{display:flex;align-items:center;gap:var(--ctv-kick-gap);font-family:var(--ctv-font-mono);font-size:var(--ctv-kick-font);line-height:1;font-weight:600;letter-spacing:var(--ctv-kick-track);text-transform:uppercase;white-space:nowrap;overflow:hidden;margin-bottom:var(--ctv-kick-mb)}
+/* 引线：一条 accent 短横，从左侧长出来（scaleX 补间，origin 在左端）。
+   不用 width 补间——宽度会推着后面的字往右挪，而这一层最不该有布局副作用。 */
+.seg-kicker .kick-rule{flex:none;width:var(--ctv-kick-rule);height:2px;background:var(--seg-accent);transform-origin:left center}
+[data-aspect="vertical"] .seg-kicker{position:absolute;left:var(--ctv-v-pad-left);top:var(--ctv-kick-top);margin-bottom:0;z-index:2}
+/* 横屏：kicker 是 text-col 里的一个 flex item，所以它和标题之间除了 margin 还
+   吃着一份 `--ctv-l-text-gap`（那一份是给"题头组 ↔ 句子流"的纵向留白）。
+   两份叠起来是 68px，小字与大字之间会空出一大块，读不成一组——用负 margin
+   把 gap 抵掉，只剩 kicker 自己的 marginBottom。写 calc 而不是硬编码 -44px：
+   改列间距时这里自动跟，不会静默多出一段空白。 */
+[data-aspect="landscape"] .seg-kicker{margin-bottom:calc(var(--ctv-kick-mb) - var(--ctv-l-text-gap))}
 .seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
 .tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em;padding-left:var(--ctv-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
 /* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）：
@@ -396,6 +416,12 @@ body{font-family:var(--ctv-font-family)}
 .chapter-num{position:absolute;top:var(--ctv-v-title-top);right:var(--ctv-v-pad-left);font-family:var(--ctv-font-mono);font-size:calc(var(--ctv-tagline-font) * 0.62);font-weight:700;letter-spacing:.12em;color:var(--seg-accent-text);font-variant-numeric:tabular-nums;white-space:nowrap;z-index:2}
 .chapter-num::before{content:"";position:absolute;right:calc(100% + .6em);top:50%;width:1.1em;height:1px;background:currentColor;opacity:.55}
 [data-aspect="landscape"] .chapter-num{top:calc(var(--ctv-l-margin) * 0.42);right:var(--ctv-l-margin)}
+/* 有 kicker 的页：编号抬到同一条抬头线，与左边那行小字**顶对齐、同盒高**。
+   不抬的话两个读数一高一低，页顶读成"斜的"；而且两条引线（编号的与 kicker 的）
+   各在一层高度上，会像两处互不相干的装饰。行高也一起改成 kicker 字号——那样
+   两盒等高，基线自动对上，不必再补一个 magic number 的偏移。
+   没有 kicker 的页不改：编号仍贴着标题顶线，那才是它的位置。 */
+[data-aspect="vertical"] .seg-card[data-kicker] .chapter-num{top:var(--ctv-kick-top);line-height:var(--ctv-kick-font)}
 [data-aspect="landscape"] .seg-title-wrap{position:static}
 /* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
    左栏是垂直居中的 flex 列，长标题按 text-wrap:balance 自由折行，长度守卫只

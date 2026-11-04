@@ -71,6 +71,46 @@ console.log(JSON.stringify({L: L, seq: seq, again: again,
 """
 
 
+# 解码波：一组节点 + 一组代理。假 GSAP 只把 stagger 的 vars 记下来（不重写 GSAP
+# 的分配曲线）——判据要证的是"回调按每个代理各自的进度算出各行"，不是再实现一份
+# distribute。额外做一次错开进度的重放，专门盯子补间先后完成这件事。
+_HARNESS_WAVE = r"""
+const fs = require("fs");
+const body = fs.readFileSync(process.argv[2], "utf8");
+const texts = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const frames = +process.argv[4];
+var rec = null;
+var nodes = texts.map(function (t) { return {textContent: t}; });
+var document = {querySelectorAll: function () { return nodes; }};
+eval("var tl={to:function(p,v,at){rec={p:p,v:v,at:at};}};\n" + body);
+const P = rec.p, cb = rec.v.onUpdate, done = rec.v.onComplete;
+const read = function () { return nodes.map(function (n) { return n.textContent; }); };
+const build = read();
+const play = function () {
+  const out = [];
+  for (var i = 0; i <= frames; i++) {
+    P.forEach(function (p) { p.k = i / frames; });
+    cb();
+    out.push(read());
+  }
+  return out;
+};
+const seq = play(), again = play();
+if (done) done();
+const after = read();
+// 错开：第 j 个代理停在 j/(n-1)，模拟"有的先演完、有的还在半路"。
+P.forEach(function (p, j) { p.k = j / (P.length - 1 || 1); });
+cb();
+const mixed = read();
+if (done) done();
+console.log(JSON.stringify({N: P.length, build: build, seq: seq, again: again,
+                            after: after, mixed: mixed, afterMixed: read(),
+                            stagger: rec.v.stagger || null, k: rec.v.k,
+                            dur: rec.v.duration, ease: rec.v.ease, at: rec.at,
+                            doneIsUpdate: done === cb}));
+"""
+
+
 def _type_script(html, sid="seg-a", target="#cap"):
     """从产物 HTML 里抠出这一段的 type 脚本块（`;(function(){…})();`）。"""
     scope = f'"#img-{sid} {target}"'
@@ -95,6 +135,25 @@ def _render_type(typ, text, target="#cap"):
             contextlib.redirect_stderr(io.StringIO()):
         html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
     return _type_script(html, target=target)
+
+
+def _render_wave(typ, texts, stagger=None):
+    """生成一条命中一组 <text> 的 decode + stagger 编排，抠出那段脚本。"""
+    m = H.make_manifest()
+    svg = ('<svg viewBox="0 0 980 735">'
+           + "".join(f'<text class="v">{t}</text>' for t in texts)
+           + '</svg>')
+    step = {"at_time": 0.0, "target": ".v", "type": typ,
+            "duration": 1.0, "ease": "none",
+            "stagger": (stagger if stagger is not None
+                        else {"amount": 0.36, "ease": "power2.out", "from": "start"})}
+    imgs = {"seg-a": {"src": "images/seg-a.svg", "inline_svg": svg,
+                      "animate": {"steps": [step]}},
+            "seg-b": {"src": "images/seg-b.svg"}}
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
+    return _type_script(html, target=".v")
 
 
 @unittest.skipUnless(NODE, "需要 node 才能重放发出去的脚本")
@@ -123,6 +182,26 @@ class TypeDecodeProduct(unittest.TestCase):
                            encoding="utf-8", errors="replace", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout or "")
+
+    def _wave(self, typ, texts, stagger=None, frames=40):
+        js = _render_wave(typ, texts, stagger)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        p = os.path.join(tmp, "case.js")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(js)
+        # 文本走 JSON 文件：与单档同理，避开 Windows 按系统代码页编码 argv。
+        t = os.path.join(tmp, "texts.json")
+        with open(t, "w", encoding="utf-8") as f:
+            json.dump(texts, f, ensure_ascii=False)
+        h = os.path.join(tmp, "h.js")
+        with open(h, "w", encoding="utf-8") as f:
+            f.write(_HARNESS_WAVE)
+        r = subprocess.run([NODE, h, p, t, str(frames)],
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout or ""), js
 
     def test_no_wallclock_and_noise_alphabet_is_injected(self):
         """产物不许有墙钟/随机源，且噪声字母表与末帧钉死都在脚本里。"""
@@ -240,6 +319,56 @@ class TypeDecodeProduct(unittest.TestCase):
                 self.assertEqual(frame[a:G[k]], text[a:G[k]],
                                  f"第 {i} 帧第 {k} 组没整组锁住：{frame!r}")
 
+    def test_wave_each_node_locks_by_its_own_progress(self):
+        """一组三行各自按锚点锁定、互不串台；stagger 原样交给 GSAP。"""
+        texts = ["同比增长 128%", "结论：增长 128%", "净值 12.5 亿"]
+        stagger = {"amount": 0.36, "ease": "power2.out", "from": "start"}
+        out, js = self._wave({"decode": {"from": "center"}}, texts, stagger)
+        self.assertEqual(out["N"], len(texts), "代理数要等于命中节点数")
+        self.assertEqual(out["stagger"], stagger, "stagger 被改写过，窗口/曲线会漂")
+        self.assertEqual(out["k"], 1, "代理进度归一到 0→1，各节点按自己的 N 换算")
+        self.assertTrue(out["doneIsUpdate"],
+                        "onComplete 只能重放 f()，不能无条件写死原文")
+        for banned in ("Math.random", "Date", "performance", "setTimeout", "setInterval"):
+            self.assertNotIn(banned, js, f"解码波混进了 {banned}")
+        self.assertEqual(out["seq"], out["again"], "同一进度重放两次不一致")
+        for j, frame in enumerate(out["build"]):
+            self.assertNotEqual(frame, texts[j], "build 期整组得先以噪声态在场")
+        self.assertEqual(out["after"], texts, "全部落定后每行各是自己的原文")
+        # 每行字符数恒等于**自己**那行的原文长度、宽度类别不变：把长句写进短节点、
+        # 或 querySelector 只取第一个那类旧毛病，都会在这里露出来。
+        for frames in out["seq"]:
+            for j, frame in enumerate(frames):
+                self.assertEqual(len(frame), len(texts[j]),
+                                 f"第 {j} 行串到了别的文本：{frame!r}")
+                for i, ch in enumerate(frame):
+                    src = texts[j][i]
+                    if ord(src) > 32:
+                        self.assertEqual(ord(ch) >= 0x2e80, ord(src) >= 0x2e80,
+                                         f"第 {j} 行第 {i} 格宽度类别变了")
+
+    def test_wave_completion_pins_only_finished_nodes(self):
+        """子补间各自完成：onComplete 重放 f()，不把还在半路的行提前写死。"""
+        texts = ["同比增长 128%", "结论：增长 128%", "净值 12.5 亿"]
+        out, _ = self._wave({"decode": True}, texts)
+        self.assertEqual(out["afterMixed"], out["mixed"],
+                         "onComplete 改写了未完成的节点——它们会瞬间落定")
+        self.assertEqual(out["mixed"][-1], texts[-1], "k=1 的那行该已钉死")
+        self.assertNotEqual(out["mixed"][0], texts[0], "k=0 的那行必须还是噪声态")
+        self.assertEqual(out["after"], texts)
+
+    def test_wave_matches_single_node_script_frame_by_frame(self):
+        """两档同一文本同一进度必须逐帧同字：钉住噪声/切分/锚点没有各写一份。"""
+        text = "AI WEEKLY 增长 3.5 倍"
+        for typ in ({"decode": True},
+                    {"decode": {"from": "end"}},
+                    {"decode": {"from": "center"}, "chunk": "word"}):
+            with self.subTest(typ=typ):
+                single = self._probe(typ, text)
+                wave, _ = self._wave(typ, [text])
+                self.assertEqual([f[0] for f in wave["seq"]], single["seq"],
+                                 "组档与单档在同一进度给出了不同的行字")
+
 
 class TypeDecodeContract(unittest.TestCase):
     """契约与产物不能各说各的：decode 只被 type 认，两个旋钮正交。"""
@@ -269,6 +398,22 @@ class TypeDecodeContract(unittest.TestCase):
                     {"decode": False}):
             with self.subTest(typ=typ):
                 self._validate(typ)
+        # R3：decode + stagger 是「解码波」，合法；不带 decode 的 type 仍被拒
+        # （渲染端会忽略 stagger，那是"作者以为在错峰、成片里全齐步"的静默失效）。
+        def check_step(step):
+            return validate_images_json({"seg4": {"src": "images/seg4.svg",
+                                                  "animate": {"steps": [step]}}})
+
+        check_step({"at": 0, "target": ".v", "type": {"decode": True},
+                    "stagger": {"amount": 0.3, "ease": "power2.out"}})
+        check_step({"at": 0, "target": ".v", "type": {"decode": True},
+                    "stagger": 0.12})
+        for typ in ({}, {"chunk": "word"}):
+            with self.subTest(typ=typ), self.assertRaises(ValueError):
+                check_step({"at": 0, "target": ".v", "type": typ, "stagger": 0.12})
+        with self.assertRaises(ValueError):
+            check_step({"at": 0, "target": ".v", "type": {"decode": True},
+                        "stagger": {"amount": 0.3, "from": "middle"}})
         # 缺省档与 word 档的产物不含解码脚本
         for typ in ({}, {"chunk": "word"}):
             with self.subTest(typ=typ):
@@ -291,6 +436,14 @@ class TypeDecodeContract(unittest.TestCase):
                          {"chunk": "word", "decode": {"from": "end"}})
         with self.assertRaises(ValueError):
             steps(decode={"from": "north"})
+        # R3：decode + stagger 同写时，两者都要带进 step（解码波）。
+        el = {"kind": "text", "id": "lede", "x": 120, "y": 400,
+              "tier": "body", "content": "增长的不是速度", "type": True,
+              "decode": True, "stagger": 0.12}
+        by = {s["target"]: s for s in
+              CK.selfcheck_fragment(CK.validate_spec({"elements": [el]}))["steps"]}
+        self.assertEqual(by["#lede"]["type"], {"decode": True})
+        self.assertEqual(by["#lede"]["stagger"], 0.12)
 
 
 if __name__ == "__main__":

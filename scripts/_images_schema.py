@@ -572,16 +572,21 @@ def _validate_steps(key, block, what="steps"):
                 # 它一起递归——这里只查顶层的话，attr:{} 那类嵌套层就是漏网。
                 _validate_tween_vars(step[k], f"{where} 的 {k}")
         # stagger 只对"命中一组元素、逐帧补间"的 step 有意义（from/to/fromTo/set）。
-        # morph/count/type 各自负责整段、draw 是单条描边，渲染端会静默忽略 stagger——
-        # 与 repeat/yoyo 挂在纯 set 上同一类"写了等于没写"，契约层直接拒，别留成
-        # 作者以为在错峰、成片里全齐步的静默失效。
+        # morph/count/draw 与不带 decode 的 type 各自负责整段，渲染端仍会静默忽略
+        # stagger——与 repeat/yoyo 挂在纯 set 上同一类"写了等于没写"，契约层直接拒。
+        # 唯一的例外是 type.decode + stagger：R3 把这条静默失效接通成「解码波」，
+        # 一组 <text> 各自按锚点错峰锁定（见 references/decode.md「解码波」）。
         if "stagger" in step:
             _validate_stagger(step["stagger"], f"{where} 的 stagger")
-            if not kinds:
+            wave = (typ is not None and isinstance(typ, dict)
+                    and bool(typ.get("decode")))
+            if not kinds and not wave:
                 raise ValueError(
                     f"{where} 写了 stagger 却没有 from / to / set 补间——stagger 只对"
-                    "命中一组元素的逐帧补间有意义，morph / count / type / draw 各自负责"
-                    "整段，渲染端会忽略它。要么去掉 stagger，要么改写成 from/to/set 补间")
+                    "命中一组元素的逐帧补间有意义；morph / count / draw 与不带 decode 的"
+                    "type 各自负责整段，渲染端会忽略它。要么去掉 stagger，要么改写成"
+                    'from/to/set 补间；要给一组 <text> 逐行解码，写 '
+                    'type:{"decode":true} + stagger（见 references/decode.md「解码波」）')
         for k in ("duration", "delay"):
             if k in step:
                 v = step[k]

@@ -2290,6 +2290,64 @@ def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=Fa
         + f"{pos:.2f}" + ");})();")
 
 
+def _type_decode_wave_js(sel_js, dur, ease, cycle_js, pos, anchor, by_word, stagger):
+    """`type.decode` 的解码波：一组 <text> 同时以噪声态在场，各自错峰锁定。
+
+    单元素档用 querySelector，一组元素则要各自算自己的 G / O / own，于是换成
+    querySelectorAll + 一组代理 P，把 stagger 原样交给 GSAP 原生分配（与模板侧
+    标题逐字同一条路：窗口 + 分配曲线，不在生成期手算每项步长）。
+
+    三处与单档不同，都是"一组"逼出来的：
+
+    - `onUpdate` **一次重算全部节点**：GSAP 对多目标 stagger 会为每个子补间调
+      回调，回调里拿不到"是哪一个"，遍历全部 P 才是幂等且不需要回调参数的写法；
+    - `p.k` 归一到 0→1，每个节点按自己的单元数 N 换算 `n`：一组里句子长短不一，
+      补到同一个绝对数会让短句提前落定、长句还没锁完；
+    - `onComplete` 只调 `f()`，不无条件写回原文：子补间各自完成，第一个完成时
+      其余还没锁完，写死原文会让它们瞬间落定。`f()` 按各自的 p.k 钉，天然只钉
+      已完成的那个。
+
+    噪声哈希 `g(i,q,s)` 与单档 `g(i,q)` 逐字同式（字母表、宽窄判定、哈希系数），
+    切分复用 `_TYPE_UNIT_SPLIT_BODY`。判据在 tests/test_type_decode.py：同一文本、
+    同一锚点、同一进度，两档必须给出同一行字——两份实现一起漂移时它才会红。
+    """
+    narrow = json.dumps(TYPE_DECODE_NARROW)
+    wide = json.dumps(TYPE_DECODE_WIDE)
+    units = ("var G=[],i=0;" + _TYPE_UNIT_SPLIT_BODY if by_word
+             else "var G=[];for(var q=1;q<=L;q++)G.push(q);")
+    return (
+        ";(function(){"
+        "var ns=[].slice.call(document.querySelectorAll(" + sel_js + "));"
+        "if(!ns.length)return;"
+        "var A=" + narrow + ",B=" + wide + ",F=" + json.dumps(anchor) + ";"
+        "var d=function(k,N){if(F===\"start\")return k;"
+        "if(F===\"end\")return N-1-k;"
+        "if(F===\"center\")return Math.abs(k-(N-1)/2);"
+        "return Math.min(k,N-1-k);};"
+        "var S=ns.map(function(e){return e.textContent||'';});"
+        "var U=S.map(function(s){var L=s.length;" + units
+        + "var N=G.length,O=[];for(var k=0;k<N;k++)O.push(k);"
+        "O.sort(function(a,b){return d(a,N)-d(b,N)||a-b;});"
+        "var own=[];for(var k=0;k<N;k++){var a=k?G[k-1]:0,b=G[k];"
+        "for(var u=a;u<b;u++)own[u]=k;}"
+        "return {L:L,N:N,O:O,own:own};});"
+        "var P=U.map(function(){return {k:0};});"
+        "var w=function(i,s){return s.charCodeAt(i)>=0x2e80;};"
+        "var g=function(i,q,s){var a=w(i,s)?B:A,c=s.charCodeAt(i);"
+        "return a.charAt((i*31+q*17+c*7)%a.length);};"
+        "var f=function(){P.forEach(function(p,j){"
+        "var e=ns[j],s=S[j],u=U[j];"
+        "if(p.k>=1-1e-9){e.textContent=s;return;}"
+        "var n=Math.floor(p.k*u.N+1e-6);if(n>u.N)n=u.N;"
+        "var lock=[];for(var t=0;t<n;t++)lock[u.O[t]]=1;"
+        "var out='';for(var i=0;i<u.L;i++){var cc=s.charCodeAt(i);"
+        "out+=(cc<=32)?s.charAt(i):(lock[u.own[i]]?s.charAt(i):g(i,n,s));}"
+        "e.textContent=out;});};"
+        "f();tl.to(P,{k:1,duration:" + json.dumps(dur)
+        + ",ease:" + json.dumps(ease) + ",stagger:" + json.dumps(stagger) + ","
+        + cycle_js + "onUpdate:f,onComplete:f}," + f"{pos:.2f}" + ");})();")
+
+
 def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
@@ -2317,7 +2375,9 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
       duration/ease 取模板 animation.animate（渲染端的视觉缺省，单一数据源）。
     - `count:{to,...}` 数字滚动、`type:{}` 打字机逐字揭示：都展开成"渲染端生成的代理
       补间 + onUpdate 写 textContent"（读的是校验过的标量/元素自身文本，非信源回调）。
-      二者与 morph 一样各负责整段、忽略 stagger，且块以 `(function…)()` 起头，故发射时
+      count / morph 与不带 decode 的 type 各负责整段、忽略 stagger；**唯一例外**是
+      `type.decode` + stagger 的解码波（`_type_decode_wave_js`：一组 <text> 各自
+      错峰锁定）。这些块以 `(function…)()` 起头，故发射时
       一律前导 `;` 断掉上一条无分号的补间行（否则 ASI 会把 `tl.x(…)(function…)()` 黏成
       把 timeline 当函数调，主时间轴建到此处崩）。
     - 补间变量经 json.dumps 序列化：schema 已挡掉 on* 回调与非标量，这里只把它
@@ -2458,8 +2518,16 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 # 从哪头先锁（白名单与 stagger.from 同源），后者定一次锁多少。
                 anchor = dec.get("from", "start") if isinstance(dec, dict) else "start"
                 by_word = typ.get("chunk", "char") == "word"
-                lines.append(_type_decode_js(sel_js, dur, ease, _cycle_js(step),
-                                             pos, anchor, by_word))
+                if stagger is not None:
+                    # 解码波：一条 step 命中一组 <text>，各自以噪声态在场、按锚点
+                    # 错峰锁定。stagger 交给 GSAP 原生分配；单元素档走上面的老路，
+                    # 产物保持字节不变（golden 快照因此不受影响）。
+                    lines.append(_type_decode_wave_js(
+                        sel_js, dur, ease, _cycle_js(step), pos,
+                        anchor, by_word, stagger))
+                else:
+                    lines.append(_type_decode_js(sel_js, dur, ease, _cycle_js(step),
+                                                 pos, anchor, by_word))
                 continue
             chunk = typ.get("chunk", "char")
             if chunk == "word":

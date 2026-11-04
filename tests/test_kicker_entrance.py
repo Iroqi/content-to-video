@@ -119,9 +119,9 @@ class LandsExactly(unittest.TestCase):
         """
         tpl = _template.load_template()
         hint = tpl["animation"]["titleEntrance"]["kicker"]
-        apple = tpl["animation"]["opening"]["apple"]["kicker"]
+        full = tpl["animation"]["opening"]["full"]["kicker"]
         size = tpl["layout"]["vertical"]["agenda"]["kickerSize"]
-        span = size * (apple["tracking"] - apple["rest"])
+        span = size * (full["tracking"] - full["rest"])
         html = render()
         self.assertAlmostEqual(float(_kick("closing", html).group("x")),
                                round(span * hint["easeFrac"], 3), places=2)
@@ -157,12 +157,12 @@ class RowWidthIsStable(unittest.TestCase):
 
     def test_pad_equals_the_per_char_span(self):
         tpl = _template.load_template()
-        apple = tpl["animation"]["opening"]["apple"]["kicker"]
+        full = tpl["animation"]["opening"]["full"]["kicker"]
         for aspect, block in (("portrait", "vertical"), ("landscape", "landscape")):
             size = tpl["layout"][block]["agenda"]["kickerSize"]
             html = render(aspect=aspect)
             self.assertIn(
-                f"--ctv-ag-kern-pad:{size * (apple['tracking'] - apple['rest']):.2f}px;",
+                f"--ctv-ag-kern-pad:{size * (full['tracking'] - full['rest']):.2f}px;",
                 html, f"{aspect}: 垫宽与单字展开量不一致")
 
     def test_css_consumes_the_token(self):

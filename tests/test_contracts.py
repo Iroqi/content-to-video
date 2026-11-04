@@ -53,7 +53,7 @@ class SourceValidation(unittest.TestCase):
         键本来就报错，这里把报错信息写成"默认强绑定"的迁移指引。
         """
         bad(SRC.validate_segments_source,
-            dict(H.sample_source(), opening_animation="apple"),
+            dict(H.sample_source(), opening_animation="legacy"),
             contains="默认强绑定")
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_animation="glow"),
@@ -64,7 +64,7 @@ class SourceValidation(unittest.TestCase):
         # 旧键 + canvas 组合同样被拦（键已不存在，写 canvas 只有版式生效）
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_layout="canvas",
-                 opening_animation="apple"),
+                 opening_animation="legacy"),
             contains="opening_animation")
 
     def test_opening_animation_still_ok_on_agenda_layout(self):
@@ -75,7 +75,7 @@ class SourceValidation(unittest.TestCase):
         """
         bad(SRC.validate_segments_source,
             dict(H.sample_source(), opening_layout="agenda",
-                 opening_animation="apple"),
+                 opening_animation="legacy"),
             contains="opening_animation")
 
     def test_unknown_segment_key_rejected(self):
@@ -233,7 +233,7 @@ class ManifestValidation(unittest.TestCase):
         （_source_schema）同一条口径：那条指引必须排在 _reject_unknown_keys
         之前，否则 reject 先报"未知字段"，作者永远拿不到"该删这个键"的说明。
         """
-        m = H.make_manifest(dict(H.sample_source(), opening_animation="apple"))
+        m = H.make_manifest(dict(H.sample_source(), opening_animation="legacy"))
         opening = next(s for s in m["segments"] if s["id"] == "opening")
         self.assertNotIn("opening_animation", opening)
         MAN.validate_timing_manifest(m)
@@ -241,7 +241,7 @@ class ManifestValidation(unittest.TestCase):
         for sid in ("opening", "seg-a", "closing"):
             with self.subTest(sid=sid):
                 m2 = H.make_manifest()
-                self._seg(m2, sid)["opening_animation"] = "apple"
+                self._seg(m2, sid)["opening_animation"] = "legacy"
                 bad(MAN.validate_timing_manifest, m2, contains="默认强绑定")
         # 旧值非法也一样走未知字段（值校验分支已随键一起移除）
         m3 = H.make_manifest()

@@ -174,7 +174,7 @@ class RevealWindow(unittest.TestCase):
         self.assertNotIn("seg-b", sids, "整页画布段不该有标题裁窗")
         self.assertIn("closing", sids, "结尾 agenda 卡的标题照旧要有揭示边")
 
-    def test_apple_opening_keeps_its_own_masks(self):
+    def test_full_opening_keeps_its_own_masks(self):
         """开屏走它自己的 `.t-mk` 逐字裁窗，不叠这一层——两套揭示边叠在同一行
         字上，起点会有两道边界在爬。"""
         m = H.make_manifest(source=H.sample_source(), dur=6.0)
@@ -331,7 +331,7 @@ class WhoDoesNotGetOne(unittest.TestCase):
         """agenda 卡的副标题是 `.agenda-kicker`（画在 `.agenda-head` 里），
         不是 `#tag-{sid}`——给它补间等于指向一个永远不存在的元素。
 
-        开屏的 kicker 由开屏整页编排逐字演（`_apple_opening_lines`），不走这一层。
+        开屏的 kicker 由开屏整页编排逐字演（`_full_opening_lines`），不走这一层。
         """
         src = dict(H.sample_source(), opening_tagline="AI WEEKLY",
                    closing_tagline="下期预告")

@@ -592,7 +592,7 @@ _TEMPLATE_JSON = r'''
       "ease": "power2.out"
     },
     "opening": {
-      "apple": {
+      "full": {
         "title": {
           "chars": {
             "delay": 0.0,

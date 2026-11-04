@@ -388,29 +388,29 @@ def _agenda_row_html(rows):
 
 
 def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
-                     title_size, bgs, apple_opening=False, card=None, rc=None):
+                     title_size, bgs, full_opening=False, card=None, rc=None):
     """纯文字 agenda 卡的前半段：.agenda-col > 题头 + agenda 行（col 不闭合）。
 
     调用方拼上句子流后再闭合 .agenda-col：flex 列"题头在顶、agenda 垂直居中、
     句子流锚底"，两画幅共用同一套 DOM，几何差异全在 CSS。kicker 取 tagline 字段。
 
-    apple_opening 时额外带题头光晕（`.apple-halo` / `.apple-glow`，DOM 最前、
+    full_opening 时额外带题头光晕（`.full-halo` / `.full-glow`，DOM 最前、
     `z-index:-1`），由 `_card_timeline_lines` 编排淡入与呼吸。
 
     `card` 只用于回写实际画出来的行数（开屏编排按它算收尾时刻）——行数只在这里算得
     出，时间线侧重算等于把同一条 `[warn]` 打两次。
     """
     sid = seg["id"]
-    halo_html = ('    <div class="apple-halo" id="halo-%s"></div>\n'
-                 '    <div class="apple-glow" id="glow-%s"></div>\n' % (sid, sid)
-                 if apple_opening else "")
-    col_attr = (' data-opening-anim="apple"' if apple_opening else "")
+    halo_html = ('    <div class="full-halo" id="halo-%s"></div>\n'
+                 '    <div class="full-glow" id="glow-%s"></div>\n' % (sid, sid)
+                 if full_opening else "")
+    col_attr = (' data-opening-anim="full"' if full_opening else "")
     # kicker 拆不拆字只看开屏（拆字是字距舞的载体），见 _agenda_kicker_html。
     # 这个函数只为 agenda 卡服务（调用点只有 _assemble_card 的 agenda 分支），
     # 所以"要垫"就是"有这一行"：两种形态都在演字距展开，都缺同一个容差。
-    kicker_html = _agenda_kicker_html(seg, bgs, ac, split_chars=apple_opening,
+    kicker_html = _agenda_kicker_html(seg, bgs, ac, split_chars=full_opening,
                                       pad_kern=True)
-    if kicker_html and not apple_opening:
+    if kicker_html and not full_opening:
         # 非开屏的 kicker 挂 id，给 _kicker_entrance_lines 一个落点；开屏那行由
         # 开屏编排按 `.k-ch` 逐字演，不需要 id（也不需要第二条整行补间）。
         kicker_html = kicker_html.replace('<div class="agenda-kicker"',
@@ -433,7 +433,7 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     # 拆的是**原文**、逐字符转义再包：先 esc 整句再拆会把 &amp; 拆成五个独立 span，
     # 标题里的 & / < / > 以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
     title_html = esc(seg["title"])
-    if apple_opening:
+    if full_opening:
         # 每个字外面一层 `.t-mk`（裁剪窗）+ 里面一层 `.t-in`（字本身）：揭示边是
         # **一行连续移动的边**，不是每个字各自"蹦"一下。
         #
@@ -450,8 +450,8 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
             for ch in seg["title"])
     # 揭示边的裁窗层：开屏编排那一支自己带 `.t-mk` 裁窗（逐字揭示边是另一种
     # 编法），只有走通用入场的 agenda 卡（典型是结尾页）需要外面这一层。
-    _rev_open = "" if apple_opening else f'<div class="title-reveal" id="rev-title-{sid}">'
-    _rev_close = "" if apple_opening else "</div>"
+    _rev_open = "" if full_opening else f'<div class="title-reveal" id="rev-title-{sid}">'
+    _rev_close = "" if full_opening else "</div>"
     return (f'    <div class="agenda-col"{col_attr}>\n'
             f'{halo_html}'
             f'      <div class="agenda-head">{kicker_html}'
@@ -1511,7 +1511,7 @@ def _prepare_card(rc, clip):
     # 不读任何可配置键（opening_animation 已随默认强绑定从契约移除，见
     # _source_schema）。closing 页与内容段不进入这条编排；开屏页写 canvas
     # 版式（整页海报）时同样没有文本编排（agenda 的 DOM 都不生成）。
-    apple_opening = sid == "opening" and is_agenda
+    full_opening = sid == "opening" and is_agenda
     has_image = (sid in rc.images) and not is_agenda
     # 并置对比（layout: "compare"）：图槽一分为二，左右各一张。两张图的记录被
     # 摊平成 `{sid}:0` / `{sid}:1`，所以 has_image 要按分格重新判——单看
@@ -1561,8 +1561,8 @@ def _prepare_card(rc, clip):
                     else _tagline_html(rc, seg, sid, ac))
     # 结尾 kicker 的**存在性**：`_kicker_entrance_lines` 拿它当闸门，与
     # `tagline_html` 同一个口径——补间只在"真有这一行"时生成。开屏那行不在这里
-    # 生成（它挂在 _apple_opening_lines 里），所以开屏编排时为 False。
-    kicker_html = bool(seg.get("tagline")) and is_agenda and not apple_opening
+    # 生成（它挂在 _full_opening_lines 里），所以开屏编排时为 False。
+    kicker_html = bool(seg.get("tagline")) and is_agenda and not full_opening
     # <video> 必须落在**卡片那个可见窗口**上，不能用口播段长：
     # hyperframes 给每个带 data-start 的元素按**它自己**的窗口独立判显隐
     # （runtime 的 applyTimedElementVisibility + 逐帧 style.visibility），
@@ -1695,7 +1695,7 @@ def _prepare_card(rc, clip):
         ac_text_attr=ac_text_attr, layout=layout, is_agenda=is_agenda,
         has_image=has_image, is_canvas=is_canvas, is_caption=has_caption,
         title_size=title_size,
-        apple_opening=apple_opening,
+        full_opening=full_opening,
         # agenda 卡装配时回写实际行数（_agenda_col_html）；非 agenda 页用不到，
         # 留 0 而不是 getattr 兜底——开屏编排只在 agenda 卡上生效，读到的
         # 必然是回写过的那个值。
@@ -1766,7 +1766,7 @@ def _assemble_card(rc, card, clips, manifest):
         return (card.card_open
                 + _agenda_col_html(card.seg, clips, manifest, rc.ag,
                                    card.ac, card.ac_attr, card.title_size,
-                                   rc.bgs, card.apple_opening, card, rc)
+                                   rc.bgs, card.full_opening, card, rc)
                 + f'    {card.verse_html}\n    </div>\n'
                 + card.progress_html
                 + '  </div>')
@@ -2707,7 +2707,7 @@ def _kicker_kern_pad_px(rc):
     垫片按 `n × span` 给——一字不留余量，多出来那半格正是容器的 cushion。
     取整到 0.01px：CSS 里写的是浮点数，留全精度只会让金样里多一串尾数。
     """
-    ak = rc.anim["opening"]["apple"]["kicker"]
+    ak = rc.anim["opening"]["full"]["kicker"]
     return round(rc.ag["kickerSize"] * max(0.0, ak["tracking"] - ak["rest"]), 2)
 
 
@@ -2734,7 +2734,7 @@ def _agenda_kicker_html(seg, bgs, ac, split_chars=False, pad_kern=False):
     if split_chars:
         text = "".join(f'<span class="k-ch">{esc(ch)}</span>' for ch in seg["tagline"])
     # data-kern：字距展开的容差垫，**只有真会演这一拍的那一页**才挂——
-    # `data-opening-anim="apple"` 的开屏也演（逐字 x），它同样要垫；只在开屏
+    # `data-opening-anim="full"` 的开屏也演（逐字 x），它同样要垫；只在开屏
     # 一个选择器上写死会在"开屏改走非开屏编排"的那天悄悄失效。
     pad = ' data-kern="1"' if (split_chars or pad_kern) else ""
     return (f'<div class="agenda-kicker"{pad} style="color:{_kc}">'
@@ -2749,9 +2749,9 @@ def _kicker_entrance_lines(rc, card):
     第一帧就站在那儿。这与第五轮"副标题是画面上唯一没进过时间线的元素"是同一个
     毛病在另一种版式上的那一半。
 
-    **为什么只给结尾、不给开屏**：开屏的 kicker 由 `_apple_opening_lines` 逐字
+    **为什么只给结尾、不给开屏**：开屏的 kicker 由 `_full_opening_lines` 逐字
     演（整支舞锚在擦除起点）；再挂一条整行补间，同一个元素会有两套补间互相覆盖。
-    `card.apple_opening` 就是那道闸门。
+    `card.full_opening` 就是那道闸门。
 
     **幅度也走比例、终点必须精确落位**：起点位移写成"kicker 字距展开量"的
     `easeFrac` 倍，收拢到 `x:0`——`x:0` 就是静态字距（`letter-spacing` 归 CSS），
@@ -2759,7 +2759,7 @@ def _kicker_entrance_lines(rc, card):
     落位时会留下残值，reading 上就是"小标题比其他行糊一点"。
     """
     a_k = rc.anim["titleEntrance"].get("kicker")
-    if not a_k or card.apple_opening or not card.kicker_html:
+    if not a_k or card.full_opening or not card.kicker_html:
         return []
     ease_frac = max(0.0, _unit_frac(a_k.get("easeFrac", 0.0)))
     if ease_frac <= 0.0:
@@ -2822,7 +2822,7 @@ def _stagger_vars(rc, group, k=1.0):
     return 'stagger:{amount:%s,ease:"%s"},' % (num_fmt(amount, 3), ease)
 
 
-def _apple_opening_budget(rc, card):
+def _full_opening_budget(rc, card):
     """开屏整页编排的等比压缩系数（1.0 = 原速不压）。
 
     收尾时刻取几条补间里最晚的那条（标题逐字、编号列、内容行、kicker）；可用时长是
@@ -2832,7 +2832,7 @@ def _apple_opening_budget(rc, card):
     口径对齐 entranceBudget：够就原速，不够按比例压，压到 `minFactor` 停手并告警
     （再狠就是闪烁）。光晕呼吸与副光漂移不参与压缩：它们是淡入后的稳态循环。
     """
-    ap = rc.anim["opening"]["apple"]
+    ap = rc.anim["opening"]["full"]
     bud = ap["budget"]
     a_t, a_k, a_r = ap["title"], ap["kicker"], ap["rows"]
     n = max(1, card.agenda_row_count)
@@ -2879,7 +2879,7 @@ def _apple_opening_budget(rc, card):
     return k
 
 
-def _apple_opening_lines(rc, card):
+def _full_opening_lines(rc, card):
     """开屏整页编排（开屏 agenda 卡默认强绑定，无契约键）。
 
     v2 的先进开场手感（对标科技发布会开场，全部 GSAP 时间线补间、逐帧 seek
@@ -2889,21 +2889,21 @@ def _apple_opening_lines(rc, card):
       - 背景**双光斑**：主光晕呼吸（accent 色）+ 副光漂移（冷色），两枚错位
         异色光在标题身后形成景深层次，替代单枚静态光斑的"贴纸感"；
       - kicker **字距展开**：整行 blur 淡入 + 逐字 x 从拉开态收拢到静态
-        字距（letterSpacing 补间的 transform 等价式，见 _apple_opening_lines
+        字距（letterSpacing 补间的 transform 等价式，见 _full_opening_lines
         里的等价性推导——门禁禁 animate reflow 属性）；
       - agenda 行**两拍进入**：编号（.ag-idx）先行 scale+blur 落定，行内容
         （.ag-name）随后 x 滑入——前后景关系让行列表的读取顺序更强。
 
     全部锚在擦除起点 win_start：页面从 clip-path 被擦开的同时内容就在演化。
-    时长是编排的一部分，**但按可见窗口等比归一**（_apple_opening_budget）：
+    时长是编排的一部分，**但按可见窗口等比归一**（_full_opening_budget）：
     固定 choreography 遇到短开场会静默丢尾巴，而"丢了"这件事只有页面被盖住
     之后才知道，那时已经无法回溯。压缩是等比的，节奏比例不变。
     模糊是短暂的（标题约 1s 内收敛到 0），成片只有开头几十帧带 filter
     开销，无头渲染可接受。
     """
     sid, t = card.sid, card.win_start
-    ap = rc.anim["opening"]["apple"]
-    k = _apple_opening_budget(rc, card)
+    ap = rc.anim["opening"]["full"]
+    k = _full_opening_budget(rc, card)
     has_kicker = bool(card.seg.get("tagline"))
     lines = []
     halo = ap["halo"]
@@ -3571,7 +3571,7 @@ def _card_timeline_lines(rc, card):
     # 入场动效预算随段长归一化：短段整体压缩，长段维持原速。
     _k = _entrance_k(rc, card)
     # Title entrance（画布页没有 HTML 标题，标题在画布里，补间一起跳过）
-    if not card.is_canvas and not card.apple_opening:
+    if not card.is_canvas and not card.full_opening:
         a_title = a_["titleEntrance"]
         _rh = _title_rhythm(a_title, getattr(card, "title_ordinal", 0))
         # 标题入场 = 一条揭示边（裁窗 + 字同步走），不是整块缩放。四档轮换的只有
@@ -3589,14 +3589,14 @@ def _card_timeline_lines(rc, card):
         lines.extend(_tagline_entrance_lines(rc, card, _rh))
         lines.extend(_chapter_entrance_lines(rc, card))
     # 结尾页（非开屏编排的 agenda 卡）的 kicker：题头组的第一行，跟标题同一拍。
-    # 开屏编排不在这里——那一行由下面 _apple_opening_lines 逐字演。
+    # 开屏编排不在这里——那一行由下面 _full_opening_lines 逐字演。
     lines.extend(_kicker_entrance_lines(rc, card))
     # 开屏整页编排：整页编排取代通用标题入场（开屏 agenda 卡默认强绑定）。
     # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
     # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
     # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。
-    if card.apple_opening:
-        lines.extend(_apple_opening_lines(rc, card))
+    if card.full_opening:
+        lines.extend(_full_opening_lines(rc, card))
     if card.has_image and not is_full_bleed_card(card) and not card.is_keep:
         a_img = a_["imageEntrance"]
         # 配图卡（两画幅）从下方滑入（y）。agenda 卡无配图，不入场。

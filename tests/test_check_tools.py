@@ -1077,6 +1077,61 @@ class SubprocessEncodingChecker(unittest.TestCase):
             check_subprocess_encoding._call_text("fake.py", ok,
                                                  honor_marks=False), [])
 
+    def test_string_material_does_not_hide_the_real_call(self):
+        """修复前：涂白整体错位一行——素材没挖掉，下一行真调用反被抹掉。
+
+        最危险的是后半句：一条真的裸 `text=True` 被静默放过，门禁还打印
+        "0 处裸 text=True"。同一份源码放一假一真，误报与漏报一起钉住。
+        """
+        import check_subprocess_encoding as C
+        material = ('NOTE = "subprocess.run(cmd, text=True) is prose"\n'
+                    'r = subprocess.run(cmd, text=True)\n')
+        lines = C._strip_strings(material).splitlines()
+        self.assertNotIn("text=True", lines[0], "字符串素材没被涂白：会误报")
+        self.assertIn("text=True", lines[1], "真调用被涂白掉了：会漏报")
+        bad = C._call_text("fake.py", material, honor_marks=False)
+        self.assertEqual([b[1] for b in bad], [2], bad)
+
+    def test_triple_quoted_and_last_line_strings_are_blanked(self):
+        """修复前：上界 `min(r1, len(lines)-1)` 漏掉最后一行，跨行字符串只涂一半。"""
+        import check_subprocess_encoding as C
+        doc = ('DOC = """\nsubprocess.run(cmd, text=True)\n"""\n'
+               'r = subprocess.run(cmd, text=True)\n')
+        lines = C._strip_strings(doc).splitlines()
+        self.assertNotIn("subprocess.run", "\n".join(lines[:3]),
+                         "三引号里的示例没被涂白")
+        self.assertIn("text=True", lines[3], "真调用不该被涂白")
+        # 字符串落在最后一行：旧实现整个跳过，素材会被当成真调用报出来
+        tail = ('r = subprocess.run(cmd, text=True)\n'
+                'NOTE = "subprocess.run(cmd, text=True) is prose"\n')
+        self.assertEqual([b[1] for b in
+                          C._call_text("fake.py", tail, honor_marks=False)],
+                         [1])
+
+    def test_fstring_literal_is_blanked_on_every_python(self):
+        """修复前：3.12+ 把 f-string 拆成 FSTRING_* token，只看 STRING 就不涂白。
+
+        CI 矩阵横跨 3.9/3.12/3.13/3.14，同一份素材在四个档里会给出两个答案。
+        """
+        import check_subprocess_encoding as C
+        src = ("NOTE = f'subprocess.run(cmd, text=True) is prose'\n"
+               "r = subprocess.run(cmd, text=True)\n")
+        self.assertNotIn("subprocess.run",
+                         C._strip_strings(src).splitlines()[0])
+        self.assertEqual([b[1] for b in
+                          C._call_text("fake.py", src, honor_marks=False)],
+                         [2])
+
+    def test_comment_quote_does_not_swallow_the_call(self):
+        """修复前：参数跨行时注释里的 `don't` 开了字符串状态，右括号被吞掉 → 漏报。"""
+        import check_subprocess_encoding as C
+        src = ("r = subprocess.run(\n"
+               "    cmd,  # don't inline\n"
+               "    text=True)\n")
+        bad = C._call_text("fake.py", src, honor_marks=False)
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("text=True", bad[0][2], bad)
+
 
 class DocExampleChecker(unittest.TestCase):
     """文档里的 spec 示例必须真能跑 canvas_kit。

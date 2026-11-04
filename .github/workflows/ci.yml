@@ -64,6 +64,15 @@ jobs:
       - name: Test budget
         run: python tests/check_test_budget.py
 
+      # 第四道文档契约旁边加的编码闸：子进程输出必须显式解码。
+      # 这道闸是**给 Windows 挡的**：Windows runner 按 locale（cp1252）解码
+      # 子进程输出，而 Node/ffmpeg 的输出是 UTF-8——一个中文字符就让
+      # `subprocess` 抛 UnicodeDecodeError，且 `r.stdout` 变 None，报错现场
+      # 被伪装成"JSON 解析失败"。Linux 全绿、Windows 全红，纯 ASCII 的用例
+      # 恰好躲过，看上去像"就那几条用例有问题"。详见脚本头部。
+      - name: Subprocess encoding
+        run: python tests/check_subprocess_encoding.py
+
   # 出片档：真的渲染一支 mp4，并且真的看那支片子的像素。
   #
   # 这一档存在的唯一理由：其余用例全部用假进程替掉了 Node、Chrome 和 ffmpeg，

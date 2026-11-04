@@ -37,7 +37,8 @@ NODE = shutil.which("node")
 _HARNESS = """
 const fs = require("fs");
 const body = fs.readFileSync(process.argv[2], "utf8");
-const text = process.argv[3], frames = +process.argv[4];
+const text = fs.readFileSync(process.argv[3], "utf8");
+const frames = +process.argv[4];
 var rec = null, node = {textContent: ""};
 var document = {querySelector: function () { return node; }};
 node.textContent = text;
@@ -89,13 +90,19 @@ class TypeChunkProduct(unittest.TestCase):
         p = os.path.join(tmp, "case.js")
         with open(p, "w", encoding="utf-8") as f:
             f.write(js)
+        # 文本走**文件**而不是 argv：argv 在 Windows 上按系统代码页编码，
+        # 中文参数会被拒（UnicodeEncodeError），而这条路径上读文件是 UTF-8。
+        t = os.path.join(tmp, "text.txt")
+        with open(t, "w", encoding="utf-8") as f:
+            f.write(text)
         h = os.path.join(tmp, "h.js")
         with open(h, "w", encoding="utf-8") as f:
             f.write(_HARNESS)
-        r = subprocess.run([NODE, h, p, text, str(frames)],
-                           capture_output=True, text=True, timeout=30)
+        r = subprocess.run([NODE, h, p, t, str(frames)],
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return json.loads(r.stdout)
+        return json.loads(r.stdout or "")
 
     def test_cjk_units_land_on_pair_boundaries(self):
         """CJK 两字一组：任意进度都停在组边界上，6/4/2 字分别是 4/2/1 组。"""

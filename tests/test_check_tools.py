@@ -664,13 +664,17 @@ class CanvasDensity(unittest.TestCase):
         _, warns = check_svg.check_file(p, layout, "portrait", "dark")
         return [w for w in warns if "空带" in w]
 
-    def test_empty_band_warns(self):
+    def test_empty_band_warns_and_a_full_bleed_plate_does_not_count_as_ink(self):
         # 实拍复现的形状：顶部两行标题、中间一条轴，y≈240–800 横着什么都没有
         got = self.check('<rect width="1080" height="1440" fill="#0b1020"/>'
                          '<text x="90" y="150" font-size="64" font-family="s">t</text>'
                          '<path d="M150 800 L930 800" stroke="#64748b" stroke-width="5"/>')
         self.assertEqual(len(got), 1)
         self.assertIn("占页高", got[0])
+        # 底板铺满整页是画布的正当画法，但它不能替内容把空带填成"有东西"
+        self.assertEqual(len(self.check(
+            '<rect width="1080" height="1440" fill="#0b1020"/>'
+            '<text x="90" y="150" font-size="64" font-family="s">t</text>')), 1)
 
     def test_spread_page_passes(self):
         self.assertEqual(self.check(
@@ -678,12 +682,6 @@ class CanvasDensity(unittest.TestCase):
             '<path d="M90 300 L990 700" stroke="#64748b" stroke-width="4"/>'
             '<circle cx="540" cy="900" r="120" fill="#38bdf8"/>'
             '<text x="90" y="1300" font-size="40" font-family="s">ok</text>'), [])
-
-    def test_full_bleed_plate_is_not_ink(self):
-        # 底板铺满整页是画布的正当画法，但它不能替内容把空带填成"有东西"
-        self.assertEqual(len(self.check(
-            '<rect width="1080" height="1440" fill="#0b1020"/>'
-            '<text x="90" y="150" font-size="64" font-family="s">t</text>')), 1)
 
     def test_draft_aggregates_full_bleed_warns(self):
         # 满幅底板：定稿自查逐条点名（两条元素两条 warn）；草稿档合并成一条
@@ -1043,6 +1041,41 @@ class DocRefChecker(unittest.TestCase):
         self.assertTrue(os.path.isfile(check_docs._target_path("SKILL.md`")))
         self.assertTrue(os.path.isfile(check_docs._target_path("references/writing.md")))
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
+
+
+class SubprocessEncodingChecker(unittest.TestCase):
+    """`text=True` 的子进程调用必须显式写 `encoding=`。
+
+    这条判据的来历是一次只在 Windows 上现形的失败：CI 的 Windows runner 按
+    locale（cp1252）解码子进程输出，而 Node 的 stdout 是 UTF-8——只要输出里有
+    一个非 ASCII 字符就抛 `UnicodeDecodeError`，且 `r.stdout` 变 `None`，报错
+    现场被伪装成"JSON 解析失败"。Linux 全绿、Windows 全红，同一文件里纯 ASCII
+    的用例恰好躲过。
+
+    这里断言两件事：全仓现在没有裸 `text=True`；以及检查器本身**抓得到**
+    （拿一段临时文件喂它，见 `_call_text`）——只会永远绿的门禁等于没门禁。
+    """
+
+    def test_repo_is_clean_and_the_checker_still_catches_violations(self):
+        import check_subprocess_encoding
+        self.assertEqual(check_subprocess_encoding.main(), 0,
+                         "有 subprocess 调用用了 text=True 却没写 encoding=："
+                         "Windows 上按 locale 解码 UTF-8 输出会直接炸")
+        # 检查器本身必须**抓得到**——只会永远绿的门禁等于没门禁
+        bare = ('import subprocess\n'
+                'r = subprocess.run(["node", "x.js"], capture_output=True,'
+                ' text=True, timeout=30)\n')
+        bad = check_subprocess_encoding._call_text("fake.py", bare,
+                                                   honor_marks=False)
+        self.assertEqual(len(bad), 1, bad)
+        self.assertEqual(bad[0][1], 2, bad)          # 报在那一行
+        self.assertIn("text=True", bad[0][2], bad)   # 报的是那一处调用
+        # 已经写明 encoding 的同一段不该再被报出来
+        ok = bare.replace("text=True, timeout=30",
+                           'text=True, encoding="utf-8", timeout=30')
+        self.assertEqual(
+            check_subprocess_encoding._call_text("fake.py", ok,
+                                                 honor_marks=False), [])
 
 
 class DocExampleChecker(unittest.TestCase):

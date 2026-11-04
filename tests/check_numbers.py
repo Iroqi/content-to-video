@@ -390,6 +390,69 @@ FACTS = [
         [("references/spring.md", r"\| 过冲预算 \| `0\.05`（5%） \|")],
         "峰值越过落位的预算；back 是 9.98%、elastic 是 20.44%，都在门外",
     ),
+    # ── hold 编排：观感旋钮 + 红线常量，作者/维护者按 `references/hold.md` 决策 ──
+    # 与弹簧同一条理由：这四个旋钮改了，静止多久、推多少、走哪条曲线就变；
+    # 后面几条红线不是观感值而是判据，改了它们，"这一帧在不在动"的口径就变。
+    (
+        "hold-still-seconds",
+        ("json", "scripts/_template.py", "animation.hold.stillSeconds"), 0.45,
+        [("references/hold.md", r"\| `stillSeconds` \| `0\.45s` \|")],
+        "落位后的静止窗口缺省；短于读不满一屏，长了变 dead beat",
+    ),
+    (
+        "hold-min-drift-seconds",
+        ("json", "scripts/_template.py", "animation.hold.minDriftSeconds"), 0.30,
+        [("references/hold.md", r"\| `minDriftSeconds` \| `0\.30s` \|")],
+        "慢推窗口地板，别切半条推镜；实际下限还会被判据反解抬高",
+    ),
+    (
+        "hold-scale",
+        ("json", "scripts/_template.py", "animation.hold.scale"), 0.02,
+        [("references/hold.md", r"\| `scale` \| `0\.02`（2%） \|")],
+        "慢推幅度缺省；写 0 明确关掉这一层",
+    ),
+    (
+        "hold-ease",
+        ("json", "scripts/_template.py", "animation.hold.ease"), "sine.inOut",
+        [("references/hold.md", r"\| `ease` \| `sine\.inOut` \|")],
+        "只收无过冲的 inOut 档：hold 没有落位可看，冲过去再收回来读成抖一下",
+    ),
+    (
+        "hold-still-min",
+        ("const", "scripts/_hold.py", "STILL_MIN_SECONDS"), 0.30,
+        [("references/hold.md", r"合法带 0\.30~0\.60s")],
+        "静止窗口下界（红线，不进模板，挡住 --set 把它调没）",
+    ),
+    (
+        "hold-still-max",
+        ("const", "scripts/_hold.py", "STILL_MAX_SECONDS"), 0.60,
+        [("references/hold.md", r"合法带 0\.30~0\.60s")],
+        "静止窗口上界（红线）：再长就重新变回 dead beat",
+    ),
+    (
+        "hold-drift-scale-max",
+        ("const", "scripts/_hold.py", "DRIFT_SCALE_MAX"), 0.02,
+        [("references/hold.md", r"幅度有上限（2%")],
+        "2% 是留在安全边距内的那一档；4%~8% 会把贴边配文推出槽位",
+    ),
+    (
+        "hold-min-drift-ratio",
+        ("const", "scripts/_hold.py", "MIN_DRIFT_RATIO"), 4,
+        [("references/hold.md", r"峰值 ≤ 入场的 1/4")],
+        "慢推峰值 ≤ 入场首帧 1/4；写成 10 会把默认 3.12s 保持段一起判死",
+    ),
+    (
+        "hold-entry-first-frame-px",
+        ("const", "scripts/_hold.py", "ENTRY_FIRST_FRAME_PX"), 4.0,
+        [("references/hold.md", r"≥ 4px 位移（980px 槽位")],
+        "入场首帧硬判据，慢推与静止窗口都按这一把尺折算",
+    ),
+    (
+        "hold-slot-width-px",
+        ("const", "scripts/_hold.py", "SLOT_WIDTH_PX"), 980.0,
+        [("references/hold.md", r"≥ 4px 位移（980px 槽位")],
+        "4px 折算成 scale 差的分母，改槽位宽度就得重算整张活动度表",
+    ),
 ]
 
 

@@ -35,6 +35,7 @@ from _ease import (spring_zeta, SPRING_CARRY, SPRING_SETTLE_EPS,  # noqa: E402
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
+from _hold import plan as hold_plan  # 静止窗口 / 慢推窗口的单一真源
 from _stage_carry import carry_pages, judging_row
 
 
@@ -3509,6 +3510,43 @@ def _image_settle_lines(rc, card, lead):
             for _sel in _pane_carriers(rc, card)]
 
 
+def _hold_drift_lines(rc, card, lead):
+    """落位之后的**动静对比**：先留一段全静，再给主视觉一条 2% 慢推。
+
+    入场那一组（题头 → 框落位 → 图收拢）是"快"，这一条管"留得住"：收拢刚结束的
+    300~600ms 里主视觉一帧不动，让观众读清这一屏；静止窗口之后用一条 `sine.inOut`
+    的 2% 慢推接管到页末，画面不再是从落位到换页的整段静帧。两段的窗口、幅度、
+    锚点全部由 `_hold.plan` 算，本函数只把它翻成 GSAP 补间——生成期与判据不许各算
+    一份（改了静止时长却只有补间跟着走，门禁就量不出"该静的地方静了"）。
+
+    **作用域与收拢同集合**（`_still_image_carrier_sid`）：整页画布的画面归作者
+    （在 SVG 里自己演）、接续页要精确接住上一页的收尾态、视频与写了 `animate` 的
+    内联 SVG 都已有自己的运动——四类页面模板一条都不插手。agenda 卡本来就是
+    "停在那里让人读"的一屏信息（`perceptual` 也刻意不判它死帧），动了反而干扰。
+
+    **只写 `scale`**：慢推是合成层动作，不碰 width/height（重排）、不碰 opacity
+    与颜色（分色纪律）。幅度上限 2% 由 `_hold.validate` 钉住——`look.md` 量过
+    4%~8% 的持续推近会把 cover 之外的配文推出槽位。终点留在可见窗口末尾前一帧：
+    窗口是半开区间，压线那一帧永不渲染，不报错，只是少一拍。
+    """
+    if _still_image_carrier_sid(rc, card) is None:
+        return []
+    cfg = rc.anim.get("hold")
+    if not cfg:
+        return []
+    # 入场收尾 = `_entrance_lead`（收拢补间的终点）；可见窗口末尾 = clips 预处理
+    # 算好的 `win_start + vis`。两处都取现成值，不在这里重推时间轴。
+    hold = hold_plan(card.s + lead, card.win_start + card.vis, cfg, rc.fps)
+    if hold is None:
+        return []
+    return [
+        f'tl.to("{sel}",{{scale:{num_fmt(1.0 + hold["scale"], 4)},'
+        f'duration:{hold["duration"]:.2f},ease:"{hold["ease"]}"}},'
+        f'{hold["drift_start"]:.2f})'
+        for sel in _pane_carriers(rc, card)
+    ]
+
+
 def _pane_carriers(rc, card):
     """这一页"能独立承载入场收拢"的图载体选择器列表。
 
@@ -3650,6 +3688,10 @@ def _card_timeline_lines(rc, card):
         lines.extend(_frame_arc_lines(rc, card, _frame_sel, _frame_at, _frame_dur))
         # 同一个 guard 内挂收拢：能配图入场的才有资格演这一层。
         lines.extend(_image_settle_lines(rc, card, lead))
+        # 落位之后接动静对比：静止窗口 + 2% 慢推。排在收拢之后，GSAP 按时间线
+        # 顺序承接同一元素的 scale=1 终态；作用域在 `_hold_drift_lines` 里再按
+        # "有没有静态图载体"收一次（视频 / 内联 SVG 不插手）。
+        lines.extend(_hold_drift_lines(rc, card, lead))
     # 字幕层的换句：整列滚过窗口那条固定的边（一句一步）。放在配图之后是因为
     # 它管的也是"跟着旁白走"的那一层，作用域却是独立的列容器。
     lines.extend(_plate_scroll_lines(rc, card))

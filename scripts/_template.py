@@ -587,6 +587,12 @@ _TEMPLATE_JSON = r'''
         {"scale": 1.05, "panX": -0.6, "panY": 0.25, "ease": "power3.out"}
       ]
     },
+    "hold": {
+      "stillSeconds": 0.45,
+      "minDriftSeconds": 0.30,
+      "scale": 0.02,
+      "ease": "sine.inOut"
+    },
     "animate": {
       "duration": 0.5,
       "ease": "power2.out"

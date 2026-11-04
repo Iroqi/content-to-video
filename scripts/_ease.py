@@ -67,7 +67,7 @@ _POLY_EXP = {"power1": 2, "power2": 3, "power3": 4, "power4": 5,
 # 静默退化——它是正式支持的档，有注册、有采样、有判据。
 EXTENSION_FAMILIES = frozenset({"spring"})
 
-# ── 受控弹簧的参数（Opus 5.5 的阻尼比纪律，按本仓库的行程预算裁剪）────────
+# ── 受控弹簧的参数（阻尼比纪律，按本仓库的行程预算裁剪）────────
 # ζ 下界不是照抄社区那句 0.7~0.85：带承接初速时 ζ=0.70 的峰值过冲是 9.2%，
 # 会撞上"落位是精确值"这条红线（reject_overshoot 的同一条理由）。0.80 是实测
 # 分界：峰值 3.3%，仍在"轻微过冲"里，且全带都过首帧 4px / 末段 50% 两道判据。
@@ -139,7 +139,7 @@ def split_ease(spec):
 # 解是**闭式的**：给定 p 就能算出这一帧，不需要从 0 积分到 p，也不需要保存
 # 上一帧的速度。这与 params 表达式白名单禁 random / 时间函数是同一条理由——
 # 逐帧 seek 下，靠历史状态算出来的第 N 帧和直接 seek 到第 N 帧会对不上。
-# Opus 5.5 那批片子用 closed-form spring 而不是数值积分，原因完全一样。
+# 代码绘制的 motion graphics用 closed-form spring 而不是数值积分，原因完全一样。
 def spring_omega(zeta):
     """由"末帧前衰减到 ε"反解 ω；ζ 越小 ω 越大，衰减率 ζω 恒为 -ln(ε)。"""
     return -math.log(SPRING_SETTLE_EPS) / zeta

@@ -63,14 +63,14 @@ def validate_segments_source(data):
     """
     if not isinstance(data, dict):
         raise ValueError("segments_source.json 顶层必须是 JSON 对象")
-    # 开场动画：开屏 agenda 卡**默认强绑定**苹果风开场，不再有可配置的契约键
+    # 开场动画：开屏 agenda 卡**默认强绑定**开屏整页编排，不再有可配置的契约键
     # （opening_animation 已随默认强绑定一起移除，见 git 历史）。写过旧键的稿
     # 件在这里得到明确指引，而不是撞一个泛化的"未知键"。放在 _reject_unknown_keys
     # 之前：reject 会先于这里报"未知字段"，指引就永远到不了作者手里。
     if "opening_animation" in data:
         raise ValueError(
             "segments_source.json 的 'opening_animation' 已随「默认强绑定」移除："
-            "开屏页（agenda 版式）现在无需配置即自动获得苹果风开场动画，"
+            "开屏页（agenda 版式）现在无需配置即自动获得开屏整页编排动画，"
             "请删掉这个键；若想要无文本编排的开屏页，把 opening_layout 写成 "
             "\"canvas\"（整页海报），或 \"plate\"（满幅图 + 标题与一句字幕）。")
     _reject_unknown_keys(data, SOURCE_KEYS, "segments_source.json 顶层")

@@ -1,4 +1,4 @@
-"""Opus 5.5 式「受控弹簧」：带承接初速的闭式二阶阶跃响应（spring / spring(ζ)）。
+"""「受控弹簧」：带承接初速的闭式二阶阶跃响应（spring / spring(ζ)）。
 
 仓库此前所有落位曲线都是多项式衰减（power*.out / expo.out）：首帧速度靠放大 y
 硬凑，收尾没有质量。这一档补的是"带着上一拍的速度继续走、在落点上稳住"，而且
@@ -274,7 +274,7 @@ class SpringInProduct(unittest.TestCase):
 
 
 class SpringColorDiscipline(unittest.TestCase):
-    """Material 3 分色红线：位置与尺寸可以弹，透明度与颜色永不弹。"""
+    """分色红线：位置与尺寸可以弹，透明度与颜色永不弹。"""
 
     def test_color_tween_with_underdamped_spring_is_rejected(self):
         # 颜色必须写在补间变量里（to/from/set，attr 里的 SVG 颜色也算）；

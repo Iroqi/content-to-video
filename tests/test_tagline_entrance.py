@@ -1,7 +1,7 @@
 """题头组入场编排：副标题行的行为锁。
 
 副标题（`#tag-{sid}`）曾经是画面上**唯一一个从头到尾没进过时间线的元素**——
-转场、标题、配图、字幕、背景、苹果风开场都各有一拍，唯独它从卡片第一帧就在
+转场、标题、配图、字幕、背景、开屏整页编排都各有一拍，唯独它从卡片第一帧就在
 那儿、钉到被下一页盖走。这一层补上之后，题头组两行不再一起到位。
 
 这份文件按第一性原理验四件事（不验实现细节）：
@@ -214,7 +214,7 @@ class Staggered(unittest.TestCase):
     def test_two_beats_overlap_rather_than_queue(self):
         """两拍交叠（delayFrac < 1）而不是首尾相接——排成队列是 PPT 的"逐条出现"。
 
-        overlapping action（迪士尼）才有编排感：主线还没落定，附属层已经在跟进。
+        overlapping action（动作重叠）才有编排感：主线还没落定，附属层已经在跟进。
         """
         frac = _template.load_template()["animation"]["titleEntrance"]["tagline"]["delayFrac"]
         self.assertLess(frac, 1.0)
@@ -331,7 +331,7 @@ class WhoDoesNotGetOne(unittest.TestCase):
         """agenda 卡的副标题是 `.agenda-kicker`（画在 `.agenda-head` 里），
         不是 `#tag-{sid}`——给它补间等于指向一个永远不存在的元素。
 
-        开屏的 kicker 由苹果风开场编排逐字演（`_apple_opening_lines`），不走这一层。
+        开屏的 kicker 由开屏整页编排逐字演（`_apple_opening_lines`），不走这一层。
         """
         src = dict(H.sample_source(), opening_tagline="AI WEEKLY",
                    closing_tagline="下期预告")

@@ -37,9 +37,9 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**。换整页海�
 
 判据是纯静态算出来的（`html_renderer._agenda_list_budget`），不启动浏览器。横屏不判——那边 agenda 列是左栏文档流的一部分，剩余空间不归 `.agenda` 独占。
 
-### 苹果风开场（开屏 agenda 卡默认强绑定）
+### 开屏整页编排（开屏 agenda 卡默认强绑定）
 
-开屏页为 agenda 版式时默认强绑定苹果风整页编排，无契约键（写过旧键 `opening_animation` 会报错）。参数真源 `animation.opening.apple`。
+开屏页为 agenda 版式时默认强绑定开屏整页编排，无契约键（写过旧键 `opening_animation` 会报错）。参数真源 `animation.opening.apple`。
 
 - 整支舞按**可见窗口**（`[擦除起点, 被下一页盖住]`）等比归一：收尾时刻由标题字数与行数决定，装不下按 `可见窗口 ÷ 收尾时刻` 压缩（地板 0.5）并 `[warn]`。压缩只落在淡入时长与起点，锚点是**擦除起点 `win_start`**，不是段起点。
 
@@ -64,7 +64,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**。换整页海�
 参数全部来自 `_template.py` 的 `animation`。**该不该动、动多快**看 `references/motion.md`「四职务」。
 
 - **段落转场**：默认方向擦除（wipe），新卡 `clip-path` 从全遮蔽补到全覆盖（`animation.segmentWipe`），`style` 全片统一（`line` 默认 / `vertical` / `diagonal` / `circle` 71%），写错档生成期报错，旧卡不淡出。**几何档是双向的**：`segmentWipe.alt` 打开时（默认）相邻两次换页方向相反——第 2、4 次自页顶遮下来，同时**旧页朝同一方向退场**（`_wipe_alternate_lines`），两条补间同起点、同时长、同曲线，旧页停在 `hold`（0.92）处，页界那帧只留一条缝。观众读到的是"两页相对运动"，不是"新的一页盖上来"——只有新页在动时，换页没有方向感。`line` 档不参与双向（它的旧页退场是 peel，同一件事的手写版，两套同屏是两种节奏打架）。时长被句间静音钳制：`gap = 下一段 start − 本段 end`（默认 0.4s），`wipe = min(基准时长, gap)`，入场提前铺到 `win_start = s − wipe`；**卡的 `data-duration` 必须覆盖整个入场窗口**（`generate_html` 的 clips 预处理一次算齐），外层可见窗口是**半开区间**——补间结束态别压线，那一帧永不渲染，不报错，只是少一拍。卡必须不透明（自带 `.bg`/`.grid`），透明卡做 wipe 会双影叠字。**满幅页（canvas）不参与模板转场**：`wipe` 强制归零走瞬间切；切过去那瞬画布是空的，让导演第一拍尽早落子（全空起步生成期 warn）。接续页同样 `wipe=0`、不生成配图入场。
-- **标题入场**：一条揭示边。字不透明、不缩放、只做位移；`.title-reveal` 的 `clip-path` 同步从 `inset(100% 0 0 0)` 开到 `inset(0%)`，两层同起点同时长同缓动（`html_renderer._reveal_tween_lines`）。四档轮换的只有行程与曲线（`titleEntrance.rhythm`：44px `power4.out` / 56px `power3.out` / 34px `power3.out` / 62px `expo.out`，按卡片序取模）；**没有缩放档**。tagline 跟标题那一档进来，自带一枚裁窗。`.agenda-kicker` 开屏由苹果编排逐字演，结尾页跟标题同拍、从字距展开态整行收拢；两页都带行尾字距垫保证行宽不变。内容段的 `kicker` 小字行（≤18 字）站在标题上沿，与标题同起点、半程收；竖屏绝对定位在标题带上方的留白里并把 `03/04` 抬到同一抬头线，横屏靠负 margin 抵掉列间距（`titleEntrance.eyebrow`）。
+- **标题入场**：一条揭示边。字不透明、不缩放、只做位移；`.title-reveal` 的 `clip-path` 同步从 `inset(100% 0 0 0)` 开到 `inset(0%)`，两层同起点同时长同缓动（`html_renderer._reveal_tween_lines`）。四档轮换的只有行程与曲线（`titleEntrance.rhythm`：44px `power4.out` / 56px `power3.out` / 34px `power3.out` / 62px `expo.out`，按卡片序取模）；**没有缩放档**。tagline 跟标题那一档进来，自带一枚裁窗。`.agenda-kicker` 开屏由开屏编排逐字演，结尾页跟标题同拍、从字距展开态整行收拢；两页都带行尾字距垫保证行宽不变。内容段的 `kicker` 小字行（≤18 字）站在标题上沿，与标题同起点、半程收；竖屏绝对定位在标题带上方的留白里并把 `03/04` 抬到同一抬头线，横屏靠负 margin 抵掉列间距（`titleEntrance.eyebrow`）。
 - **配图入场（不做持续推近）**：两层——框先落位（容器层只有 `y`，**没有 `opacity` 门控**）、图本体收拢（`scale`/`x`/`y` 从 `settle` 收到 `{1,0,0}`）；**满幅页两层都不生成**。画面"在场"由页面自己的 `clip-path` 揭盖承担：揭盖擦到哪儿画面到哪儿，页界不留"新页已露、主体还没到"的空槽（判据见 `references/motion.md`「场景相连」）。容器层那条 `y` 另配一条**同起点、同时长、异缓动**的 `x`（`imageEntrance.arc`）——两轴不同缓动时合成路径才是弧，同缓动时恒为直线（判据与"哪些地方不走弧"见 `references/motion.md`「位移走弧线」）。收拢 `duration` 不开放（终点由入场预算推出）。**收拢之后图不再动**：SVG 正文常贴画布边缘，推近会把 `cover` 之外的内容再放大 4%–8%、位移还会把边缘拖进槽位，边框附近的配文就看不见了。要动就给该段写 `animate` 在图里演（`references/motion.md`「六种够用的演法」）。收拢的 `panX/panY` 写"用掉多少盈余"的比例（`[0,1]`）——**scale < 1 或位移超出 `(s−1)×边长/2` 就是露底**。三类载体不收拢：`<video>`、写了 `animate` 的内联 SVG、满幅版式与接续页。
 - **字幕层换句**：一列滚过一条固定的边，一句一个槽高。位移只写在列容器 `#pl-{sid}` 上，**行自己一条补间都没有**；`tl.to` 一条管一句的"到来"，锚在新句开口（`start_time + onset`），时长取 `layout.<画幅>.subtitle.relay`、缓动取 `subtitle.scroll.ease`——与句子流换句同一套口径。**首句不滚**：满幅页进场是硬切，第一帧字幕必须在位。
 - **CSS 不得给 GSAP 补间的元素声明 `transform`**（要位移用绝对定位 + auto 外边距）。已是生成期门禁：`gen_hyperframes` 拿 `composition.css` 里声明了 `transform` 的选择器与产物里实际补间的选择器求交，命中即 `error`（`_css_guard.py`），伪元素豁免。

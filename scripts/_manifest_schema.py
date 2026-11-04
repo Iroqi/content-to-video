@@ -275,7 +275,7 @@ def validate_timing_manifest(data):
             raise ValueError(
                 f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 写了 "
                 "opening_animation，该键已随「默认强绑定」移除：开屏页（agenda "
-                "版式）现在无需配置即自动获得苹果风开场动画，请删掉这个键。")
+                "版式）现在无需配置即自动获得开屏整页编排动画，请删掉这个键。")
         _reject_unknown_keys(sg, MANIFEST_SEGMENT_KEYS,
                              f"timing_manifest.json 的 segments[{i}]"
                              f"（id={sg.get('id', '?')}）")

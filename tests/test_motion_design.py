@@ -385,8 +385,8 @@ class FrameArcInProduct(unittest.TestCase):
 
 
 # ── 入场阶梯：一屏几层，就有几个先后 ────────────────────────────────────────
-# 前沿动效的同一屏从来不是"一起到位"：Framer 的 staggerChildren、Material 的
-# staggered container transform、迪士尼十二条里的 Overlapping Action，说的是同一件
+# 前沿动效的同一屏从来不是"一起到位"：错峰入场、容器级
+# staggered container transform、动画十二原则中的动作重叠，说的是同一件
 # 事——层与层之间有先后。同时开始的两层在观众眼里是**一层**。
 #
 # 刻度与「首帧位移 ≥ 4px」同源，都是 30fps 下"这一帧看得出吗"：2 帧（66ms）是
@@ -561,8 +561,8 @@ class EntranceLadderInProduct(unittest.TestCase):
 
 
 # ── 错峰的分配：揭示窗口 × 曲线，不是逐项等差 ──────────────────────────────────
-# 前沿揭示的边不是一个匀速的节拍器。Apple 发布会大标题、Framer 的 staggered
-# container transform、现代 UI 的列表入场，顺序都是"先疏后密"：最先几个各自站定让
+# 前沿揭示的边不是一个匀速的节拍器。大标题的逐字揭示、容器级错峰变换、
+# 现代 UI 的列表入场，顺序都是"先疏后密"：最先几个各自站定让
 # 人读出来，后面的连成一条线扫过收尾。GSAP 原生就有这一枚旋钮——
 # `stagger:{amount: W, ease: "…"}`，`amount` 是**整组的揭示窗口**、`ease` 把这一个
 # 窗口按曲线分给各项。两条书面性质的判据：

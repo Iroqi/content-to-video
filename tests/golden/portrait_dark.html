@@ -76,20 +76,20 @@ body{font-family:var(--ctv-font-family)}
    两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
    把开场/收尾那两页的氛围光挪位。 */
 .agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
-/* 苹果风开场（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
-   模拟苹果发布会的"产品光"。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
+/* 开屏整页编排（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
+   模拟舞台主光。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
    不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
    交给 GSAP 编排（淡入 + 呼吸，遍数按片长折算），CSS 只负责形状与颜色。 */
 .apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
-/* 苹果开场副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
+/* 开屏编排副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
    副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
    冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
 .apple-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
-/* 苹果开场标题的逐字 span（渲染器只在 apple 开场拆字）：inline-block 让 GSAP
+/* 开屏编排标题的逐字 span（渲染器只在开屏编排时拆字）：inline-block 让 GSAP
    的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
    与折行；静态开场标题是纯文本、不命中这里。 */
 .t-ch{display:inline-block;white-space:pre}
-/* 苹果开场标题的"揭示边"两层（见 html_renderer 的 _agenda_col_html）：
+/* 开屏编排标题的"揭示边"两层（见 html_renderer 的 _agenda_col_html）：
    `.t-mk` 是外层的裁剪窗，`.t-in` 是窗里的字。边由 GSAP 对 `.t-in` 补 y
    （`mask.rise` × 字高）产生，字本身**不参与透明度补间**——逐字淡入是"打字机
    在打字"，一列字被同一条边推上来才是"镜头落在这句话上"。
@@ -98,7 +98,7 @@ body{font-family:var(--ctv-font-family)}
 .t-mk{display:inline-block;overflow:hidden;vertical-align:bottom;
   padding-top:var(--ctv-tm-top,0.34em);margin-top:calc(-1 * var(--ctv-tm-top,0.34em))}
 .t-in{display:inline-block;white-space:pre}
-/* 苹果开场 kicker 的逐字 span（同 .t-ch 的由来：transform 要生效 + 空格
+/* 开屏编排 kicker 的逐字 span（同 .t-ch 的由来：transform 要生效 + 空格
    不折叠）。与 .t-ch 分开两类：kicker 的字距舞 animate **每一个** .k-ch
    （含空格——GSAP 函数式值按目标序号求值，序号即字符序号），标题那支
    stagger 舞却要 :not(.t-sp) 排除空格，一个选择器两种语义会互相咬。 */
@@ -314,7 +314,7 @@ body{font-family:var(--ctv-font-family)}
    translateY 上，与这里的亮度、尺寸共用同一个接力窗口：三个维度同一时刻到位，
    “焦点”不能在途中分裂成“先滚、再亮”两个动作。
    ── 第四个维度：景深（模糊）──────────────────────────────────────────
-   前沿歌词 UI（AMLL 的 setEnableBlur、Jellyfin 那支“梯度模糊”）让离焦的行不只
+   前沿歌词 UI（离焦行的梯度模糊处理）让离焦的行不只
    更暗更小，还**更虚**：景深是“远”这个字在光学里的本义——前三维合起来表达的是
    强弱，只有模糊表达的是“不在焦平面上”。每远一档加 subtitle.focus.blur（单位
    em，相对**该行自己的字号**，所以两画幅按各自字号自动缩放，不用存第二份）。
@@ -1024,7 +1024,7 @@ const verseVedApply = (L, k) => {
 // 帧读覆盖层的逐字 alpha）。更致命的是正在念的那个字 alpha 恒为 1：边缘只有"还没翻"
 // 和"翻过去了"两种状态，从来没有"正在翻开"。
 //
-// 前沿歌词 UI（AMLL 的逐字模式、Apple Music 的词级同步）的高亮边缘都是**连续的**：
+// 前沿歌词 UI（逐字模式、词级同步）的高亮边缘都是**连续的**：
 // 前者按词级时间戳、后者按词的发声区间推进，两者都没有"取整到整字"这一步。本仓库的
 // TTS 只有句级时间戳，"句内匀速"确实是唯一可用的假设——但**匀速推不出取整**：把 p
 // floor 成整数是自己加的一层量化器，不是时间戳缺失的推论。留着它，等于把句内这条
@@ -1120,7 +1120,7 @@ const verseEmUpdate = (c, si, t) => {
 // ── 念完之后的收束（settle）：把整句的 accent 交还给"下一句" ──────────────
 // 词级强调的目标是"念到哪儿亮到哪儿"，但念完那一刻整句仍是全亮 accent，而它
 // 与下一句刚亮起的第一个字**同色同重**——画面上同时有两个"现在的焦点"。前沿的
-// 歌词/字幕收束（Apple Music 的逐行歌词、Spotify 同步歌词、卡拉OK 的 bar 收尾）
+// 歌词/字幕收束（逐行歌词 UI 的逐行歌词、同步歌词 UI、卡拉OK 的 bar 收尾）
 // 都在一句唱完时做一次回落：句内进度走满的同时整句退到"已过去"那一档，把焦点
 // 让给下一句。
 //
@@ -1188,7 +1188,7 @@ let cueSi = -1;
 const cueSpan = () => (cues.length ? cues[cues.length - 1].t + Math.max(cues[cues.length - 1].d, 0.01) : 0);
 // ── 焦点衰减（focus falloff）：句子流按"离当前句多远"决定亮度 ────────────
 // 三档阶跃（1.0 / 0.45 / 0.62）的问题在"同档内一视同仁"：0.62 的未念墙里，观众
-// 唯一找焦点的线索是最亮那行。前沿的歌词 UI（Apple Music 逐行、Spotify 同步）
+// 唯一找焦点的线索是最亮那行。前沿的歌词 UI（逐行歌词、同步歌词）
 // 都按**离焦距离**衰减——渐变本身就是路标。
 //
 // 曲线不是新发明：0.62 × 0.726 ≈ 0.45，"已念"本来就是"未念"沿同一条几何衰减
@@ -1201,7 +1201,7 @@ const cueSpan = () => (cues.length ? cues[cues.length - 1].t + Math.max(cues[cue
 // 的自然结果，不用特判。封在第三档：再远的行基本已滚出窗口。
 //
 // ── 第二个维度：尺寸 ────────────────────────────────────────────────────
-// 前沿歌词 UI（Apple Music 逐行、Apple Music Like Lyrics 的 spring 动画）让层级
+// 前沿歌词 UI（逐行歌词与逐字 spring 动画）让层级
 // 同时落在**三个**属性上：透明度、缩放、位置。这里只有一维，于是"远"只被表达成
 // "暗"——同一档里第 2 行和第 4 行完全一样远。补上尺寸：远处的行不只更暗，也更小。
 //
@@ -1269,7 +1269,7 @@ const focusScale = (d) => {
 // 尺寸那一档，写法与上面同源；四位小数是留给 0.8836 这种两档相乘的值。
 const verseFocusScale = (d) => (d === 0 ? "" : focusScale(d).toFixed(4));
 // ── 第四个维度：景深（模糊）───────────────────────────────────────────────
-// 前沿歌词 UI（AMLL 的 setEnableBlur、Jellyfin 那支“梯度模糊”）让离焦的行不只是
+// 前沿歌词 UI（离焦行的梯度模糊处理）让离焦的行不只是
 // 更暗更小，还**更虚**。这是"远"这个字在光学里的本义：前三维合起来表达的是强弱
 // （暗 / 小 / 被推走），只有模糊表达的是"不在焦平面上"——观众判断"哪一行是现在"
 // 靠的是锐度，锐度差比亮度差更早被眼睛抓到。
@@ -1398,7 +1398,7 @@ const _cueStart = (si) => {
 };
 // ── 焦点层级的第三个维度：位置（滚动）─────────────────────────────────
 //
-// 前沿歌词 UI（Apple Music 逐行歌词、AMLL 的 LyricPlayer）的 spring 同时管
+// 前沿歌词 UI（逐行歌词与逐字歌词 UI）的 spring 同时管
 // **垂直位置、缩放、透明度**三个属性——行不是"啪地换掉"的，是被推着上去的。
 // 此前本仓库只做了两维（亮度、尺寸），滚动那一维是硬跳：换句那一帧 clip 的
 // translateY 直接写死到新落位（实测 0 → −70px 一帧到位），而同一次换句的亮度
@@ -1464,7 +1464,7 @@ const verseScroll = (c, t, t0, si) => {
 //     都暗——被全局淡入的起点压下去再涨回来；
 //   · 离焦距离**根本没变**的行：.45 → **.35** → .45——纯闪烁，它本来该一动不动。
 //
-// 前沿歌词 UI（Apple Music 逐行歌词、AMLL 的 LyricPlayer、Spotify 同步歌词）里所有
+// 前沿歌词 UI（逐行歌词、逐字歌词与同步歌词 UI）里所有
 // 行共享同一套 spring 物理：换句是整块歌词各行**同时**柔和挪位——新行上浮放大变亮、
 // 旧行继续上浮缩小褪色、更远的行同步递降，没有一行跳档，也没有一行会先暗下去再
 // 亮回来。d 不是"档位号"，而是**连续场里的一个坐标**。

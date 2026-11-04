@@ -1,7 +1,7 @@
 """题头组第一行（agenda kicker）的入场与它的两个结构约束。
 
 第五轮把副标题补进了时间线，但 `agenda-kicker`（开屏 / 结尾那行"AI WEEKLY"式的
-小标题）只活在苹果风开场里——非开屏的 agenda 卡（典型是结尾）里它没有 id、没有
+小标题）只活在开屏整页编排里——非开屏的 agenda 卡（典型是结尾）里它没有 id、没有
 补间，从卡片第一帧就站在那儿。这是同一个毛病在另一种版式上的那一半。
 
 这份文件按第一性原理验五件事（不验实现细节）：
@@ -9,7 +9,7 @@
 1. **进时间线了** —— 结尾页的 kicker 有一条补间，起点晚于标题（错峰交叠）；
 2. **落位是精确的** —— `fromTo` 收到 `x:0`，不是 `from`（`from` 的起点若被
    半像素吸附，落位会留残值，小标题比别的行"糊一点"）；
-3. **开屏不重复演** —— 开屏那行由苹果编排逐字演，不能再挂整行补间（两套补间
+3. **开屏不重复演** —— 开屏那行由开屏编排逐字演，不能再挂整行补间（两套补间
    互相覆盖，且它会在擦除窗里先整行亮一下）；
 4. **行宽不变** —— 起点态比落位态宽 `(n−1)×span`，容器是 `overflow:hidden`，
    所以每一行 kicker 都要带字距垫（`data-kern` + `--ctv-ag-kern-pad` 恒等）；
@@ -136,13 +136,13 @@ class LandsExactly(unittest.TestCase):
 
 
 class OpeningIsNotDoubled(unittest.TestCase):
-    """开屏那行由苹果编排逐字演，不能再挂整行补间。"""
+    """开屏那行由开屏编排逐字演，不能再挂整行补间。"""
 
     def test_opening_kicker_has_no_row_tween(self):
         html = render()
         self.assertIsNone(_kick("opening", html),
                           "开屏 kicker 被两套补间同时驱动（整行 + 逐字）")
-        # 苹果编排本身还在（逐字 x 那一条）
+        # 开屏编排本身还在（逐字 x 那一条）
         self.assertIn('#opening .k-ch",{x:(i)=>i*', html)
 
 

@@ -142,7 +142,7 @@ def _fill(template, mapping, name):
 _SPRING_EASE_RE = re.compile(
     r"""["']?ease["']?\s*:\s*["']([^"']*spring[^"']*)["']""")
 
-# Material 3 的分色红线（Opus 5.5 那批作品同样守）：位置与尺寸可以带一点
+# 分色红线：位置与尺寸可以带一点
 # 过冲，透明度与颜色永远不许。颜色越过 1 再回来读成一次闪白，而且它不像
 # 位移有"落位"可看，观众只会觉得这一帧脏了。
 _SPRING_COLOR_KEYS = frozenset({
@@ -397,7 +397,7 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
     apple_opening 时额外带题头光晕（`.apple-halo` / `.apple-glow`，DOM 最前、
     `z-index:-1`），由 `_card_timeline_lines` 编排淡入与呼吸。
 
-    `card` 只用于回写实际画出来的行数（苹果开场按它算收尾时刻）——行数只在这里算得
+    `card` 只用于回写实际画出来的行数（开屏编排按它算收尾时刻）——行数只在这里算得
     出，时间线侧重算等于把同一条 `[warn]` 打两次。
     """
     sid = seg["id"]
@@ -412,13 +412,13 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                                       pad_kern=True)
     if kicker_html and not apple_opening:
         # 非开屏的 kicker 挂 id，给 _kicker_entrance_lines 一个落点；开屏那行由
-        # 苹果编排按 `.k-ch` 逐字演，不需要 id（也不需要第二条整行补间）。
+        # 开屏编排按 `.k-ch` 逐字演，不需要 id（也不需要第二条整行补间）。
         kicker_html = kicker_html.replace('<div class="agenda-kicker"',
                                           f'<div class="agenda-kicker" id="kicker-{sid}"',
                                           1)
     rows, tail_rows = _agenda_rows(sid, clips, manifest, ag)
     if card is not None:
-        # 截断后的真实行数（正文 + cta 尾行）。苹果开场按它算 stagger 的收尾时刻，
+        # 截断后的真实行数（正文 + cta 尾行）。开屏编排按它算 stagger 的收尾时刻，
         # 必须是**画在画面上**的行数，不是稿件里想写的行数。
         card.agenda_row_count = len(rows) + len(tail_rows)
     # rc 只在从 _assemble_card 进来时给（那里握有句子流窗口高）；单独调这个
@@ -429,7 +429,7 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
                    if rows else "")
     tail_html = (f'<div class="agenda-tail">{_agenda_row_html(tail_rows)}</div>'
                  if tail_rows else "")
-    # 苹果开场把标题逐字拆成 .t-ch span（空格为 .t-sp）交给 stagger。
+    # 开屏编排把标题逐字拆成 .t-ch span（空格为 .t-sp）交给 stagger。
     # 拆的是**原文**、逐字符转义再包：先 esc 整句再拆会把 &amp; 拆成五个独立 span，
     # 标题里的 & / < / > 以字面文本上画面（实测 "Q&A" 渲染成 "Q&amp;A"）。
     title_html = esc(seg["title"])
@@ -448,7 +448,7 @@ def _agenda_col_html(seg, clips, manifest, ag, ac, ac_attr,
             if ch.isspace()
             else f'<span class="t-mk"><span class="t-ch"><span class="t-in">{esc(ch)}</span></span></span>'
             for ch in seg["title"])
-    # 揭示边的裁窗层：苹果开场那一支自己带 `.t-mk` 裁窗（逐字揭示边是另一种
+    # 揭示边的裁窗层：开屏编排那一支自己带 `.t-mk` 裁窗（逐字揭示边是另一种
     # 编法），只有走通用入场的 agenda 卡（典型是结尾页）需要外面这一层。
     _rev_open = "" if apple_opening else f'<div class="title-reveal" id="rev-title-{sid}">'
     _rev_close = "" if apple_opening else "</div>"
@@ -1133,7 +1133,7 @@ def _kicker_row_html(rc, seg, sid, ac):
 
     它钉的是**读序**：一行小号宽字距的分类标签 → 大标题 → 正文。缺了这一级，
     观众第一眼就撞上最大那个字，题号与正文之间没有过渡；有了它，视线先被一条
-    短引线领进来，再落在大字上（Opus 系作品的题头几乎都是这个三层结构）。
+    短引线领进来，再落在大字上（代码绘制的 motion graphics 的题头几乎都是这个三层结构）。
 
     颜色**取文字色为主、只掺两成 accent**：它是读序里最低的一级，而 accent 是
     画面里最抢眼的色——小字一旦上 accent，反而比白色大标题更先被看到，层级就
@@ -1507,7 +1507,7 @@ def _prepare_card(rc, clip):
     # 库调用方仍带映射时这里也强制忽略。
     layout = seg_layout(seg)
     is_agenda = layout == "agenda"
-    # 苹果风开场：开屏页（sid="opening"）且是 agenda 版式时**默认强绑定**——
+    # 开屏整页编排：开屏页（sid="opening"）且是 agenda 版式时**默认强绑定**——
     # 不读任何可配置键（opening_animation 已随默认强绑定从契约移除，见
     # _source_schema）。closing 页与内容段不进入这条编排；开屏页写 canvas
     # 版式（整页海报）时同样没有文本编排（agenda 的 DOM 都不生成）。
@@ -1561,7 +1561,7 @@ def _prepare_card(rc, clip):
                     else _tagline_html(rc, seg, sid, ac))
     # 结尾 kicker 的**存在性**：`_kicker_entrance_lines` 拿它当闸门，与
     # `tagline_html` 同一个口径——补间只在"真有这一行"时生成。开屏那行不在这里
-    # 生成（它挂在 _apple_opening_lines 里），所以苹果开场时为 False。
+    # 生成（它挂在 _apple_opening_lines 里），所以开屏编排时为 False。
     kicker_html = bool(seg.get("tagline")) and is_agenda and not apple_opening
     # <video> 必须落在**卡片那个可见窗口**上，不能用口播段长：
     # hyperframes 给每个带 data-start 的元素按**它自己**的窗口独立判显隐
@@ -1684,7 +1684,7 @@ def _prepare_card(rc, clip):
     return SimpleNamespace(
         seg=seg, sid=sid, s=s, d=d, wipe=clip["wipe"], win_start=win_start,
         # vis = 这一页真正在画面上的时长（[擦除起点, 被下一页盖住]），也是
-        # data-duration 写进标签的那个数。苹果开场按它归一，不按 d：编排锚在
+        # data-duration 写进标签的那个数。开屏编排按它归一，不按 d：编排锚在
         # 擦除起点，可用时长里还含着入场那段 wipe，短开场段里两者差一整个 gap。
         vis=vis_d,
         peel=clip.get("peel"), gets_peeled=clip["gets_peeled"],
@@ -1697,7 +1697,7 @@ def _prepare_card(rc, clip):
         title_size=title_size,
         apple_opening=apple_opening,
         # agenda 卡装配时回写实际行数（_agenda_col_html）；非 agenda 页用不到，
-        # 留 0 而不是 getattr 兜底——苹果开场只在 agenda 卡上生效，读到的
+        # 留 0 而不是 getattr 兜底——开屏编排只在 agenda 卡上生效，读到的
         # 必然是回写过的那个值。
         agenda_row_count=0,
         is_keep=_is_keep_page(rc, sid),
@@ -2332,7 +2332,7 @@ def _type_word_js(sel_js, dur, ease, cycle_js, pos):
 def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=False):
     """`type` 的解码式揭示档：整行先在场，按锚点逐格/逐组锁定成真字。
 
-    Opus 5.5 那类代码绘制的 motion graphics 里最认得出的一拍是"占位字符闪着、
+    代码绘制的 motion graphics 里最认得出的一拍是"占位字符闪着、
     一格一格锁成真字"。缺省的 `type` 是前缀渐长（从空串长出来），只有
     "有 / 无"两态；解码档多一态——**未定的那部分也在场**，于是观众读到的是
     "这一格还没定下来"，而不是"这句话还没说完"。这是「推进叙事」而非装饰：
@@ -2715,7 +2715,7 @@ def _agenda_kicker_html(seg, bgs, ac, split_chars=False, pad_kern=False):
     """agenda 卡（开屏 / 结尾）的 kicker 行 HTML（`.agenda-kicker`，可空）。
 
     `split_chars=True` 逐字拆 `.k-ch`——字距舞（逐字 x = i×span）的载体，**只有
-    开屏（苹果风开场）拆**。结尾不拆：它是一行固定姿态的小字，逐字拆只会丢掉
+    开屏（开屏整页编排）拆**。结尾不拆：它是一行固定姿态的小字，逐字拆只会丢掉
     整行的字距对（kern），同一句 kicker 在两页上会差半个像素的间距，读成"这两页
     的小标题不是同一个字号"。
 
@@ -2735,7 +2735,7 @@ def _agenda_kicker_html(seg, bgs, ac, split_chars=False, pad_kern=False):
         text = "".join(f'<span class="k-ch">{esc(ch)}</span>' for ch in seg["tagline"])
     # data-kern：字距展开的容差垫，**只有真会演这一拍的那一页**才挂——
     # `data-opening-anim="apple"` 的开屏也演（逐字 x），它同样要垫；只在开屏
-    # 一个选择器上写死会在"开屏改走非苹果编排"的那天悄悄失效。
+    # 一个选择器上写死会在"开屏改走非开屏编排"的那天悄悄失效。
     pad = ' data-kern="1"' if (split_chars or pad_kern) else ""
     return (f'<div class="agenda-kicker"{pad} style="color:{_kc}">'
             f'{text}</div>')
@@ -2744,7 +2744,7 @@ def _agenda_kicker_html(seg, bgs, ac, split_chars=False, pad_kern=False):
 def _kicker_entrance_lines(rc, card):
     """结尾页 kicker 的入场：跟题头组同一拍（标题先起、kicker 错峰跟上）。
 
-    **为什么需要**：`agenda-kicker` 是题头组的第一行，而它只在苹果风开场里有
+    **为什么需要**：`agenda-kicker` 是题头组的第一行，而它只在开屏整页编排里有
     编排——非开屏的 agenda 卡（典型是结尾）里它没有 id、也没有任何补间，从卡片
     第一帧就站在那儿。这与第五轮"副标题是画面上唯一没进过时间线的元素"是同一个
     毛病在另一种版式上的那一半。
@@ -2800,8 +2800,8 @@ def _stagger_window(group, k=1.0):
 def _stagger_vars(rc, group, k=1.0):
     """一组元素的错峰：**窗口 × 分配曲线**，不是逐项等差。
 
-    前沿揭示的边不是一个匀速的节拍器。Apple 发布会大标题、Framer 的 staggered
-    container transform、现代 UI 的列表入场，顺序都是"先疏后密"——最先几个各自站
+    前沿揭示的边不是一个匀速的节拍器。大标题的逐字揭示、容器级错峰变换、
+    现代 UI 的列表入场，顺序都是"先疏后密"——最先几个各自站
     定让人读出来，后面的连成一条线扫过收尾。GSAP 原生就有这一枚旋钮：
     `stagger:{amount: W, ease: "…"}`，`amount` 是整组的揭示窗口、`ease` 把这一个
     窗口**按曲线分给各项**（对着钉固的 gsap-3.14.2 实测：`{amount:0.4,
@@ -2823,7 +2823,7 @@ def _stagger_vars(rc, group, k=1.0):
 
 
 def _apple_opening_budget(rc, card):
-    """苹果风开场的等比压缩系数（1.0 = 原速不压）。
+    """开屏整页编排的等比压缩系数（1.0 = 原速不压）。
 
     收尾时刻取几条补间里最晚的那条（标题逐字、编号列、内容行、kicker）；可用时长是
     开屏页的**可见窗口**（锚在擦除起点 `win_start` 的整段 life，不是口播段长）。两者
@@ -2868,7 +2868,7 @@ def _apple_opening_budget(rc, card):
         raw = card.vis / need
         k = max(raw, bud["minFactor"])
         if raw < bud["minFactor"]:
-            print(f"[warn] 开屏（苹果风开场，默认强绑定）的可见窗口 "
+            print(f"[warn] 开屏（开屏整页编排，默认强绑定）的可见窗口 "
                   f"{card.vis:.2f}s 装不下整支开场动画（{need:.2f}s，"
                   f"{n} 行 agenda、{n_chars} 字标题）：已压到地板 "
                   f"{bud['minFactor']:.0%}，收尾仍会被下一页切走。"
@@ -2880,12 +2880,12 @@ def _apple_opening_budget(rc, card):
 
 
 def _apple_opening_lines(rc, card):
-    """苹果风开场编排（开屏 agenda 卡默认强绑定，无契约键）。
+    """开屏整页编排（开屏 agenda 卡默认强绑定，无契约键）。
 
     v2 的先进开场手感（对标科技发布会开场，全部 GSAP 时间线补间、逐帧 seek
     确定性）：
       - 标题**逐字浮出**：每字 blur + 上浮 + 微缩放落定，stagger 0.035 的
-        波次比整行 blur 更"活"——苹果发布会大标题那种字逐个落定的节奏；
+        波次比整行 blur 更"活"——大标题那种字逐个落定的节奏；
       - 背景**双光斑**：主光晕呼吸（accent 色）+ 副光漂移（冷色），两枚错位
         异色光在标题身后形成景深层次，替代单枚静态光斑的"贴纸感"；
       - kicker **字距展开**：整行 blur 淡入 + 逐字 x 从拉开态收拢到静态
@@ -3072,8 +3072,8 @@ def _entrance_k(rc, card):
 def _entrance_ladder_step(rc, card):
     """入场阶梯的**步距**（秒）：画面层比题头组晚出发多久——"疏密"那一维。
 
-    前沿动效的同一屏从来不是"一起到位"——Framer 的 `staggerChildren`、Material 的
-    staggered container transform、迪士尼十二条里的 *Overlapping Action*，说的都是
+    前沿动效的同一屏从来不是"一起到位"——错峰入场、容器级
+    staggered container transform、动画十二原则中的动作重叠，说的都是
     同一件事：**一屏里有几层，就有几个先后**。同时开始的两层在观众眼里是一层，
     "最想让人先看到的排最先"这条就落空了。
 
@@ -3231,8 +3231,8 @@ def _title_rhythm(a_title, ordinal):
 def _reveal_tween_lines(sel_clip, sel_inner, y, duration, ease, at):
     """一条「揭示边」的两层补间：裁窗从上往下开，字同时从下方走到原位。
 
-    前沿排版的标题入场不是"整块浮上来"，而是**字不动、边在走**（Apple 产品页、
-    Vercel / Linear 的标题揭示都是这一招）。两层各管一件事：
+    前沿排版的标题入场不是"整块浮上来"，而是**字不动、边在走**（现代产品页的
+    标题揭示都是这一招）。两层各管一件事：
 
     - `#rev-*` 裁窗：`clip-path` 从 `inset(100% 0 0 0)`（全裁）补到 `inset(0%)`。
       与段落转场（wipe）同一手法——纯属性补间、逐帧 seek 确定、不依赖容器高度
@@ -3261,7 +3261,7 @@ def _reveal_tween_lines(sel_clip, sel_inner, y, duration, ease, at):
 def _chapter_tick_lines(rc, card, s, d):
     """页底那排刻度的读数：亮到第几格 = 走到第几章，当前格的长度 = 本段进度。
 
-    Opus 5.5 那批作品里 HUD 几乎是共同语：观众**随时知道这一段在第几章**。缺省的
+    代码绘制的 motion graphics 里 HUD 几乎是共同语：观众**随时知道这一段在第几章**。缺省的
     进度条只说明"这一段演了多久"，换一段就归零，读者没有位置感。
 
     - **亮度说"哪一章"**：已过的格子整条亮（`--tick-on` 写常量 1，随后不动），
@@ -3416,9 +3416,9 @@ def _settle_rhythm(a_img, ordinal):
 def _frame_arc_lines(rc, card, frame_sel, at, duration):
     """容器入场的**副轴**：与主轴同起点、同时长，只换一条缓动。
 
-    前沿动效的位移不沿坐标轴走直线——迪士尼十二条里那条 *Arcs*，现代 UI（Apple 的
-    widget 位移、Framer 的 layout animation、Material 的 container transform）也全是
-    弧线：有机体的运动没有一个是笔直的，直线位移读出来是"被程序挪过去的"。
+    前沿动效的位移不沿坐标轴走直线——动画十二原则中的弧线运动，现代 UI（控件
+    位移、布局补间、容器变换）也全是弧线：有机体的运动没有一个是笔直的，
+    直线位移读出来是"被程序挪过去的"。
 
     怎么造弧不用 `MotionPath` 插件：**两条轴各配一条缓动**。位移写成
 
@@ -3588,10 +3588,10 @@ def _card_timeline_lines(rc, card):
         # `_tagline_entrance_lines`。
         lines.extend(_tagline_entrance_lines(rc, card, _rh))
         lines.extend(_chapter_entrance_lines(rc, card))
-    # 结尾页（非苹果开场的 agenda 卡）的 kicker：题头组的第一行，跟标题同一拍。
-    # 苹果开场不在这里——那一行由下面 _apple_opening_lines 逐字演。
+    # 结尾页（非开屏编排的 agenda 卡）的 kicker：题头组的第一行，跟标题同一拍。
+    # 开屏编排不在这里——那一行由下面 _apple_opening_lines 逐字演。
     lines.extend(_kicker_entrance_lines(rc, card))
-    # 苹果风开场：整页编排取代通用标题入场（开屏 agenda 卡默认强绑定）。
+    # 开屏整页编排：整页编排取代通用标题入场（开屏 agenda 卡默认强绑定）。
     # 锚在擦除起点而非段起点：页面从 clip-path 里被擦开，标题若等擦完再出现，
     # 会先"完整亮 0.28s 再跳回模糊起点"——编排从页一出现就在演，模糊→锐利
     # 正好铺满擦除窗口。时长是编排的一部分，不随段长归一化。

@@ -612,7 +612,7 @@ class AgendaTitleShrink(unittest.TestCase):
 
 
 class AppleOpening(unittest.TestCase):
-    """开屏 agenda 卡**默认强绑定**的 v2 苹果风开场编排：主/副双光斑 + 标题逐字
+    """开屏 agenda 卡**默认强绑定**的 v2 开屏整页编排：主/副双光斑 + 标题逐字
     浮出 + kicker 拆字字距展开 + agenda 行两拍（编号先行、内容滑入），取代通用
     标题入场。作者不写任何键即生效（契约键已随默认强绑定移除）。"""
 
@@ -747,9 +747,9 @@ class AppleOpening(unittest.TestCase):
 
     def test_apple_opening_replaces_generic_title_entrance(self):
         html = self._render_apple()
-        # 苹果编排取代通用 back.out 标题入场（两条补间同元素会打架）
+        # 开屏编排取代通用 back.out 标题入场（两条补间同元素会打架）
         self.assertNotIn('tl.from("#title-opening"', html)
-        # 非开屏卡照旧走通用入场（揭示边：只有位移、没有缩放）；closing 不带苹果
+        # 非开屏卡照旧走通用入场（揭示边：只有位移、没有缩放）；closing 不走整页
         # 编排。不断言具体档位（44 / 56 / 34 / 62px）：标题入场的行程按段序轮换
         # （见 _template.titleEntrance.rhythm），把一个档位写死进断言等于禁止轮换。
         self.assertIn('tl.from("#title-seg-a",{y:', html)
@@ -762,7 +762,7 @@ class AppleOpening(unittest.TestCase):
         标题不拆字、编排不生成，通用标题入场也没有（画布页连标题层都不渲染）。
 
         默认强绑定只覆盖 agenda 版式——canvas 开屏页只有一张图，agenda 的 DOM
-        都不生成，苹果风整支舞无处可演。
+        都不生成，这套编排无处可演。
         """
         s = dict(H.sample_source(), opening_layout="canvas")
         m = H.make_manifest(s)
@@ -806,7 +806,7 @@ class AppleOpening(unittest.TestCase):
 def _apple_manifest(open_dur, n_rows, gap=0.4, seg_dur=2.0):
     """opening 口播 open_dur 秒 + n_rows 个内容段的 manifest。
 
-    不走 _helpers.make_manifest：它给所有句子同一个 dur，而苹果开场的预算
+    不走 _helpers.make_manifest：它给所有句子同一个 dur，而开屏编排的预算
     只在"开屏那段特别短"时才会被触发——那正是这条用例要摆出来的形状。
     行时间轴在这里手排，好让 opening 段的长度与内容段解耦。
     """
@@ -868,7 +868,7 @@ class LoopRepeat(unittest.TestCase):
 
 
 class AppleOpeningBudget(unittest.TestCase):
-    """苹果风开场按可见窗口等比归一：短开场装不下时不静默丢尾巴。
+    """开屏整页编排按可见窗口等比归一：短开场装不下时不静默丢尾巴。
 
     开屏 agenda 卡默认强绑定这套编排（无契约键），这支舞的收尾时刻由**标题
     字数与 agenda 行数**共同决定（标题逐字 stagger 波次与最后一行内容滑入），

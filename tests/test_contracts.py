@@ -47,7 +47,7 @@ class SourceValidation(unittest.TestCase):
         bad(SRC.validate_segments_source, s, contains="closing_text")
 
     def test_opening_animation_key_is_removed(self):
-        """开屏页默认强绑定苹果风开场：`opening_animation` 键已从契约移除。
+        """开屏页默认强绑定开屏整页编排：`opening_animation` 键已从契约移除。
 
         写了旧键 = 报错并带指引（而不是泛化的"未知键"）——字段集封闭时多出的
         键本来就报错，这里把报错信息写成"默认强绑定"的迁移指引。

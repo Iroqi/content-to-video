@@ -68,6 +68,17 @@ def _strip_strings(src):
     用 `tokenize` 而不是正则：正则分不清 `'don\'t'` 里的转义，也分不清三引号
     跨行；tokenize 是解释器自己的口径。挖的时候按 token 的**精确行列区间**把
     源文本涂白（不是拼字符串），行号与列号才都对得上。
+
+    两处踩过的坑，改的时候别再踩回去：
+
+    - tokenize 的行号是 **1-based**，`lines` / `offsets` 是 **0-based**。曾经直接
+      拿 `r` 当索引，每个字符串都涂到了**下一行**：素材没涂白（误报），下一行的
+      真调用反倒被抹掉 `text=True`（漏报——Windows 上的真违规就这么被静默放过）。
+      上界写成 `min(r1, len(lines)-1)` 还会整个漏掉最后一行。
+    - Python 3.12 起 f-string 不再是单个 STRING token，而是
+      FSTRING_START / MIDDLE / END 三段。只看 STRING 的话，3.9/3.11 涂白、
+      3.12/3.13/3.14 不涂白，同一份代码在 CI 矩阵里三个答案。这里把
+      FSTRING_START→FSTRING_END 整段当一个字符串涂白，对齐旧版口径。
     """
     lines = src.splitlines(keepends=True)
     offsets = []
@@ -82,16 +93,30 @@ def _strip_strings(src):
         # 片段代码（测试里喂进来的）不一定是完整模块：退回正则粗略挖一遍
         return re.sub(r"'[^'\n]*'|\"[^\"\n]*\"",
                       lambda m: " " * len(m.group(0)), src)
-    chars = list(src)
+    # 收集要涂白的区间。STRING 一整块；3.12+ 的 f-string 由 START/MIDDLE/END
+    # 三段组成，按 START→END 的整段收，行为与 3.11 的单个 STRING 一致。
+    spans = []
+    f_start = None
     for tok in toks:
-        if tok.type != tokenize.STRING:
-            continue
-        (r0, c0), (r1, c1) = tok.start, tok.end
-        for r in range(r0, min(r1, len(lines) - 1) + 1):
-            base = offsets[r]
-            start = c0 if r == r0 else 0
-            end = c1 if r == r1 else len(lines[r])
-            for i in range(start, min(end, len(lines[r]))):
+        name = tokenize.tok_name.get(tok.type, "")
+        if tok.type == tokenize.STRING:
+            spans.append((tok.start, tok.end))
+        elif name == "FSTRING_START":
+            f_start = tok.start
+        elif name == "FSTRING_END" and f_start is not None:
+            spans.append((f_start, tok.end))
+            f_start = None
+
+    chars = list(src)
+    for (r0, c0), (r1, c1) in spans:
+        for row in range(r0, r1 + 1):
+            idx = row - 1                 # 1-based 行号 → 0-based 下标
+            if idx >= len(lines):
+                break
+            base = offsets[idx]
+            start = c0 if row == r0 else 0
+            end = c1 if row == r1 else len(lines[idx])
+            for i in range(start, min(end, len(lines[idx]))):
                 if chars[base + i] != "\n":
                     chars[base + i] = " "
     return "".join(chars)
@@ -135,6 +160,13 @@ def _call_text(path, src, honor_marks=True):
                     continue
                 if ch == in_str:
                     in_str = None
+            elif ch == "#":
+                # 注释里的引号（`don't`、示例片段）不该开字符串状态：跨行书写的
+                # 调用参数里只要有一行带这种引号，右括号就会被吞掉 → 漏报。
+                # 真字符串已在 _strip_strings 里涂白，这里遇 # 一律跳到行尾。
+                while i < len(src) and src[i] != "\n":
+                    i += 1
+                continue
             elif ch in "\"'":
                 in_str = ch
             elif ch == "(":

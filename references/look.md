@@ -39,7 +39,7 @@ opening / closing 默认是不配图的**纯文字 agenda 卡**。换整页海�
 
 ### 开屏整页编排（开屏 agenda 卡默认强绑定）
 
-开屏页为 agenda 版式时默认强绑定开屏整页编排，无契约键（写过旧键 `opening_animation` 会报错）。参数真源 `animation.opening.apple`。
+开屏页为 agenda 版式时默认强绑定开屏整页编排，无契约键（写过旧键 `opening_animation` 会报错）。参数真源 `animation.opening.full`。
 
 - 整支舞按**可见窗口**（`[擦除起点, 被下一页盖住]`）等比归一：收尾时刻由标题字数与行数决定，装不下按 `可见窗口 ÷ 收尾时刻` 压缩（地板 0.5）并 `[warn]`。压缩只落在淡入时长与起点，锚点是**擦除起点 `win_start`**，不是段起点。
 

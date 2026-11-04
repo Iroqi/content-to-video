@@ -595,7 +595,7 @@ class StaggerDistribute(unittest.TestCase):
     def setUp(self):
         _anim = T.load_template()["animation"]
         self.ease = _anim["staggerDistribute"]["ease"]
-        self.apple = _anim["opening"]["apple"]
+        self.full = _anim["opening"]["full"]
 
     def test_ease_is_in_the_pinned_catalog(self):
         """分配曲线必须能解析：GSAP 认不出的档不报错、直接退回缺省缓动——
@@ -648,8 +648,8 @@ class StaggerDistribute(unittest.TestCase):
         """模板里不得再出现"每项一格"的错峰：两组都写 `window`。两层各留一份
         口径的下场是"改了窗口只有一处在动"——正是 `entranceLadder.step` 之前
         那三条补间各算一份起点的同一件事。"""
-        for where, group in (("rows", self.apple["rows"]),
-                             ("title.chars.mask", self.apple["title"]["chars"]["mask"])):
+        for where, group in (("rows", self.full["rows"]),
+                             ("title.chars.mask", self.full["title"]["chars"]["mask"])):
             self.assertNotIn("stagger", group, f"{where} 还留着逐项 stagger")
             self.assertGreater(group.get("window") or 0.0, 0.0,
                                f"{where} 没写揭示窗口")

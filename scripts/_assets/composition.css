@@ -69,15 +69,15 @@ body{font-family:var(--ctv-font-family)}
    两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
    把开场/收尾那两页的氛围光挪位。 */
 .agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
-/* 开屏整页编排（opening_animation:"apple"）的题头光晕：主光斑放在标题身后，
+/* 开屏整页编排（开屏 agenda 卡默认强绑定）的题头光晕：主光斑放在标题身后，
    模拟舞台主光。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
    不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
    交给 GSAP 编排（淡入 + 呼吸，遍数按片长折算），CSS 只负责形状与颜色。 */
-.apple-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
+.full-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
 /* 开屏编排副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
    副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
    冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
-.apple-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
+.full-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
 /* 开屏编排标题的逐字 span（渲染器只在开屏编排时拆字）：inline-block 让 GSAP
    的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
    与折行；静态开场标题是纯文本、不命中这里。 */
@@ -510,7 +510,7 @@ body{font-family:var(--ctv-font-family)}
    整行补间 x，两种形态都在"字距展开"这一拍上）。行的起点态比落位态宽
    (n−1)×span，容器是 overflow:hidden——垫满 n×span，行宽就恒不变，最后一个字
    不会在补间前半段被裁掉（只在那一页、收拢到一半才"长出来"，看不出是 bug）。
-   宽度走 --ctv-ag-kern-pad（模板 opening.apple.kicker 的 tracking−rest 乘
+   宽度走 --ctv-ag-kern-pad（模板 opening.full.kicker 的 tracking−rest 乘
    kickerSize），不在这里按画幅分叉。 */
 .agenda-kicker[data-kern]{padding-right:var(--ctv-ag-kern-pad)}
 .agenda-head .seg-title{margin-top:var(--ctv-ag-title-mt);line-height:var(--ctv-ag-title-lh);text-wrap:balance}

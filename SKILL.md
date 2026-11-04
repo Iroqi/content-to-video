@@ -40,6 +40,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3b 步一组元素逐个出场：多久演完、怎么分、从哪头起（`stagger`） | `references/stagger.md` | 这一拍只改一个元素时 |
 | 第 3b 步结论/数字要"从未定到落定"（逐格/逐组锁定、定方向） | `references/decode.md` | 该段只是把字写出来时 |
 | 第 3b 步一组文字要逐行解码（`type.decode` + `stagger`） | `references/decode.md` | 只有一行结论时 |
+| 第 3b 步落位要"带着上一拍的速度"稳住（受控弹簧 `spring` / `spring(ζ)`） | `references/spring.md` | 入场落位用 `.out` 档就够时 |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认版式时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |

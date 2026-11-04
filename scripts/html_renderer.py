@@ -30,6 +30,8 @@ from _path_morph import make_morph, interp as _morph_interp
 from _ease import curve as ease_curve
 from _ease import validate_ease as ease_validate
 from _ease import reject_overshoot as ease_reject_overshoot
+from _ease import (spring_zeta, SPRING_CARRY, SPRING_SETTLE_EPS,  # noqa: E402
+                   SPRING_ZETA_MIN, SPRING_ZETA_MAX)
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
@@ -129,6 +131,108 @@ def _fill(template, mapping, name):
             + ("；" if unfilled and unused else "")
             + (f"映射里骨架没有的 {unused}" if unused else ""))
     return _CTV_PH_RE.sub(lambda m: mapping[m.group(0)], template)
+
+
+# ── 受控弹簧：注册完备性 + 分色纪律 ────────────────────────────────────
+# spring 不在钉固的 GSAP core 里，是生成期调 gsap.registerEase 注册的扩展档。
+# 注册名必须是**产物里出现的那个完整串**：实测注册了裸 `spring` 之后，
+# gsap.parseEase("spring(0.9)") 会静默拿到裸 spring 的函数、把参数丢掉，
+# 作者写的 ζ 与成片演的 ζ 就不是一回事。所以只按产物里实际出现的 spec 精确
+# 注册，绝不额外注册一个兜底的裸名。详见 .brainstorm/2026-11-04-spring.md。
+_SPRING_EASE_RE = re.compile(
+    r"""["']?ease["']?\s*:\s*["']([^"']*spring[^"']*)["']""")
+
+# Material 3 的分色红线（Opus 5.5 那批作品同样守）：位置与尺寸可以带一点
+# 过冲，透明度与颜色永远不许。颜色越过 1 再回来读成一次闪白，而且它不像
+# 位移有"落位"可看，观众只会觉得这一帧脏了。
+_SPRING_COLOR_KEYS = frozenset({
+    "opacity", "color", "backgroundcolor", "background-color",
+    "fill", "stroke", "bordercolor", "border-color", "strokecolor",
+})
+
+
+def _spring_registry_js(gsap_code):
+    """产物里出现了 spring 档才注入注册代码；默认产物一个字节都不加。
+
+    扫的是**最终 gsap_code**，不是模板或 images.json 的猜测——模板派生的时间线、
+    --set 临时改的 ease、作者写的 animate.steps 全都已经落进这段文本，扫它才
+    不会漏掉一个未注册的 spec（漏一个就是一条静默退化）。
+    """
+    specs = sorted({m.group(1) for m in _SPRING_EASE_RE.finditer(gsap_code)})
+    if not specs:
+        return ""
+    regs = []
+    for spec in specs:
+        z = spring_zeta(spec)
+        if z is None or not (SPRING_ZETA_MIN <= z <= SPRING_ZETA_MAX):
+            raise ValueError(
+                f"[renderer] 产物里出现非法 spring 档 {spec!r}——ζ 不在 "
+                f"{SPRING_ZETA_MIN:.2f}~{SPRING_ZETA_MAX:.2f}，注册了也演不对")
+        ease_validate(spec, "[renderer] spring 注册")
+        regs.append(f"gsap.registerEase({json.dumps(spec)}, ctvSpring({z:.6g}));")
+    # 与 _ease.spring_raw / spring_curve 同一条闭式解，常量由 Python 侧注入，
+    # 不在 JS 里再抄一份数字（两份常量必然漂移）。纯函数：给定 p 直接算，
+    # 不读墙钟、不存上一帧状态——逐帧 seek 下第 N 帧与直接跳到第 N 帧一致。
+    factory = (
+        ";(function(){\n"
+        f"var EPS={SPRING_SETTLE_EPS:.6g}, CARRY={SPRING_CARRY:.6g};\n"
+        "function ctvSpring(z){\n"
+        "  var w=-Math.log(EPS)/z, v0=CARRY*w;\n"
+        "  function raw(p){\n"
+        "    if(z>=1) return 1-Math.exp(-w*p)*(1+(w-v0)*p);\n"
+        "    var q=w*Math.sqrt(1-z*z), c=(z*w-v0)/q;\n"
+        "    return 1-Math.exp(-z*w*p)*(Math.cos(q*p)+c*Math.sin(q*p));\n"
+        "  }\n"
+        "  var end=raw(1);\n"
+        "  return function(p){if(p<=0)return 0;if(p>=1)return 1;return raw(p)/end;};\n"
+        "}\n"
+        + "\n".join(regs) + "\n"
+        "})();"
+    )
+    return factory
+
+
+def _spring_color_hits(vars_):
+    """一拍的补间变量里，哪些键是透明度/颜色（attr 里的 SVG 颜色也算）。"""
+    if not isinstance(vars_, dict):
+        return []
+    hits = [str(k) for k in vars_ if str(k).lower() in _SPRING_COLOR_KEYS]
+    attr = vars_.get("attr")
+    if isinstance(attr, dict):
+        hits += ["attr." + str(k) for k in attr
+                 if str(k).lower() in _SPRING_COLOR_KEYS]
+    return hits
+
+
+def _check_spring_color_usage(images, dflt_ease):
+    """生成期门禁：ζ<1 的弹簧不许补间透明度与颜色。"""
+    for sid, entry in (images or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        blocks = []
+        if isinstance(entry.get("animate"), dict):
+            blocks.append(entry["animate"])
+        panes = entry.get("panes")
+        if isinstance(panes, list):
+            blocks += [p["animate"] for p in panes
+                       if isinstance(p, dict) and isinstance(p.get("animate"), dict)]
+        for block in blocks:
+            for step in block.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                z = spring_zeta(step.get("ease") or dflt_ease)
+                if z is None or z >= SPRING_ZETA_MAX:
+                    continue
+                hits = []
+                for key in ("to", "from", "set"):
+                    hits += [f"{key}.{h}" for h in _spring_color_hits(step.get(key))]
+                if hits:
+                    raise ValueError(
+                        f"段落 '{sid}' 的 animate.steps 有一拍用 ζ={z:.2f} 的弹簧补间了 "
+                        f"{', '.join(sorted(set(hits)))}：透明度与颜色不许过冲（越过 1 再回来"
+                        f"读成一次闪白）。写 \"spring\"（ζ=1，临界阻尼）或把这一拍换回 "
+                        f"power2.out；位移与尺寸才用 spring({z:.2f})。")
+
 
 def esc(text):
     """Escape HTML special characters (HTML attribute / element text).
@@ -3596,6 +3700,9 @@ def generate_html(manifest, audio_src, images=None,
     # 据此决定"烘不烘焙"、渲染端据此决定"要不要当新页再演一遍"，两边看的是同一份合并
     # （合并逻辑只有 `_stage_carry.judging_row` 一份）。
     raw_images = images or {}
+    # 分色纪律是生成期门禁，不是渲染端的容错：ζ<1 的弹簧补间透明度/颜色，
+    # 成片里是一次没人看得懂的闪白，而 GSAP 不会报错。
+    _check_spring_color_usage(raw_images, tpl["animation"]["animate"]["ease"])
     carries = carry_pages(
         raw_images, [judging_row(seg, raw_images) for seg in manifest["segments"]])
     images = _normalize_images(images)
@@ -3779,6 +3886,11 @@ def generate_html(manifest, audio_src, images=None,
             print("[warn] 收束变量 --ctv-ved-settle 的 0 值占位没找到，"
                   f"句尾收束将整条不演（期望 {_new!r}）", file=sys.stderr)
     gsap_code = "\n  ".join(gsap_lines)
+    # 注册代码必须排在所有 tl.to 之前（GSAP 在补间创建时就解析 ease 串）。
+    # 产物里没写 spring 时返回空串——默认 HTML 一个字节都不变，四份 golden 照旧。
+    _registry = _spring_registry_js(gsap_code)
+    if _registry:
+        gsap_code = _registry + "\n  " + gsap_code
 
     # ── 装配最终 HTML ────────────────────────────────────
     # CSS 必须内联 <style>（无头浏览器首帧等不了外链，否则白屏错版）；

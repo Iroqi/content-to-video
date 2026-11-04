@@ -59,8 +59,28 @@ _FAMILY_ALIAS = {"strong": "power4"}
 _POLY_EXP = {"power1": 2, "power2": 3, "power3": 4, "power4": 5,
              "quad": 2, "cubic": 3, "quart": 4, "quint": 5}
 
+# 本项目自己注册进 GSAP 的扩展档。**不放进 EASE_FAMILIES**：那张表的语义是
+# "钉固的 GSAP core 里到底有哪些 ease"（见模块头），spring 是生成期调用
+# `gsap.registerEase` 才存在的，混进去会让"core 目录"这句话变成假的，也会让
+# 对着目录遍历的用例以为它天然带 .in/.out/.inOut 三个方向。
+# 目录之外另立一张表，宽松档（--allow-ease）也不会把它当"未知族名"放行成
+# 静默退化——它是正式支持的档，有注册、有采样、有判据。
+EXTENSION_FAMILIES = frozenset({"spring"})
+
+# ── 受控弹簧的参数（Opus 5.5 的阻尼比纪律，按本仓库的行程预算裁剪）────────
+# ζ 下界不是照抄社区那句 0.7~0.85：带承接初速时 ζ=0.70 的峰值过冲是 9.2%，
+# 会撞上"落位是精确值"这条红线（reject_overshoot 的同一条理由）。0.80 是实测
+# 分界：峰值 3.3%，仍在"轻微过冲"里，且全带都过首帧 4px / 末段 50% 两道判据。
+SPRING_ZETA_MIN = 0.80
+SPRING_ZETA_MAX = 1.00
+SPRING_ZETA_DEFAULT = 1.00   # 临界阻尼：零过冲，与既有"位移不过冲"红线一致
+SPRING_CARRY = 0.85          # 承接初速 v0 = SPRING_CARRY·ω；0 是标准阶跃（起步慢）
+SPRING_SETTLE_EPS = 0.004    # 末帧前的衰减目标，ω = -ln(ε)/ζ
+SPRING_OVERSHOOT_MAX = 0.05  # 峰值越过落位的预算，与 back(9.98%)/elastic(20.44%) 分界
+
 EASE_HELP = ("认得的档：" + "、".join(sorted(EASE_FAMILIES))
-             + "；写法 power2.out / back.out(1.7) / elastic.inOut(1,0.3) / steps(4)，"
+             + "；扩展档 spring(ζ)（ζ 0.80~1.00，写法 spring / spring(0.85)）；"
+               "写法 power2.out / back.out(1.7) / elastic.inOut(1,0.3) / steps(4)，"
                "方向 .in/.out/.inOut，裸名按 .out，参数写在方向后面。"
                "rough/slow/CustomEase 这类要 EasePack 或插件，core 里没有，写了会静默退化")
 
@@ -114,6 +134,68 @@ def split_ease(spec):
     return fam, mod, args
 
 
+# ── 受控弹簧：闭式二阶阶跃响应 ────────────────────────────────────────
+# x'' + 2ζω·x' + ω²(x−1) = 0，x(0)=0，x'(0)=v0=SPRING_CARRY·ω。
+# 解是**闭式的**：给定 p 就能算出这一帧，不需要从 0 积分到 p，也不需要保存
+# 上一帧的速度。这与 params 表达式白名单禁 random / 时间函数是同一条理由——
+# 逐帧 seek 下，靠历史状态算出来的第 N 帧和直接 seek 到第 N 帧会对不上。
+# Opus 5.5 那批片子用 closed-form spring 而不是数值积分，原因完全一样。
+def spring_omega(zeta):
+    """由"末帧前衰减到 ε"反解 ω；ζ 越小 ω 越大，衰减率 ζω 恒为 -ln(ε)。"""
+    return -math.log(SPRING_SETTLE_EPS) / zeta
+
+
+def spring_raw(p, zeta):
+    """未归一化的阶跃响应。ζ=1 走临界阻尼的退化式，ζ<1 走欠阻尼式。"""
+    w = spring_omega(zeta)
+    v0 = SPRING_CARRY * w
+    if zeta >= 1.0:
+        return 1.0 - math.exp(-w * p) * (1.0 + (w - v0) * p)
+    q = w * math.sqrt(1.0 - zeta * zeta)
+    c = (zeta * w - v0) / q
+    return 1.0 - math.exp(-zeta * w * p) * (math.cos(q * p) + c * math.sin(q * p))
+
+
+def spring_curve(zeta):
+    """归一化成 f(0)=0、f(1)=1 的 ease，供生成期采样与渲染端注册共用同一式。
+
+    闭式响应只在 t→∞ 才精确等于 1，而补间的末帧必须**精确落在落位**上（差
+    0.4% 就是 40px 位移差 0.16px，跨段接续时会被读成回弹）。除以 raw(1) 把
+    终点钉死；raw(1) 与 1 的差已在 ω 里压到 ε 量级，整条曲线只是被抬了不到
+    千分之五，形状不变。
+    """
+    end = spring_raw(1.0, zeta)
+
+    def f(p):
+        if p <= 0.0:
+            return 0.0
+        if p >= 1.0:
+            return 1.0
+        return spring_raw(p, zeta) / end
+
+    return f
+
+
+def spring_overshoot(zeta):
+    """峰值越过 1 的量。带初速时没有简单闭式，按 1000 点实采（0.1% 精度足够
+    卡 5% 的预算）；契约层与判据共用这一份，不另写一条 Python 实现。"""
+    f = spring_curve(zeta)
+    return max(0.0, max(f(i / 1000.0) for i in range(1001)) - 1.0)
+
+
+def spring_zeta(spec):
+    """ease 串 → ζ；不是 spring 档或 ζ 解析不出返回 None。"""
+    parts = split_ease(spec) if isinstance(spec, str) else None
+    if parts is None or parts[0] != "spring":
+        return None
+    if not parts[2]:
+        return SPRING_ZETA_DEFAULT
+    try:
+        return float(parts[2][0])
+    except ValueError:
+        return None
+
+
 # 宽松档：只为预览放行 core 之外的档名（`--allow-ease`）。
 # 语义是"这条档名认得了，但渲染时它不会按你写的演"——GSAP 对未注册的 ease 不报错，
 # 静默退回缺省缓动。所以宽松档只放行**目录里没有的族名**，形状本身是坑的写法
@@ -135,7 +217,8 @@ def _extra_family(spec):
     parts = split_ease(spec)
     # 不再多判 `parts[0] != "none"`：`none` 本就在 EASE_FAMILIES 里，前半截为真时
     # 它恒为真——一条永远不起作用的条件，只会让读的人以为 none 被特殊对待了。
-    if parts is not None and parts[0] not in EASE_FAMILIES:
+    if parts is not None and (parts[0] not in EASE_FAMILIES
+                              and parts[0] not in EXTENSION_FAMILIES):
         return parts[0]
     return None
 
@@ -143,7 +226,17 @@ def _extra_family(spec):
 def ease_ok(spec):
     """这一档名 GSAP core 认不认（契约层的判据）。宽松档下额外放行未知族名。"""
     parts = split_ease(spec)
-    if parts is None or parts[0] not in EASE_FAMILIES:
+    if parts is None:
+        return False
+    if parts[0] in EXTENSION_FAMILIES:
+        # spring 是一条完整的阶跃响应，没有 .in/.out/.inOut 之分；写了方向
+        # GSAP 会去查 "spring.out" 这个键，查不到就静默回落缺省缓动。空括号
+        # 同理（spring() 解析不出参数）。两样都在目录层拒，别留到成片里。
+        m = _EASE_RE.match(spec.strip())
+        if "()" in spec or (m and m.group(3) is not None):
+            return False
+        return True
+    if parts[0] not in EASE_FAMILIES:
         return False
     # 空括号（`steps()` / `elastic.out()`）GSAP 实测出 NaN 曲线或悄悄回落缺省缓动
     # （back.out() 逐点等于 power2.out），形状合法但语义是坑，目录层一并拒。
@@ -191,7 +284,8 @@ def _elastic_arg_bad(value, what, spec, where):
 # 作者以为改了次数，同一条静默退化，目录层一并拒。
 _FAMILY_ARGS = {"elastic": ("num>0", "num>0"),
                 "steps": ("steps_n", "flag"),
-                "back": ("num",)}
+                "back": ("num",),
+                "spring": ("spring_zeta",)}
 _ELASTIC_WHAT = ("振幅（第一个参数）", "周期（第二个参数）")
 
 
@@ -249,6 +343,19 @@ def _check_family_args(family, args, spec, where):
                     f"{where} {spec!r}：steps 的第二个参数只能是 true/false/1/0"
                     f"（实际 {raw!r}）——GSAP 按 JS truthiness 认它，任何非空串都等于 "
                     f"true，写别的串成片与预览会对不上。{EASE_HELP}")
+        elif kind == "spring_zeta":
+            v = _arg_num(raw, "阻尼比 ζ", spec, where)
+            if v != v or math.isinf(v) or not (SPRING_ZETA_MIN <= v <= SPRING_ZETA_MAX):
+                raise ValueError(
+                    f"{where} {spec!r}：阻尼比 ζ 必须是 "
+                    f"{SPRING_ZETA_MIN:.2f}~{SPRING_ZETA_MAX:.2f} 的有限数"
+                    f"（实际 {raw!r}）。ζ<{SPRING_ZETA_MIN:.2f} 的峰值过冲会撞破落位"
+                    f"（ζ=0.70 实测 9.2%），ζ>{SPRING_ZETA_MAX:.2f} 是过阻尼、段末还在爬。"
+                    f"{EASE_HELP}")
+            if spring_overshoot(v) > SPRING_OVERSHOOT_MAX:
+                raise ValueError(
+                    f"{where} {spec!r}：峰值过冲 {spring_overshoot(v):.1%} 超过 "
+                    f"{SPRING_OVERSHOOT_MAX:.0%} 预算。{EASE_HELP}")
 
 
 # 会**越界**的族：曲线在到达 1 之前先冲过 1（back 的过冲量、elastic 的振幅）
@@ -267,7 +374,20 @@ def reject_overshoot(spec, where):
     用在标题入场是好手感，用在字幕滚动落位是穿帮。
     """
     parts = split_ease(spec)
-    if parts is None or parts[0] not in OVERSHOOT_FAMILIES:
+    if parts is None:
+        return spec
+    # spring 不在 OVERSHOOT_FAMILIES 里（ζ=1 是零过冲的正式档），但 ζ<1 那一档
+    # 确实会越过落位。精确落位场景（字幕换句）按同一条理由拒，别让"扩展档"
+    # 成为绕过红线的后门。
+    if parts[0] == "spring":
+        z = spring_zeta(spec)
+        if z is not None and z < SPRING_ZETA_MAX:
+            raise ValueError(
+                f"{where} {spec!r}：ζ={z:.2f} 的弹簧峰值越过落位 "
+                f"{spring_overshoot(z):.1%}——字幕换句这类精确落位不许过冲，"
+                f"写 \"spring\"（ζ=1，临界阻尼）或换 power2.out。")
+        return spec
+    if parts[0] not in OVERSHOOT_FAMILIES:
         return spec
     raise ValueError(
         f"{where} {spec!r} 是过冲族（{parts[0]}）：位移类动画的落位是一个精确值，"
@@ -295,6 +415,12 @@ def validate_ease(spec, where):
               file=sys.stderr)
         return spec
     if not ease_ok(spec):
+        _sp = split_ease(spec)
+        if _sp is not None and _sp[0] in EXTENSION_FAMILIES:
+            raise ValueError(
+                f"{where} {spec!r}：spring 是一条完整的阶跃响应，没有方向后缀"
+                f"（写 spring.out，GSAP 查不到这个键会静默回落缺省缓动）；括号里"
+                f"也不留空。写 \"spring\"（ζ=1）或 \"spring(0.85)\"。{EASE_HELP}")
         if "()" in spec:
             raise ValueError(f"{where} {spec!r}：空括号没有参数——GSAP 实测对空参数的"
                              f"解析结果是 NaN 曲线或悄悄回落缺省缓动（elastic.out() 出 "
@@ -374,6 +500,14 @@ def curve(name, default):
     if parts is None:
         return lambda t: t
     family, mod, args = parts
+    # spring 不走下面的 g/mod 变换：它不是"某个 .in 形态再翻转"，而是从 0 到 1
+    # 的完整阶跃响应。方向后缀在契约层已拒，这里仍给出确定曲线（线性兜底的
+    # 同一条理由：渲染端不该因为一条算不出的曲线把整页崩掉）。
+    if family in EXTENSION_FAMILIES:
+        z = spring_zeta(name)
+        if z is None or not (SPRING_ZETA_MIN <= z <= SPRING_ZETA_MAX):
+            return lambda t: t
+        return spring_curve(z)
     if family in ("none", "linear", "power0"):
         return lambda t: t
 

@@ -39,6 +39,8 @@ SNIPPETS = [
     (os.path.join("references", "decode.md"),
      '"target": ".verdict", "type": {"decode": {"from": "center"}}',
      "decode.md「解码波」的一组文字示例"),
+    (os.path.join("references", "spring.md"),
+     '"ease": "spring(0.85)"', "spring.md「契约」的弹簧补间示例"),
 ]
 
 

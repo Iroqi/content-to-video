@@ -351,6 +351,45 @@ FACTS = [
         "canvas_kit 手绘抖动上限（与官方 rough.js 同款口径）：超过只是噪声，"
         "作者按它取 roughness",
     ),
+    # ── 受控弹簧：ζ 带、初速、衰减目标、过冲预算都直接决定"能不能过行程预算" ──
+    # 这五个不是实现细节：改 ζ 下界，峰值过冲就变；改初速系数，首帧位移就变；
+    # 改 ε，末帧落位就变。作者挑 `spring(ζ)` 时按这张表做决策，所以逐个上锁。
+    (
+        "spring-zeta-min",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_MIN"), 0.80,
+        [("references/spring.md", r"\| 阻尼比 ζ \| `0\.80`~`1\.00` \|")],
+        "ζ 下界：0.70 带承接初速时峰值过冲 9.2%，会撞破落位精确红线",
+    ),
+    (
+        "spring-zeta-max",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_MAX"), 1.00,
+        [("references/spring.md", r"\| 阻尼比 ζ \| `0\.80`~`1\.00` \|")],
+        "ζ 上界：临界阻尼，之上是过阻尼、段末还在爬",
+    ),
+    (
+        "spring-zeta-default",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_DEFAULT"), 1.00,
+        [("references/spring.md", r"\| 缺省 ζ \| `1\.00` \|")],
+        "缺省零过冲，与仓库既有的「位移不过冲」红线一致",
+    ),
+    (
+        "spring-carry",
+        ("const", "scripts/_ease.py", "SPRING_CARRY"), 0.85,
+        [("references/spring.md", r"\| 承接初速系数 \| `0\.85` \|")],
+        "承接初速：0 是起步慢的标准阶跃（首帧只有 2~4px），进不了行程预算",
+    ),
+    (
+        "spring-settle-eps",
+        ("const", "scripts/_ease.py", "SPRING_SETTLE_EPS"), 0.004,
+        [("references/spring.md", r"\| 末帧衰减目标 \| `0\.004`（0\.4%） \|")],
+        "由它反解 ω；末帧还要除以 raw(1) 才精确落在 1，页界处才不回弹",
+    ),
+    (
+        "spring-overshoot-max",
+        ("const", "scripts/_ease.py", "SPRING_OVERSHOOT_MAX"), 0.05,
+        [("references/spring.md", r"\| 过冲预算 \| `0\.05`（5%） \|")],
+        "峰值越过落位的预算；back 是 9.98%、elastic 是 20.44%，都在门外",
+    ),
 ]
 
 

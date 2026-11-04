@@ -81,9 +81,10 @@ class OdometerCarry(unittest.TestCase):
         with open(h, "w", encoding="utf-8") as f:
             f.write(_HARNESS)
         r = subprocess.run([NODE, h, p, str(count.get("from", 0)), str(count["to"]),
-                            str(frames)], capture_output=True, text=True, timeout=30)
+                            str(frames)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return json.loads(r.stdout)
+        return json.loads(r.stdout or "")
 
     def test_ten_place_waits_for_units(self):
         """9 → 10：个位走满之后十位才翻，中途不会出现"1"打头的数。"""

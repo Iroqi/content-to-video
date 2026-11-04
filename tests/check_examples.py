@@ -98,7 +98,8 @@ def check_one(spec_conf):
                 for a in spec_conf["argv"]]
         argv = [a.format(spec=sp, out=out) for a in argv]
         r = subprocess.run([sys.executable] + argv, capture_output=True,
-                           text=True, cwd=tmp)
+                           text=True, encoding="utf-8", errors="replace",
+                           cwd=tmp)
         if r.returncode != 0:
             return "跑不通（exit %d）：%s" % (r.returncode, (r.stderr or "").strip()[-400:])
         if spec_conf.get("must_render"):

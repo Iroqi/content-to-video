@@ -2778,40 +2778,105 @@ def _still_image_carrier_sid(rc, card):
 
 
 def _entrance_k(rc, card):
-    """入场动效预算的压缩系数：短段整体压缩，长段维持原速。
+    """入场动效的**疏密系数**：短段收得紧、长段铺得开——同一套参数读出两种呼吸。
 
-    容器层入场、内容层收拢两处**都**按它压缩——两处各写一遍
-    `min(1, max(minFactor, d/normSeconds))` 的话，改了归一化口径就会有一处没跟着
-    走：那一段的图"框已经到位了、图还在按旧速度收"，而它看起来只是有点不对劲。
+    容器层入场、内容层收拢、题头各拍**都**按它算——几处各写一遍公式的话，改了
+    口径就会有一处没跟着走：那一段的图"框已经到位了、图还在按旧速度收"，而它
+    看起来只是有点不对劲。
+
+    两段式（此前只有前一段，于是"短段压缩、长段原速"——长段永远停在同一档，
+    全片的入场读起来是均匀的）：
+
+        d ≤ normSeconds  →  d / normSeconds            （短段压缩，地板 minFactor）
+        d > normSeconds  →  1 + (d−normSeconds) / (calmSeconds−normSeconds)
+                                                     × (calmFactor − 1)
+
+    **为什么要上限**：观众对"入场演了多久"的容忍随段长涨，但只在某一段区间内涨。
+    一个 20 秒的长段让标题慢慢走 1.6 秒是"从容"；照这个斜率再长下去就是"卡住"。
+    所以第二段到 `calmSeconds` 收顶，之后一律 `calmFactor`——**疏密是节奏，
+    不是段长的函数**，超过一档就该停在同一档。
+
+    两个分母都可能被 `--set` 写成 0 或负数（同 `_title_font_px` 那条理由）。
+    分母失效时比值趋于无穷：第一段外层 `min(1.0, …)` 收成"不压缩"（与
+    normSeconds 极小同一个意图）；第二段检测到分母 ≤0 直接跳到 `calmFactor`。
     """
     _eb = rc.anim["entranceBudget"]
-    # 归一化分母同样可能被 --set 写成 0（同 _title_font_px 那条理由）。分母失
-    # 效时比值趋于无穷，外层 min(1.0, ...) 正好收成"不压缩"——长段维持原速，
-    # 与 normSeconds 极小是同一个意图。
-    return min(1.0, max(_eb["minFactor"],
-                        card.d / max(1e-6, _eb["normSeconds"])))
+    d = card.d
+    norm = max(1e-6, float(_eb["normSeconds"]))
+    if d <= norm:
+        return min(1.0, max(_eb["minFactor"], d / norm))
+    calm = float(_eb.get("calmSeconds") or 0.0)
+    calm_k = max(1.0, float(_eb.get("calmFactor") or 1.0))
+    if calm <= norm:
+        # 区间退化：没有"铺开"的余地，退回旧口径（长段原速）
+        return 1.0
+    return min(calm_k, 1.0 + (d - norm) / (calm - norm) * (calm_k - 1.0))
 
 
-def _entrance_ladder_step(rc):
-    """入场阶梯的**步距**（秒）：画面层比题头组晚出发多久。
+def _entrance_ladder_step(rc, card):
+    """入场阶梯的**步距**（秒）：画面层比题头组晚出发多久——"疏密"那一维。
 
     前沿动效的同一屏从来不是"一起到位"——Framer 的 `staggerChildren`、Material 的
     staggered container transform、迪士尼十二条里的 *Overlapping Action*，说的都是
     同一件事：**一屏里有几层，就有几个先后**。同时开始的两层在观众眼里是一层，
     "最想让人先看到的排最先"这条就落空了。
 
-    步距**不随段长压缩**（`_entrance_k` 不参与）：压缩是为了让整段入场装得下，而
-    "看得出先后"是**感知下限**（按帧数定的，见 `tests/test_motion_design.py` 的
-    `EntranceLadder`）——把它一起压，短段上阶梯会缩到一帧以内，等于把这一层关掉。
+    **步距是"疏密"，拍长是"快慢"——两维各自独立**（这是本函数存在的理由）：
 
-    取值 0.14s（≈4 帧 @30fps）：下限是 2 帧（"先后"与"同时"的分界），上限 0.30s
-    （之上就是逐条出现），取在中段偏下——够读得出先后，又不至于让画面迟到。
+    - 快慢 = 每一拍**演多久** → `_entrance_k`（入场预算因子，动的是时长）
+    - 疏密 = 各拍**隔多远** → 本函数（步距，动的是间隔）
+
+    两者都随段长走，但**走的不是同一条曲线**：若步距按 k 等比缩放，那一页里各层
+    的相对位置与整体时长同比伸缩，看起来只是"整体快一点/慢一点"——密度没变，
+    观众读到的仍是均匀节奏。密度要变，就得让**间隔相对拍长**变化。
+
+    所以本函数**不读 k**（读 k 就等于把两维焊在一起：改快慢会偷偷改疏密），
+    改读段长自己的窗口：
+
+        step = base + spread × ramp(d, fromSeconds → toSeconds)
+
+    `ramp` 在 `[fromSeconds, toSeconds]` 上从 0 走到 1，之后封顶 1；`fromSeconds`
+    之前恒为 0——**只拉开，不收紧**（硬约束，见 `tests/test_motion_design.py` 的
+    `EntranceLadder.test_step_is_not_compressed_away_on_a_short_segment`）：步距是
+    "看得出先后"的**感知下限**，压到一帧以内等于把这一层关掉。短段本就拍子短
+    （k<1 已经把每一拍压紧），密度已经够了；长段才是需要"拉开"的那一端。
+
+    上限 `maxStep`（0.30s）：之上就是逐条出现，一页 PPT——与
+    `tests/test_motion_design.py` 的阶梯判据同一条线。
+
+    四个旋钮都可能�� `--set` 写成 0 或负数（同 `_title_font_px` 那条理由）：
+    分母 ≤0 时 `ramp` 直接判成 1（"没有铺开的余地"），取不到数时各自退回 0。
     """
     lad = rc.anim.get("entranceLadder") or {}
     try:
-        return max(0.0, float(lad.get("step") or 0.0))
+        base = max(0.0, float(lad.get("step") or 0.0))
     except (TypeError, ValueError):
-        return 0.0
+        base = 0.0
+    try:
+        spread = float(lad.get("spread") or 0.0)
+    except (TypeError, ValueError):
+        spread = 0.0
+    try:
+        hi = float(lad.get("maxStep") or 0.0)
+    except (TypeError, ValueError):
+        hi = 0.0
+    try:
+        lo_s = float(lad.get("fromSeconds") or 0.0)
+    except (TypeError, ValueError):
+        lo_s = 0.0
+    try:
+        hi_s = float(lad.get("toSeconds") or 0.0)
+    except (TypeError, ValueError):
+        hi_s = 0.0
+    d = float(card.d)
+    if hi_s <= lo_s:
+        ramp = 1.0 if d >= hi_s else 0.0
+    else:
+        ramp = max(0.0, min(1.0, (d - lo_s) / (hi_s - lo_s)))
+    step = base + spread * ramp
+    if hi > 0:
+        step = min(hi, step)
+    return max(0.0, step)
 
 
 def _head_beat_offset(rc, card):
@@ -2837,7 +2902,7 @@ def _frame_entrance_offset(rc, card):
     这个数是配图容器入场与内容层收拢两处的共同起点，**只有这一份**：两处各算一份
     的话，改了步距就只有一处在动，成片里是"框按新步距落、图还在旧时刻收"。
     """
-    return _head_beat_offset(rc, card) + _entrance_ladder_step(rc)
+    return _head_beat_offset(rc, card) + _entrance_ladder_step(rc, card)
 
 
 def _entrance_lead(rc, card):

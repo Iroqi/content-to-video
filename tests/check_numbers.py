@@ -275,6 +275,26 @@ FACTS = [
         "题头组与画面的错峰幅度，文档必须跟着说清当前是哪一档",
     ),
     (
+        "entrance-budget-calm-factor",
+        ("json", "scripts/_template.py", "animation.entranceBudget.calmFactor"), 1.25,
+        [("references/motion.md", r"`calmFactor` 1\.25")],
+        "入场拍长的封顶倍率：段长超过 calmSeconds 之后每一拍最多慢到 "
+        "1.25 倍——作者据此判断长段是「铺开」还是「卡住」",
+    ),
+    (
+        "entrance-ladder-spread",
+        ("json", "scripts/_template.py", "animation.entranceLadder.spread"), 0.12,
+        [("references/motion.md", r"`spread` 0\.12")],
+        "疏密维度的总增量：步距在 fromSeconds→toSeconds 之间由 base 拉开 "
+        "这么多次秒——它与拍长因子无关，改它只改层间距",
+    ),
+    (
+        "entrance-ladder-max-step",
+        ("json", "scripts/_template.py", "animation.entranceLadder.maxStep"), 0.30,
+        [("references/motion.md", r"`maxStep` 0\.30")],
+        "步距上限：之上就是逐条出现（等于一页 PPT），与阶梯判据同一条线",
+    ),
+    (
         "stagger-distribute-ease",
         ("json", "scripts/_template.py", "animation.staggerDistribute.ease"),
         "power2.out",

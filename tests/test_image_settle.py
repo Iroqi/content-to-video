@@ -33,9 +33,12 @@ _SETTLE_RE = re.compile(
     r'\{scale:(?P<scale>-?[\d.]+),x:(?P<x>-?[\d.]+),y:(?P<y>-?[\d.]+)\},'
     r'\{scale:1,x:0,y:0,duration:(?P<dur>[\d.]+),'
     r'ease:"(?P<ease>[a-z.0-9()]+)"\},(?P<at>[\d.]+)\)')
-# 容器层入场：tl.from("#img-seg-a",{opacity:0,y:40,duration:0.44,ease:"…"},2.60)
+# 容器层入场：tl.from("#img-seg-a",{y:40,duration:0.44,ease:"…"},2.60)
+# 容器层**不再有 opacity 门控**：画面"在场"由页面自己的 clip-path 揭盖承担
+# （见 html_renderer._card_timeline_lines 的注释与 references/motion.md
+# 「场景相连」那一节）。这里量的是**落位**：框从下方走到位。
 _FRAME_RE = re.compile(
-    r'tl\.from\("#img-(?P<sid>[A-Za-z0-9_-]+)",\{opacity:0,y:-?[\d.]+,'
+    r'tl\.from\("#img-(?P<sid>[A-Za-z0-9_-]+)",\{y:-?[\d.]+,'
     r'duration:(?P<dur>[\d.]+),ease:"[^"]+"\},(?P<at>[\d.]+)\)')
 _PIN_MAX_DUR = 0.02
 
@@ -84,7 +87,7 @@ class SettleFloorOnGrid(unittest.TestCase):
 class UnitFrac(unittest.TestCase):
     """比例钳制：所有"占某个上限的比例"共用一份（上限随画幅与段长变）。"""
 
-    def test_clamps_to_unit_interval(self):
+    def test_clamps_to_unit_interval_and_keeps_the_sign(self):
         self.assertEqual(_unit_frac(0.6), 0.6)
         self.assertEqual(_unit_frac(0), 0.0)
         self.assertEqual(_unit_frac(1), 1.0)
@@ -93,8 +96,6 @@ class UnitFrac(unittest.TestCase):
         self.assertEqual(_unit_frac(None), 0.0)
         self.assertEqual(_unit_frac("x"), 0.0)
         self.assertEqual(_unit_frac(float("nan")), 0.0)
-
-    def test_keeps_the_sign(self):
         """符号即方向：收拢的档位表里 `-0.6` 就是"从左侧来"。
 
         早先这一层取了 abs，结果四档里写负号的那档被压成与正号同向——轮换只剩
@@ -175,15 +176,13 @@ class RhythmRotates(unittest.TestCase):
         got = [(s.group("scale"), s.group("x"), s.group("y")) for s in settles(html)]
         self.assertEqual(len(got), 4)
         self.assertEqual(len(set(got)), 4, f"收拢档位重复了：{got}")
-
-    def test_beats_come_from_both_sides(self):
         """轮换里必须有反向来向——符号在哪一层被 abs 吃掉，这条就挂。
 
         `_unit_frac` 曾经取 `abs`，四档里写负号的那档被压成与正号同向，"连续四段
         四个来向"退化成三种；而"档位不重样"那条断言（比的是 x/y 数值）看不出来，
         因为 17.15 与 14.7 本来就不等。
         """
-        xs = [float(s.group("x")) for s in settles(render()[1])]
+        xs = [float(s.group("x")) for s in settles(html)]
         self.assertTrue(any(x > 0 for x in xs), f"全部挤在同一侧: {xs}")
         self.assertTrue(any(x < 0 for x in xs), f"全部挤在同一侧: {xs}")
 

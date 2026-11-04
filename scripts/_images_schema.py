@@ -315,11 +315,22 @@ def _validate_type(typ, where):
                          + " / ".join(json.dumps(c) for c in TYPE_CHUNKS)
                          + f"（实际: {chunk!r}）")
     dec = typ.get("decode", False)
-    if not isinstance(dec, bool):
-        raise ValueError(f"{where} 的 decode 必须是 JSON 布尔 true/false（实际: {dec!r}）")
-    if dec and chunk != "char":
-        raise ValueError(f"{where} 的 decode 与 chunk:\"word\" 暂不能同写——"
-                         "解码档这一轮按字符逐格锁定，按语义单元锁定见下一条迭代")
+    if isinstance(dec, dict):
+        unknown = set(dec) - {"from"}
+        if unknown:
+            raise ValueError(f"{where} 的 decode 含未知键 {sorted(unknown)}——只认 from")
+        if "from" not in dec:
+            raise ValueError(f"{where} 的 decode 写成对象就得给 from——空对象与 "
+                             "true 只差一个写法，不该读成两种意思")
+        anchor = dec["from"]
+        if anchor not in STAGGER_ANCHORS:
+            raise ValueError(f"{where} 的 decode.from 只能是 "
+                             + " / ".join(json.dumps(a) for a in STAGGER_ANCHORS)
+                             + f"（实际: {anchor!r}）——锚点只有这一份白名单，"
+                               "与 stagger.from 同源（见 references/stagger.md）")
+    elif not isinstance(dec, bool):
+        raise ValueError(f"{where} 的 decode 必须是 JSON 布尔 true/false 或 "
+                         f'{{"from": …}}（实际: {dec!r}）')
     return typ
 
 

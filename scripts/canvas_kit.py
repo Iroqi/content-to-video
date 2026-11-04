@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_svg  # noqa: E402  门禁判据以它为准，自查直接调它而不是重算一遍
 from _images_schema import (_DIRECTOR_TARGET_RE, _validate_count,  # noqa: E402
                             _validate_repeat_yoyo, _validate_stagger,
-                            validate_images_json)
+                            _validate_type, validate_images_json)
 from _script_utils import (guard_not_in_skill_dir, num_fmt, read_json_file,  # noqa: E402
                            seeded_wobble, write_text_atomic)
 # 满幅判据整个走 _svg_sanitize._covers_viewbox（阈值常量也在它那边）：check_svg
@@ -510,9 +510,10 @@ def _validate_kind_keys(el, kind, where):
         if "type" in el and not isinstance(el["type"], bool):
             raise ValueError(f"{where} 的 type 必须是 JSON 布尔 true/false"
                              "（逐字揭示的字取自 content，快慢用 duration/ease）")
-        if el.get("decode") is not None and not isinstance(el["decode"], bool):
-            raise ValueError(f"{where} 的 decode 必须是 JSON 布尔 true/false"
-                             f"（实际: {el['decode']!r}）")
+        if el.get("decode") is not None:
+            # decode 的取值形状（布尔 / {"from": 锚点}）与 from 白名单只有
+            # _validate_type 一份真源，这里不另抄一份类型判断。
+            _validate_type({"decode": el["decode"]}, where)
         if "count" in el:
             # count 与 content 互斥：数字节点的初始文本就是 from 那一档的渲染值，
             # 另给一句 content 等于让屏幕上先印一个和滚动无关的数（frame 0 撒谎）。
@@ -1033,7 +1034,7 @@ def build_animate(spec, sentences=None):
             if el.get("chunk"):
                 t["chunk"] = el["chunk"]
             if el.get("decode"):
-                t["decode"] = True
+                t["decode"] = el["decode"]
             step["type"] = t
         else:
             # 仍给全 from：删掉 SVG 那行 opacity 之后草稿还得演得对（fromTo 不依赖

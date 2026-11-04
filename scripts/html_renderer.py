@@ -2170,6 +2170,29 @@ def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
         + f"{pos:.2f}" + ");})();")
 
 
+# `type` 的"语义单元"切分：唯一真源。按单元跳格（一次露一组）与解码档
+# （一次锁一组）共用同一段 JS——两份切分规则一起错的时候，产物级判据照样绿。
+# 判定全走 `charCodeAt` 区间，不用正则字面量：这段 JS 要原样嵌进 `<script>` 与
+# JSON 序列化后的字符串里，斜杠、反斜杠、`]` 在正则里各有一套转义规则。
+_TYPE_UNIT_SPLIT_BODY = (
+    "var isW=function(c){var u=c.charCodeAt(0);"
+    "return (u>=48&&u<=57)||(u>=65&&u<=90)||(u>=97&&u<=122)||(u>=192&&u<=591);};"
+    "var isC=function(c){var u=c.charCodeAt(0);"
+    "return (u>=0x3400&&u<=0x9fff)||(u>=0x3040&&u<=0x30ff)||(u>=0xac00&&u<=0xd7af);};"
+    "var isT=function(c){var u=c.charCodeAt(0);"
+    "return u<=32||(u>=33&&u<=47)||(u>=58&&u<=64)||(u>=91&&u<=96)"
+    "||(u>=123&&u<=126)||(u>=0x2010&&u<=0x2015)||u===0x2026"
+    "||(u>=0x3000&&u<=0x303f)||(u>=0xff00&&u<=0xff65);};"
+    "var J=\"._-'/\";"
+    "while(i<L){var c=s.charAt(i),j=i;"
+    "if(isW(c)){while(j<L&&(isW(s.charAt(j))||J.indexOf(s.charAt(j))>=0))j++;}"
+    "else if(isC(c)){j=Math.min(i+2,L);}"
+    "else{j=i+1;}"
+    "while(j<L&&isT(s.charAt(j)))j++;"
+    "G.push(j);i=j;}"
+)
+
+
 def _type_word_js(sel_js, dur, ease, cycle_js, pos):
     """`type` 的按单元跳格档：一次写回一个语义单元，不在字与字之间切。
 
@@ -2193,25 +2216,8 @@ def _type_word_js(sel_js, dur, ease, cycle_js, pos):
     return (
         ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
         "var s=e.textContent||'',G=[],i=0,L=s.length;"
-        # 三条区间判定：拉丁字母与数字（含 Latin-1/扩展 A-B）、CJK（含假名谚文）、
-        # 标点与空白（ASCII 三段 + 通用/CJK/全角标点区）。
-        "var isW=function(c){var u=c.charCodeAt(0);"
-        "return (u>=48&&u<=57)||(u>=65&&u<=90)||(u>=97&&u<=122)||(u>=192&&u<=591);};"
-        "var isC=function(c){var u=c.charCodeAt(0);"
-        "return (u>=0x3400&&u<=0x9fff)||(u>=0x3040&&u<=0x30ff)||(u>=0xac00&&u<=0xd7af);};"
-        "var isT=function(c){var u=c.charCodeAt(0);"
-        "return u<=32||(u>=33&&u<=47)||(u>=58&&u<=64)||(u>=91&&u<=96)"
-        "||(u>=123&&u<=126)||(u>=0x2010&&u<=0x2015)||u===0x2026"
-        "||(u>=0x3000&&u<=0x303f)||(u>=0xff00&&u<=0xff65);};"
-        "var J=\"._-'/\";"
-        "while(i<L){var c=s.charAt(i),j=i;"
-        "if(isW(c)){while(j<L&&(isW(s.charAt(j))||J.indexOf(s.charAt(j))>=0))j++;}"
-        "else if(isC(c)){j=Math.min(i+2,L);}"
-        "else{j=i+1;}"
-        # 把紧随其后的空白/标点并进这一组：不让它们各占一跳。
-        "while(j<L&&isT(s.charAt(j)))j++;"
-        "G.push(j);i=j;}"
-        "var N=G.length,p={g:0};"
+        + _TYPE_UNIT_SPLIT_BODY
+        + "var N=G.length,p={g:0};"
         "var f=function(){var n=Math.floor(p.g+1e-6);"
         "if(n>N)n=N;e.textContent=n?s.slice(0,G[n-1]):'';};"
         "f();tl.to(p,{g:N,duration:" + json.dumps(dur)
@@ -2219,45 +2225,66 @@ def _type_word_js(sel_js, dur, ease, cycle_js, pos):
         + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
 
 
-def _type_decode_js(sel_js, dur, ease, cycle_js, pos):
-    """`type` 的解码式揭示档：整行先在场，逐格锁定成真字。
+def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=False):
+    """`type` 的解码式揭示档：整行先在场，按锚点逐格/逐组锁定成真字。
 
     Opus 5.5 那类代码绘制的 motion graphics 里最认得出的一拍是"占位字符闪着、
-    从左到右一格一格锁成真字"。缺省的 `type` 是前缀渐长（从空串长出来），只有
+    一格一格锁成真字"。缺省的 `type` 是前缀渐长（从空串长出来），只有
     "有 / 无"两态；解码档多一态——**未定的那部分也在场**，于是观众读到的是
     "这一格还没定下来"，而不是"这句话还没说完"。这是「推进叙事」而非装饰：
     结论/数字在旁白揭晓前先以未定态占位，锁定边就是揭晓的那一瞬。
 
     三条红线，判据在 tests/test_type_decode.py（按钉固 GSAP 的 onUpdate 重放）：
 
-    1. **逐帧可复现**：噪声是 `(格号, 已锁定格数, 原字符码点)` 的确定性哈希，
+    1. **逐帧可复现**：噪声是 `(格号, 已锁定单元数, 原字符码点)` 的确定性哈希，
        不用 `Math.random` / `Date` / `performance`。渲染端逐帧 seek 时 onUpdate
        按 p.k 重算，同一时刻两帧必须给出同一行字——墙钟一进来这条就断。
-    2. **锁定不回退**：`i < n` 的格子直接取原文且不再被噪声改写，只有 `i >= n`
-       的格子在锁定推进时换一批噪声。噪声随"已锁定格数"翻而不是每帧翻：成片
+    2. **锁定不回退**：已锁定的单元直接取原文且不再被噪声改写，只有未锁定的
+       格子在锁定推进时换一批噪声。噪声随"已锁定单元数"翻而不是每帧翻：成片
        里每帧都变会读成噪点，那是与口播无关的墙钟闪烁（motion.md「四职务」）。
-    3. **末帧钉死**：缓动停在 `L - 1e-13` 时 floor 会少一格，所以 onComplete
-       无条件写回原文；onUpdate 里也把 n 夹到 L。
+    3. **末帧钉死**：缓动停在 `N - 1e-13` 时 floor 会少一组，所以 onComplete
+       无条件写回原文；onUpdate 里也把 n 夹到 N。
+
+    锁定的**先后**由 `anchor` 决定，白名单与 `stagger.from` 同源
+    （`_images_schema.STAGGER_ANCHORS`，见 references/stagger.md「从哪儿开始动」）：
+    start 按读序、end 从结论往回卷、center 从核心长出来、edges 两端向中线合拢。
+    距离相同时按下标兜底，排序不依赖 JS 引擎的稳定性——逐帧 seek 要的是确定的。
+    `by_word` 时一组一单元，切分复用 `_TYPE_UNIT_SPLIT_BODY`（与按单元跳格档
+    同一份），否则一格一单元。
 
     噪声分宽/窄两栏（`_images_schema.TYPE_DECODE_*`）：原文是全角格就用全角
-    几何符、半角格用半角大写、空白原样保留。字符数恒等、每格宽度类别不变，
+    汉字数字、半角格用半角大写、空白原样保留。字符数恒等、每格宽度类别不变，
     整行在解码途中不重排——文字盒左缘站定不动（look.md「三条换版式时会坏的」）。
     """
     narrow = json.dumps(TYPE_DECODE_NARROW)
     wide = json.dumps(TYPE_DECODE_WIDE)
+    # G[k] 是第 k 组的结束索引：word 档走共用切分，char 档一格一单元。
+    units = ("var G=[],i=0;" + _TYPE_UNIT_SPLIT_BODY if by_word
+             else "var G=[];for(var q=1;q<=L;q++)G.push(q);")
     return (
         ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
         "var s=e.textContent||'',L=s.length;"
-        "var A=" + narrow + ",B=" + wide + ";"
+        + units +
+        "var N=G.length;"
+        "var A=" + narrow + ",B=" + wide + ",F=" + json.dumps(anchor) + ";"
+        "var O=[];for(var k=0;k<N;k++)O.push(k);"
+        "var d=function(k){if(F===\"start\")return k;"
+        "if(F===\"end\")return N-1-k;"
+        "if(F===\"center\")return Math.abs(k-(N-1)/2);"
+        "return Math.min(k,N-1-k);};"
+        "O.sort(function(a,b){return d(a)-d(b)||a-b;});"
+        "var own=[];for(var k=0;k<N;k++){var a=k?G[k-1]:0,b=G[k];"
+        "for(var u=a;u<b;u++)own[u]=k;}"
         "var w=function(i){return s.charCodeAt(i)>=0x2e80;};"
         "var p={k:0};"
         "var g=function(i,q){var a=w(i)?B:A,c=s.charCodeAt(i);"
         "return a.charAt((i*31+q*17+c*7)%a.length);};"
-        "var f=function(){var n=Math.floor(p.k+1e-6);if(n>L)n=L;"
+        "var f=function(){var n=Math.floor(p.k+1e-6);if(n>N)n=N;"
+        "var lock=[];for(var t=0;t<n;t++)lock[O[t]]=1;"
         "var out='';for(var i=0;i<L;i++){var u=s.charCodeAt(i);"
-        "out+=(u<=32)?s.charAt(i):((i<n)?s.charAt(i):g(i,n));}"
+        "out+=(u<=32)?s.charAt(i):(lock[own[i]]?s.charAt(i):g(i,n));}"
         "e.textContent=out;};"
-        "f();tl.to(p,{k:L,duration:" + json.dumps(dur)
+        "f();tl.to(p,{k:N,duration:" + json.dumps(dur)
         + ",ease:" + json.dumps(ease) + "," + cycle_js
         + "onUpdate:f,onComplete:function(){e.textContent=s;}},"
         + f"{pos:.2f}" + ");})();")
@@ -2423,10 +2450,16 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             # 两档：`char`（缺省，一个字符一跳）与 `word`（一个语义单元一跳，见
             # _type_word_js）。缺省档的产物保持原样不动，golden 快照因此不受影响。
             typ = step.get("type") or {}
-            if typ.get("decode"):
+            dec = typ.get("decode")
+            if dec:
                 # 解码档是"换一种写法"而非叠加：整行占位、逐格锁定。缺省档与
                 # word 档的产物保持原样不动，golden 快照因此不受影响。
-                lines.append(_type_decode_js(sel_js, dur, ease, _cycle_js(step), pos))
+                # `from` 与 `chunk` 是同一份 type 契约里的两个正交旋钮：前者定
+                # 从哪头先锁（白名单与 stagger.from 同源），后者定一次锁多少。
+                anchor = dec.get("from", "start") if isinstance(dec, dict) else "start"
+                by_word = typ.get("chunk", "char") == "word"
+                lines.append(_type_decode_js(sel_js, dur, ease, _cycle_js(step),
+                                             pos, anchor, by_word))
                 continue
             chunk = typ.get("chunk", "char")
             if chunk == "word":

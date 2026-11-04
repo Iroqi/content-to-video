@@ -12,10 +12,10 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 ```json
 {"title": "本期标题", "opening": "一句开场白，说清主题和为什么值得看。",
  "segments": [
-   {"id": "seg1", "title": "第一个要点", "tagline": "背景",
-    "text": "第一句。第二句。", "takeaway": "带走这一句"},
-   {"id": "seg2", "title": "第二个要点", "tagline": "进展",
-    "text": "第一句。第二句。", "takeaway": "带走这一句"}],
+   {"id": "seg1", "title": "第一个要点", "kicker": "第一章 · 起跑线",
+    "tagline": "背景", "text": "第一句。第二句。", "takeaway": "带走这一句"},
+   {"id": "seg2", "title": "第二个要点", "kicker": "第二章 · 进展",
+    "tagline": "进展", "text": "第一句。第二句。", "takeaway": "带走这一句"}],
  "closing": "回顾主线，一句收束。", "cta": "关注我们"}
 ```
 ```bash
@@ -24,7 +24,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 产物标 degraded）。打开 hf-project/index.html 看版式；配音后去掉 --until 才是出片。
 ```
 
-只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
+只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`kicker` 省了就没有标题上沿那行分类小字，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
 
 ## 这份文档怎么用
 

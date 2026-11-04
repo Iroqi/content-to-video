@@ -650,6 +650,25 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
     _vv = tpl_layout["verse"]
     _il = tpl_layout["image"]
     _tgl = tpl_layout["tagline"]
+    # 题头小字行（eyebrow）：标题上沿那一行「小 → 大 → 正文」的第一级。
+    # 它是题头组的成员，但**不在 .seg-title-wrap 里**——竖屏那个盒子是定高
+    # overflow:hidden 的绝对定位盒，装进去要么把标题挤掉一行，要么自己被裁。
+    # 竖屏因此把它绝对定位到标题带的**上方留白**里（title.top 之下还有一段
+    # padding，正好一行高）；横屏 text-col 是弹性列，它就正常占一行。
+    _kick = rc.kick = _tl["kicker"]
+    # 竖屏那一行的总占高：字号 × 行高 1（紧凑行盒）+ 与标题的间距。抬到
+    # title.top 之上时用它反推 top——两处各算一遍就会有一处留空或被裁。
+    # 横屏没有 `title.top`（text-col 是弹性列，标题不绝对定位），留 0 占位：
+    # 那条画幅的 CSS 不读 `--ctv-kick-top`，写进去是为了变量表两画幅同形。
+    _kick_top = 0.0
+    if aspect == "vertical":
+        _kick_top = _tl["top"] - (_kick["fontSize"] + _kick["marginBottom"])
+        if _kick_top < 0:
+            raise ValueError(
+                f"[template] 竖屏 kicker 放不下：title.top({_tl['top']}) 不够装"
+                f"一行 kicker（{_kick['fontSize']}px + 间距 {_kick['marginBottom']}px）。"
+                "kicker 站在标题带上方的留白里，留白不足时会顶到卡片边——"
+                "调小 title.kicker.fontSize/marginBottom，或抬高 title.top")
 
     _sl = tpl_layout["subtitle"]
     # 字幕字号是唯一被消费的 subtitle 参数（两画幅各读各的 subtitle 块）
@@ -851,6 +870,9 @@ def _build_render_context(tpl, aspect, width, height, theme, images,
   --ctv-tagline-font:{css_tagline_font};--ctv-tagline-mt:{css_tagline_mt}px;
   --ctv-tagline-lh:{css_tagline_lh};--ctv-tagline-weight:{css_tagline_weight};
   --ctv-tagline-indent:{_tgl["indent"]}px;--ctv-tagline-tick:{_tgl["tickWidth"]}px;
+  --ctv-kick-font:{_kick["fontSize"]}px;--ctv-kick-track:{_kick["tracking"]}em;
+  --ctv-kick-rule:{_kick["ruleWidth"]}px;--ctv-kick-gap:{_kick["ruleGap"]}px;
+  --ctv-kick-mb:{_kick["marginBottom"]}px;--ctv-kick-top:{_kick_top:.2f}px;
   --ctv-prog-height:{css_prog_height}px;--ctv-ch-tick-h:{_prog["chapterTickHeight"]}px;
   --ctv-sub-font:{css_sub_font};
   --ctv-verse-h:{_verse_h}px;--ctv-verse-clip:{_vv["clipPad"]}px;
@@ -999,6 +1021,31 @@ def _title_font_px(rc, seg, sid, is_agenda):
     else:
         _title_font_px = _tl["fontSize"]
     return f"{_title_font_px}px"
+
+
+def _kicker_row_html(rc, seg, sid, ac):
+    """题头上沿那行小字（eyebrow，可空）。
+
+    它钉的是**读序**：一行小号宽字距的分类标签 → 大标题 → 正文。缺了这一级，
+    观众第一眼就撞上最大那个字，题号与正文之间没有过渡；有了它，视线先被一条
+    短引线领进来，再落在大字上（Opus 系作品的题头几乎都是这个三层结构）。
+
+    颜色**取文字色为主、只掺两成 accent**：它是读序里最低的一级，而 accent 是
+    画面里最抢眼的色——小字一旦上 accent，反而比白色大标题更先被看到，层级就
+    倒了。带两成页色是为了让它跟这一页的调子连着，不是一块通用灰。引线保留
+    accent 本色：这条标签唯一允许带彩的地方，也是它和标题之间那道"缝合线"。
+
+    `letter-spacing` 与 `text-transform` 归 CSS：宽字距是这一级的身份，行内
+    再写一份就会在改字号时漂成两档。
+    """
+    text = seg.get("kicker")
+    if not text:
+        return ""
+    _kc = ensure_text_contrast(
+        mix(ac, rc.theme_colors["text_color"], 0.82), rc.bgs)
+    return (f'<div class="seg-kicker" id="kick-{sid}" style="color:{_kc}">'
+            f'<i class="kick-rule"></i><span class="kick-text">{esc(text)}</span>'
+            f'</div>')
 
 
 def _tagline_html(rc, seg, sid, ac):
@@ -1439,6 +1486,12 @@ def _prepare_card(rc, clip):
     verse_html = (_plate_caption_html(seg, sid, ac_text_attr) if has_caption
                   else "" if is_canvas
                   else _verse_html(seg, sid, ac_text_attr))
+    # 题头上沿的小字行。画布页没有题头层；agenda 卡那行由 `.agenda-kicker`
+    # 承担（内容不同、版式不同），两行都画会在开屏上叠出两条小字。
+    # 算在这里而不是 title_wrap 里：卡片上要挂 `data-kicker`（见下），
+    # 好让右上角那枚 `01/04` 抬到同一条抬头线上。
+    kicker_row = ("" if (is_canvas or is_agenda)
+                  else _kicker_row_html(rc, seg, sid, ac))
 
     # 标题与句子流都走 CSS flex 文档流，宽度由 CSS 约束，Python 侧
     # 不推导盒几何。
@@ -1492,6 +1545,7 @@ def _prepare_card(rc, clip):
         + (" text-only" if no_image_slot else "")
         + f'" data-start="{win_start:.2f}" data-duration="{vis_d:.2f}" '
         + f'data-accent="{ac_attr}" data-track-index="1" '
+        + ('data-kicker="1" ' if kicker_row else '')
         + chapter_attr
         # 内联 clip-path 必须与开场补间的 from 值同型（方向档：奇数页自页顶遮下来），
         # 否则 JS 加载那一瞬间整页先按默认边露一次再跳回去。
@@ -1511,8 +1565,10 @@ def _prepare_card(rc, clip):
     # DOM 里只是给 Layout 门禁多一个"这里有个盒子"的账。
     _tag_rev = (f'      <div class="title-reveal" id="rev-tag-{sid}">'
                 f'{tagline_html}</div>\n' if tagline_html else "")
+    # 题头上沿的小字行（已在卡片属性区之前算好，见 `kicker_row` 的注释）。
     title_wrap = ("" if is_canvas else (
-        f'    <div class="seg-title-wrap">\n'
+        (f'{kicker_row}\n' if kicker_row else "")
+        + f'    <div class="seg-title-wrap">\n'
         f'      <div class="title-reveal" id="rev-title-{sid}">'
         f'<div class="seg-title" id="title-{sid}" '
         f'style="font-size:{title_size};text-shadow:0 0 {rc.tl["glow"]}px {ac_attr}40">'
@@ -1541,7 +1597,7 @@ def _prepare_card(rc, clip):
         agenda_row_count=0,
         is_keep=_is_keep_page(rc, sid),
         tagline_html=tagline_html, image_html=image_html,
-        kicker_html=kicker_html,
+        kicker_html=kicker_html, kicker_row=kicker_row,
         verse_html=verse_html, card_open=card_open,
         progress_html=progress_html, title_wrap=title_wrap,
         chapter_html=chapter_html, chapter=_ch)
@@ -2953,6 +3009,39 @@ def _chapter_entrance_lines(rc, card):
             f'opacity:0,duration:{dur:.2f},ease:"{a["tagline"]["ease"]}"}},{at:.2f})']
 
 
+def _eyebrow_entrance_lines(rc, card):
+    """题头上沿小字行的入场：与标题**同起点、半程收**，先把读序钉下来。
+
+    为什么不是"比标题更早"：`card.s` 已是这一页的第一帧，再往前就落进上一页的
+    擦除窗口里（那两个时间轴各有各的补间，叠在一起读成抖动）。所以"小字先站定"
+    靠的是**时长**而不是起点——同一帧起，它 0.25s 就走完，标题要 0.5s，屏幕上
+    自然是"小字落定、大字还在往下走"。读序因此成立而不用改任何既有节奏。
+
+    两层各写一条：文字淡入 + 微量上浮（`rise` 6px，小字号经不起大行程），
+    引线 `scaleX` 从 0 长到 1（`transform-origin: left`，不占布局、不推文字）。
+    `scaleX` 而不是 `width`：width 补间会让后面的字跟着往右挪，正好是这一层
+    最不该有的动作（一层标签不该有布局副作用）。
+    """
+    a_title = rc.anim["titleEntrance"]
+    cfg = a_title.get("eyebrow")
+    if not cfg or not getattr(card, "kicker_row", ""):
+        return []
+    frac = max(0.0, _unit_frac(cfg.get("durationFrac", 1.0)))
+    dur = a_title["duration"] * _entrance_k(rc, card) * frac
+    if dur <= 0.01:
+        return []
+    rise = max(0.0, float(cfg.get("rise") or 0.0))
+    ease = cfg["ease"]
+    txt = f"#kick-{card.sid} .kick-text"
+    rule = f"#kick-{card.sid} .kick-rule"
+    return [
+        f'tl.from("{txt}",{{opacity:0,y:{num_fmt(rise)},duration:{dur:.2f},'
+        f'ease:"{ease}"}},{card.s:.2f})',
+        f'tl.from("{rule}",{{scaleX:0,duration:{dur:.2f},'
+        f'ease:"{ease}"}},{card.s:.2f})',
+    ]
+
+
 def _tagline_entrance_lines(rc, card, rh):
     """副标题行的入场：跟着标题那一档进来，幅度小一号、起点错峰。
 
@@ -3167,6 +3256,9 @@ def _card_timeline_lines(rc, card):
         # 标题入场 = 一条揭示边（裁窗 + 字同步走），不是整块缩放。四档轮换的只有
         # 行程与曲线；**没有缩放**：标题是左对齐的文字块，绕中心缩放时左缘一直在
         # 动，而"站定"恰恰要求左缘不动（详见 `_title_rhythm` 的口径）。
+        # 小字行先落：同起点、半程收（详见 `_eyebrow_entrance_lines`）。
+        # 排在标题之前只是阅读顺序，时间轴上两条从同一秒起跑。
+        lines.extend(_eyebrow_entrance_lines(rc, card))
         lines.extend(_reveal_tween_lines(
             f"#rev-title-{sid}", f"#title-{sid}", _rh["y"],
             a_title["duration"] * _k, _rh["ease"], s))

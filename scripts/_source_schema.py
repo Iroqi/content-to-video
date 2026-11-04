@@ -13,8 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _beats import validate_beats  # noqa: E402  台词板（beats）形状校验
 from _segments import (CANVAS_MIN_SEGMENTS, CANVAS_TRIGGER_SEGMENTS,  # noqa: E402
-                       CONTENT_SID_PREFIX, _validate_layout, _validate_sid,
-                       is_content_sid, ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
+                       CONTENT_SID_PREFIX, KICKER_MAX_CHARS, _validate_layout,
+                       _validate_sid, is_content_sid,
+                       ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  上墙字段清单
 from _timeline import validate_speed  # noqa: E402
 from _validate import (_reject_unknown_keys, _validate_accent,  # noqa: E402
                        _validate_display_text, _validate_text)
@@ -31,9 +32,9 @@ SOURCE_KEYS = ("title", "opening", "opening_title", "opening_tagline",
                "closing", "closing_title",
                "closing_tagline", "closing_speed", "closing_layout", "cta",
                "speakers", "segments")
-SEGMENT_KEYS = ("id", "title", "tagline", "text", "dialogue", "accent",
-                "speed", "voice_id", "voice_style", "takeaway", "layout",
-                "subtitle", "beats")
+SEGMENT_KEYS = ("id", "title", "tagline", "kicker", "text", "dialogue",
+                "accent", "speed", "voice_id", "voice_style", "takeaway",
+                "layout", "subtitle", "beats")
 SPEAKER_KEYS = ("voice_id", "voice_style", "label")
 # 对话轮次只认这两个键：音色一律查顶层 speakers，per-turn 的 voice_id
 # 写了也不会生效（读侧只取 speaker/text），必须出声而不是静悄悄当没看见。
@@ -203,6 +204,24 @@ def validate_segments_source(data):
                 raise ValueError(
                     f"segments[{i}]（title={seg.get('title')!r}）的 'takeaway' 必须是单行"
                     "（结尾 agenda 每段只占一行，含换行会挤爆行数预算）")
+        if seg.get("kicker") is not None:
+            if not isinstance(seg["kicker"], str):
+                raise ValueError(
+                    f"segments[{i}]（title={seg.get('title')!r}）的 'kicker' 必须是字符串"
+                    "（题头上沿那行分类小字，可选字段）")
+            if "\n" in seg["kicker"] or "\r" in seg["kicker"]:
+                raise ValueError(
+                    f"segments[{i}]（title={seg.get('title')!r}）的 'kicker' 必须是单行"
+                    "（题头一行，换行会被 overflow:hidden 静默裁掉）")
+            # 字数上限是渲染侧的常量（_segments.KICKER_MAX_CHARS）：那一行
+            # nowrap + overflow:hidden，超长直接消失且**不报错**——在这里拒，
+            # 作者当场就能改短，而不是等成片里看到半截标签。
+            if len(seg["kicker"]) > KICKER_MAX_CHARS:
+                raise ValueError(
+                    f"segments[{i}]（title={seg.get('title')!r}）的 'kicker' 有 "
+                    f"{len(seg['kicker'])} 字，超过上限 {KICKER_MAX_CHARS}"
+                    f"：{seg['kicker']!r}。这是一条分类标签，不是一句话——"
+                    "压到十几个字以内")
         _validate_text(seg.get("voice_style"),
                        f"segments[{i}]（title={seg.get('title')!r}）的 voice_style")
         _validate_accent(seg.get("accent"),

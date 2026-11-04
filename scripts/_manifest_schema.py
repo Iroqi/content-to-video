@@ -12,8 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _script_utils import read_json_file  # noqa: E402
 from _degraded import KEYS as DEGRADED_KEYS  # noqa: E402  降级词汇表（注册表派生，单一来源）
-from _segments import (CONTENT_SID_PREFIX, STRUCTURAL_SIDS,  # noqa: E402
-                       _validate_layout, _validate_sid, is_content_sid,
+from _segments import (CONTENT_SID_PREFIX, KICKER_MAX_CHARS,  # noqa: E402
+                       STRUCTURAL_SIDS, _validate_layout, _validate_sid,
+                       is_content_sid,
                        ON_SCREEN_SEGMENT_KEYS)  # noqa: E402  与 _source_schema 共用 ON_SCREEN_SEGMENT_KEYS
 from _beats import validate_beats  # noqa: E402  台词板形状校验（与 source 侧同一份）
 from _timeline import TIMELINE_TOLERANCE  # noqa: E402
@@ -38,7 +39,8 @@ MANIFEST_SENTENCE_KEYS = ("index", "text", "start_time", "duration",
                           # 发声区间（_speech.py 量出来，二者成对出现）：句首静默
                           # 与真正发声的长度。`duration` 仍是音频块长度、语义不变。
                           "onset", "voiced")
-MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "accent", "sentences",
+MANIFEST_SEGMENT_KEYS = ("id", "title", "tagline", "kicker", "accent",
+                         "sentences",
                          "speed", "layout",
                          "voice_id", "voice_style",
                          "takeaway", "turns",
@@ -333,6 +335,23 @@ def validate_timing_manifest(data):
                 raise ValueError(
                     f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
                     "'takeaway' 必须是单行（含换行会挤爆 agenda 行数预算）")
+        # 题头小字行：渲染层直接读 manifest，形状错会在 esc() 那里炸裸异常；
+        # 长度错更糟——nowrap + overflow:hidden 会把超出的部分静默吃掉，
+        # 成片里只剩半截标签（与 source 侧同一个上限常量）。
+        if sg.get("kicker") is not None:
+            if not isinstance(sg["kicker"], str):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
+                    "'kicker' 必须是字符串")
+            if "\n" in sg["kicker"] or "\r" in sg["kicker"]:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
+                    "'kicker' 必须是单行（题头一行，换行会被裁掉）")
+            if len(sg["kicker"]) > KICKER_MAX_CHARS:
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' 的 "
+                    f"'kicker' 有 {len(sg['kicker'])} 字，超过上限 "
+                    f"{KICKER_MAX_CHARS}：{sg['kicker']!r}")
         # 段级 voice_id 与顶层同一白名单口径（pipeline 从已校验的 source
         # 透传，手写 manifest 是另一条入口）：坏音色名混进来只会在配音
         # 错位时才被发现

@@ -182,8 +182,10 @@ class PagesThatDoNotPlay(unittest.TestCase):
         self.assertIsNone(_kick("closing", html))
         self.assertNotIn('id="kicker-closing"', html)
 
-    def test_slot_segments_use_the_tagline_layer_instead(self):
-        """内容段的副标题是 `.tagline`（`#tag-{sid}`），不是 kicker。"""
+    def test_slot_segments_have_no_agenda_kicker(self):
+        """内容段没有 `.agenda-kicker`——它自己的小字行是另一个字段（`kick-`，
+        见 test_eyebrow.py）。这里只钉住"两种行不混用"：`kicker-{sid}` 这个 id
+        只属于 agenda 卡。"""
         html = render()
         self.assertNotIn('id="kicker-seg-a"', html)
 

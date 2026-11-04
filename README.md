@@ -136,6 +136,7 @@ tests/       契约测试 ＋ 五道检查脚本
 | 第 3b 步画 SVG：几何、对比度、字号、数据自查 | [`references/canvas.md`](references/canvas.md) |
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、镜头归谁 | [`references/motion.md`](references/motion.md) |
 | 第 3b 步一组元素逐个出场：窗口、分配曲线、锚点 | [`references/stagger.md`](references/stagger.md) |
+| 第 3b 步落位之后别让画面整段静帧：静止窗口、hold 慢推、活动度判据 | [`references/hold.md`](references/hold.md) |
 | 第 4 步预览、渲染、调性能、官方门禁 | [`references/rendering.md`](references/rendering.md) |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | [`references/look.md`](references/look.md) |
 | 画面空 / 不动 / 换页没东西 | [`references/troubleshooting.md`](references/troubleshooting.md) |

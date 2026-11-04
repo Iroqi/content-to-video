@@ -22,7 +22,8 @@ from _theme import (
 from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
                        get_canvas, get_image_box, normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
-                            MEDIA_DUCK_VOLUME, ATTR_KEY)
+                            MEDIA_DUCK_VOLUME, ATTR_KEY,
+                            TYPE_DECODE_NARROW, TYPE_DECODE_WIDE)
 from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
                        is_full_bleed, seg_layout, seg_subtitle)
 from _path_morph import make_morph, interp as _morph_interp
@@ -2218,6 +2219,50 @@ def _type_word_js(sel_js, dur, ease, cycle_js, pos):
         + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
 
 
+def _type_decode_js(sel_js, dur, ease, cycle_js, pos):
+    """`type` 的解码式揭示档：整行先在场，逐格锁定成真字。
+
+    Opus 5.5 那类代码绘制的 motion graphics 里最认得出的一拍是"占位字符闪着、
+    从左到右一格一格锁成真字"。缺省的 `type` 是前缀渐长（从空串长出来），只有
+    "有 / 无"两态；解码档多一态——**未定的那部分也在场**，于是观众读到的是
+    "这一格还没定下来"，而不是"这句话还没说完"。这是「推进叙事」而非装饰：
+    结论/数字在旁白揭晓前先以未定态占位，锁定边就是揭晓的那一瞬。
+
+    三条红线，判据在 tests/test_type_decode.py（按钉固 GSAP 的 onUpdate 重放）：
+
+    1. **逐帧可复现**：噪声是 `(格号, 已锁定格数, 原字符码点)` 的确定性哈希，
+       不用 `Math.random` / `Date` / `performance`。渲染端逐帧 seek 时 onUpdate
+       按 p.k 重算，同一时刻两帧必须给出同一行字——墙钟一进来这条就断。
+    2. **锁定不回退**：`i < n` 的格子直接取原文且不再被噪声改写，只有 `i >= n`
+       的格子在锁定推进时换一批噪声。噪声随"已锁定格数"翻而不是每帧翻：成片
+       里每帧都变会读成噪点，那是与口播无关的墙钟闪烁（motion.md「四职务」）。
+    3. **末帧钉死**：缓动停在 `L - 1e-13` 时 floor 会少一格，所以 onComplete
+       无条件写回原文；onUpdate 里也把 n 夹到 L。
+
+    噪声分宽/窄两栏（`_images_schema.TYPE_DECODE_*`）：原文是全角格就用全角
+    几何符、半角格用半角大写、空白原样保留。字符数恒等、每格宽度类别不变，
+    整行在解码途中不重排——文字盒左缘站定不动（look.md「三条换版式时会坏的」）。
+    """
+    narrow = json.dumps(TYPE_DECODE_NARROW)
+    wide = json.dumps(TYPE_DECODE_WIDE)
+    return (
+        ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
+        "var s=e.textContent||'',L=s.length;"
+        "var A=" + narrow + ",B=" + wide + ";"
+        "var w=function(i){return s.charCodeAt(i)>=0x2e80;};"
+        "var p={k:0};"
+        "var g=function(i,q){var a=w(i)?B:A,c=s.charCodeAt(i);"
+        "return a.charAt((i*31+q*17+c*7)%a.length);};"
+        "var f=function(){var n=Math.floor(p.k+1e-6);if(n>L)n=L;"
+        "var out='';for(var i=0;i<L;i++){var u=s.charCodeAt(i);"
+        "out+=(u<=32)?s.charAt(i):((i<n)?s.charAt(i):g(i,n));}"
+        "e.textContent=out;};"
+        "f();tl.to(p,{k:L,duration:" + json.dumps(dur)
+        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        + "onUpdate:f,onComplete:function(){e.textContent=s;}},"
+        + f"{pos:.2f}" + ");})();")
+
+
 def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     """把一段编排展开成挂在主时间线上的 GSAP 补间。
 
@@ -2377,7 +2422,13 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             #
             # 两档：`char`（缺省，一个字符一跳）与 `word`（一个语义单元一跳，见
             # _type_word_js）。缺省档的产物保持原样不动，golden 快照因此不受影响。
-            chunk = (step.get("type") or {}).get("chunk", "char")
+            typ = step.get("type") or {}
+            if typ.get("decode"):
+                # 解码档是"换一种写法"而非叠加：整行占位、逐格锁定。缺省档与
+                # word 档的产物保持原样不动，golden 快照因此不受影响。
+                lines.append(_type_decode_js(sel_js, dur, ease, _cycle_js(step), pos))
+                continue
+            chunk = typ.get("chunk", "char")
             if chunk == "word":
                 lines.append(_type_word_js(sel_js, dur, ease, _cycle_js(step), pos))
                 continue

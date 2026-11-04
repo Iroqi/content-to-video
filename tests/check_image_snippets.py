@@ -30,6 +30,8 @@ SNIPPETS = [
      '"param": "theta"', "motion.md「参数演绎」的最小示例"),
     (os.path.join("references", "motion.md"),
      '"param": "theta", "to": 180', "motion.md「参数演绎」的多拍累进示例"),
+    (os.path.join("references", "decode.md"),
+     '"type": {"decode": true}', "decode.md「怎么写这一拍」的解码示例"),
 ]
 
 

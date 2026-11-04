@@ -118,7 +118,7 @@ ELEMENT_KEYS = {
     "bars": ("id", "base_y", "bars", "fill"),
     "circle": ("id", "cx", "cy", "r", "fill"),
     "text": ("id", "x", "y", "tier", "content", "fill", "anchor", "type", "count",
-             "odometer", "chunk"),
+             "odometer", "chunk", "decode"),
     "rule": ("id", "x1", "y1", "x2", "y2", "stroke", "width", "draw"),
 }
 COMMON_KEYS = ("kind", "role", "beat", "duration", "ease", "stagger",
@@ -510,6 +510,9 @@ def _validate_kind_keys(el, kind, where):
         if "type" in el and not isinstance(el["type"], bool):
             raise ValueError(f"{where} 的 type 必须是 JSON 布尔 true/false"
                              "（逐字揭示的字取自 content，快慢用 duration/ease）")
+        if el.get("decode") is not None and not isinstance(el["decode"], bool):
+            raise ValueError(f"{where} 的 decode 必须是 JSON 布尔 true/false"
+                             f"（实际: {el['decode']!r}）")
         if "count" in el:
             # count 与 content 互斥：数字节点的初始文本就是 from 那一档的渲染值，
             # 另给一句 content 等于让屏幕上先印一个和滚动无关的数（frame 0 撒谎）。
@@ -1024,9 +1027,14 @@ def build_animate(spec, sentences=None):
             step["count"] = (dict(el["count"], odometer=True) if el.get("odometer")
                              else el["count"])
         elif el.get("type"):
-            # 切分档同样是**节点级**调档：一页里往往只有一两句该按词跳，
-            # 把它写进 type 契约就得整页跟着变。
-            step["type"] = {"chunk": el["chunk"]} if el.get("chunk") else {}
+            # 切分档与解码档都是**节点级**调档：一页里往往只有一两句该按词跳、
+            # 或只有结论那一句该从噪声里锁出来，写进 type 契约就整页跟着变。
+            t = {}
+            if el.get("chunk"):
+                t["chunk"] = el["chunk"]
+            if el.get("decode"):
+                t["decode"] = True
+            step["type"] = t
         else:
             # 仍给全 from：删掉 SVG 那行 opacity 之后草稿还得演得对（fromTo 不依赖
             # 元素当前值）。to 带作者写的落定透明度。

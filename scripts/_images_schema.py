@@ -285,25 +285,41 @@ def _validate_count(count, where):
 #   "一组一组念出来"，字多的句子尤其明显。
 TYPE_CHUNKS = ("char", "word")
 
+# 解码式揭示的噪声字母表：唯一真源，渲染端与文档都从这里取，不各抄一份。
+# 分宽/窄两栏是因为中文稿里一个 CJK 字占一个全角，换成半角 ASCII 会让行宽在
+# 解码途中收缩、落定时又撑回去——"字还没定，整行先抖"。宽栏用全角汉字数字
+# （码点 ≥ 0x2e80，与渲染端判定同一条线），读作"读数还没定下来"；窄栏用半角
+# 大写字母数字。两栏都不含引号、反斜杠、尖括号与 &：这段串要原样嵌进 JS
+# 字符串字面量，多一条转义规则就是一处静默失效（见 references/decode.md）。
+TYPE_DECODE_NARROW = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+TYPE_DECODE_WIDE = "〇一二三四五六七八九"
+
 
 def _validate_type(typ, where):
-    """编排步骤的 type：打字机式揭示——把 <text> 里现成的整段文本按进度写回。
+    """编排步骤的 type：把 <text> 里现成的整段文本按进度写回。
 
     正文取自那条 <text>（运行时读 textContent），节奏走 step 级 duration/ease。
-    可选的 `chunk` 只换"一次写回多少"：`char` 一个字符、`word` 一个语义单元。
+    两个可选键各管一件事：`chunk` 管"一次写回多少"（char / word），`decode` 把
+    "从空串渐长"换成"整行先在场、逐格锁定成真字"（见 references/decode.md）。
     """
     if not isinstance(typ, dict):
-        raise ValueError(f"{where} 必须是对象 {{}} 或 {{\"chunk\": …}}"
+        raise ValueError(f"{where} 必须是对象 {{}} / {{\"chunk\": …}} / {{\"decode\": true}}"
                          f"（节奏用 step 级 duration/ease 调；实际: {type(typ).__name__}）")
-    unknown = set(typ) - {"chunk"}
+    unknown = set(typ) - {"chunk", "decode"}
     if unknown:
-        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 chunk"
+        raise ValueError(f"{where} 含未知键 {sorted(unknown)}——只认 chunk / decode"
                          "（字数取自 <text> 本身，快慢用 duration/ease）")
     chunk = typ.get("chunk", "char")
     if chunk not in TYPE_CHUNKS:
         raise ValueError(f"{where} 的 chunk 只能是 "
                          + " / ".join(json.dumps(c) for c in TYPE_CHUNKS)
                          + f"（实际: {chunk!r}）")
+    dec = typ.get("decode", False)
+    if not isinstance(dec, bool):
+        raise ValueError(f"{where} 的 decode 必须是 JSON 布尔 true/false（实际: {dec!r}）")
+    if dec and chunk != "char":
+        raise ValueError(f"{where} 的 decode 与 chunk:\"word\" 暂不能同写——"
+                         "解码档这一轮按字符逐格锁定，按语义单元锁定见下一条迭代")
     return typ
 
 

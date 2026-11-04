@@ -295,11 +295,15 @@ class FrameArcPath(unittest.TestCase):
         self.assertAlmostEqual(bow, 0.0, places=9,
                                msg="同缓动的双轴位移必须是直线（这一条是判据的自检）")
 
-    def test_every_arc_tier_bends_the_path(self):
-        """每一档的弯曲度 ≥ 4px 且 ≥ 弦长的 10%；否则那条弧等于不存在。"""
+    def test_every_arc_tier_bends_midway(self):
+        """每一档：弯曲度 ≥ 4px、≥ 弦长的 10%，且弧顶落在行程中段。
+
+        贴到端点上就是折线，不是弧——所以这两件事一起量：弯得不够读不出来，
+        顶跑偏了读成两段动作接起来。
+        """
         for i, x in self._tiers():
-            bow, frac, _ = _arc_metrics(self.a_img["vert_y"], x,
-                                        self.a_img["ease"], self.arc["ease"])
+            bow, frac, apex = _arc_metrics(self.a_img["vert_y"], x,
+                                           self.a_img["ease"], self.arc["ease"])
             self.assertGreaterEqual(
                 bow, ARC_MIN_BOW_PX,
                 f"第 {i} 档（x={x}）弯曲度只有 {bow:.1f}px：屏幕上读到的是一条竖直直线，"
@@ -307,12 +311,6 @@ class FrameArcPath(unittest.TestCase):
             self.assertGreaterEqual(
                 frac, ARC_MIN_BOW_FRAC,
                 f"第 {i} 档（x={x}）弯曲度只占弦长 {frac:.1%}：副轴太小，弧读不出来")
-
-    def test_every_arc_tier_apex_is_in_the_middle(self):
-        """弧顶落在行程中段：贴到端点上是折线，不是弧。"""
-        for i, x in self._tiers():
-            _, _, apex = _arc_metrics(self.a_img["vert_y"], x,
-                                      self.a_img["ease"], self.arc["ease"])
             self.assertTrue(
                 ARC_APEX[0] <= apex <= ARC_APEX[1],
                 f"第 {i} 档（x={x}）弧顶在 t={apex:.2f}：贴着起点或终点说明两轴在"

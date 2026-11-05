@@ -16,6 +16,8 @@ from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
 from _ease import validate_ease  # noqa: E402
+from _cam_crop import CAM_ID  # noqa: E402  相机 id 只有一份，别在这里重写字面量
+import _momentum  # noqa: E402  惯性档的红线只有一份，契约层与渲染端共用
 from _validate import (_reject_unknown_keys,  # noqa: E402  未知键拦截（panes 分格也走同一份）
                        is_finite_number)  # noqa: E402  数值守卫的单一谓词（拒 NaN/Inf）
 
@@ -134,8 +136,9 @@ def classify_media_path(path, explicit_type="auto"):
 # 逗号/后代/伪类一律不进（那会把"一条 step 打一个简单选择器"的约束拆掉）。
 _DIRECTOR_TARGET_RE = re.compile(r"^([#.])[A-Za-z_][A-Za-z0-9_-]*$")
 _DIRECTOR_STEP_KEYS = frozenset({"at", "at_time", "target", "from", "to", "set",
-                                 "draw", "morph", "count", "type", "stagger",
-                                 "duration", "ease", "delay", "repeat", "yoyo"})
+                                 "draw", "morph", "count", "type", "momentum",
+                                 "stagger", "duration", "ease", "delay",
+                                 "repeat", "yoyo"})
 # 写在 from/to/set **里面**的旋钮：一律拒，指回 step 级。理由是这些键渲染端会自己覆盖或
 # 根本不读——`ease` 会被 step 级顶掉（写了等于没写），`duration`/`delay` 却会被 GSAP 真的
 # 吃掉，于是补间实际跨度与门禁拿去判窗的那个数分家（`beat_positions` 只读 step 级）。
@@ -537,36 +540,62 @@ def _validate_steps(key, block, what="steps"):
         morph = step.get("morph")
         count = step.get("count")
         typ = step.get("type")
+        mom = step.get("momentum")
         if typ is not None:
             # type 也是独立"演"：整段负责把一个 <text> 的现成文本逐字打出来，不能再叠
-            # 任何别的驱动语义（补间变量/描边/形变/数字滚动）——两套同时写同一元素会打架。
-            if kinds or draw or morph is not None or count is not None:
+            # 任何别的驱动语义（补间变量/描边/形变/数字滚动/惯性）——两套同时写同一元素会打架。
+            if kinds or draw or morph is not None or count is not None or mom is not None:
                 raise ValueError(
-                    f"{where} 写了 type，就不能再写 from / to / set / draw / morph / count"
-                    "——type 自己负责整段逐字揭示")
+                    f"{where} 写了 type，就不能再写 from / to / set / draw / morph / "
+                    "count / momentum——type 自己负责整段逐字揭示")
             _validate_type(typ, f"{where} 的 type")
         elif count is not None:
             # count 也是一种独立"演"：整段负责一个 <text> 的数字滚动，不能再叠
-            # from/to/set/draw/morph——那会同时驱动两套语义。
-            if kinds or draw or morph is not None:
+            # from/to/set/draw/morph/momentum——那会同时驱动两套语义。
+            if kinds or draw or morph is not None or mom is not None:
                 raise ValueError(
-                    f"{where} 写了 count，就不能再写 from / to / set / draw / morph"
-                    "——count 自己负责整段数字滚动")
+                    f"{where} 写了 count，就不能再写 from / to / set / draw / morph / "
+                    "momentum——count 自己负责整段数字滚动")
             _validate_count(count, f"{where} 的 count")
         elif morph is not None:
             # morph 是一种独立的"演"：整段负责一条同拓扑 path 的形变，不能再叠
             # from/to/set（补间变量）或 draw（描边生长）——那会同时驱动两套语义。
-            if kinds or draw:
+            if kinds or draw or mom is not None:
                 raise ValueError(
-                    f"{where} 写了 morph，就不能再写 from / to / set / draw"
+                    f"{where} 写了 morph，就不能再写 from / to / set / draw / momentum"
                     "——morph 自己负责整段形变")
             _validate_morph(morph, f"{where} 的 morph")
+        elif mom is not None:
+            # momentum 是第七种独立"演"：整段负责「预备 → 冲程 → 跟随」，自己会
+            # 逐帧写 x/y 与 scaleX/scaleY。再叠任何补间就是两条时间线抢同一条
+            # transform 通道（GSAP 后写的那条静默覆盖前一条），成片里只剩一套。
+            if kinds or draw:
+                raise ValueError(
+                    f"{where} 写了 momentum，就不能再写 from / to / set / draw"
+                    "——momentum 自己负责整段位移与形变")
+            if "stagger" in step:
+                raise ValueError(
+                    f"{where} 的 momentum 不收 stagger：三段编排是一条拍的连续时间线，"
+                    "错峰会把它拆成几条各自起跑的动作；要一组元素各自演就写多条拍")
+            if step.get("repeat") or step.get("yoyo"):
+                raise ValueError(
+                    f"{where} 的 momentum 不收 repeat / yoyo：这一拍自带落位与跟随，"
+                    "重放会把「落定」演成「又冲一次」，且采样跨度与门禁游标分家")
+            if target == "#" + CAM_ID:
+                # 相机层是整页画布的取景容器，它的收尾姿态由 `_fold_camera` 折进
+                # 子层（`cam_resting_pose` 只读 to/set）。给它演形变，接续烘焙会
+                # 静默看不见终点——正是模块头「我明明演了，下一页怎么回去了」。
+                raise ValueError(
+                    f"{where} 的 momentum 不能打在 #{CAM_ID}：相机层归整页取景，"
+                    "它的收尾态由折层负责；要演主视觉，就给那个元素单独命名")
+            _momentum.validate(mom, f"{where} 的 momentum")
         else:
             if not kinds and not draw:
                 raise ValueError(
                     f"{where} 至少要有一个 from / to / set，或写 draw:true 做自绘、"
-                    "morph 做 path 形变、count 做数字滚动、type 做逐字揭示"
-                    "（补间起止/瞬时赋值/描边生长/形状互变/数值递增/打字机）")
+                    "morph 做 path 形变、count 做数字滚动、type 做逐字揭示、"
+                    "momentum 做惯性入场（补间起止/瞬时赋值/描边生长/形状互变/"
+                    "数值递增/打字机/预备拉伸跟随）")
             for k in kinds:
                 # 控制旋钮（duration/ease/…）的拦截在 _validate_tween_vars 里，跟着
                 # 它一起递归——这里只查顶层的话，attr:{} 那类嵌套层就是漏网。
@@ -598,7 +627,8 @@ def _validate_steps(key, block, what="steps"):
         # 反复必须挂在真会"演"的步上。纯 set 是瞬时赋值：门禁按"瞬时"推进相对链的游标，
         # 而 GSAP 会把带 repeat 的 set 当 0 秒补间重放，于是报出来的落点是假时刻；yoyo
         # 在单遍上更是直接被忽略。静默失效的那一类宁可在契约层就说不通。
-        replayable = bool(draw or morph is not None or count is not None or typ is not None
+        replayable = bool(draw or morph is not None or count is not None
+                          or typ is not None or mom is not None
                           or "from" in step or "to" in step)
         if (step.get("repeat") or step.get("yoyo")) and not replayable:
             raise ValueError(

@@ -70,6 +70,7 @@ from _timeline import beat_cycles, ends_at_start
 # 形状与烘焙认得的形状一旦分家，症状是 stage:"keep" 接续页第 0 帧就坏，且生成
 # 期零报错（烘焙按自己那份键名读不到东西，只当没写）。
 from _images_schema import ATTR_KEY  # noqa: E402
+import _momentum  # noqa: E402  惯性档收尾态的真源（终点只有 x/y，尺寸回 1）
 
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
 # SVG_NS 自 _svg_sanitize 导入：同一个命名空间串只声明一次。
@@ -290,7 +291,7 @@ def _settle_cam_payload(el, step):
 
 
 def _settle_step(root, step):
-    """一步的结束态：draw / morph / count / set / to（from-only 是 no-op）。
+    """一步的结束态：draw / morph / count / momentum / set / to（from-only 是 no-op）。
 
     返回 (搬不动的 transform 键, 落错元素的 count 标签)，由调用方合成说明——跳过必须
     出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页怎么回去了"。
@@ -301,6 +302,15 @@ def _settle_step(root, step):
         tag = _local(el.tag)
         if selector == "#" + CAM_ID:
             transforms += _settle_cam_payload(el, step)
+            continue
+        if "momentum" in step:
+            # 三段演完：位移精确落在 distance，scaleX/scaleY 回到 1（面积守恒的
+            # 必然结果）。所以只搬 x/y 就够——模块头「元素级 transform 只搬 x/y，
+            # 不搬 scale/rotation」那条禁令在这里天然满足，没有姿态可折。
+            # 不认这一拍的话，接续页第 0 帧元素会弹回原位：正是 motion.md
+            # 「接续页字从来就不在」那一类静默错。
+            mom = _momentum.validate(step["momentum"], "momentum 接续烘焙")
+            transforms += _settle_payload(el, {mom["axis"]: mom["distance"]})
             continue
         if step.get("draw"):
             # 演完 = 线长满了：pathLength=1 归一 + dasharray=1 + dashoffset=0（solid）。

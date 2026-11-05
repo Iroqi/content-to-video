@@ -36,6 +36,7 @@ from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
 from _hold import plan as hold_plan  # 静止窗口 / 慢推窗口的单一真源
+import _momentum  # noqa: E402  速度包络 / 三段编排 / 生成期采样的单一真源
 from _stage_carry import carry_pages, judging_row
 
 
@@ -2534,6 +2535,27 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 out["stagger"] = stagger
             out.update(_cycle_vars(step))
             return _pin(out)
+
+        if "momentum" in step:
+            # 惯性档：预备 → 冲程 → 跟随三段，由同一条速度包络驱动位移与面积
+            # 守恒的形变。生成期按帧采样成离散 `tl.set`，走的是 `morph` 那条
+            # 老路——渲染端零脚本、零 onUpdate，逐帧 seek 下每一帧都是时间的
+            # 纯函数。用 GSAP 的 onUpdate 或 CSS keyframes 都会让 Python 侧的
+            # 判据退化成「对着另一份实现自证」（decode.md / spring.md 记过账）。
+            try:
+                p = _momentum.plan(step["momentum"], dur, rc.fps,
+                                   f"段落 '{sid}' 的 momentum")
+            except ValueError as e:
+                raise ValueError(f"段落 '{sid}' 的 animate.steps 有一步 {e}")
+            if not _momentum.is_well_formed(p):
+                raise ValueError(
+                    f"段落 '{sid}' 的 momentum 没过生成期自查（面积守恒 / "
+                    "峰值对齐 / 落点精确）：这一拍不该出成片")
+            for t, vars_ in _momentum.frames(p):
+                lines.append(
+                    f"tl.set({sel_js}, {json.dumps(vars_, sort_keys=True)}, "
+                    f"{round(pos + t, 2):.2f})")
+            continue
 
         if "count" in step:
             # 数字滚动：代理对象 p.v 从 from 补间到 to，onUpdate 把当前值写进 <text>

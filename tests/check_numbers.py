@@ -453,6 +453,19 @@ FACTS = [
         [("references/hold.md", r"≥ 4px 位移（980px 槽位")],
         "4px 折算成 scale 差的分母，改槽位宽度就得重算整张活动度表",
     ),
+    # ── 惯性档：作者按这两个上限决定形变能不能用在图形主体上 ──
+    (
+        "momentum-stretch-max",
+        ("const", "scripts/_momentum.py", "STRETCH_MAX"), 0.30,
+        [("references/momentum.md", r"拉伸上限 0\.30")],
+        "峰值拉伸上限；超过它圆角与字形会读成变形字，作者得改用普通 to 补间",
+    ),
+    (
+        "momentum-anticipation-max",
+        ("const", "scripts/_momentum.py", "ANTICIPATION_MAX"), 0.35,
+        [("references/momentum.md", r"预备上限 0\.35")],
+        "预备幅度 / 行程的上限；超过 1/3 就不是蓄力，是一次看得见的反向运动",
+    ),
 ]
 
 

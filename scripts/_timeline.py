@@ -97,7 +97,10 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 # 「这一步落在绝对秒哪儿」只有一份实现：渲染端（html_renderer 发 GSAP 关键帧）与
 # 生成期门禁/对轴报告（gen_hyperframes.animate_prepare）都调这里。两处各写一套就
 # 会漂移——门禁拿着渲染器根本不会用的时刻报错，比没门禁更糟。
-_WHOLE_BEAT_KEYS = ("morph", "count", "type")   # 各自负责整段，从 pos 一直占满 dur
+# 各自负责整段，从 pos 一直占满 dur。momentum 同属这一类：三段（预备/冲程/
+# 跟随）加起来恰是 step 级 duration，相对链 "+N" 的游标必须按整段推进，不能
+# 像纯 `set` 那样停在 pos——否则下一拍会压在上一条还在演的形变上。
+_WHOLE_BEAT_KEYS = ("morph", "count", "type", "momentum")
 
 
 def beat_cycles(step):

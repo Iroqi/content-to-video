@@ -43,6 +43,8 @@ SNIPPETS = [
      '"ease": "spring(0.85)"', "spring.md「契约」的弹簧补间示例"),
     (os.path.join("references", "momentum.md"),
      '"axis": "y"', "momentum.md「契约与旋钮」的惯性拍示例"),
+    (os.path.join("references", "drag.md"),
+     '"chain": ["#head"', "drag.md「契约与旋钮」的拖曳链示例"),
 ]
 
 

@@ -137,6 +137,7 @@ tests/       契约测试 ＋ 五道检查脚本
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、镜头归谁 | [`references/motion.md`](references/motion.md) |
 | 第 3b 步一组元素逐个出场：窗口、分配曲线、锚点 | [`references/stagger.md`](references/stagger.md) |
 | 第 3b 步一个图形要带预备、挤压拉伸与落位跟随（惯性档 `momentum`） | [`references/momentum.md`](references/momentum.md) |
+| 第 3b 步一组图形跟着同一条主运动按相位传下去、全链一起落定（拖曳档 `drag`） | [`references/drag.md`](references/drag.md) |
 | 第 3b 步落位之后别让画面整段静帧：静止窗口、hold 慢推、活动度判据 | [`references/hold.md`](references/hold.md) |
 | 第 4 步预览、渲染、调性能、官方门禁 | [`references/rendering.md`](references/rendering.md) |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | [`references/look.md`](references/look.md) |

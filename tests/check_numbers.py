@@ -466,6 +466,19 @@ FACTS = [
         [("references/momentum.md", r"预备上限 0\.35")],
         "预备幅度 / 行程的上限；超过 1/3 就不是蓄力，是一次看得见的反向运动",
     ),
+    # ── 拖曳链：作者按这两个上限决定波会不会盖过主运动 ──
+    (
+        "drag-lag-max",
+        ("const", "scripts/_drag.py", "LAG_MAX"), 0.35,
+        [("references/drag.md", r"相位上限 0\.35")],
+        "链尾相位滞后上限；超过 1/3 时链首已落定、链尾还没起步，读成两个独立动作",
+    ),
+    (
+        "drag-overshoot-max",
+        ("const", "scripts/_drag.py", "OVERSHOOT_MAX"), 0.30,
+        [("references/drag.md", r"过冲上限 0\.30")],
+        "链首过冲幅度上限；与惯性档拉伸同量级，再大就抢了主运动的戏",
+    ),
 ]
 
 

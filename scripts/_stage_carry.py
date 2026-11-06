@@ -71,6 +71,7 @@ from _timeline import beat_cycles, ends_at_start
 # 期零报错（烘焙按自己那份键名读不到东西，只当没写）。
 from _images_schema import ATTR_KEY  # noqa: E402
 import _momentum  # noqa: E402  惯性档收尾态的真源（终点只有 x/y，尺寸回 1）
+import _drag  # noqa: E402  拖曳档收尾态的真源（全链终点都是 distance）
 
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
 # SVG_NS 自 _svg_sanitize 导入：同一个命名空间串只声明一次。
@@ -291,13 +292,23 @@ def _settle_cam_payload(el, step):
 
 
 def _settle_step(root, step):
-    """一步的结束态：draw / morph / count / momentum / set / to（from-only 是 no-op）。
+    """一步的结束态：draw / morph / count / momentum / drag / set / to（from-only 是 no-op）。
 
     返回 (搬不动的 transform 键, 落错元素的 count 标签)，由调用方合成说明——跳过必须
     出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页怎么回去了"。
     """
     selector = step["target"]
     transforms, misfires = [], []
+    if "drag" in step:
+        # 全链在 dur 处一起落定：每一节的终点都是 distance，过冲核 h(1)=0
+        # 所以没有残留姿态可搬。链头由 selector 兜住，其余节点只写在
+        # drag.chain 里——只折链头的话，接续页第 0 帧链尾会静默弹回原位，
+        # 正是 motion.md 记过的那一类「字从来就不在」的跨页静默错。
+        c = _drag.validate(step["drag"], "drag 接续烘焙")
+        for sel in c["chain"]:
+            for el in _targets(root, sel):
+                transforms += _settle_payload(el, {c["axis"]: c["distance"]})
+        return transforms, misfires
     for el in _targets(root, selector):
         tag = _local(el.tag)
         if selector == "#" + CAM_ID:

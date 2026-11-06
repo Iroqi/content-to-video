@@ -37,6 +37,7 @@ from _cam_crop import cam_default_origin
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
 from _hold import plan as hold_plan  # 静止窗口 / 慢推窗口的单一真源
 import _momentum  # noqa: E402  速度包络 / 三段编排 / 生成期采样的单一真源
+import _drag  # noqa: E402  相位链 / 阻尼过冲 / 生成期采样的单一真源
 from _stage_carry import carry_pages, judging_row
 
 
@@ -2554,6 +2555,27 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             for t, vars_ in _momentum.frames(p):
                 lines.append(
                     f"tl.set({sel_js}, {json.dumps(vars_, sort_keys=True)}, "
+                    f"{round(pos + t, 2):.2f})")
+            continue
+
+        if "drag" in step:
+            # 拖曳链：一条主运动按显式链序分相位传下去，全链在同一拍终点一起
+            # 落定。与 momentum 同一条路——生成期按帧率采样成离散 tl.set，
+            # 渲染端零脚本、零 onUpdate；每个链成员各占一组同刻补间，选择器
+            # 仍收在 #img-{sid} 作用域里，不会打到别页的同名元素。
+            try:
+                p = _drag.plan(step["drag"], dur, rc.fps,
+                               f"段落 '{sid}' 的 drag")
+            except ValueError as e:
+                raise ValueError(f"段落 '{sid}' 的 animate.steps 有一步 {e}")
+            if not _drag.is_well_formed(p):
+                raise ValueError(
+                    f"段落 '{sid}' 的 drag 没过生成期自查（全链落点精确 / "
+                    "相位递增 / 阻尼衰减）：这一拍不该出成片")
+            for t, member, vars_ in _drag.frames(p):
+                member_js = json.dumps(f"{scope} {member}")
+                lines.append(
+                    f"tl.set({member_js}, {json.dumps(vars_, sort_keys=True)}, "
                     f"{round(pos + t, 2):.2f})")
             continue
 

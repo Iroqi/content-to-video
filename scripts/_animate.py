@@ -195,6 +195,18 @@ def check_animate(raw, block, sid, *, full_bleed):
             errs.append(
                 f"段落 '{sid}' 的 animate.steps[{i}] target={target} 在 SVG 里找不到"
                 f"对应 id/class 的元素——选择器落空不会报错，只会静默没有动画")
+        # 拖曳链的每一节都要按文件拦：链头由上面的 target 兜住，其余节点只写在
+        # drag.chain 里。落空一节不会报错、也不会有动画，成片里是"这条链短了一截"。
+        drag = step.get("drag")
+        chain = drag.get("chain") if isinstance(drag, dict) else None
+        if isinstance(chain, list):
+            missing = sorted({s for s in chain
+                              if isinstance(s, str) and s not in universe})
+            if missing:
+                errs.append(
+                    f"段落 '{sid}' 的 animate.steps[{i}] drag.chain 里的 "
+                    + "、".join(missing) + " 在 SVG 里找不到对应 id 的元素——"
+                    "链上一节落空不会报错，只会静默少一段跟随波")
         if full_bleed:
             continue
         # 参数推进的拍（`param` + 数值 `to`）没有补间变量表，先看形状再取键。

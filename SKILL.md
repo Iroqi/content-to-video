@@ -43,6 +43,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3b 步落位要"带着上一拍的速度"稳住（受控弹簧 `spring` / `spring(ζ)`） | `references/spring.md` | 入场落位用 `.out` 档就够时 |
 | 第 3b 步一个图形要"发力 → 途中拉伸 → 落地跟随"（惯性档 `momentum`） | `references/momentum.md` | 只改一个属性、或动的是文字/数据图时 |
 | 第 3b 步一组图形要"主体先动、链尾晚半拍跟上、全链一起落定"（拖曳档 `drag`） | `references/drag.md` | 元素本就该逐个出现（用 `stagger`）时 |
+| 第 3b 步要"一张画停几帧、换画时刻带手作不规则"（定格档 `step`） | `references/step.md` | 文字/表格要逐行落定、或要丝滑落位时 |
 | 第 3b 步落位之后别让画面整段静帧：静止窗口留多久、hold 期间推多少、怎么量"在不在动" | `references/hold.md` | 该段写了 `animate` 或本来就是满幅画布时 |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认版式时 |

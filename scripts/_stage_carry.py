@@ -72,6 +72,7 @@ from _timeline import beat_cycles, ends_at_start
 from _images_schema import ATTR_KEY  # noqa: E402
 import _momentum  # noqa: E402  惯性档收尾态的真源（终点只有 x/y，尺寸回 1）
 import _drag  # noqa: E402  拖曳档收尾态的真源（全链终点都是 distance）
+import _step  # noqa: E402  定格档收尾态的真源（最后一张唯帧就是 distance）
 
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
 # SVG_NS 自 _svg_sanitize 导入：同一个命名空间串只声明一次。
@@ -292,7 +293,7 @@ def _settle_cam_payload(el, step):
 
 
 def _settle_step(root, step):
-    """一步的结束态：draw / morph / count / momentum / drag / set / to（from-only 是 no-op）。
+    """一步的结束态：draw / morph / count / momentum / drag / step / set / to（from-only 是 no-op）。
 
     返回 (搬不动的 transform 键, 落错元素的 count 标签)，由调用方合成说明——跳过必须
     出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页怎么回去了"。
@@ -313,6 +314,13 @@ def _settle_step(root, step):
         tag = _local(el.tag)
         if selector == "#" + CAM_ID:
             transforms += _settle_cam_payload(el, step)
+            continue
+        if "step" in step:
+            # 定格档最后一张唯帧就落在 dur，位置精确是 distance；台阶之间画面
+            # 自己保持，不带形变、不带速度，没有姿态可折。不认这一拍的话，接续
+            # 页第 0 帧元素会弹回原位——定格档的台阶少，这一弹比连续补间更显眼。
+            c = _step.validate(step["step"], "step 接续烘焙")
+            transforms += _settle_payload(el, {c["axis"]: c["distance"]})
             continue
         if "momentum" in step:
             # 三段演完：位移精确落在 distance，scaleX/scaleY 回到 1（面积守恒的

@@ -45,6 +45,8 @@ SNIPPETS = [
      '"axis": "y"', "momentum.md「契约与旋钮」的惯性拍示例"),
     (os.path.join("references", "drag.md"),
      '"chain": ["#head"', "drag.md「契约与旋钮」的拖曳链示例"),
+    (os.path.join("references", "step.md"),
+     '"every": 2', "step.md「契约与旋钮」的定格拍示例"),
 ]
 
 

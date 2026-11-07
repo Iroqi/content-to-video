@@ -479,6 +479,25 @@ FACTS = [
         [("references/drag.md", r"过冲上限 0\.30")],
         "链首过冲幅度上限；与惯性档拉伸同量级，再大就抢了主运动的戏",
     ),
+    # ── 定格档：作者按这三个上限决定一张画停几帧、抖多少 ──
+    (
+        "step-every-max",
+        ("const", "scripts/_step.py", "EVERY_MAX"), 4,
+        [("references/step.md", r"每步帧数 2～4")],
+        "每步帧数上限；>4 时 24fps 下只剩 6 张唯帧/秒，读成幻灯片而非有节奏的卡",
+    ),
+    (
+        "step-timing-max",
+        ("const", "scripts/_step.py", "TIMING_MAX"), 0.35,
+        [("references/step.md", r"时间抖动上限 0\.35")],
+        "时间抖动上限（渲染帧）；再大就破坏唯帧时刻严格递增，GSAP 会吞掉一张画",
+    ),
+    (
+        "step-min-unique-frames",
+        ("const", "scripts/_step.py", "MIN_UNIQUE_FRAMES"), 3,
+        [("references/step.md", r"至少 3 张唯帧")],
+        "最少唯帧数；2 张就是瞬跳，3 张才有起—中—落的定格节奏",
+    ),
 ]
 
 

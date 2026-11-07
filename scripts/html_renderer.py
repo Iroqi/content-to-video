@@ -38,6 +38,7 @@ from _animate import animate_of  # 编排块的唯一读法（steps/params/bind�
 from _hold import plan as hold_plan  # 静止窗口 / 慢推窗口的单一真源
 import _momentum  # noqa: E402  速度包络 / 三段编排 / 生成期采样的单一真源
 import _drag  # noqa: E402  相位链 / 阻尼过冲 / 生成期采样的单一真源
+import _step  # noqa: E402  唯帧网格 / 时间抖动 / 生成期采样的单一真源
 from _stage_carry import carry_pages, judging_row
 
 
@@ -2576,6 +2577,28 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 member_js = json.dumps(f"{scope} {member}")
                 lines.append(
                     f"tl.set({member_js}, {json.dumps(vars_, sort_keys=True)}, "
+                    f"{round(pos + t, 2):.2f})")
+            continue
+
+        if "step" in step:
+            # 定格档：M+1 张唯帧，每 K 个渲染帧才换一张画，台阶之间靠 GSAP
+            # 自然保持上一张（on twos 的画面就这么来的）。与 momentum / drag
+            # 相反——那里是「每帧一条」、条数被采样带钳住；这里是「每 K 帧
+            # 一条」、条数就是作者写的 every，产物里能直接数出来。时刻里的
+            # 双频抖动也由生成期算死，渲染端零脚本、零 onUpdate，逐帧 seek
+            # 下每一张都由时间独立确定。
+            try:
+                p = _step.plan(step["step"], dur, rc.fps,
+                               f"段落 '{sid}' 的 step")
+            except ValueError as e:
+                raise ValueError(f"段落 '{sid}' 的 animate.steps 有一步 {e}")
+            if not _step.is_well_formed(p):
+                raise ValueError(
+                    f"段落 '{sid}' 的 step 没过生成期自查（唯帧不撞进同一 "
+                    "0.01s 格 / 端点精确 / 台阶严格递增）：这一拍不该出成片")
+            for t, vars_ in _step.frames(p):
+                lines.append(
+                    f"tl.set({sel_js}, {json.dumps(vars_, sort_keys=True)}, "
                     f"{round(pos + t, 2):.2f})")
             continue
 

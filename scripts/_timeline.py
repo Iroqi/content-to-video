@@ -99,9 +99,10 @@ def estimate_sentence_seconds(sentence, chars_per_sec, speed):
 # 会漂移——门禁拿着渲染器根本不会用的时刻报错，比没门禁更糟。
 # 各自负责整段，从 pos 一直占满 dur。momentum 同属这一类：三段（预备/冲程/
 # 跟随）加起来恰是 step 级 duration；drag 也一样——全链在 dur 处一起落定，
-# 链尾的相位已经吃进这一拍里。相对链 "+N" 的游标必须按整段推进，不能像纯
-# `set` 那样停在 pos——否则下一拍会压在上一条还在演的形变或链波上。
-_WHOLE_BEAT_KEYS = ("morph", "count", "type", "momentum", "drag")
+# 链尾的相位已经吃进这一拍里；step 的 M+1 张唯帧铺满整段 dur，最后一张就在
+# pos+dur。相对链 "+N" 的游标必须按整段推进，不能像纯 `set` 那样停在 pos
+# ——否则下一拍会压在上一条还在演的形变、链波或唯帧阶梯上。
+_WHOLE_BEAT_KEYS = ("morph", "count", "type", "momentum", "drag", "step")
 
 
 def beat_cycles(step):

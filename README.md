@@ -55,7 +55,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 没有 key 也能跑：自动降级成无配音预览。打开 hf-project/index.html 看版式。
 ```
 
-预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，版式自带入场动画，先把链路跑通。
+预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，版式自带入场动画，先把链路跑通。**科普推演片例外**：画面要跟着旁白分步变的段，第 1 步写稿时就得定 `beats`，否则会落成念稿配静图——结构、图示选型与专项验收见 `references/science.md`。
 
 五个停止点（`--until` 的全部取值）：
 

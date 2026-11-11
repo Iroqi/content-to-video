@@ -1,0 +1,588 @@
+/* ── Content-to-Video composition stylesheet ──────────────────────────────
+   本文件是版式的**静态骨架**：结构与选择器写死，随画幅/主题变的数值一律走
+   var(--ctv-*)——变量由 html_renderer.py 从 _template.py 内联的版式数据派生后
+   注入本文件末尾的 :root 块。
+   注意：注释里**不得写出占位符名字**——装配用的是全文替换，注释里的同名
+   字符串也会被替换（会把整份变量表塞进注释里）。
+
+   数值分三档，读规则时先分清是哪一档：
+     1. **随画幅/主题变** → 必须走 --ctv-*，真源在 _template.py。CSS 里写第二份
+        会让改模板不带着它走（门禁：test_no_aspect_scoped_geometry_in_css、
+        test_css_declares_no_template_token_outside_root）。
+     2. **单值即终态的结构常数**（描边宽度、mask 渐隐百分比、字形相对偏移、
+        装饰线的透明度）→ 直接写在规则里。它们与画幅无关、也不会因为换主题而变，
+        给每枚配一个令牌只会把一份 JSON 变成两份。
+     3. **运行时逐帧写进去的派生量**（--ctv-line-op / --ctv-line-scale /
+        --ctv-relay-* / --ctv-line-filter）→ 由 CSS 给稳态档、runtime.js 内联覆盖。
+        它们不在 :root 里，也不该出现。
+
+   双画幅：竖屏 3:4 与横屏 16:9 共用同一批 --ctv-* 令牌键名（数值各取
+   layout.vertical / layout.landscape 块）。画面结构与三档版式行为以
+   references/look.md「画面结构」为准，这里不复述。
+   ────────────────────────────────────────────────────────────────────── */
+
+/* ── 第 2 档：结构常数（不随画幅/主题变，改这里就是改版式本身）──────────
+   集中登记，免得下一屏的规则里又冒出"看起来像能调"的字面量。每条都写明理由：
+   没有理由的常数就是漏抽的令牌。
+     1px         描边与网格线宽（.grid / .seg-image::after / .agenda-row 分隔线）
+     .5          剥页遮罩的黑色透明度——它是"盖住"的深度，不是主题色
+     14% / 86%   句子流上下 mask 渐隐区（不变量：clipPad ≥ 14% × windowHeight，
+                 见下方 .verse 注释；改这里要同步改 clipPad 的推导）
+     34%         边框内描边、光晕里 accent 的稀释比例
+     em 单位      字形相对偏移（tagline 上缘微调、VED 覆盖层补边）——跟字号走，
+                 所以不能是 px */
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:var(--ctv-w);height:var(--ctv-h);overflow:hidden;background:var(--ctv-bg-gradient)}
+/* local() 顺序即优先级：macOS/Windows 原名在前，Linux 沙箱只有
+   "Noto Sans CJK SC/JP"（"Noto Sans SC" 会回落到无 CJK 字形的
+   NotoSans-Regular.ttf），兜底名必须显式列出。 */
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei"),local("MicrosoftYaHei"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"PingFang SC";src:local("PingFang SC"),local("PingFangSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+@font-face{font-family:"Noto Sans SC";src:local("Noto Sans SC"),local("NotoSansSC"),local("Noto Sans CJK SC"),local("Noto Sans CJK JP")}
+/* 上面三枚是"字体栈里出现过的名字都要有 @font-face"：hyperframes 的
+   StaticGuard 会把 font-family 里每个未在 @font-face / 自动解析字体表
+   中出现的家族名判成 error（font_family_without_font_face），判定基于
+   名字而不是解析结果——所以兜底名自身也必须声明，src 只用 local()，
+   本机没有该字体时依旧按字体栈正常回落。 */
+@font-face{font-family:"Noto Sans CJK SC";src:local("Noto Sans CJK SC"),local("NotoSansCJKsc-Regular")}
+@font-face{font-family:"Noto Sans CJK JP";src:local("Noto Sans CJK JP"),local("NotoSansCJKjp-Regular")}
+body{font-family:var(--ctv-font-family)}
+
+.bg{position:absolute;inset:0;background:var(--ctv-bg-gradient)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(var(--ctv-grid-color) 1px,transparent 1px),linear-gradient(90deg,var(--ctv-grid-color) 1px,transparent 1px);background-size:var(--ctv-grid-size) var(--ctv-grid-size);-webkit-mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%);mask-image:radial-gradient(120% 95% at 50% 45%,transparent 28%,#000 82%)}
+
+/* 段落氛围光：每段把自己的 accent 稀释成一团大半径径向光垫在内容之下
+   （z-index:-1 + isolation 把它压在卡片内容之上、却仍在页面背景/网格之上），
+   让不同段落各有色彩氛围，破除整片米白的单调。
+   isolation 写在无属性限定的 .seg-card 上：两画幅都要它，且 hyperframes 的
+   negative_z_index 检查只看静态声明、不解析 [data-aspect] 作用域，写成属性
+   选择器会被误报成"祖先没有层叠上下文"。
+   几何（椭圆半轴、圆心、浓度、截止点）随画幅变——竖屏那团居中且宽大于高，
+   横屏偏媒体区中心且高大于宽——所以全部走 var(--ctv-amb-*)，值在
+   _template.py 的 layout.<画幅>.ambience。**别在这里写死第二份**：改模板
+   不会带着 CSS 里的字面量走。 */
+.seg-card::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-cx) var(--ctv-amb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 纯文字 agenda 卡（opening/closing，与 .seg-card 同时挂在同一元素上）把圆心从媒体
+   区拨回文字重心：横屏是 50% 45%，竖屏本来就是 50% 50%、与 .seg-card 相同。
+   椭圆半轴/浓度/截止点两画幅共用，只圆心有第二种取值。注意这条**不带画幅限定**，
+   两画幅都要命中，所以两个画幅的 agendaCx/agendaCy 都得填对——竖屏填错会静默
+   把开场/收尾那两页的氛围光挪位。 */
+.agenda-card::after{background:radial-gradient(var(--ctv-amb-rx) var(--ctv-amb-ry) at var(--ctv-amb-agenda-cx) var(--ctv-amb-agenda-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-amb-alpha),transparent),transparent var(--ctv-amb-edge))}
+/* 开屏整页编排（开屏 agenda 卡默认强绑定）的题头光晕：主光斑放在标题身后，
+   模拟舞台主光。径向渐变中心透、外缘淡出，所以压在哪一行文字上都
+   不遮字；z-index:-1 衬在 agenda 列内容之下、卡片 .bg（-2）之上；透明度完全
+   交给 GSAP 编排（淡入 + 呼吸，遍数按片长折算），CSS 只负责形状与颜色。 */
+.full-halo{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(58% 92% at 50% 34%,color-mix(in srgb,var(--seg-accent) 34%,transparent),transparent 68%)}
+/* 开屏编排副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
+   副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
+   冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
+.full-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
+/* 开屏编排标题的逐字 span（渲染器只在开屏编排时拆字）：inline-block 让 GSAP
+   的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
+   与折行；静态开场标题是纯文本、不命中这里。 */
+.t-ch{display:inline-block;white-space:pre}
+/* 开屏编排标题的"揭示边"两层（见 html_renderer 的 _agenda_col_html）：
+   `.t-mk` 是外层的裁剪窗，`.t-in` 是窗里的字。边由 GSAP 对 `.t-in` 补 y
+   （`mask.rise` × 字高）产生，字本身**不参与透明度补间**——逐字淡入是"打字机
+   在打字"，一列字被同一条边推上来才是"镜头落在这句话上"。
+   裁剪窗的上下各留 `mask.rise` 的余量（padding + 负 margin），否则字在起手位
+   会被切掉上缘；overflow:hidden 只裁这个窗口，行高与折行都不变。 */
+.t-mk{display:inline-block;overflow:hidden;vertical-align:bottom;
+  padding-top:var(--ctv-tm-top,0.34em);margin-top:calc(-1 * var(--ctv-tm-top,0.34em))}
+.t-in{display:inline-block;white-space:pre}
+/* 开屏编排 kicker 的逐字 span（同 .t-ch 的由来：transform 要生效 + 空格
+   不折叠）。与 .t-ch 分开两类：kicker 的字距舞 animate **每一个** .k-ch
+   （含空格——GSAP 函数式值按目标序号求值，序号即字符序号），标题那支
+   stagger 舞却要 :not(.t-sp) 排除空格，一个选择器两种语义会互相咬。 */
+.k-ch{display:inline-block;white-space:pre}
+.seg-card{position:absolute;inset:0;isolation:isolate}
+/* 引导线（style:"line" 才生成）：进度条的续命——转场时这条 accent 高亮线从
+   页底脱开向上扫，新页跟着它被画出来。它是新卡的末子，随父卡 clip-path 裁切，
+   只露出揭示边以下的部分（GSAP 补间 y，自身不得声明 transform）；颜色走卡上
+   已有的 --seg-accent，所以看起来是"下一页的颜色从进度条里渗出来"；两端渐隐、
+   中心提亮成一枚"笔尖"，是硬条读不出笔触、必须有亮头才有"书写"感；辉光下偏
+   （y 偏移）让光只洒在刚被画出的页面上——均匀四散是"发光条"，下洒才是"光源在画"。 */
+.reveal-line{position:absolute;left:0;right:0;top:0;background:linear-gradient(90deg,transparent 0%,var(--seg-accent) 16%,color-mix(in srgb,var(--seg-accent) 55%,#fff) 50%,var(--seg-accent) 84%,transparent 100%);box-shadow:0 12px 30px 5px color-mix(in srgb,var(--seg-accent) 55%,transparent);pointer-events:none}
+/* 被揭旧页的底缘暗边（style:"line" 且该页会被下一页犁起才生成）：绕底边轴
+   掀起的纸在折页线附近最暗；opacity 由 peel 同窗补间拉起（_peel_shade_html）。 */
+.peel-shade{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.5),transparent);opacity:0;pointer-events:none}
+/* 卡内自带 .bg/.grid 背景层（几何沿用 root 那两条规则，逐像素对齐）：卡片由此
+   成为不透明图层，clip-path 擦除换页时新旧内容不会叠影。z-index:-2 压在氛围光
+   (::after,-1) 之下；负 z 的安全性与上面 isolation 的 lint 口径同判。 */
+.seg-card>.bg,.seg-card>.grid{z-index:-2}
+/* 标题/副标题的**揭示边裁窗**：一条边从上往下走，字从下方走到原位，两者同拍
+   （见 html_renderer._reveal_tween_lines）。
+   这一层只负责"裁"，所以**不写任何 transform / overflow**——裁切走 GSAP 补的
+   `clip-path`（inset(100% 0 0 0) → inset(0%)），与段落转场同一手法：纯属性补间、
+   逐帧 seek 确定，而且**不要求容器高度恰好贴合文字**（`overflow:hidden` 的写法
+   在标题只占一行、框却按两行留高时，字会先在框里飘一段才被"裁"到，揭示变成滑动）。
+   盒子紧贴内容（width:fit-content 只在横屏/图版需要：竖屏标题区是定宽块，撑满
+   才能左对齐、也才能让 2 行钳制生效）。 */
+.title-reveal{position:relative;width:100%}
+.seg-title-wrap{position:absolute}
+/* 题头上沿的小字行（eyebrow）。读序的第一级：一行宽字距的分类标签 → 大标题 →
+   正文。它比 tagline 更小、颜色更暗、字距更开——字号梯度与色彩梯度一起说
+   "这一行是引子，不是内容"。
+   与 tagline 的分工：tagline 是**这一页的副标题**（跟在标题下面，与标题同属
+   一个句子），kicker 是**这一页属于哪一类**（主语之外的语境）。两者都在场时
+   观众读到的顺序是 分类 → 主句 → 注脚，三层各自不同字号。
+   竖屏那条绝对定位在题头带**上方的留白**里（见下方 [data-aspect="vertical"]
+   规则）：不进 .seg-title-wrap 是因为那个盒子定高且 overflow:hidden，塞进去
+   要么挤掉标题一行、要么自己被裁。 */
+.seg-kicker{display:flex;align-items:center;gap:var(--ctv-kick-gap);font-family:var(--ctv-font-mono);font-size:var(--ctv-kick-font);line-height:1;font-weight:600;letter-spacing:var(--ctv-kick-track);text-transform:uppercase;white-space:nowrap;overflow:hidden;margin-bottom:var(--ctv-kick-mb)}
+/* 引线：一条 accent 短横，从左侧长出来（scaleX 补间，origin 在左端）。
+   不用 width 补间——宽度会推着后面的字往右挪，而这一层最不该有布局副作用。 */
+.seg-kicker .kick-rule{flex:none;width:var(--ctv-kick-rule);height:2px;background:var(--seg-accent);transform-origin:left center}
+[data-aspect="vertical"] .seg-kicker{position:absolute;left:var(--ctv-v-pad-left);top:var(--ctv-kick-top);margin-bottom:0;z-index:2}
+/* 横屏：kicker 是 text-col 里的一个 flex item，所以它和标题之间除了 margin 还
+   吃着一份 `--ctv-l-text-gap`（那一份是给"题头组 ↔ 句子流"的纵向留白）。
+   两份叠起来是 68px，小字与大字之间会空出一大块，读不成一组——用负 margin
+   把 gap 抵掉，只剩 kicker 自己的 marginBottom。写 calc 而不是硬编码 -44px：
+   改列间距时这里自动跟，不会静默多出一段空白。 */
+[data-aspect="landscape"] .seg-kicker{margin-bottom:calc(var(--ctv-kick-mb) - var(--ctv-l-text-gap))}
+.seg-title{font-weight:var(--ctv-title-weight);letter-spacing:var(--ctv-title-tracking);color:var(--ctv-text-color);line-height:var(--ctv-title-lh);word-break:break-word}
+.tagline{font-size:var(--ctv-tagline-font);margin-top:var(--ctv-tagline-mt);line-height:var(--ctv-tagline-lh);font-weight:var(--ctv-tagline-weight);font-family:var(--ctv-font-mono);letter-spacing:.05em;padding-left:var(--ctv-tagline-indent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+/* 内容段 tagline 左侧的 accent 刻度条（落在 indent 留白里，不推挤文字）：
+   两画幅同款故无属性限定，宽度走 --ctv-tagline-tick。开屏/结尾已是纯文字
+   agenda 卡，不再出现 tagline。 */
+.tagline::before{content:"";position:absolute;left:0;top:50%;width:var(--ctv-tagline-tick);height:1.15em;transform:translateY(-50%);border-radius:calc(var(--ctv-tagline-tick)/2);background:linear-gradient(180deg,var(--seg-accent),color-mix(in srgb,var(--seg-accent) 45%,transparent))}
+.seg-progress{position:absolute;bottom:0;left:0;z-index:3;height:var(--ctv-prog-height);box-shadow:0 0 calc(var(--ctv-prog-height) * 3) color-mix(in srgb,var(--seg-accent) 60%,transparent)}
+/* 进度条轨道：垫在 fill 之下的整宽低对比底轨（::before 先于子元素绘制，
+   不会盖住 fill）。颜色走文字色 10% 混透明，双主题自适应、无新令牌。
+   轨道几何与配色两画幅完全一致，故无属性限定——按 [data-aspect] 拆成两份
+   只会多出一次同步维护，没有第二种取值可表达。 */
+.seg-card::before{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--ctv-prog-height);background:color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+/* 页底那一条到底读什么，按档互斥：
+     bar（默认）：页底**只有刻度排**（下面那排短横），没有进度条。长度说"这一章
+       演到哪儿"、位置说"在第几章"——两个读数各占一个维度，不抢同一条线。
+     off：进度条退回页内进度（.seg-progress 自己的 fill），刻度层整体不出现。
+   两条读数同框试过：同色不同长的两条亮条并排，谁也读不出自己那条的含义，
+   1080 宽的成片里像故障条（实测）。所以 `.seg-progress` 在编号卡片里隐掉，
+   `.chapter-tick` 只在挂了 data-chapter 的卡片里存在。 */
+
+/* 刻度本身不画，改画它**上方那一排短横**：页底是进度条的地盘，任何压在线上的竖线
+   读起来都像"进度条断了一节"（实测竖线在 4px 轨道上被当成亮条的空洞）。所以刻度
+   站在轨道上方 chapterTickHeight 的高度里（盒子底边 = 轨道顶边），画成一格宽、
+   3px 高的短横（1024 宽的成片缩下来还有 1px 以上），横在那一格的中线上——这是唱片转速灯 / 取景器刻度那一路 HUD 的
+   语汇，也让"进度"与"章节"两件事在视觉上彻底分开：长度说进度，位置说章节。
+   点亮走 `--tick-on`（0→1，由 _chapter_tick_lines 推）：底色从 26% 中灰混到 accent。
+   逐格单独点亮而非整段染色——"我在第几章"是单数，一条渐变读不出单数。 */
+.chapter-tick{position:absolute;bottom:var(--ctv-prog-height);z-index:4;height:var(--ctv-ch-tick-h);pointer-events:none;
+  --tick-on:0;--tick-past:0;--tick-fill:1}
+.chapter-tick::after{content:"";position:absolute;left:0;bottom:5px;height:3px;border-radius:1.5px;
+  /* 已走到的格子整条亮（--tick-fill = 1）；当前这格从 0 长到满（见 _chapter_tick_lines
+     末尾那条补间）——格内长度就是"这一章演到哪儿"。 */
+  width:calc(100% * var(--tick-fill,1));
+  /* 三档颜色，各管一件事（都从 --tick-past / --tick-on 两个 0/1 变量推，不加新类）：
+       未走到  中性灰     = 文字色 34% 混底色
+       已走过  **文字色** = 62% 混，中性白，不随页换色——走过的章是记录，不是状态
+       当前章  **accent** = 这一页的强调色，只有这一格会发亮
+     已走过的格子若也用 accent，整排就会随每一页重新上色，读作"换了一把尺子"；
+     而"走过 + 当前"两档同色又分不出哪一格是现在。 */
+  background:color-mix(in srgb,
+      var(--seg-accent) calc(var(--tick-on) * 100%),
+      color-mix(in srgb,
+          var(--ctv-text-color) calc(var(--tick-past) * 62%),
+          color-mix(in srgb, var(--ctv-text-color) 34%, var(--ctv-bg-color))));
+  box-shadow:0 0 calc(var(--ctv-prog-height) * 3 * var(--tick-on)) color-mix(in srgb,var(--seg-accent) calc(var(--tick-on) * 70%),transparent)}
+/* 未编号的卡片（开屏/结尾/接续页/画布页）里即使误留刻度也不画：编号与刻度同生同灭；
+   同样的道理，编号卡片里页内进度 fill 也隐掉（见 ── 页底的三个层 ── 那条注释）。 */
+.seg-card:not([data-chapter]) .chapter-tick{display:none}
+.seg-card[data-chapter]>.seg-progress{display:none}
+
+/* 槽位不铺底色，素材直接落在页面背景上。
+   外发光从祖先 seg-card 注入的 --seg-accent 派生（半径走 --ctv-img-glow），
+   两画幅同款、三个媒体分支共用一条，渲染器不再把颜色写进 inline style。 */
+.seg-image{position:absolute;overflow:hidden;box-shadow:0 0 var(--ctv-img-glow) color-mix(in srgb,var(--seg-accent) 25%,transparent)}
+/* img 与 video 共用同一套铺满规则：槽位是定盒 + overflow:hidden，缺了这条的话
+   <video> 按固有尺寸摆（16:9 素材在 4:3 槽里既不满也不 cover，右边留空、
+   下边被裁）。这条是**唯一**来源：inline style 会盖过一切非 important 选择器，
+   所以渲染器不给 <video> 写 inline 铺满样式、竖屏也不挂 !important 副本——
+   三处并存时改一处不生效。 */
+.seg-image img,.seg-image video{position:relative;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
+/* 导演档的内联 SVG（.svg-inline）：铺满槽位，和 <img>+object-fit:cover 同款。
+   cover 语义由 SVG 根节点自带的 preserveAspectRatio="xMidYMid slice" 承担（净化时
+   写入，见 _svg_sanitize），这里只负责把它撑到 100%×100%；z-index 与 img 一致，
+   让内描边 ::after 照常收边（bare-media 时又被撤掉，与 <img> SVG 同路径）。 */
+.seg-image.svg-inline>svg{position:relative;z-index:1;width:100%;height:100%;display:block}
+/* 配图槽位统一的 1px accent 内描边（z 高于 img，压在图像之上收边），SVG 配图
+   除外（见下面 bare-media）。两画幅同款故无属性限定；agenda 卡没有 .seg-image，不受影响。 */
+.seg-image::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--seg-accent) 34%,transparent)}
+/* 无框媒体（bare-media = SVG 配图）：撤掉上面那道内描边和外发光。画布透明时
+   这两层是唯一还留着"矩形槽位"证据的东西，留着就是给一片空白画框。圆角刻意
+   保留：没有底色和描边之后它只裁到图自身的留白，且省掉一条与 [data-aspect]
+   圆角规则打架的选择器。 */
+.seg-image.bare-media{box-shadow:none}
+.bare-media::after{display:none}
+
+/* ── Vertical（竖屏 3:4，1080x1440）大标题 + 图片 + 句子流 ──────────────
+   仅在 #root[data-aspect="vertical"] 时命中。portrait（3:4）复用本块全部规则。
+   竖屏只有 verse 模式。结构：固定标题区（1 行优先、最多 2 行）→ 固定 4:3 画布
+   → 固定在底部的句子流。标题不参与画布与 verse 的定位。
+   侧边距统一由 --ctv-v-pad-left 控制（标题/画布/句子流对齐同一轴线）。
+   注意：本块全部是绝对定位——绝对定位子元素的包含块是 padding box，
+   segCard 的 padding 不会内缩它们，轴线必须显式写成 left/right 值；
+   同理百分比宽度按整屏 1080 解析而非内容盒宽，画布宽必须用变量
+   --ctv-v-img-w（renderer 有护栏保证 image.width = 屏宽 − 2×pad）。
+   本块刻意**不用 !important**：每条选择器都比 base 块多一个属性选择器
+   （0,2,0 > 0,1,0），层叠自然压过 base；渲染器写在同名元素上的 inline
+   style 只带 font-size / color / text-shadow / opacity，
+   与本块声明的属性零重叠，没有需要靠 importance 才能赢的对手。 */
+[data-aspect="vertical"] .seg-card{inset:0;padding:0 var(--ctv-v-pad-left) var(--ctv-v-pad-left)}
+[data-aspect="vertical"] .seg-title-wrap{left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);top:var(--ctv-v-title-top);height:var(--ctv-v-title-area);padding:0;overflow:hidden;text-align:left}
+[data-aspect="vertical"] .seg-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-v-title-lines);overflow:hidden;max-height:calc(var(--ctv-v-title-lines) * var(--ctv-title-lh) * 1em)}
+/* 横向居中走绝对定位的左右 auto 外边距，**不走 transform:translateX(-50%)**：
+   GSAP 的入场补间往同一个元素写 inline transform，CSS 的 transform 与它互斥，
+   写了就得靠 !important 压住补间、连带把 y 滑入整条吃掉（竖屏配图只剩淡入，
+   横屏却有滑入）。用 auto 外边距居中，transform 归 GSAP 独占，两画幅动效一致。 */
+[data-aspect="vertical"] .seg-image{top:var(--ctv-v-img-top);left:0;right:0;margin:0 auto;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2);height:var(--ctv-v-img-height);border-radius:var(--ctv-v-img-radius)}
+
+/* ── verse 句子流（两画幅统一的双行窗口滚动字幕）────────────────────────
+   竖屏 = 固定标题区/固定 4:3 画布 + 钉底句子流：窗口高由 vertical.verse.windowHeight
+   控制，DOM 渲染在 seg-card 尾部、绝对定位钉在内容区底部（见下面的 vertical 覆盖）。
+   横屏 = 左栏内的文档流窗口（base 规则相对定位即命中，无需额外覆盖）。
+   开屏/结尾为 agenda 卡：其 .verse 收在 .agenda-col 列尾随流锚底（豁免规则在
+   agenda 块）。
+   clip 上下各留 verse.clipPad 内边距且滚动锚点同步同值：首句/尾句完整落在
+   mask 渐隐区（上下各 14%）之外，不被边缘虚化。不变量：
+   verse.clipPad ≥ 14% × verse.windowHeight（横屏 260→36.4、竖屏 280→39.2，
+   两画幅 clipPad 均为 40）。 */
+.verse{position:relative;width:100%;height:var(--ctv-verse-h);overflow:hidden;
+  -webkit-mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent);
+  mask-image:linear-gradient(transparent,#000 14%,#000 86%,transparent)}
+/* clip 必须定位：verse-line.offsetTop 需要相对 clip 而不是绝对定位的
+   seg-card（否则首行 offsetTop 巨大，滚动公式恒被钳到段落尾部——
+   第一句永远在窗口外） */
+/* 这里刻意**不写 transition**：成片是逐帧 seek 时间线截出来的，每一帧的
+   画面必须是"时间线时刻"的纯函数。CSS 过渡按墙上时钟走、不受 GSAP 驱动，
+   实测（seek 到 12.0s 后立即读取计算样式）状态停在过渡起点：
+   inline `translateY(-220px)` → computed `matrix(1,0,0,1,0,0)`、active 行
+   opacity 0.62（该是 1）、颜色还是主题色而非 accent，6 条 CSSTransition
+   全部 `playState:running, currentTime:0`。表现就是句子流不跟着滚动、
+   高亮不上色——而且 bleed 多少取决于抓取每帧花多久，同一条稿件两次渲染
+   不一致。预览要的那点淡入淡出由 preview.js 注入（只在人工预览分支）。
+   注意**滚动位移也不在这里补**：`.verse-clip` 的 translateY 由 runtime.js 的
+   verseScroll 每帧插值（焦点层级的第三维，见 runtime.js 里的长注释），
+   预览与成片同源；preview.js 因此**不再**给 .verse-clip 加 transform 过渡
+   （同一段位移被两个时钟驱动，预览会拖尾、逐帧抓帧会读到半路值）。 */
+.verse-clip{position:relative;padding:var(--ctv-verse-clip) 0}
+/* 句子流的**暗垫**：竖屏句子流钉在页底，正压在氛围光最亮的一带，网格线在字
+   后面读起来像托着一层灰底。垫层从透明渐变到 90% 页面底色，边缘看不见，只把
+   字托起来（页底纹理因此正好在字幕上边界处淡出，读作"字幕区是干净的"）。
+   横屏不垫（--ctv-verse-shade: none）：文字栏是定宽弹性列，整块宽垫垂中时读成
+   "这里垫了一块悬浮的板"（成片实测，字号越大的标题区越明显）；横屏底色本就在
+   #060709 附近很干净，没有要垫的东西。开关走模板，不在这里按画幅分叉。
+   必须让句子流自己是层叠上下文（isolation）：垫层要落在"这一行字之后、卡片
+   背景之前"，只有负 z-index 能做到，而负 z 元素会掉进**最近祖先**层叠上下文
+   的最底层——卡片本身就是（.seg-card 上的 isolation），不隔离的话垫层会钻到
+   .bg/.grid 下面，画面上一像素都看不见（lab 实测：pixel 完全不变）。
+   层叠上下文不动布局，与上面那个 overflow 裁切窗口互不影响。
+   几何走 --ctv-verse-line（行内边距）而不是写死 px：垫片要比文字盒宽出一点，
+   但不能宽到顶到页面边缘。右缘单独一个变量 --ctv-verse-pad-right：竖屏是页宽
+   一整条（左右都出血），横屏收到 0（只垫到句子流行尾——宽垫在左栏垂中的时候
+   整块会读成一块悬浮暗块，见 references/look.md「画面结构」）。 */
+.verse{isolation:isolate}
+.verse::before{content:"";display:var(--ctv-verse-shade,block);position:absolute;left:calc(-1 * var(--ctv-verse-line) * 2);right:var(--ctv-verse-pad-right);bottom:calc(-1 * var(--ctv-verse-line) * 5);height:calc(var(--ctv-verse-h) * 0.8);z-index:-1;pointer-events:none;background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--ctv-bg-color) 74%,transparent) 58%,color-mix(in srgb,var(--ctv-bg-color) 90%,transparent))}
+/* active/past 与 base 的 .verse-line 是 0,2,0 对 0,1,0，层叠自然压过，不用
+   !important；运行时往行上写 inline color 与 inline --ctv-line-op（焦点衰减，
+   见 runtime.js 的 verseFocusOp），后者按内联优先级盖过这两条档位。
+   `--ctv-relay` 是换句接力（运行时见 runtime.js 的 verseRelay）：只在换句后的
+   一小段行程里被写成 0.35→1 的实数，整段结束后运行时把它移除，这里的 `1`
+   就是"没在接力"的常态值。opacity 用 min() 取两者较小者：active 行的 1.0 与
+   接力值取小 = 接力值；非活动行与接力值取小 = 更暗的那个，两种状态
+   都不会被对方意外覆盖。
+   0.62 / 0.45 两份字面量只是"变量全缺"时的最后一层兜底（见下面 `.verse-line.past`）；
+   真源在 _template.py 的 subtitle.focus（经 --ctv-focus-* 注入），改模板即可。 */
+/* 离焦的**第二个维度**是尺寸：远处的行不只更暗，也更小（前沿歌词 UI 的排版层级，
+   见 runtime.js 的 verseFocusScale）。它必须走 transform 而不是改 font-size——
+   改字号会重排：折行点变、offsetTop 变（滚动锚点漂移）、覆盖层那份复制文本折到
+   别处去，重影随之而来。transform 不动布局盒，上面三样一个都不碰。
+   min() 与 opacity 那条完全同一条合成规则：焦点档与接力值谁更"远"听谁的。
+   之所以**只写 scale 不写 translate**：滚动归 .verse-clip 独占（它的 translateY
+   按 offsetTop 算落位），行上再叠位移会让行偏离锚点；scale 不改布局盒，锚点照旧。
+   transform-origin 锚**左缘**：字幕是左对齐的，绕中心缩放会让行的左边界在换句时
+   左右抖——那道左缘是句子流里唯一不动的视觉基准线，不能让它动。
+   滚动这一维（垂直位置）由 runtime.js 的 verseScroll 插值，落在 .verse-clip 的
+   translateY 上，与这里的亮度、尺寸共用同一个接力窗口：三个维度同一时刻到位，
+   “焦点”不能在途中分裂成“先滚、再亮”两个动作。
+   ── 第四个维度：景深（模糊）──────────────────────────────────────────
+   前沿歌词 UI（离焦行的梯度模糊处理）让离焦的行不只
+   更暗更小，还**更虚**：景深是“远”这个字在光学里的本义——前三维合起来表达的是
+   强弱，只有模糊表达的是“不在焦平面上”。每远一档加 subtitle.focus.blur（单位
+   em，相对**该行自己的字号**，所以两画幅按各自字号自动缩放，不用存第二份）。
+   模糊同样**不改布局盒**，滚动锚点、offsetTop、逐字命中测试一个字节都不用动
+   （与尺寸那一维同一条理由）。
+   滤镜挂在**运行时合成出来的整条 filter 值**上（`--ctv-line-filter`），不在 CSS
+   里做 max() 合成——因为 `blur(0em)` 也是 filter：实测它把字形换成另一套栅格化
+   （同一句 40px 白字，边缘拉普拉斯和 925410 → 994512、单像素最大差 80）。离焦行
+   本来就要虚，无所谓；**当前行**是画面上最该锐利的那一句，为一个 0 半径的滤镜
+   把它整句字形换一遍是纯视觉漂移，而成片里看不出是谁干的。所以“不需要模糊”必须
+   是 `filter:none`（var 缺省即 none），合成改在 runtime.js 的 verseBlurSet 里做。 */
+.verse-line{font-size:var(--ctv-sub-font);line-height:var(--ctv-verse-lh);font-weight:600;color:var(--ctv-text-color);opacity:min(var(--ctv-line-op,var(--ctv-focus-future)),var(--ctv-relay,1));transform:scale(min(var(--ctv-line-scale,1),var(--ctv-relay-scale,1)));filter:var(--ctv-line-filter,none);transform-origin:left center;padding:var(--ctv-verse-line) 0;text-align:left;position:relative}
+.verse-line.active{--ctv-line-op:1}
+/* 活动行下划线：走 currentColor（runtime 把 accent 写在行上），从实到虚
+   的横向渐变收在 62% 处，像荧光笔轻扫一道，替代单纯换色的弱提示 */
+.verse-line.active::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--ctv-verse-line) * 0.4);height:var(--ctv-verse-rule);border-radius:calc(var(--ctv-verse-rule)/2);background:linear-gradient(90deg,color-mix(in srgb,currentColor 65%,transparent),transparent 62%)}
+/* 两档兜底都先问生成期注入的 --ctv-focus-*（真源 _template.subtitle.focus），
+   最后那个字面量只在"变量全缺"时兜——不再抄第二份模板值。 */
+.verse-line.past{--ctv-line-op:var(--ctv-focus-past)}
+/* 词级强调（karaoke，运行时见 runtime.js 的 verseEmUpdate）──────────────────
+   当前句已经"念到哪儿"，用一层**真实元素**的覆盖物画出来。
+   为什么要覆盖物、不直接把正文切成两段 span：切成两个含文字的叶子，Layout 门禁
+   会逐字量重叠——滚出窗口的行 rect 仍在原位，静态内容段成批报 text_occluded
+   （proseCoverageFloor 也救不了：包成 span 之后它不再是散文单元）。所以正文永远
+   保持**一个裸文本节点**，强调是叠在它上面的一层附加物。
+
+   这一层的不变量只有一条，其余全由它推出来：
+   **覆盖层与正文逐字重合。**
+
+   于是覆盖层装的是**整句原文**（生成期写死，见 html_renderer._ved_layer），与
+   正文共用同一套行盒、同一份字体声明，折行位置和每个字的落点由浏览器算出同一份
+   答案。运行时只把已经念过的字 alpha 抹成 0（verseVedGlyphs），未念的字留 0.62
+   压暗。没有 clip-path、没有 em 书签、没有"已念段有多宽"——三样都是重影源。
+
+   走过两条弯路，都记在这里免得再走一遍：
+   · 覆盖层只写 slice(k)（"还没念到的那截"）自己从头起排：单行看不出问题，跨行
+     立刻塌——前 k 个字被拿掉，折行点全部前移，第 j 个字只有第一个能对齐正文的
+     第 k+j 个字，之后按缺掉的前缀宽度逐渐错开（实测 13 字句第 8 字起差出半个字，
+     屏幕上是一格叠一格）。
+   · clip-path 裁"k 个 em"：假设被裁掉的部分恰好占 k 个等宽格，中英混排、标点、
+     字母都不成立，误差随 k 累积。而且 Chrome 144 上伪元素 + content:attr() +
+     clip-path 三者同用会漂移（左缘落后几十像素、随机跳动、有时整层不再被裁），
+     所以还得用真元素。
+
+   几何上的两处讲究：
+   · 不用 `inset:0` 定位：inset 的参考盒是**内边距边框盒**，文字画在内容盒里，
+     行有 padding 时整层会被推下一个内边距，与正文错开半行。
+   · 不用 `left:0;right:0` 拉满行宽：那会把文字原点挪到行盒左缘，而正文首字可能
+     因为说话人标签 / 首行缩进往右让开一段。负边距把盒子铺到**行盒**（含内边距）
+     的左右缘，再用 padding 把内容盒缩回去——`--ctv-ved-dx` 是运行时实测的那段
+     行内前缀宽度（只在带说话人标签的首句上非零），加上它，文字原点与正文首字
+     严格相等，横向一个像素都不用猜。
+   · 纵向同理：上下各让出一个行内边距再补回来，行内边距一变自动跟随。
+   · 字体逐项对齐 .verse-line 的声明，不用 `font:inherit`（简写会连 font-weight
+     一起拉过来，任何一处不一致都会让同一句话以两种粗细叠着画）。
+   · 未念段必须是**实色**、不能靠 opacity：活动行的正文是全句 accent 色，覆盖层
+     用 `opacity:.62` 的浅色去盖，合成结果仍比底色亮得多——实测成片里整句看起来
+     仍然全亮，压暗完全失效（浏览器里读到的 opacity 数值都"对"，所以这个坑很隐蔽）。
+     改成不透明实色（`color-mix` 把文本色按 0.62 混到页面背景色上，与 .verse-line
+     base 档的观感一致），已念字 alpha 归 0 露出下面的 accent。
+   · 逐字进度**不写 transition**：过渡会让高亮滞后于逐帧 seek 的时间轴。
+     唯一例外是**念完之后的收束**（.verse-ved-settled，见下一条）。
+   · 三态辨识度靠 accent（已念/在念）与 past(0.45) 拉开。 */
+.verse-ved{position:absolute;top:0;left:0;right:0;margin:calc(-1 * var(--ctv-verse-line)) 0;padding:calc(var(--ctv-verse-line) * 2) 0 0 var(--ctv-ved-dx,0px);font-family:inherit;font-size:var(--ctv-sub-font);font-weight:600;letter-spacing:inherit;line-height:inherit;white-space:inherit;color:color-mix(in srgb,var(--ctv-text-color) 62%,var(--ctv-bg-color,#000));pointer-events:none;display:none}
+.verse-line.verse-ved-on .verse-ved{display:block}
+/* 念完之后的收束（settle）：整句从 accent 逐字交还给覆盖层的实色，把"现在的
+   焦点"让给下一句（动机见 runtime.js 的 verseEmSettle）。为什么这里可以有
+   transition，而逐字进度不行——
+     · 逐字进度是**时间的函数**，每帧 seek 都会重算，过渡会让它追不上时钟；
+     · 收束是一次**单向的终态切换**：整句已经念完、这一句的覆盖层到达终点后再也
+       不会被 seek 改回去（除非 cue 切走、清场复位，那时 class 一起摘掉）。
+   时长只有一处真源：`--ctv-ved-settle` 由渲染器按 cue 算成"最后一句念完 →
+   下一次换句"那段留白的长度（html_renderer._ved_settle_seconds；上限 0.6s，
+   不足两帧就不写、等于 0s，此规则自动不生效）。
+   **这里只给过渡、不给 opacity 终值**：终值由运行时逐字写成内联（只有"已经念到
+   的字"才退，还没念到的字本来就压暗、不该跟着动）。CSS 里再写一份 opacity
+   没有坏处但有两份真源——改了一边忘了另一边，回落就会从"逐字笔锋"变成"整句
+   一起闪"。每个字的延迟由运行时按"时长 ÷ 字数"
+   给出，于是整段回落正好铺满那段留白：第一个字在留白开头动、最后一个字在
+   下一句开口前退回。缓动取 expo.out（起手快、收得稳），与页面其它笔触同手性。 */
+.verse-line.verse-ved-settled .verse-ved span{transition:opacity var(--ctv-ved-settle) cubic-bezier(.16,1,.3,1)}
+/* 对话段的说话人标签（只在轮次切换的首句行首出现，见 html_renderer._verse_html）。
+   它是字幕里的**元信息**，不是内容：字号比句子小一档、字重压到最重、颜色走
+   accent 的文本安全副本（--ctv-verse-who-color 由渲染器按段写在 .verse-clip 上，
+   这里不存第二份色值）。小字号 + 重字重是为了让它读作"抬头"而不是"正文的
+   前两个字"——只缩不重会跟正文糊在一起。
+   不写 vertical-align：inline 元素默认基线对齐，且它自身 line-height 继承的
+   数值（--ctv-verse-lh）× 更小的 font-size，算出来的行盒比 .verse-line 矮，
+   不会把行撑高、不推动滚动锚点。 */
+.verse-who{font-size:var(--ctv-verse-who-font);font-weight:800;color:var(--ctv-verse-who-color);margin-right:var(--ctv-verse-who-gap);white-space:nowrap}
+/* 竖屏钉底。不用 !important：本条 0,2,0 压过上面的 .verse（0,1,0）；
+   agenda 卡里的豁免由 .agenda-col .verse 用 importance 拿下（那两条选择器
+   打平，靠 importance 而非源序决胜，理由见该处注释）。 */
+[data-aspect="vertical"] .verse{position:absolute;left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left);bottom:var(--ctv-v-verse-bottom);width:auto;height:var(--ctv-verse-h);margin:0}
+
+/* ── Landscape（横屏 16:9，1920x1080）左栏文本 + 右侧媒体卡 ─────────────
+   仅在 #root[data-aspect="landscape"] 时命中。四周留白统一（--ctv-l-margin）、
+   栏间距走 gap，左栏（标题组 + 句子流）垂直居中紧凑成块，媒体卡居右垂直居中。 */
+[data-aspect="landscape"] .text-col{position:absolute;left:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);width:var(--ctv-l-text-w);display:flex;flex-direction:column;justify-content:center;gap:var(--ctv-l-text-gap)}
+/* 章节编号：标题上沿右对齐的 `03/12`。它是"读到哪儿"的读数，不是装饰——
+   位置贴着标题带的顶边（多段视频里所有被编号的页共用同一条水平线，与标题
+   各自折几行无关），走 mono 字体、字距放开，与 tagline/kicker 同一套字面。
+   前缀那一横（::before）是编号与画面的缝合线：编号不是浮在标题上的标签，
+   而是从标题左上角引出来的一条边。颜色取 --seg-accent-text（对比度已兜底），
+   不用装饰色 --seg-accent——这是要读的字。 */
+.chapter-num{position:absolute;top:var(--ctv-v-title-top);right:var(--ctv-v-pad-left);font-family:var(--ctv-font-mono);font-size:calc(var(--ctv-tagline-font) * 0.62);font-weight:700;letter-spacing:.12em;color:var(--seg-accent-text);font-variant-numeric:tabular-nums;white-space:nowrap;z-index:2}
+.chapter-num::before{content:"";position:absolute;right:calc(100% + .6em);top:50%;width:1.1em;height:1px;background:currentColor;opacity:.55}
+[data-aspect="landscape"] .chapter-num{top:calc(var(--ctv-l-margin) * 0.42);right:var(--ctv-l-margin)}
+/* 有 kicker 的页：编号抬到同一条抬头线，与左边那行小字**顶对齐、同盒高**。
+   不抬的话两个读数一高一低，页顶读成"斜的"；而且两条引线（编号的与 kicker 的）
+   各在一层高度上，会像两处互不相干的装饰。行高也一起改成 kicker 字号——那样
+   两盒等高，基线自动对上，不必再补一个 magic number 的偏移。
+   没有 kicker 的页不改：编号仍贴着标题顶线，那才是它的位置。 */
+[data-aspect="vertical"] .seg-card[data-kicker] .chapter-num{top:var(--ctv-kick-top);line-height:var(--ctv-kick-font)}
+[data-aspect="landscape"] .seg-title-wrap{position:static}
+/* 横屏标题**刻意不做行数钳制**（上面的 vertical 分支才有 -webkit-line-clamp）：
+   左栏是垂直居中的 flex 列，长标题按 text-wrap:balance 自由折行，长度守卫只
+   降字号（62→54→48）。因此 _template.py 的 landscape.title 里没有 maxLines，
+   竖屏那份才有——给横屏补一个没人读的行数键，只会骗下一个改版式的人。 */
+[data-aspect="landscape"] .seg-title{line-height:var(--ctv-l-title-lh);text-wrap:balance}
+/* 媒体卡四周留 96 白、垂直居中。内描边与进度条轨道走两画幅共用的无属性限定
+   规则（.seg-image::after / .seg-card::before），此处不再各写一份。 */
+[data-aspect="landscape"] .seg-image{right:var(--ctv-l-margin);top:var(--ctv-l-margin);bottom:var(--ctv-l-margin);left:auto;margin-top:auto;margin-bottom:auto;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);border-radius:var(--ctv-l-img-radius)}
+
+/* ── 整页画布（段落 layout: "canvas"，两画幅同一份）──────────────────────
+   配图就是这一页：槽位盒拉满全屏，槽位那两道装饰（1px 内描边 + 外发光）一并
+   撤掉——页面边缘就是画布边缘，再描一道等于给整块屏幕套相框。HTML 的标题层与
+   句子流层由渲染器**不生成**（不是藏起来），所以画布上没有任何覆盖物，也就不
+   需要遮罩层；文字对比度由画布自己负责（见 references/rendering.md）。
+   选择器用 [data-aspect] 抬到 0,3,0，与两条画幅各自的 .seg-image 定位规则
+   （0,2,0）打平源序无关地压过它们——同 agenda 豁免标题钳制的手法。 */
+[data-aspect] .seg-canvas .seg-image{top:0;right:0;bottom:0;left:0;margin:0;width:100%;height:100%;border-radius:0;box-shadow:none}
+[data-aspect] .seg-canvas .seg-image::after{display:none}
+/* 画布页的氛围光要比槽位那枚**大得多、软得多**：画布页不画满幅底板，主题渐变 + 网格 +
+   这团光就是它全部的景深来源。槽位那枚 58%×42% 的光斑放到整屏上只盖住中间一小块，
+   边缘仍是平的，而且它的椭圆边界在深色页底上看得出来——读作糊在主视觉后面的一块色斑而不是
+   打光。所以这里取近全屏的宽高、把中心略抬到主视觉一带、并把截止点推到 82% 让边界消失。
+   抬到 0,3,1 与两条画幅各自的 .seg-card::after（0,2,1）无关源序地压过它们。
+   网格不需要为画布降级：.grid 的 mask 本来就是中心透明、只在页缘显形，够不到图中间。 */
+[data-aspect] .seg-card.seg-canvas::after{background:radial-gradient(var(--ctv-camb-rx) var(--ctv-camb-ry) at var(--ctv-camb-cx) var(--ctv-camb-cy),color-mix(in srgb,var(--seg-accent) var(--ctv-camb-alpha),transparent),transparent var(--ctv-camb-edge))}
+/* 底轨（卡上的 ::before）抬到媒体之上：槽位版式里媒体永远够不到页底，被 img/video
+   的 z-index:1 压着也看不出差别；画布拉满全屏后，一张铺到页底的照片就会把它整个
+   盖掉。进度条本身的层高在基规则里一次定死（z-index:3）——字幕层是 z-index:2，
+   进度条压不过去就会被字幕的暗垫吃掉最后一条。 */
+[data-aspect] .seg-canvas::before{z-index:2}
+
+/* ── 页底字幕层（整页画布 + subtitle:true，两画幅同一份结构）──────────
+   整页画布把版面全交给作者，代价是屏幕上原本一个字都没有。这一层把"跟着念"补
+   回来：一句钉在页底、一屏一句、换句靠整列滚动（html_renderer._plate_caption_html
+   / _plate_scroll_lines）。它**不改构图**——不进 SVG、不生成标题层、不画 tagline；
+   作者只要保证页底那一条留白（竖屏 216px、横屏 177px）是空的，字就落得下。
+   不写 subtitle 就默认开（整页画布的字幕默认要有），写 subtitle:false 才关。
+   图槽盒与整页画布同一套几何（拉满整幅、撤掉圆角/外发光/内描边），所以上面那条
+   规则只管图；这里只补这一层文字。
+   字幕必须自己带暗垫（scrim）：满幅图可以是任何亮度，白字直接落在浅色照片上就
+   读不出来——这是画布版式交给作者、而这一层必须由模板兜住的一件事。渐变从透明
+   到 78% 页底色，边界看不见，只把字托起来。 */
+[data-aspect] .seg-canvas .plate-caption{position:absolute;left:var(--ctv-pl-cap-x);right:var(--ctv-pl-cap-x);bottom:var(--ctv-pl-cap-b);z-index:2}
+[data-aspect] .seg-canvas .plate-caption::before{content:"";position:absolute;left:calc(-1 * var(--ctv-pl-cap-x));right:calc(-1 * var(--ctv-pl-cap-x));bottom:calc(-1 * var(--ctv-pl-cap-b));height:var(--ctv-pl-cap-scrim);z-index:-1;pointer-events:none;background:linear-gradient(0deg,color-mix(in srgb,var(--ctv-bg-color) 78%,transparent),transparent)}
+/* 窗口：高度就是槽高（--ctv-pl-slot，与补间位移同源），多出来的句子被它裁掉。
+   位移的目标 `.plate-lines` 用绝对定位 + top:0 定住（CSS 不给它声明 transform，
+   GSAP 才能独占那一维——见 _css_guard）。 */
+[data-aspect] .seg-canvas .plate-clip{position:relative;height:var(--ctv-pl-slot);overflow:hidden}
+[data-aspect] .seg-canvas .plate-lines{position:absolute;left:0;right:0;top:0}
+/* 一格：等高，句在格内**贴底**——短句上方留白，字仍停在页底同一个高度上 */
+[data-aspect] .seg-canvas .plate-slot{position:relative;height:var(--ctv-pl-slot)}
+[data-aspect] .seg-canvas .plate-line{position:absolute;left:0;right:0;bottom:0;font-size:var(--ctv-pl-cap-fs);line-height:var(--ctv-pl-cap-lh);font-weight:var(--ctv-pl-cap-weight);color:var(--ctv-text-color);text-align:left;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--ctv-pl-cap-lines);overflow:hidden}
+[data-aspect] .seg-canvas .plate-line.plate-accent{color:var(--seg-accent-text)}
+
+/* ── 并置对比（段落 layout: "compare"，两画幅同一份内部结构）──────────────
+   与槽位版式只差图槽内部：外面那一层 .seg-compare **就是**原来的图槽盒子（几何
+   直接继承两条画幅各自的 .seg-image 定位规则，见下两行），里面两格平分。
+   为什么让外层沿用 .seg-image 的类名：边框、圆角、外发光、内描边 ::after、
+   Layout 门禁的盒子假设全都按"一个槽"成立——拆成两个独立槽就要给每一道门禁
+   各教一遍"这两个其实是一个"。所以外层仍带 .seg-image（槽的容器），
+   两格是 .seg-compare-pane（各占一半，各自 overflow:hidden 裁自己的图）。
+   竖屏两格上下排（1080 宽的画幅里左右各 490 太窄，纵向各 367 正好是 4:3 的
+   半高）；横屏两格左右排（1920 里各 848 × 888，够放两张 4:3）。 */
+[data-aspect] .seg-compare{top:var(--ctv-v-img-top);left:0;right:0;margin:0 auto;width:calc(var(--ctv-v-img-w) + var(--ctv-v-img-ms) * 2);height:var(--ctv-v-img-height);border-radius:var(--ctv-v-img-radius);display:grid;grid-template-columns:1fr;grid-template-rows:1fr 1fr;gap:var(--ctv-v-img-cmp-gap);overflow:visible}
+[data-aspect="landscape"] .seg-compare{top:var(--ctv-l-margin);right:var(--ctv-l-margin);left:auto;bottom:var(--ctv-l-margin);margin:auto 0;width:var(--ctv-l-img-w);height:var(--ctv-l-img-h);grid-template-columns:1fr 1fr;grid-template-rows:1fr;gap:var(--ctv-l-img-cmp-gap)}
+/* 两格各自的盒子：位置归 grid，装饰归自己（每格独立圆角 + 内描边，读作"两张卡"
+   而不是"一张卡被划了一刀"）。.seg-image 的绝对定位在这里必须撤掉——它属于
+   "槽的容器"那一档，格是 grid 的子项。
+   bare-media 撤外发光与内描边（SVG 不铺满幅底，见根规则那段），这一档照旧。 */
+[data-aspect] .seg-compare-pane{position:relative;inset:auto;margin:0;width:auto;height:auto;border-radius:calc(var(--ctv-v-img-radius) * 0.6);overflow:hidden}
+[data-aspect] .seg-compare-pane.bare-media{box-shadow:none}
+[data-aspect] .seg-compare-pane.bare-media::after{display:none}
+
+/* ── Agenda 卡（开屏/结尾，两画幅统一 DOM）───────────────────────────
+   全高文字列：题头在顶、行列表紧跟题头（间距走 --ctv-ag-list-mt，不再垂直居中
+   吃留白——省出的空间用来抬进行数上限）、句子流锚底。几何差异
+   （inset/字号）全部由 --ctv-ag-* 令牌承载，renderer 对两画幅输出同一套结构。
+   横屏的 --ctv-ag-t(80) 刻意小于左右 --ctv-ag-x(96)：列顶再抬 16px，把整块空白
+   让给行列表，行数吃满时行距仍有余量（7 行预算正是靠"标题锁 1 行 + rowPad 8 /
+   titleMarginTop 12"的紧行距换出来的，实测题头+7 行+定高句子流不挤）。代价是那一页
+   的卡顶不与内容段的 96 轴线对齐——内容段走 --ctv-l-margin，不受这里影响。 */
+.agenda-col{position:absolute;left:var(--ctv-ag-x);right:var(--ctv-ag-x);top:var(--ctv-ag-t);bottom:var(--ctv-ag-b);display:flex;flex-direction:column;color:var(--ctv-text-color)}
+.agenda-kicker{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-kicker);font-weight:600;letter-spacing:.14em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* kicker 行尾的字距垫（渲染器给每一行 kicker 写 data-kern：开屏逐字拆、结尾
+   整行补间 x，两种形态都在"字距展开"这一拍上）。行的起点态比落位态宽
+   (n−1)×span，容器是 overflow:hidden——垫满 n×span，行宽就恒不变，最后一个字
+   不会在补间前半段被裁掉（只在那一页、收拢到一半才"长出来"，看不出是 bug）。
+   宽度走 --ctv-ag-kern-pad（模板 opening.full.kicker 的 tracking−rest 乘
+   kickerSize），不在这里按画幅分叉。 */
+.agenda-kicker[data-kern]{padding-right:var(--ctv-ag-kern-pad)}
+.agenda-head .seg-title{margin-top:var(--ctv-ag-title-mt);line-height:var(--ctv-ag-title-lh);text-wrap:balance}
+/* agenda 正文列表既是生长块也是可牺牲块：行数没吃满 maxRows 预算时，
+   flex:1 把列里剩的高度收进来、交给 space-evenly 在行的上下与之间均摊
+   （行距和"题头→首行"的间距一起拉开，不再把空白全堆到句子流上方）；
+   行数超出时 min-height:0 解除 flex 默认不缩底、overflow:hidden 从尾部
+   裁行。行距下限由 .agenda-row 自身的 rowPad 提供，所以满额预算时
+   space-evenly 几乎无剩余可分，版式与改动前一致。
+   .agenda-tail（cta 尾行）与题头、句子流窗口都 flex-shrink:0，永远完整。 */
+.agenda{margin-top:var(--ctv-ag-list-mt);flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:space-evenly}
+.agenda-tail{flex-shrink:0}
+.agenda-row{display:flex;align-items:baseline;gap:var(--ctv-ag-gap);padding:var(--ctv-ag-row-pad) 4px;border-top:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-row:last-child{border-bottom:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+.agenda-tail .agenda-row:first-child{border-top:0}
+.ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
+/* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
+   （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。
+   行高 1.4 = Noto Sans CJK Bold 实测墨迹下限（hyperframes 判 clipped_text 的
+   阈值是墨迹 ≤ 行盒 − 2px，42px 时 1.32 仍超 3px、1.4 才装下）；微软雅黑在
+   此行高下同样有余量，且两画幅 maxRows 预算都放得下（横屏 40px×1.4 的 7 行
+   仍低于定高列预算）。1.25 时字形墨迹溢出被 overflow:hidden 裁掉。 */
+.ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.4;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
+/* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
+   与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让
+   长旁白按句数无限撑高、吃掉整列预算，把行列表挤出屏幕；定高窗口 +
+   运行时滚动锚点保证句子流占位恒定，挤压只落在可收缩的正文列表上。
+   margin-top:auto 由句子流吸收列内剩余空间（题头/列表贴顶成块，留白
+   全部沉到列表与句子流之间），挤压时 auto 归零、无副作用。
+   这里的 !important 是**全表唯一承重的一处**：对手是句子流样式表里那条
+   竖屏钉底规则，两条选择器同为 0,2,0 打平，靠源序决胜就等于把正确性押在
+   那份样式表的注入位置上；用 importance 决胜与注入点无关。
+   对面的规则因此不再需要 !important。 */
+.agenda-col .verse{position:static!important;left:auto!important;right:auto!important;bottom:auto!important;width:100%!important;max-width:var(--ctv-ag-verse-w);margin:auto 0 0!important;flex-shrink:0}
+/* agenda 标题整体豁免竖屏内容段标题钳制（-webkit-box / line-clamp /
+   overflow:hidden / max-height 四件套）：agenda 卡是全高 flex 列、没有固定
+   标题区，单行大标题不需要行数钳制，挂着 overflow:hidden 反而会把雅黑字体
+   度量盒（≈1.32em）上下各约 9px 的溢出裁掉。豁免后长标题整段折行而非静默
+   截断，垂直方向按 max(2px, 0.2em) 容差吸收字体度量溢出。
+   不用 !important：本条 0,3,0 已经压过被豁免的 [data-aspect] .seg-title（0,2,0）。 */
+[data-aspect="vertical"] .agenda-head .seg-title{display:block;overflow:visible;-webkit-line-clamp:none;max-height:none}
+
+/* ── 无图档（--slot-no-image）：槽位段没有图时的排版 ─────────────────
+   这一档只解决一件事：图槽撤掉之后，原本被它占住的那块不能留成空白。
+   几何（句子流窗口高、底距）已经由 renderer 按模板算好注入 --ctv-verse-h /
+   --ctv-v-verse-bottom，CSS 这边**不重算任何尺寸**——它只负责把
+   "没有 .seg-image 这个子元素"这个事实接住：
+
+   竖屏：.verse 原本钉底（bottom + 定高），窗口一变高它仍从**底部往上长**，
+   而句子流的内容是"从窗口顶部往下排、超出才滚动"的——只改高度会把字幕
+   留在窗口顶、下面空出一大片（实测过）。所以这一档把它改成 top/bottom
+   同时写（绝对定位下两条并存 = 拉伸），内容才落在内容区上沿。
+
+   为什么**不**垂直居中：居中是"把一句话摆在整页正中"的海报逻辑，而槽位版式
+   的读法是"标题带下面跟着念"。一个两句的段居中后会落在页面腰线、上下各留
+   一大片空，比原版的图槽留白更像排版事故（实测帧确认过）。这一档沿用正常
+   档的读法——句子从标题带下方起排，只是把原本属于图槽的那块也给了句子流。
+
+   横屏：图槽在右栏，左栏本来就跟内容走；撤掉图槽后右半边空着，这是这一档
+   的既定代价（作者选的是"没有图也要出片"，不是"假装有图"）。
+
+   选择器按 `[data-aspect] .seg-card.text-only` 写（0,2,0），与
+   `[data-aspect] .seg-image` 同级；本档根本不会生成 .seg-image，没有需要
+   压过的对手，因此不用 !important——全表唯一的 importance 仍留给 agenda
+   的句子流豁免（理由见该处注释）。 */
+[data-aspect="vertical"] .seg-card.text-only .verse{top:var(--ctv-v-img-top);bottom:var(--ctv-v-verse-bottom);height:auto;display:flex;flex-direction:column;justify-content:flex-start;left:var(--ctv-v-pad-left);right:var(--ctv-v-pad-left)}
+/* flex 子项默认按内容高排、且不横向撑满：.verse-clip 是那个可滚窗口，
+   得让它占满 box 才量得到正确的 roll 范围。 */
+[data-aspect="vertical"] .seg-card.text-only .verse>.verse-clip{width:100%}
+/* 无图档里句子流上方的暗垫不再需要（它原本是为了压住图槽底边的氛围光）。
+   保留反而会在一块空白上多出一道横向渐隐，读成"这里本该有张图"。 */
+[data-aspect="vertical"] .seg-card.text-only .verse::before{content:none}
+
+__CTV_ROOT_VARS__

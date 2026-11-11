@@ -1,0 +1,8 @@
+{
+  "name": "sketch",
+  "version": "1.0.0",
+  "kind": "style-filter",
+  "outputs": ["svg"],
+  "dependencies": [],
+  "provider": "content-to-video builtin (reference extension)"
+}

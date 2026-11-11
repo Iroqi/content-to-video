@@ -1,0 +1,8 @@
+{
+  "name": "karaoke-align",
+  "version": "1.0.0",
+  "kind": "steps-compiler",
+  "outputs": ["steps"],
+  "dependencies": [],
+  "provider": "WorkBuddy capability-gap PoC (offline forced-alignment timestamps)"
+}

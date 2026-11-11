@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature]
+  pull_request:
+
+jobs:
+  # 快档：单元测试 + 文档契约（7 秒级）。它是"改坏了哪条判据"的速查表，
+  # 但它**不能**证明这条链路能出片——所以它不是唯一的 job。
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # 采样而非全矩阵：下限（SKILL.md 声明的 3.9+）、一个中位、本机开发用的两档
+        python: ["3.9", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    env:
+      # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError
+      PYTHONIOENCODING: utf-8
+      # 这一档不渲染（矩阵里没有 Chrome）。端到端用例显式跳过——它在 e2e job
+      # 里必须跑，见下方 CTV_E2E_REQUIRED。
+      CTV_SKIP_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 可选依赖 Pillow 也装上：它让 _media_size 覆盖 AVIF/HEIC 等全部格式，
+      # 少了它那几条用例只会走降级分支、测不到主路径。"缺 Pillow 仍能用"另有用例钉住。
+      - name: Install optional deps
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+        timeout-minutes: 3
+
+      # 技能脚本只依赖标准库；Pillow 是可选的"多认几种图片格式"依赖
+      - name: Unit tests
+        working-directory: tests
+        run: python -m unittest discover -s . -v
+        timeout-minutes: 5
+
+      # 三道文档契约检查（cross-refs · numbers · examples）都是"文档与代码
+      # 是否还诚实"的同一件事，并成一步；本地维护者跑法相同：
+      #   check_docs   ——「指向哪」：章节交叉引用有没有悬空、文档有没有重新膨胀
+      #   check_numbers——「是几」：文档里的数字必须等于代码常量（决策阈值最小集）
+      #   check_examples——「能不能跑」：文档示例退化成"看起来对"的那天，读者要
+      #                    自己再撞一遍当初试错撞出来的坑
+      #   check_image_snippets——「抄得进去吗」：文档里的 images.json 片段必须过
+      #                    契约层；它曾在示例搬家后静默失败而无人发现
+      - name: Doc contracts
+        run: |
+          python tests/check_docs.py
+          python tests/check_numbers.py
+          python tests/check_examples.py
+          python tests/check_image_snippets.py
+
+      # 测试套件的增长也要有闸，理由与上面那份文档上限同构：用例从几十长到
+      # 一千五（四天里五个 `test_occam_review_<轮次>.py` 各收一轮 review 的账），
+      # 于是"改一个模块该读哪个测试文件"再也答不上来。它守三件事：总量、
+      # 单文件、以及不许再出现以轮次编号命名的文件。
+      - name: Test budget
+        run: python tests/check_test_budget.py
+
+      # 第四道文档契约旁边加的编码闸：子进程输出必须显式解码。
+      # 这道闸是**给 Windows 挡的**：Windows runner 按 locale（cp1252）解码
+      # 子进程输出，而 Node/ffmpeg 的输出是 UTF-8——一个中文字符就让
+      # `subprocess` 抛 UnicodeDecodeError，且 `r.stdout` 变 None，报错现场
+      # 被伪装成"JSON 解析失败"。Linux 全绿、Windows 全红，纯 ASCII 的用例
+      # 恰好躲过，看上去像"就那几条用例有问题"。详见脚本头部。
+      - name: Subprocess encoding
+        run: python tests/check_subprocess_encoding.py
+
+  # 出片档：真的渲染一支 mp4，并且真的看那支片子的像素。
+  #
+  # 这一档存在的唯一理由：其余用例全部用假进程替掉了 Node、Chrome 和 ffmpeg，
+  # 所以"HTML → 帧 → MP4"这一段在自动化里是盲区。盲区里的失败（GSAP 没加载、
+  # 末段没渲进去、首帧是纯背景）本地门禁一条都看不见。
+  #
+  # 判据只有三条，都在 tests/test_e2e_render.py 里：成片存在且体积合理、
+  # 时长等于时间轴（容差同交付闸门）、逐段取帧没有空页且整片确有变化。
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      # 缺依赖 = 失败，不是跳过。"悄悄跳过"正是过去全绿却从未出过片的原因。
+      CTV_E2E_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Pillow + ffmpeg
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      # 渲染要 headless Chrome。chrome-headless-shell 是 hyperframes 推荐的那条
+      # 抓帧路径（比完整 Chrome 的 screenshot 模式快一个数量级）。
+      - name: Install chrome-headless-shell
+        run: |
+          npx --yes @puppeteer/browsers install chrome-headless-shell@stable
+          echo "HYPERFRAMES_BROWSER_PATH=$(find "$PWD" -path '*chrome-headless-shell/*' -name chrome-headless-shell -type f | head -1)" >> "$GITHUB_ENV"
+        timeout-minutes: 10
+
+      - name: Render smoke test (build → render → look at frames)
+        working-directory: tests
+        run: python -m unittest test_e2e_render -v
+        timeout-minutes: 25
+
+      - name: Upload rendered sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-sample
+          path: |
+            **/out.mp4
+            **/frames/**
+          if-no-files-found: warn
+          retention-days: 7

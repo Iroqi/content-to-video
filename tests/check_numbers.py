@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""校验「代码里的数字」与「文档里写的数字」说的是同一件事。
+
+第一性原理：文档里的数字是**代码常量的复制品**。复制品必然漂移——有人改了常量、
+忘了改文档，于是两个人拿着不同的阈值做决策，而且谁也看不出来。靠人记得对齐是不
+可行的，所以把这件事变成机器保证。
+
+锁法是双向的，两头都堵：
+  1. 代码这边改了、文档没改→ `expect` 与代码里的值不符，报错；
+  2. 文档这边删了/改了这句说法、代码没动 → `doc` 正则在文档里匹配不到，报错。
+
+两种取代码值的方式：
+  ("const", 文件, 常量名)——顶层 `NAME = <字面量>` 赋值；
+  ("json",  文件, 点分路径)——文件里那段内嵌 JSON 模板（`_template.py` 的
+  `_TEMPLATE_JSON`）里逐层下钻，如 "layout.vertical.agenda.maxRows"。
+
+登记标准（最小必要契约）：只登记**作者的决策阈值**——改了它，作者的写法就得
+跟着变的那种数字（几何尺寸、告警阈值、字长上限、时间容差、版式钳制）。以下两
+类**不登记**，它们在更近的一层自文档化：
+  - 内部实现细节（canvas_kit 的刻度比例/基线修正、check_svg 的端点容差/圆点判据、
+    局部底板明度等）：由 `canvas_kit.py` / `check_svg.py` 的报错与注释当场带出，
+    改判据不影响作者写法，不构成"文档说了不算数"的风险。
+  - 同一数字的重复表述：只在**一处权威文档**上锁（字段规范 / 版式表 / 参数表），
+    症状表、正文复述不重复上锁——数字只有一个真源，重复锁只会放大文档改动的成本。
+"""
+import ast
+import json
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# id, 取值方式, 期望值, 必须命中的文档与正则, 为什么它重要
+FACTS = [
+    # ── 画布几何：作者按这个尺寸出图/画 SVG，差一截就被 cover 裁掉或判比例不符 ──
+    (
+        "canvas-slot-vertical",
+        ("json", "scripts/_template.py", "layout.vertical.image.width"), 980,
+        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|")],
+        "槽位宽度（竖屏）；作者按 4:3 出图，差一截就被 cover 裁掉",
+    ),
+    (
+        "canvas-slot-vertical-height",
+        ("json", "scripts/_template.py", "layout.vertical.image.height"), 735,
+        [("references/canvas.md", r"980[×x]735")],
+        "同上，高度",
+    ),
+    (
+        "canvas-slot-landscape",
+        ("json", "scripts/_template.py", "layout.landscape.image.width"), 1067,
+        [("references/canvas.md", r"\| 槽位（不写 `layout`，默认） \| 980×735 \| 1067×800 \|")],
+        "槽位宽度（横屏）；画布 4:3 的权威出处",
+    ),
+    (
+        "canvas-slot-landscape-height",
+        ("json", "scripts/_template.py", "layout.landscape.image.height"), 800,
+        [("references/canvas.md", r"1067[×x]800")],
+        "同上，高度",
+    ),
+    (
+        "canvas-full-vertical",
+        ("json", "scripts/_template.py", "canvas.vertical.width"), 1080,
+        [("references/canvas.md", r"1080[×x]1440"),
+         ("SKILL.md", r"1080[×x]1440")],
+        "整页画布竖屏原生宽度；照错尺寸画会被 check_svg 判比例不符",
+    ),
+    (
+        "canvas-full-vertical-height",
+        ("json", "scripts/_template.py", "canvas.vertical.height"), 1440,
+        [("references/canvas.md", r"1080[×x]1440")],
+        "同上，高度",
+    ),
+    (
+        "canvas-full-landscape",
+        ("json", "scripts/_template.py", "canvas.landscape.width"), 1920,
+        [("references/canvas.md", r"1920[×x]1080"),
+         ("SKILL.md", r"1920[×x]1080")],
+        "整页画布横屏宽度",
+    ),
+    (
+        "canvas-full-landscape-height",
+        ("json", "scripts/_template.py", "canvas.landscape.height"), 1080,
+        [("references/canvas.md", r"1920[×x]1080")],
+        "同上，高度",
+    ),
+    # ── 素材与可读性：作者据此判断素材够不够糊、字号能不能读 ──
+    (
+        "upscale-warn",
+        ("const", "scripts/_media_size.py", "UPSCALE_WARN"), 1.25,
+        [("references/imagery.md", r"1\.25\s*倍")],
+        "ImageGen 放大告警阈值：作者据此判断素材够不够糊",
+    ),
+    (
+        "upscale-severe",
+        ("const", "scripts/_media_size.py", "UPSCALE_SEVERE"), 2.0,
+        [("references/imagery.md", r"2\.0\s*倍")],
+        "严重档阈值；缺这一档说明少说了一级严重性",
+    ),
+    # ── 时间轴：作者据此判断字幕什么时候换、卡拉OK从哪儿开始数 ──
+    (
+        "speech-min-silence",
+        ("const", "scripts/_speech.py", "MIN_SILENCE"), 0.05,
+        [("references/tts_pipeline.md", r"50ms 是最短静音")],
+        "发声区间的最短静音（秒）：它决定 `onset` 会不会把句尾换气吃进来，"
+        "于是直接决定字幕换句的时刻——文档与代码分开时，作者按文档算出来的"
+        "时间轴会和产物对不上",
+    ),
+    (
+        "crop-warn",
+        ("const", "scripts/_media_size.py", "CROP_WARN"), 0.20,
+        [("references/imagery.md", r"裁掉超过\s*20%\s*画面")],
+        "cover 裁切告警阈值：作者据此判断构图丢多少、出图该选哪档",
+    ),
+    (
+        "min-font-px",
+        ("const", "scripts/_template.py", "MIN_READABLE_FONT_PX"), 26,
+        [("references/canvas.md", r"\*\*26px 是下限\*\*")],
+        "图内字号下限的权威定义句；作者照此定字号，改了它所有字号建议都要重算",
+    ),
+    (
+        "empty-band",
+        ("const", "scripts/check_svg.py", "MAX_EMPTY_BAND"), 0.25,
+        [("references/canvas.md", r"25%\s*页高")],
+        "整页画布横向空带阈值（0.25 → 文档写百分比）",
+    ),
+    (
+        "speaker-label-max",
+        ("const", "scripts/_source_schema.py", "SPEAKER_LABEL_MAX_CHARS"), 6,
+        [("references/writing.md", r"最多\s*6\s*字")],
+        "说话人标签上墙字长上限；超了契约层直接报错，作者必须知道这个数",
+    ),
+    # ── 字幕焦点衰减：作者改曲线就是改这三份抄写（模板/运行时兜底/文档） ──
+    (
+        "focus-future",
+        ("json", "scripts/_template.py", "subtitle.focus.future"), 0.62,
+        [("references/look.md", r"d=1→0\.62")],
+        "未念档的亮度；衰减曲线的锚点，composition.css 的兜底字面量与它必须一致",
+    ),
+    (
+        "focus-past",
+        ("json", "scripts/_template.py", "subtitle.focus.past"), 0.45,
+        [("references/look.md", r"d=-1→0\.45")],
+        "已念档的亮度；必须是 future×ratio（同一条曲线多走一档）",
+    ),
+    (
+        "focus-ratio",
+        ("json", "scripts/_template.py", "subtitle.focus.ratio"), 0.726,
+        [("references/look.md", r"ratio 0\.726")],
+        "每远一档的衰减比；0.62×0.726≈0.45 是「曲线本来就在那里」的证据",
+    ),
+    (
+        "focus-scale",
+        ("json", "scripts/_template.py", "subtitle.focus.scale"), 0.94,
+        [("references/look.md", r"subtitle\.focus\.scale.{0,12}默认\s*`0\.94`"),
+         ("references/look.md", r"0\.94³=0\.8306")],
+        "离焦的第二个维度（尺寸）每远一档的缩放比；封两档是守住 26px 可读下限，"
+        "改大改小都会动到「远处的行还读不读得出来」",
+    ),
+    (
+        "focus-blur",
+        ("json", "scripts/_template.py", "subtitle.focus.blur"), 0.02,
+        [("references/look.md", r"subtitle\.focus\.blur.{0,12}默认\s*`0\.02`")],
+        "离焦的第四个维度（景深）每远一档加多少模糊（em）；最深档 = 2 × 它，"
+        "改大改小都会动到「远处的行还认不认得出字」",
+    ),
+    (
+        "focus-blur-max",
+        ("const", "scripts/_template.py", "FOCUS_BLUR_MAX_EM"), 0.05,
+        [("references/look.md", r"FOCUS_BLUR_MAX_EM`（`0\.05em")],
+        "景深的糊掉线（em）：封顶档的模糊半径不得越过它，半径逼近笔画宽度"
+        "（≈0.07em）时相邻笔画并成一片",
+    ),
+    # ── 配音与时间：作者写稿时按这些数填 speed/gap、预期转场宽度 ──
+    (
+        "default-speed",
+        ("const", "scripts/_timeline.py", "DEFAULT_SPEED"), 1.5,
+        [("references/tts_pipeline.md", r"默认\s*`?1\.5")],
+        "全局语速默认；写稿时不看代码就按这个填 speed",
+    ),
+    (
+        "opening-closing-speed",
+        ("const", "scripts/_timeline.py", "OPENING_CLOSING_DEFAULT_SPEED"), 1.2,
+        [("references/tts_pipeline.md", r"开场/结尾用\s*`?1\.2")],
+        "开屏/结尾建议语速；与正文默认值不同，是一条独立建议",
+    ),
+    (
+        "default-gap",
+        ("const", "scripts/_timeline.py", "DEFAULT_GAP"), 0.4,
+        [("references/tts_pipeline.md", r"默认\s*`?0\.4")],
+        "句间静音默认；直接影响转场宽度",
+    ),
+    (
+        "timeline-tolerance",
+        ("const", "scripts/_timeline.py", "TIMELINE_TOLERANCE"), 0.25,
+        [("references/tts_pipeline.md", r"250ms")],
+        "末句不得超出 total_duration 的容差（0.25s → 文档写 250ms）",
+    ),
+    (
+        "duration-tolerance-floor",
+        ("const", "scripts/_timeline.py", "DURATION_TOLERANCE_FLOOR_S"), 1.0,
+        [("SKILL.md", r"max\(1s"),
+         ("references/rendering.md", r"max\(1s, 2%\)")],
+        "实测长度对账的绝对容差下限：短片按绝对量放行，不按 2% 放大到不足一秒",
+    ),
+    (
+        "duration-tolerance-ratio",
+        ("const", "scripts/_timeline.py", "DURATION_TOLERANCE_RATIO"), 0.02,
+        [("SKILL.md", r"2%\)"),
+         ("references/rendering.md", r"max\(1s, 2%\)")],
+        "同上，相对档：长片按比例放宽。音频回落闸与成片时长闸共用这一档",
+    ),
+    # ── 写稿预算：超过直接不上画面 / 直接被拒，作者写稿时就知道 ──
+    (
+        "agenda-max-rows",
+        ("json", "scripts/_template.py", "layout.vertical.agenda.maxRows"), 7,
+        [("references/writing.md", r"7\s*行")],
+        "开屏/结尾卡总行数硬上限；两画幅同值",
+    ),
+    (
+        "agenda-name-trim-portrait",
+        ("json", "scripts/_template.py", "layout.vertical.agenda.nameTrim"), 20,
+        [("references/writing.md", r"竖屏\s*20\s*字")],
+        "agenda 行名竖屏截断字数；超了直接不上画面且无省略号",
+    ),
+    (
+        "agenda-name-trim-landscape",
+        ("json", "scripts/_template.py", "layout.landscape.agenda.nameTrim"), 26,
+        [("references/writing.md", r"横屏\s*26\s*字")],
+        "同上，横屏",
+    ),
+    (
+        "long-sentence-warn",
+        ("const", "scripts/build_from_structured.py", "LONG_SENTENCE_CHARS"), 45,
+        [("references/writing.md", r"45\s*字")],
+        "逐句告警的字长阈值",
+    ),
+    (
+        "long-sentence-hint",
+        ("const", "scripts/build_from_structured.py", "LONG_SENTENCE_HINT_CHARS"), 32,
+        [("references/writing.md", r"32[–-]45\s*字")],
+        "段落级 hint 的字长下界",
+    ),
+    # ── 环境与版式：SKILL.md 环境表与画面结构手写的数 ──
+    (
+        "min-node-major",
+        ("const", "scripts/_render_backend.py", "MIN_NODE_MAJOR"), 22,
+        [("SKILL.md", r"Node\.js\s*22\+")],
+        "渲染前置条件：Hyperframes CLI 的 engines 写死 node>=22",
+    ),
+    (
+        "min-ffmpeg-render-major",
+        ("const", "scripts/_render_backend.py", "MIN_FFMPEG_RENDER_MAJOR"), 5,
+        [("README.md", r"FFmpeg.*5\.0|ffmpeg.*5\.0"),
+         ("SKILL.md", r"FFmpeg.*5\.0|ffmpeg.*5\.0")],
+        "渲染前置条件：hyperframes 0.8.185 音频封装用 setts bsf 的 duration 选项（ffmpeg>=5.0）",
+    ),
+    (
+        "tts-default-model",
+        ("const", "scripts/_tts.py", "DEFAULT_MODEL"), "mimo-v2.5-tts",
+        [("SKILL.md", r"mimo-v2\.5-tts")],
+        "TTS 默认模型；SKILL.md「环境」节写了默认值",
+    ),
+    (
+        "landscape-text-col-width",
+        ("json", "scripts/_template.py", "layout.landscape.textCol.width"), 613,
+        [("references/look.md", r"613px")],
+        "横屏左文字栏宽度；look.md「画面结构」手写同数",
+    ),
+    (
+        "entrance-ladder-step",
+        ("json", "scripts/_template.py", "animation.entranceLadder.step"), 0.14,
+        [("references/motion.md", r"`entranceLadder\.step`，默认 `0\.14`）")],
+        "入场阶梯的步距：题头组末拍之后画面再晚多久出发——作者调它等于调"
+        "题头组与画面的错峰幅度，文档必须跟着说清当前是哪一档",
+    ),
+    (
+        "entrance-budget-calm-factor",
+        ("json", "scripts/_template.py", "animation.entranceBudget.calmFactor"), 1.25,
+        [("references/motion.md", r"`calmFactor` 1\.25")],
+        "入场拍长的封顶倍率：段长超过 calmSeconds 之后每一拍最多慢到 "
+        "1.25 倍——作者据此判断长段是「铺开」还是「卡住」",
+    ),
+    (
+        "entrance-ladder-spread",
+        ("json", "scripts/_template.py", "animation.entranceLadder.spread"), 0.12,
+        [("references/motion.md", r"`spread` 0\.12")],
+        "疏密维度的总增量：步距在 fromSeconds→toSeconds 之间由 base 拉开 "
+        "这么多次秒——它与拍长因子无关，改它只改层间距",
+    ),
+    (
+        "entrance-ladder-max-step",
+        ("json", "scripts/_template.py", "animation.entranceLadder.maxStep"), 0.30,
+        [("references/motion.md", r"`maxStep` 0\.30")],
+        "步距上限：之上就是逐条出现（等于一页 PPT），与阶梯判据同一条线",
+    ),
+    (
+        "stagger-distribute-ease",
+        ("json", "scripts/_template.py", "animation.staggerDistribute.ease"),
+        "power2.out",
+        [("references/stagger.md", r'\{"amount": 0\.3, "ease": "power2\.out"\}')],
+        "错峰的分配曲线：一组元素揭示时先疏后密的形状由它决定，改窗口不改观感；"
+        "作者按文档抄这一枚时，文档必须还是这个值",
+    ),
+    (
+        "canvas-mix-min-segments",
+        ("const", "scripts/_segments.py", "CANVAS_MIN_SEGMENTS"), 2,
+        [("references/writing.md", r"至少 \*\*2 段\*\*用整页画布")],
+        "整页画布的段数下限：内容段够多时它至少要占几段——版式全在稿件侧决定，"
+        "没有这个下限，「不写 layout = 槽位」这条最稳的默认会把整页画布挤到边缘",
+    ),
+    (
+        "canvas-mix-trigger-segments",
+        ("const", "scripts/_segments.py", "CANVAS_TRIGGER_SEGMENTS"), 5,
+        [("references/writing.md", r"内容段 ≥ 5 段时")],
+        "配比提醒的触发段数：内容段到这个数才谈整页画布配比，此前由作者按内容判断",
+    ),
+    (
+        "subtitle-scroll-ease",
+        ("json", "scripts/_template.py", "subtitle.scroll.ease"), "sine.out",
+        [("references/look.md", r"`subtitle\.scroll\.ease`（默认 `sine\.out`）")],
+        "字幕滚动的缓动档：作者改了它，成片里滚动的手感就换了——"
+        "文档必须跟着说清当前是哪一档",
+    ),
+    (
+        "subtitle-relay-from",
+        ("json", "scripts/_template.py", "subtitle.relay.from"), 0.35,
+        [("references/look.md",
+          r"模板 `subtitle\.relay\.from`，默认 `0\.35`")],
+        "入场浮出的起点：只叠给当前行。作者调它等于调换句那一下的强弱，"
+        "文档必须跟着说清当前是哪一档",
+    ),
+    # ── 画布三档字号（竖屏/横屏各锁一组，label 档=刻度线长的分母）──
+    (
+        "canvas-tier-title-v",
+        ("json", "scripts/_template.py", "layout.vertical.title.fontSize"), 64,
+        [("references/canvas.md", r"64/40/32")],
+        "画布三档字号 title 档（竖屏）；画布页没有 HTML 标题层，图内文字是唯一的字",
+    ),
+    (
+        "canvas-tier-title-l",
+        ("json", "scripts/_template.py", "layout.landscape.title.fontSize"), 62,
+        [("references/canvas.md", r"62/33/28")],
+        "同上，横屏 title 档",
+    ),
+    # ── 手绘旋钮：作者按这个上限取 roughness，超过只是噪声 ──
+    (
+        "canvas-roughness-max",
+        ("const", "scripts/canvas_kit.py", "ROUGHNESS_MAX"), 10,
+        [("references/canvas.md", r"roughness` 0[–-]10")],
+        "canvas_kit 手绘抖动上限（与官方 rough.js 同款口径）：超过只是噪声，"
+        "作者按它取 roughness",
+    ),
+    # ── 受控弹簧：ζ 带、初速、衰减目标、过冲预算都直接决定"能不能过行程预算" ──
+    # 这五个不是实现细节：改 ζ 下界，峰值过冲就变；改初速系数，首帧位移就变；
+    # 改 ε，末帧落位就变。作者挑 `spring(ζ)` 时按这张表做决策，所以逐个上锁。
+    (
+        "spring-zeta-min",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_MIN"), 0.80,
+        [("references/spring.md", r"\| 阻尼比 ζ \| `0\.80`~`1\.00` \|")],
+        "ζ 下界：0.70 带承接初速时峰值过冲 9.2%，会撞破落位精确红线",
+    ),
+    (
+        "spring-zeta-max",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_MAX"), 1.00,
+        [("references/spring.md", r"\| 阻尼比 ζ \| `0\.80`~`1\.00` \|")],
+        "ζ 上界：临界阻尼，之上是过阻尼、段末还在爬",
+    ),
+    (
+        "spring-zeta-default",
+        ("const", "scripts/_ease.py", "SPRING_ZETA_DEFAULT"), 1.00,
+        [("references/spring.md", r"\| 缺省 ζ \| `1\.00` \|")],
+        "缺省零过冲，与仓库既有的「位移不过冲」红线一致",
+    ),
+    (
+        "spring-carry",
+        ("const", "scripts/_ease.py", "SPRING_CARRY"), 0.85,
+        [("references/spring.md", r"\| 承接初速系数 \| `0\.85` \|")],
+        "承接初速：0 是起步慢的标准阶跃（首帧只有 2~4px），进不了行程预算",
+    ),
+    (
+        "spring-settle-eps",
+        ("const", "scripts/_ease.py", "SPRING_SETTLE_EPS"), 0.004,
+        [("references/spring.md", r"\| 末帧衰减目标 \| `0\.004`（0\.4%） \|")],
+        "由它反解 ω；末帧还要除以 raw(1) 才精确落在 1，页界处才不回弹",
+    ),
+    (
+        "spring-overshoot-max",
+        ("const", "scripts/_ease.py", "SPRING_OVERSHOOT_MAX"), 0.05,
+        [("references/spring.md", r"\| 过冲预算 \| `0\.05`（5%） \|")],
+        "峰值越过落位的预算；back 是 9.98%、elastic 是 20.44%，都在门外",
+    ),
+    # ── hold 编排：观感旋钮 + 红线常量，作者/维护者按 `references/hold.md` 决策 ──
+    # 与弹簧同一条理由：这四个旋钮改了，静止多久、推多少、走哪条曲线就变；
+    # 后面几条红线不是观感值而是判据，改了它们，"这一帧在不在动"的口径就变。
+    (
+        "hold-still-seconds",
+        ("json", "scripts/_template.py", "animation.hold.stillSeconds"), 0.45,
+        [("references/hold.md", r"\| `stillSeconds` \| `0\.45s` \|")],
+        "落位后的静止窗口缺省；短于读不满一屏，长了变 dead beat",
+    ),
+    (
+        "hold-min-drift-seconds",
+        ("json", "scripts/_template.py", "animation.hold.minDriftSeconds"), 0.30,
+        [("references/hold.md", r"\| `minDriftSeconds` \| `0\.30s` \|")],
+        "慢推窗口地板，别切半条推镜；实际下限还会被判据反解抬高",
+    ),
+    (
+        "hold-scale",
+        ("json", "scripts/_template.py", "animation.hold.scale"), 0.02,
+        [("references/hold.md", r"\| `scale` \| `0\.02`（2%） \|")],
+        "慢推幅度缺省；写 0 明确关掉这一层",
+    ),
+    (
+        "hold-ease",
+        ("json", "scripts/_template.py", "animation.hold.ease"), "sine.inOut",
+        [("references/hold.md", r"\| `ease` \| `sine\.inOut` \|")],
+        "只收无过冲的 inOut 档：hold 没有落位可看，冲过去再收回来读成抖一下",
+    ),
+    (
+        "hold-still-min",
+        ("const", "scripts/_hold.py", "STILL_MIN_SECONDS"), 0.30,
+        [("references/hold.md", r"合法带 0\.30~0\.60s")],
+        "静止窗口下界（红线，不进模板，挡住 --set 把它调没）",
+    ),
+    (
+        "hold-still-max",
+        ("const", "scripts/_hold.py", "STILL_MAX_SECONDS"), 0.60,
+        [("references/hold.md", r"合法带 0\.30~0\.60s")],
+        "静止窗口上界（红线）：再长就重新变回 dead beat",
+    ),
+    (
+        "hold-drift-scale-max",
+        ("const", "scripts/_hold.py", "DRIFT_SCALE_MAX"), 0.02,
+        [("references/hold.md", r"幅度有上限（2%")],
+        "2% 是留在安全边距内的那一档；4%~8% 会把贴边配文推出槽位",
+    ),
+    (
+        "hold-min-drift-ratio",
+        ("const", "scripts/_hold.py", "MIN_DRIFT_RATIO"), 4,
+        [("references/hold.md", r"峰值 ≤ 入场的 1/4")],
+        "慢推峰值 ≤ 入场首帧 1/4；写成 10 会把默认 3.12s 保持段一起判死",
+    ),
+    (
+        "hold-entry-first-frame-px",
+        ("const", "scripts/_hold.py", "ENTRY_FIRST_FRAME_PX"), 4.0,
+        [("references/hold.md", r"≥ 4px 位移（980px 槽位")],
+        "入场首帧硬判据，慢推与静止窗口都按这一把尺折算",
+    ),
+    (
+        "hold-slot-width-px",
+        ("const", "scripts/_hold.py", "SLOT_WIDTH_PX"), 980.0,
+        [("references/hold.md", r"≥ 4px 位移（980px 槽位")],
+        "4px 折算成 scale 差的分母，改槽位宽度就得重算整张活动度表",
+    ),
+    # ── 惯性档：作者按这两个上限决定形变能不能用在图形主体上 ──
+    (
+        "momentum-stretch-max",
+        ("const", "scripts/_momentum.py", "STRETCH_MAX"), 0.30,
+        [("references/momentum.md", r"拉伸上限 0\.30")],
+        "峰值拉伸上限；超过它圆角与字形会读成变形字，作者得改用普通 to 补间",
+    ),
+    (
+        "momentum-anticipation-max",
+        ("const", "scripts/_momentum.py", "ANTICIPATION_MAX"), 0.35,
+        [("references/momentum.md", r"预备上限 0\.35")],
+        "预备幅度 / 行程的上限；超过 1/3 就不是蓄力，是一次看得见的反向运动",
+    ),
+    # ── 拖曳链：作者按这两个上限决定波会不会盖过主运动 ──
+    (
+        "drag-lag-max",
+        ("const", "scripts/_drag.py", "LAG_MAX"), 0.35,
+        [("references/drag.md", r"相位上限 0\.35")],
+        "链尾相位滞后上限；超过 1/3 时链首已落定、链尾还没起步，读成两个独立动作",
+    ),
+    (
+        "drag-overshoot-max",
+        ("const", "scripts/_drag.py", "OVERSHOOT_MAX"), 0.30,
+        [("references/drag.md", r"过冲上限 0\.30")],
+        "链首过冲幅度上限；与惯性档拉伸同量级，再大就抢了主运动的戏",
+    ),
+    # ── 定格档：作者按这三个上限决定一张画停几帧、抖多少 ──
+    (
+        "step-every-max",
+        ("const", "scripts/_step.py", "EVERY_MAX"), 4,
+        [("references/step.md", r"每步帧数 2～4")],
+        "每步帧数上限；>4 时 24fps 下只剩 6 张唯帧/秒，读成幻灯片而非有节奏的卡",
+    ),
+    (
+        "step-timing-max",
+        ("const", "scripts/_step.py", "TIMING_MAX"), 0.35,
+        [("references/step.md", r"时间抖动上限 0\.35")],
+        "时间抖动上限（渲染帧）；再大就破坏唯帧时刻严格递增，GSAP 会吞掉一张画",
+    ),
+    (
+        "step-min-unique-frames",
+        ("const", "scripts/_step.py", "MIN_UNIQUE_FRAMES"), 3,
+        [("references/step.md", r"至少 3 张唯帧")],
+        "最少唯帧数；2 张就是瞬跳，3 张才有起—中—落的定格节奏",
+    ),
+    # ── 有机档 organic：观感红线 + 判据常量，作者按 references/organic.md 决策 ──
+    (
+        "organic-amplitude-max",
+        ("const", "scripts/_organic.py", "AMPLITUDE_MAX"), 60.0,
+        [("references/organic.md", r"幅度上限 60")],
+        "有机起伏的幅度上限（SVG 用户单位）：再大主体会读成飘走了",
+    ),
+    (
+        "organic-cycles-max",
+        ("const", "scripts/_organic.py", "CYCLES_MAX"), 4.0,
+        [("references/organic.md", r"起伏密度 0\.5～4\.0")],
+        "起伏密度上限：短拍塞满周期会读成抖动，生成期自查会拦",
+    ),
+    (
+        "organic-decay",
+        ("const", "scripts/_organic.py", "DECAY"), 1.35,
+        [("references/organic.md", r"谱斜率 1\.35")],
+        "谐波谱斜率：4 层谐波严格递减，高频层不许盖过主频",
+    ),
+    (
+        "organic-harmonics",
+        ("const", "scripts/_organic.py", "HARMONICS"), 4,
+        [("references/organic.md", r"4 层谐波")],
+        "谐波层数：少于 3 层读不出不重复，多于 5 层在 24fps 下读成噪声",
+    ),
+    (
+        "organic-isotropy-min",
+        ("const", "scripts/_organic.py", "MIN_ISOTROPY"), 0.20,
+        [("references/organic.md", r"各向同性比 ≥ 0\.20")],
+        "双轴各向同性下限：两轴同相时轨迹退化成直线，垂距恒为 0",
+    ),
+    (
+        "organic-frame-step-max",
+        ("const", "scripts/_organic.py", "MAX_FRAME_STEP_RATIO"), 0.75,
+        [("references/organic.md", r"逐帧位移 ≤ 幅度的 0\.75")],
+        "逐帧位移 / 幅度上限：超线读成闪，不是呼吸",
+    ),
+    (
+        "organic-min-duration",
+        ("const", "scripts/_organic.py", "MIN_DURATION"), 0.12,
+        [("references/organic.md", r"最短拍长 0\.12s")],
+        "最短拍长：帧时刻锁两位，短于此会让两个采样撞进同一格、静默少一帧",
+    ),
+    # ── 残影档 trail：观感红线 + 判据常量，作者按 references/trail.md 决策 ──
+    # 与有机档同一条理由：这几个数改了，「一帧里看到几层、隔多远、多亮」就变；
+    # 作者挑 ghosts / lag / decay 时按这张表做决策，所以逐个上锁。
+    (
+        "trail-ghosts-max",
+        ("const", "scripts/_trail.py", "GHOSTS_MAX"), 6,
+        [("references/trail.md", r"影子层数 2～6")],
+        "影子层数上限：前沿工作流的 2~5 份副本再留一层余量；再多每帧 tl.set 条数膨胀且数不出层次",
+    ),
+    (
+        "trail-lag-max",
+        ("const", "scripts/_trail.py", "LAG_MAX"), 0.25,
+        [("references/trail.md", r"层间滞后上限 0\.25s")],
+        "层间滞后上限：24fps 下 6 帧，再大两层之间读成两个独立动作",
+    ),
+    (
+        "trail-decay-max",
+        ("const", "scripts/_trail.py", "DECAY_MAX"), 0.85,
+        [("references/trail.md", r"可见度衰减比上限 0\.85")],
+        "逐层可见度比上限：再接近 1 时各层亮度太像，一串影子读成一坨实心块",
+    ),
+    (
+        "trail-lag-span-max",
+        ("const", "scripts/_trail.py", "LAG_SPAN_MAX"), 0.75,
+        [("references/trail.md", r"总滞后 ≤ 拍长 75%")],
+        "总滞后 / 拍长上限：超线时最后一层影子到落定还几乎没动过，读成一串停在起点的复制品",
+    ),
+    (
+        "trail-min-duration",
+        ("const", "scripts/_organic.py", "MIN_DURATION"), 0.12,
+        [("references/trail.md", r"最短拍长 0\.12s")],
+        "最短拍长：与有机档共用同一常量（_trail 直接导入，不另写一份）；"
+        "帧时刻锁两位，短于此会让两个采样撞进同一格、静默少一帧",
+    ),
+    (
+        "trail-default-lag",
+        ("const", "scripts/_trail.py", "DEFAULT_LAG"), 0.08,
+        [("references/trail.md", r"`lag` \| `0\.08`")],
+        "缺省层间滞后：24fps 下约 2 帧，前沿 motion-trails 工作流的下沿；作者抄这一枚时文档必须还是这个值",
+    ),
+    # ── 波场档 wave：观感红线 + 判据常量，作者按 references/wave.md 决策 ──
+    # 与残影档同一条理由：这几个数改了，「一屏能有多少格子、最远那排衰减多少、
+    # 波扫得多快、单个格子动多久」就变；作者挑 cells / falloff / span / width
+    # 时按这张表做决策，所以逐个上锁。
+    (
+        "wave-cells-max",
+        ("const", "scripts/_wave.py", "CELLS_MAX"), 12,
+        [("references/wave.md", r"格子数 2～12")],
+        "参与格子数上限：再多每帧 tl.set 条数膨胀，观众也数不出波前",
+    ),
+    (
+        "wave-falloff-max",
+        ("const", "scripts/_wave.py", "FALLOFF_MAX"), 2.0,
+        [("references/wave.md", r"衰减强度上限 2\.0")],
+        "距离衰减强度上限：最远格子只剩 e^-2≈13.5%，再大远处等于没动",
+    ),
+    (
+        "wave-min-duration",
+        ("const", "scripts/_organic.py", "MIN_DURATION"), 0.12,
+        [("references/wave.md", r"最短拍长 0\.12s")],
+        "最短拍长：与有机档/残影档共用同一常量（_wave 直接导入，不另写一份）；"
+        "帧时刻锁两位，短于此会让两个采样撞进同一格、静默少一帧",
+    ),
+    (
+        "wave-default-span",
+        ("const", "scripts/_wave.py", "DEFAULT_SPAN"), 0.50,
+        [("references/wave.md", r"`span` \| `0\.50`")],
+        "缺省波前扫场时长：纯时间量，与画幅无关；作者抄这一枚时文档必须还是这个值",
+    ),
+    (
+        "wave-default-width",
+        ("const", "scripts/_wave.py", "DEFAULT_WIDTH"), 0.34,
+        [("references/wave.md", r"`width` \| `0\.34`")],
+        "缺省脉冲宽度：24fps 下约 8 帧，前沿 dot-matrix ripple 的单点起伏量级",
+    ),
+    (
+        "wave-default-falloff",
+        ("const", "scripts/_wave.py", "DEFAULT_FALLOFF"), 0.45,
+        [("references/wave.md", r"`falloff` \| `0\.45`")],
+        "缺省距离衰减：最远格子约保留 64% 幅度，波前仍读得出来但不抢近处",
+    ),
+    # ── 透镜档 lens：作者按 references/lens.md 判断「这一排元素够不够」与
+    # 「方向转不转得出来」，这两个数改了写法就得跟着变，逐个上锁 ──
+    (
+        "lens-cells-max",
+        ("const", "scripts/_lens.py", "LENS_CELLS_MAX"), 12,
+        [("references/lens.md", r"参与元素 2～12 个")],
+        "参与元素数上限：再多每帧 tl.set 条数膨胀，观众也数不出不同朝向",
+    ),
+    (
+        "lens-min-turn-deg",
+        ("const", "scripts/_lens.py", "LENS_MIN_TURN_DEG"), 6.0,
+        [("references/lens.md", r"方向转角 ≥ 6°")],
+        "方向随时间转的下限：低于它读成固定震中的径向推开，这一拍退化成 wave",
+    ),
+    # ── 群集档 swarm：作者按 references/swarm.md 判断「这一片元素够不够」与
+    # 「方向散不散得开」，这两个数改了写法就得跟着变，逐个上锁 ──
+    (
+        "swarm-cells-max",
+        ("const", "scripts/_swarm.py", "SWARM_CELLS_MAX"), 12,
+        [("references/swarm.md", r"参与元素 3～12 个")],
+        "参与元素数上限：再多每帧 tl.set 条数膨胀，观众也数不出各自走向",
+    ),
+    (
+        "swarm-min-spread-deg",
+        ("const", "scripts/_swarm.py", "SWARM_MIN_SPREAD_DEG"), 20.0,
+        [("references/swarm.md", r"方向发散 ≥ 20°")],
+        "位移方向发散下限：低于它读成整块平移，这一拍退化成 wave 或一条 to",
+    ),
+]
+
+
+def _read(rel):
+    with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+def _const(rel, name):
+    """取顶层赋值 `NAME = <字面量>` 的值。"""
+    tree = ast.parse(_read(rel))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise KeyError("%s 里找不到常量 %s" % (rel, name))
+
+
+def _json(rel, path):
+    """在文件内嵌的 JSON 模板里按点分路径下钻，如 layout.vertical.agenda.maxRows。"""
+    tree = ast.parse(_read(rel))
+    blob = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            try:
+                candidate = json.loads(node.value.value)
+            except ValueError:
+                continue
+            if isinstance(candidate, dict):
+                blob = candidate
+                break
+    if blob is None:
+        raise KeyError("%s 里找不到内嵌 JSON 模板" % rel)
+    cur = blob
+    for key in path.split("."):
+        if not isinstance(cur, dict) or key not in cur:
+            raise KeyError("%s 的 JSON 模板里找不到路径 %s 的一环 %s" % (rel, path, key))
+        cur = cur[key]
+    return cur
+
+
+def read_code_value(spec):
+    kind = spec[0]
+    if kind == "const":
+        return _const(spec[1], spec[2])
+    if kind == "json":
+        return _json(spec[1], spec[2])
+    raise ValueError("未知的取值方式 %r" % (kind,))
+
+
+def main():
+    problems = []
+    for fid, spec, expect, docs, why in FACTS:
+        # 第一头锁：代码实际值必须等于登记的期望值
+        try:
+            actual = read_code_value(spec)
+        except (KeyError, ValueError, SyntaxError) as exc:
+            problems.append("[code-missing] %s：读不到代码里的值（%s）" % (fid, exc))
+            continue
+        if actual != expect:
+            problems.append(
+                "[code-drift] %s：%s = %r，但文档按 %r 写着。改常量就要同步改文档"
+                % (fid, " ".join(spec[1:]), actual, expect)
+            )
+            continue
+        # 第二头锁：文档必须还留着这句说法
+        for rel, pattern in docs:
+            try:
+                text = _read(rel)
+            except OSError as exc:
+                problems.append("[doc-missing] %s：读不到 %s（%s）" % (fid, rel, exc))
+                continue
+            if not re.search(pattern, text):
+                problems.append(
+                    "[doc-drift] %s：%s 里找不到 /%s/（%s）"
+                    % (fid, rel, pattern, why)
+                )
+
+    for line in problems:
+        print(line)
+    if problems:
+        print("\n数字契约漂移 %d 处。改代码就改文档，别只改一边。" % len(problems))
+        return 1
+    print("数字契约一致：%d 条决策阈值全部等于登记值，文档表述均在场。" % len(FACTS))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

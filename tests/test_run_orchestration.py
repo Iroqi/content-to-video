@@ -1,0 +1,1037 @@
+"""run.py 编排契约：进程内直调语义、闸门与制作报告。
+
+pipeline / gen_hyperframes / render_wait 在这里都被换成假入口——本文件测
+的是编排层本身：flag 透传、--until 边界、缺图/降级闸门、退出码传播、
+production_report 落盘。真实 TTS 与渲染不在测试范围（那是各自模块的题）。
+"""
+import contextlib
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path（本文件随后 import 的脚本模块需要它）
+import _degraded as D
+import pipeline
+import run as R
+from _script_utils import write_json_atomic
+
+
+class Harness:
+    """一个临时项目目录 + 三个假步骤。步骤只记录 argv / 落最小产物。"""
+
+    def __init__(self):
+        self.tmp = tempfile.mkdtemp(prefix="ctv-run-")
+        self.out = os.path.join(self.tmp, "audio_out")
+        self.project = os.path.join(self.tmp, "hf-project")
+        self.source = os.path.join(self.tmp, "segments_source.json")
+        write_json_atomic(self.source, H.sample_source())
+        self.manifest = H.make_manifest()
+        self.tts_argv = None
+        self.gen_argv = None
+        self.render_calls = []
+        self.probe_calls = []
+        self.last_out = self.last_err = ""
+        # 假成片时长（秒）；None = 量不到（ffmpeg 不可用那条降级路径）。
+        # 渲染之后 run.py 会拿它跟 manifest 的 total_duration 对账，测试靠
+        # 这个注入点覆盖那道闸——不注入会去调真 ffmpeg（CI 上没有）。
+        self.video_duration = None
+        # 官方门禁（每次定稿渲染前都会跑）：默认"干净通过"，个别用例注入 findings。
+        self.gate_findings = []
+        self.gate_calls = 0
+        # ffmpeg 环境闸的返回值：编排测试不关心宿主机 ffmpeg 版本（≥5 才放行），
+        # invoke 里按这个属性打桩，接线用例改它验证"拦/不拦"两条分支。
+        self.ffmpeg_gate_result = ("ok", "")
+
+    def fake_check(self, project, command=None):
+        self.gate_calls += 1
+        return list(self.gate_findings), 1.0
+
+    def cleanup(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fake_pipeline(self, argv):
+        self.tts_argv = list(argv)
+        if "--dry-run" in argv:  # 真 pipeline 的 dry-run 什么都不写
+            return
+        os.makedirs(self.out, exist_ok=True)
+        write_json_atomic(os.path.join(self.out, "timing_manifest.json"),
+                          self.manifest)
+
+    def fake_gen(self, argv):
+        self.gen_argv = list(argv)
+        html = argv[argv.index("-o") + 1]
+        os.makedirs(os.path.dirname(html), exist_ok=True)
+        with open(html, "w", encoding="utf-8") as f:
+            f.write("<html>fake</html>")
+
+    def fake_render(self, cmd, out_path, cwd=None, max_wait=None):
+        self.render_calls.append({"cmd": cmd, "out": out_path,
+                                  "cwd": cwd, "max_wait": max_wait})
+        with open(out_path, "wb") as f:
+            f.write(b"x" * 100)
+
+    def fake_probe(self, out_path, ffmpeg_path=None):
+        self.probe_calls.append(out_path)
+        return self.video_duration
+
+    def make_images_complete(self):
+        """按 manifest 需要配图的段 id 落齐映射与文件。"""
+        from _segments import sids_needing_image
+        sids = sids_needing_image(self.manifest)
+        os.makedirs(os.path.join(self.project, "images"), exist_ok=True)
+        mapping = {}
+        for sid in sids:
+            with open(os.path.join(self.project, "images", f"{sid}.svg"),
+                      "w", encoding="utf-8") as f:
+                f.write("<svg/>")
+            mapping[sid] = {"src": f"images/{sid}.svg"}
+        os.makedirs(self.project, exist_ok=True)
+        write_json_atomic(os.path.join(self.project, "images.json"), mapping)
+
+    def put_beats(self, sid, beats, images_extra=None):
+        """给某个内容段挂台词板，并把配图配额补齐（否则缺图闸会先拦）。
+
+        台词板的核对发生在 TTS 之后、生成 HTML 之前，所以测试要能像作者那样
+        在 manifest 与 images.json 两处分别落东西。
+        """
+        for seg in self.manifest["segments"]:
+            if seg["id"] == sid:
+                seg["beats"] = beats
+                break
+        else:
+            raise AssertionError(f"manifest 里没有段落 {sid}")
+        # 先按 manifest 需要配图的段落齐（样例稿里有整页画布段，缺图连预览
+        # HTML 都不给生成），再把调用方给的那一段覆盖上去。
+        self.make_images_complete()
+        if images_extra is not None:
+            write_json_atomic(os.path.join(self.project, "images.json"),
+                              images_extra)
+
+    def add_motion(self, sid, steps):
+        """给某个段在 images.json 里加一条补间声明（配图映射此时已齐）。"""
+        path = os.path.join(self.project, "images.json")
+        with open(path, encoding="utf-8") as f:
+            mapping = json.load(f)
+        mapping[sid]["animate"] = {"steps": steps}
+        write_json_atomic(path, mapping)
+
+    def drop_manifest(self):
+        """把假 pipeline 写下的 manifest 删掉——复现"还没走到 TTS 那一步"。"""
+        path = os.path.join(self.out, "timing_manifest.json")
+        if os.path.isfile(path):
+            os.remove(path)
+
+    def invoke(self, extra_argv, pipeline_main=None):
+        """跑一次 run.main()，返回 (stdout, stderr)；SystemExit 原样上抛。
+
+        抛出路径上 last_out/last_err 也已写好（finally 在 redirect 生效期间
+        取值），失败传播类测试才能断言到报错文本。
+        """
+        argv = ["run.py", "--source", self.source, "-o", self.out,
+                "--project", self.project] + list(extra_argv)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.ExitStack() as stack:
+            for p in (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(R.pipeline, "main",
+                                  pipeline_main or self.fake_pipeline),
+                mock.patch.object(R.gen_hyperframes, "main", self.fake_gen),
+                mock.patch.object(R, "render_wait", self.fake_render),
+                mock.patch.object(R, "hyperframes_command", lambda: ["fakehf"]),
+                mock.patch.object(R, "run_check", self.fake_check),
+                mock.patch.object(R, "probe_video_duration", self.fake_probe),
+                # 环境闸（Node/ffmpeg 版本）不归编排测试管：node 闸在多数机器上
+                # 自然通过所以没 patch，ffmpeg 闸却随机器版本（≥5 才放行）摇摆
+                # ——统一中和，编排逻辑与宿主机 ffmpeg 解耦。接线本身有专门用例。
+                mock.patch.object(R, "ffmpeg_render_gate",
+                                  lambda: self.ffmpeg_gate_result),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                stack.enter_context(p)
+            try:
+                R.main()
+            finally:
+                self.last_out, self.last_err = out.getvalue(), err.getvalue()
+        return self.last_out, self.last_err
+
+    def report(self):
+        with open(os.path.join(self.out, "production_report.json"),
+                  encoding="utf-8") as f:
+            return json.load(f)
+
+
+class FlagPassthrough(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_defaults_always_sent(self):
+        self.h.invoke(["--until", "tts"])
+        self.assertIn("--resume", self.h.tts_argv)
+        self.assertIn("--speed", self.h.tts_argv)
+        self.assertIn("--voice-id", self.h.tts_argv)
+        self.assertIn("--on-fail", self.h.tts_argv)
+        # 显式给出才透传：不给由 pipeline 用自己的默认值
+        for opt in ("--gap", "--voice-style"):
+            self.assertNotIn(opt, self.h.tts_argv)
+
+    def test_optional_flags_forward(self):
+        self.h.invoke(["--until", "tts", "--gap", "0.7", "--voice-style", "轻快"])
+        for pair in (("--gap", "0.7"), ("--voice-style", "轻快")):
+            self.assertIn(pair[0], self.h.tts_argv)
+            self.assertEqual(self.h.tts_argv[self.h.tts_argv.index(pair[0]) + 1],
+                             pair[1])
+
+    def test_gap_help_default_matches_the_single_source(self):
+        """--gap 的 help 不许自己抄一份默认值：DEFAULT_GAP 一改，help 就漂。
+
+        证伪：原先这句写死"默认 0.4"，而真源是 _timeline.DEFAULT_GAP——隔壁 --speed
+        用 f-string 引 DEFAULT_SPEED，这一条却是抄下来的字面量，改默认值时只有
+        --speed 跟着变。
+        """
+        from _timeline import DEFAULT_GAP
+        # --gap 归在"调参"一类，默认 help 里不列（见 _HIDDEN_OPTIONS），
+        # 所以这条契约要在 --help-all 那一份上验。
+        self.assertIn("默认 {:g}".format(DEFAULT_GAP),
+                      R._build_parser(show_all=True).format_help())
+
+    def test_short_help_stays_one_screen(self):
+        """默认 help 必须一屏读完：常用参数 ≤ 15 条、总行数 ≤ 45。
+
+        证伪：加 --help-all 之前，`run.py --help` 有 72 行，usage 本身占 7 行，
+        读的人要先扫完 25 个旗标才知道从哪开始——而其中 14 个是调参与逃生口。
+        """
+        text = R._build_parser().format_help()
+        self.assertLessEqual(len(text.splitlines()), 45)
+        self.assertLessEqual(text.count("\n  --") + text.count("\n  -h"), 15)
+        self.assertIn("--help-all", text)          # 指针要在，否则等于藏起来
+
+    def test_escape_hatches_hidden_but_still_parse(self):
+        """藏起来的旗标一条都不能少：还要能解析，只是不列在默认 help 里。
+
+        隐藏的判据是"第一次用要不要知道"，不是"重不重要"——把它们从 parser
+        里删掉会让既有用法静默失效，那是另一回事。
+        """
+        short = R._build_parser().format_help()
+        full = R._build_parser(show_all=True).format_help()
+        for opt in sorted(R._HIDDEN_OPTIONS):
+            self.assertNotIn(opt, short, opt)
+            self.assertIn(opt, full, opt)
+        args = R._build_parser().parse_args(
+            ["--source", "s.json", "--workers", "2", "--allow-degraded",
+             "--gap", "0.7"])
+        self.assertEqual(args.workers, 2)
+        self.assertTrue(args.allow_degraded)
+        self.assertEqual(args.gap, 0.7)
+
+    def test_fps_default_has_one_source_across_three_entrypoints(self):
+        """默认帧率只有一份：run --fps / gen --fps / generate_html(fps=)。
+
+        证伪：三处曾各写一份字面量 24，改 _timeline.DEFAULT_FPS 只改到一处——
+        HTML 的 data-fps、渲染命令的 --fps 与库调用方的默认互相漂移，而三者
+        都不报错（fps 漂 1 帧看不出来，成片只是整体快/慢一点）。
+        """
+        import inspect
+        from _timeline import DEFAULT_FPS
+        from html_renderer import generate_html
+        self.assertEqual(DEFAULT_FPS, 24)
+        self.assertEqual(
+            R._build_parser().parse_args(["--source", "s.json"]).fps, DEFAULT_FPS)
+        self.assertEqual(inspect.signature(generate_html).parameters["fps"].default,
+                         DEFAULT_FPS)
+        # gen 的 parser 建在 main() 里（没有独立的 _build_parser 可调），按源码钉住：
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "scripts", "gen_hyperframes.py"),
+                  encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"--fps", type=int, default=DEFAULT_FPS', src)
+        self.assertNotIn('"--fps", type=int, default=24', src)
+
+    def test_nan_speed_rejected(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "tts", "--speed", "nan"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertFalse(os.path.isdir(self.h.out), "fail-fast 早于任何产物目录")
+
+    def test_dry_run_nothing_written(self):
+        self.h.invoke(["--dry-run"])
+        self.assertIn("--dry-run", self.h.tts_argv)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.h.out, "production_report.json")))
+
+    def test_until_tts_writes_report(self):
+        self.h.invoke(["--until", "tts"])
+        rep = self.h.report()
+        self.assertEqual([s["name"] for s in rep["steps"]], ["TTS"])
+        self.assertTrue(rep["skipped"])
+        self.assertEqual(rep["params"]["canvas"], "1080x1440")
+
+
+class Gates(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_missing_images_block_render_exit2(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke([])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIsNone(self.h.gen_argv, "缺图必须拦在生成 HTML 之前")
+
+    def test_until_images_exits_zero_before_gate(self):
+        out, _ = self.h.invoke(["--until", "images"])
+        self.assertIn("跳过的步骤", out)
+        self.assertIsNone(self.h.gen_argv)
+
+    def _drop_image_key(self, sid):
+        """把某个段的配图映射从 images.json 里去掉（保留其余段）。"""
+        self.h.make_images_complete()
+        path = os.path.join(self.h.project, "images.json")
+        with open(path, encoding="utf-8") as f:
+            mapping = json.load(f)
+        mapping.pop(sid, None)
+        write_json_atomic(path, mapping)
+
+    def test_until_html_warns_but_generates(self):
+        # 只缺槽位段的图：那一页少了配图但仍能出 HTML 看版式，缺图降级成警告
+        self._drop_image_key("seg-a")
+        _, err = self.h.invoke(["--until", "html"])
+        self.assertIn("还没有定稿配图", err)
+        self.assertIn("继续生成 HTML", err)
+        self.assertTrue(os.path.isfile(os.path.join(self.h.project, "index.html")))
+
+    def test_until_html_canvas_missing_blocks(self):
+        # 整页画布缺图：那一页没有标题层也没有句子流层，配图是唯一画面，
+        # gen_hyperframes 在生成期必然拦下——run.py 不该先承诺"继续生成
+        # HTML 供预览"再让下一步失败，所以这里同样 exit 2 并点名画布段。
+        self._drop_image_key("seg-b")  # seg-b 是 layout:"canvas"
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("整页画布", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv, "画布段缺图不能进 HTML 步骤")
+
+    def test_until_html_canvas_missing_with_placeholder_previews(self):
+        """显式预览档：整页画布缺图时放行 HTML，并把同一个决定传给生成器。
+
+        默认那一档（上一条）照旧拦——这里锁的是"拦得住"与"想先看结构时有路
+        可走"两件事同时成立，而不是用放宽换掉拦截。
+        """
+        self._drop_image_key("seg-b")  # seg-b 是 layout:"canvas"
+        _, err = self.h.invoke(["--until", "html", "--placeholder-missing"])
+        self.assertTrue(os.path.isfile(os.path.join(self.h.project, "index.html")))
+        self.assertIn("占位 SVG", err)
+        self.assertIn("--placeholder-missing", self.h.gen_argv)
+
+    def test_placeholder_is_rejected_outside_the_preview_tier(self):
+        """带占位旗标跑渲染 = 要把占位图烧进成片，入口直接报错（argparse exit 2）。"""
+        self._drop_image_key("seg-b")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--placeholder-missing"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("只配 --until html", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv)
+
+    def test_placeholder_flag_not_forwarded_when_not_previewing(self):
+        """没给旗标时生成器不该收到它：两处各判一次就会分家。"""
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"])
+        self.assertNotIn("--placeholder-missing", self.h.gen_argv)
+
+    def test_visual_knobs_reach_the_generator(self):
+        """--set 原样转给生成器：取值校验只有 gen 那份 parser 一份。"""
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html",
+                       "--set", "animation.animate.duration=0.9",
+                       "--set", "layout.vertical.title.fontSize=72"])
+        argv = self.h.gen_argv
+        i = argv.index("--set")
+        self.assertEqual(argv[i + 1], "animation.animate.duration=0.9")
+        self.assertEqual(argv.count("--set"), 2, "可重复的旗标要全部转过去")
+
+    def test_visual_knobs_absent_unless_asked(self):
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"])
+        self.assertNotIn("--set", self.h.gen_argv)
+
+    def test_allow_ease_is_preview_only(self):
+        """core 之外的 ease 渲染时会静默退回缺省——带它渲染等于交一支不是你要的片。"""
+        self.h.make_images_complete()
+        _, _ = self.h.invoke(["--until", "html", "--allow-ease"])
+        self.assertIn("--allow-ease", self.h.gen_argv)
+
+        self.h.gen_argv = None
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--allow-ease"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("只配 --until html", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv)
+
+    def test_allow_ease_is_recorded_as_a_debug_tier(self):
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html", "--allow-ease"])
+        self.assertIn("ease 钉固目录（--allow-ease，预览档）",
+                      self.h.report()["skipped"])
+
+    def test_missing_files_block_even_for_until_html(self):
+        # images.json 有键但文件不在：映射指向坏路径，不是"图没画完"
+        os.makedirs(self.h.project, exist_ok=True)
+        write_json_atomic(os.path.join(self.h.project, "images.json"),
+                          {"seg-a": {"src": "images/nope.svg"}})
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIsNone(self.h.gen_argv)
+
+    def test_symlink_out_of_project_blocks_at_gate(self):
+        """软链接指向项目外：run.py 的缺图闸门必须与 gen 同一口径。
+
+        证伪：run.py 原先只按 os.path.isfile 判（它跟随软链接），于是把这种条目
+        算成"图在"，覆盖率报告记 matched、闸门放行；下一步 gen_hyperframes 用
+        realpath 判"越出 HTML 项目目录"再 fail-fast。同一份文件两道门两个答案，
+        作者先看到一份乐观的覆盖率，再撞上另一道门的报错。
+        """
+        self.h.make_images_complete()
+        outside = os.path.join(self.h.tmp, "outside.svg")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("<svg/>")
+        link = os.path.join(self.h.project, "images", "seg-a.svg")
+        os.remove(link)
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"本机不能建软链接（Windows 未开开发者模式？）: {exc}")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("越出", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv)
+
+    # ── 草稿档（--draft）：迭代逃生口的总开关，交付路径照旧全严 ────
+
+    def test_draft_allows_missing_files_at_html(self):
+        """草稿档："src 还没落盘"不卡死 --until html——先看版式，坏位置留空/占位。
+
+        此前 missing_files 连 --until html 都 exit 2 且无逃生口：草稿期"先搭
+        结构、图稍后画"的常态被整条卡死。--draft 放行并把同一个决定传给生成器
+        （gen 的 --draft 会给画布段换占位、槽位段留空位）。
+        """
+        os.makedirs(self.h.project, exist_ok=True)
+        write_json_atomic(os.path.join(self.h.project, "images.json"),
+                          {"seg-a": {"src": "images/nope.svg"}})
+        _, err = self.h.invoke(["--until", "html", "--draft"])
+        self.assertTrue(os.path.isfile(os.path.join(self.h.project, "index.html")))
+        self.assertIn("--draft", self.h.gen_argv)
+        self.assertIn("缺 src", err)
+        self.assertTrue(any("草稿档" in s for s in self.h.report()["skipped"]))
+
+    def test_draft_allows_missing_files_at_render(self):
+        """草稿档粗剪：缺 src 也照常出片（渲染 best-effort 隐含），报告留痕。"""
+        os.makedirs(self.h.project, exist_ok=True)
+        write_json_atomic(os.path.join(self.h.project, "images.json"),
+                          {"seg-a": {"src": "images/nope.svg"}})
+        self.h.invoke(["--draft"])
+        self.assertEqual(len(self.h.render_calls), 1)
+        self.assertTrue(self.h.report().get("draft"))
+
+    def test_draft_opens_placeholder_and_ease_at_render(self):
+        """--draft 是占位/ease 的总开关：带它跑渲染不再被入口 parser.error 拦。
+
+        定稿路径（不带 --draft）照旧拦——上两条 test_placeholder_is_rejected_
+        outside_the_preview_tier / test_allow_ease_is_preview_only 锁的就是
+        "拦得住"；这里锁的是"想先看一版动起来时有路可走"。
+        """
+        self._drop_image_key("seg-b")  # seg-b 是 layout:"canvas"
+        self.h.invoke(["--draft"])
+        self.assertEqual(len(self.h.render_calls), 1, "草稿档照常出粗剪")
+        self.assertIn("--draft", self.h.gen_argv)
+        self.assertIn("占位", self.h.last_err)
+
+    def test_draft_reports_marker(self):
+        self.h.make_images_complete()
+        _, _ = self.h.invoke(["--until", "html", "--draft"])
+        rep = self.h.report()
+        self.assertTrue(rep.get("draft"))
+        self.assertTrue(any("草稿档（--draft" in s for s in rep["skipped"]))
+
+    def _degrade(self):
+        self.h.make_images_complete()
+        self.h.manifest["status"] = "degraded"
+        self.h.manifest["degraded"] = {D.LOST_SENTENCE_COUNT: 1}
+
+    def test_degraded_blocks_render_exit3(self):
+        self._degrade()
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke([])
+        self.assertEqual(cm.exception.code, 3)
+        # 阻断信息必须附上可执行的补录路径——降级句带指纹缓存，会被
+        # --resume 一直复用，没有这条提示，隔天重跑仍会卡在同一处静音。
+        self.assertIn("补录", self.h.last_err)
+        self.assertIn(os.path.join(self.h.out, "sentences"), self.h.last_err)
+
+    def test_degraded_allowed_until_html_marks_report(self):
+        self._degrade()
+        self.h.invoke(["--until", "html", "--allow-degraded"])
+        rep = self.h.report()
+        self.assertEqual(rep["degraded"][0]["type"], "tts_lost_sentences")
+
+
+class FailurePropagation(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_step_exit_code_propagates_and_report_records_failure(self):
+        def boom(argv):
+            raise SystemExit(7)
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "tts"], pipeline_main=boom)
+        self.assertEqual(cm.exception.code, 7)
+        rep = self.h.report()
+        self.assertFalse(rep["steps"][0]["ok"])
+
+    def test_unexpected_exception_from_a_step_still_lands_a_report(self):
+        """子脚本抛 ValueError / OSError 时也要按失败步骤收尾。
+
+        证伪（去掉 _run_step 那两条 except 之后实测）：一次普通的"路径写错"变成裸栈
+        退出，且**不落** production_report——"这次跑到哪一步、哪一步挂的"这条唯一的
+        排查线索也没了，与 docstring 承诺的"失败也落盘"不符。
+        """
+        for exc, label in ((ValueError("稿件里少了个字段"), "ValueError"),
+                           (OSError(28, "磁盘满了"), "OSError")):
+            with self.subTest(exc=label):
+                def boom(argv, _e=exc):
+                    raise _e
+                with self.assertRaises(SystemExit) as cm:
+                    self.h.invoke(["--until", "tts"], pipeline_main=boom)
+                self.assertEqual(cm.exception.code, 1)
+                rep = self.h.report()
+                self.assertFalse(rep["steps"][0]["ok"])
+                self.assertIn(label, self.h.last_err)
+                self.assertIn(str(exc), self.h.last_err)
+
+    def test_keyboard_interrupt_is_not_recorded_as_a_failed_step(self):
+        """Ctrl-C 是用户主动中断，不该被当成"这一步渲染坏了"写进报告。"""
+        def interrupted(argv):
+            raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.h.invoke(["--until", "tts"], pipeline_main=interrupted)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.h.out, "production_report.json")))
+
+    def test_string_systemexit_prints_message_and_becomes_1(self):
+        def msg_exit(argv):
+            raise SystemExit("人话报错")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "tts"], pipeline_main=msg_exit)
+        self.assertEqual(cm.exception.code, 1)
+        # 子进程时代由解释器代打的 sys.exit("消息")，进程内由 _run_step 补打
+        self.assertIn("人话报错", self.h.last_err)
+
+    def test_broken_manifest_reported_once_in_human_words(self):
+        # manifest 只在覆盖率统计那一处加载：坏文件在那里就报成人话，
+        # 不再往下走。曾经这里 load+全量校验两遍，第二遍的错误分支已删。
+        def write_broken(argv):
+            os.makedirs(self.h.out, exist_ok=True)
+            with open(os.path.join(self.h.out, "timing_manifest.json"), "w",
+                      encoding="utf-8") as f:
+                f.write('{"segments": [')     # 上次中断写入留下的截断 JSON
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"], pipeline_main=write_broken)
+        # 进程内 code 就是那句人话（解释器代打时才映射成退出码 1）
+        self.assertIn("timing_manifest.json 无法读取", str(cm.exception.code))
+
+
+class PreviewWithoutKey(unittest.TestCase):
+    """预览档没 key 时自动降级到 `--no-tts`；定稿路径不降级。
+
+    这条行为的分界线是"要不要交付成片"：预览是纯本地编译，定稿要的是成片，
+    无声片不是成片。两边搞反的后果都很糟——预览档硬停等于把画面迭代抵押给
+    账户余额，定稿档静默降级等于交付一支没有声音的片子。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def _no_key(self):
+        return mock.patch.object(R.pipeline, "has_tts_key", lambda: False)
+
+    def test_preview_without_key_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "html"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+        self.assertTrue(any("TTS" in s for s in self.h.report()["skipped"]),
+                        "报告里没记「跳过了 TTS」，读者会以为这次是真配了音")
+
+    def test_check_stage_also_falls_back(self):
+        with self._no_key():
+            self.h.drop_manifest()
+            self.h.make_images_complete()
+            self.h.invoke(["--until", "check"])
+        self.assertIn("--no-tts", self.h.tts_argv)
+
+    def test_render_path_never_falls_back(self):
+        """不给 --until 就等于"要成片"：没 key 必须让 pipeline 自己硬停，
+        run.py 不许替它降级，也不许替它决定"无声也能交"。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke([])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_with_key_preview_does_not_fall_back(self):
+        self.h.make_images_complete()
+        with mock.patch.object(R.pipeline, "has_tts_key", lambda: True):
+            self.h.invoke(["--until", "html"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+    def test_dry_run_is_left_alone(self):
+        """--dry-run 本来就不碰网络，没必要给它加 --no-tts（两者语义不同：
+        一个「只看分句」，一个「产出一份 degraded 时间轴自检」）。"""
+        self.h.make_images_complete()
+        with self._no_key():
+            self.h.invoke(["--until", "html", "--dry-run"])
+        self.assertNotIn("--no-tts", self.h.tts_argv)
+
+
+class ReportBackfillsDegraded(unittest.TestCase):
+    """`production_report.json` 的降级明细不许漏——预览档提前 return 会漏。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_unvoiced_preview_lands_in_report_even_on_early_return(self):
+        """无配音档在 `--until html` 的最后一步才落 manifest，而报告在
+        finally 里写——不回填的话报告恒为 `degraded: []`，读者看到的是
+        "这一次干干净净"，实际整片无声。"""
+        manifest = dict(self.h.manifest)
+        manifest["status"] = "degraded"
+        manifest["degraded"] = {D.UNVOICED_PREVIEW: True,
+                                D.SILENCE_FALLBACK_COUNT: 3}
+        self.h.manifest = manifest
+
+        def fake_gen(argv):
+            self.h.gen_argv = list(argv)
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"], pipeline_main=self.h.fake_pipeline)
+        rep = self.h.report()
+        kinds = {d["type"]: d["count"] for d in rep["degraded"]}
+        self.assertEqual(kinds.get(D.UNVOICED_PREVIEW), 1,
+                         f"报告没记下 unvoiced_preview：{rep['degraded']}")
+
+
+class LayoutDistributionInReport(unittest.TestCase):
+    """制作报告里必须有版式分布——"整页画布出镜率低"要看得见才改得动。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_report_shows_how_many_pages_are_full_bleed(self):
+        """报告要报出各档版式占几段。
+
+        证伪：版式 100% 由稿件侧决定（不写 layout = 槽位），代码里没有配平机制。
+        没有这一栏，作者写完稿看不到"整页画布到底占了几段"，出镜率低就是一件
+        永远没人知道的事——规则只提醒一次，可见的事实才管得久。
+        """
+        self.h.make_images_complete()
+        self.h.invoke(["--until", "html"])
+        lay = self.h.report()["layouts"]
+        self.assertEqual(lay["canvas"]["segments"], 1,
+                         f"样例稿有 1 段整页画布，报告说 {lay}")
+        self.assertEqual(lay["slot"]["segments"], 1,
+                         f"样例稿有 1 段槽位，报告说 {lay}")
+
+    def test_report_says_nothing_about_a_layout_that_has_no_pages(self):
+        """某一档版式一段都没有时，报告只报存在的那些档。
+
+        不可达的场景先说清：manifest 缺席时 run.py 会 SystemExit（连配图覆盖率
+        都算不了），所以"没有 manifest 却报出版式分布"在真实流程里不会发生。
+        可达的是"某一档一段都没有"——比如整稿都是槽位。这时报告该只列存在的
+        档，不能报出一个整页画布 0 段/0% 的空行（那会被读成"这一档出场过但
+        没画面"，与事实不符）。
+        """
+        for seg in self.h.manifest["segments"]:
+            if seg["id"].startswith("seg"):
+                seg.pop("layout", None)      # 不写 layout = 槽位（manifest 层不认 "slot"）
+        self.h.make_images_complete()
+        out, _ = self.h.invoke(["--until", "html"])
+        lay = self.h.report()["layouts"]
+        self.assertNotIn("canvas", lay,
+                         f"一段整页画布都没有却报了这一档：{lay}")
+        self.assertEqual(lay["slot"]["segments"], 2, f"样例稿有两段内容段：{lay}")
+        # 摘要那行同样只列存在的档，且带着版式名（"1 段 / 1 段"分不清谁是谁）
+        line = [ln for ln in out.splitlines() if "版式" in ln]
+        self.assertTrue(line, "摘要里没有版式这一行")
+        self.assertIn("槽位", line[0])
+        self.assertNotIn("整页画布", line[0])
+
+
+class HappyPath(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_full_render_flow(self):
+        self.h.make_images_complete()
+        out, _ = self.h.invoke([])
+        self.assertIn("完成", out)
+        rep = self.h.report()
+        self.assertEqual([s["name"] for s in rep["steps"]],
+                         ["TTS", "生成 HTML", "官方门禁 check", "渲染"])
+        self.assertTrue(all(s["ok"] for s in rep["steps"]))
+        # 进程内直调的行为凭证：假入口是 patch 在 pipeline.main /
+        # gen_hyperframes.main 上的，argv 被记下来就说明 run.py 走的是模块属性
+        # 而不是子进程（改成 shell 出去跑，这两个就还是 None）。
+        self.assertIsNotNone(self.h.tts_argv)
+        self.assertIsNotNone(self.h.gen_argv)
+        call = self.h.render_calls[0]
+        self.assertEqual(os.path.basename(call["out"]), "out.mp4")
+        self.assertGreaterEqual(call["max_wait"], 1800.0)
+        self.assertIn("fakehf", call["cmd"])
+
+
+class ArchitecturePin(unittest.TestCase):
+    """P1 决策固化：run.py 不再用自己的 subprocess 调自家脚本。"""
+
+    def test_run_has_no_self_subprocess(self):
+        src = H.read_text(os.path.join(H.SCRIPTS_DIR, "run.py"))
+        self.assertNotIn("subprocess", src,
+                         "run.py 只应编排进程内步骤；唯一的子进程在 _render_backend")
+        self.assertNotIn("sys.executable", src,
+                         "TTS/HTML 步骤参数列表里不该再出现解释器路径")
+
+
+def _fake_gate(project, tm, out_dir, aspect=None, command=None):
+    """观感门禁的假产物：帧数/判词/拼图三样都在，没有 error。
+
+    只证明"这一档真的调到了门禁"——真门禁要 Node + Chrome + Pillow，
+    那条链路由 `tests/test_perceptual.py` 与 e2e 覆盖。
+    """
+    _fake_gate.calls.append({"project": project, "aspect": aspect,
+                             "out_dir": out_dir})
+    return {"frames": 4, "issues": [], "contact_sheet": "sheet.png",
+            "segs": []}
+
+
+_fake_gate.calls = []
+
+
+class CheckUntilRunsPerceptual(unittest.TestCase):
+    """`--until check --perceptual`：HTML 已生成，观感门禁却整条分支没有调用点。
+
+    修复前：`--perceptual` 只有两个落点（`args.until == "html"` 与定稿渲染），
+    `--until check` 分支里只有官方门禁 → 落报告 → return。于是这一档的判词
+    凭空消失，报告里连一条 skipped 都没有，而 `--perceptual` 的 help 写的是
+    "跑观感门禁…判词进 production_report 的 perceptual 字段"。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        self.h.make_images_complete()
+        _fake_gate.calls = []
+
+    def _invoke(self, argv):
+        with mock.patch.object(R.perceptual, "run_gate", _fake_gate), \
+                mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            return self.h.invoke(argv)
+
+    def test_check_until_runs_the_gate(self):
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(len(_fake_gate.calls), 1,
+                         "--until check --perceptual 没有跑观感门禁")
+
+    def test_check_until_writes_verdict_into_report(self):
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(self.h.report()["perceptual"]["frames"], 4)
+
+    def test_without_the_flag_the_gate_stays_off(self):
+        self._invoke(["--until", "check"])
+        self.assertEqual(_fake_gate.calls, [])
+        self.assertNotIn("perceptual", self.h.report())
+
+    def test_html_and_check_share_one_implementation(self):
+        """两档的判词必须同源：各贴一段正是本轮失效的成因。"""
+        self._invoke(["--until", "html", "--perceptual"])
+        html_report = self.h.report()["perceptual"]
+        _fake_gate.calls = []
+        self._invoke(["--until", "check", "--perceptual"])
+        self.assertEqual(html_report, self.h.report()["perceptual"])
+
+
+class SlotNoImageReachesTheOrchestrator(unittest.TestCase):
+    """`--slot-no-image` 写在 run.py 的参数节里，旗标却只在 gen_hyperframes。
+
+    修复前：`run.py --slot-no-image` 直接被 argparse 拒；就算手工分步调
+    gen，编排层的缺图闸也会在 `--until render` 下 exit 2，把这条"没有生图
+    能力也能出片"的路整条堵死。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        # 只给整页画布段（seg-b）落图：槽位段 seg-a 缺图。
+        os.makedirs(os.path.join(self.h.project, "images"), exist_ok=True)
+        with open(os.path.join(self.h.project, "images", "seg-b.svg"),
+                  "w", encoding="utf-8") as f:
+            f.write("<svg/>")
+        from _script_utils import write_json_atomic
+        write_json_atomic(os.path.join(self.h.project, "images.json"),
+                          {"seg-b": {"src": "images/seg-b.svg"}})
+
+    def test_flag_is_parseable(self):
+        args = R._build_parser(show_all=True).parse_args(
+            ["--source", "x.json", "--slot-no-image"])
+        self.assertTrue(args.slot_no_image)
+
+    def test_flag_reaches_the_html_step(self):
+        self.h.invoke(["--until", "html", "--slot-no-image"])
+        self.assertIn("--slot-no-image", self.h.gen_argv)
+
+    def test_slot_missing_no_longer_blocks_delivery(self):
+        with mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            self.h.invoke(["--slot-no-image"])
+        rep = self.h.report()
+        self.assertEqual(rep["images"]["missing"], 1,
+                         "缺图的事实要照实记，放行的是拦截不是统计")
+        self.assertTrue(any("slot-no-image" in s for s in rep["skipped"]),
+                        f"放行没在报告里留痕：{rep['skipped']}")
+
+    def test_without_the_flag_slot_missing_still_blocks(self):
+        with mock.patch.object(R, "node_version_gate", lambda: ("ok", "")):
+            with self.assertRaises(SystemExit) as cm:
+                self.h.invoke([])
+        self.assertEqual(cm.exception.code, 2)
+
+
+class CheckFramesFlag(unittest.TestCase):
+    """--check-frames：默认不取帧；开了就编排官方 snapshot，失败只 warn 不阻断。
+
+    取帧本身是"给人眼看"的手段，画面对不对由人判——所以这里锁的是编排契约
+    （传给官方的时刻表、产物路径进报告），不是像素阈值。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        self.h.make_images_complete()
+        self.h.video_duration = self.h.manifest["total_duration"]
+
+    def _import(self):
+        import run as RUN
+        return RUN
+
+    def test_off_by_default_never_snapshots(self):
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=("/tmp/snap", "")) as sf:
+            out, _ = self.h.invoke([])
+        sf.assert_not_called()
+        self.assertNotIn("snapshots", self.h.report()["video"])
+
+    def test_flag_hands_official_snapshot_a_time_table(self):
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=("/tmp/snap", "")) as sf:
+            out, _ = self.h.invoke(["--check-frames"])
+        times = sf.call_args.args[2]
+        self.assertEqual(times[0], 0.0, "首帧必取：开场问题只在 t=0 附近看得见")
+        self.assertTrue(all(t < self.h.manifest["total_duration"] for t in times))
+        self.assertIn("完成", out)
+        self.assertEqual(self.h.report()["video"]["snapshots"]["dir"], "/tmp/snap")
+
+    def test_snapshot_failure_degrades_not_blocks(self):
+        """取帧失败不该砸掉一条已经过了时长契约的成片，但必须出声。"""
+        RUN = self._import()
+        with mock.patch.object(RUN, "snapshot_frames",
+                               return_value=(None, "Chrome 起不来")):
+            out, err = self.h.invoke(["--check-frames"])
+        self.assertIn("完成", out)
+        self.assertIn("Chrome 起不来", err)
+        self.assertIn("error", self.h.report()["video"]["snapshots"])
+
+
+class OfficialGateWiring(unittest.TestCase):
+    """官方门禁接在编排里的两个位置：`--until check` 挡在渲染前、定稿路径自动跑。"""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+        self.h.make_images_complete()
+        self.h.video_duration = self.h.manifest["total_duration"]
+
+    def test_until_check_stops_before_render(self):
+        """`--until check`：出 HTML、跑门禁、不进渲染（也不量成片）。"""
+        out, _ = self.h.invoke(["--until", "check"])
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(self.h.render_calls, [])
+        self.assertEqual(self.h.probe_calls, [])
+        self.assertIn("官方门禁 check", [s["name"] for s in self.h.report()["steps"]])
+
+    def test_until_check_rejects_old_node_before_cli(self):
+        """check 也运行 Hyperframes CLI，不能只在 render 分支拦旧 Node。"""
+        with mock.patch.object(R, "node_version_gate",
+                               return_value=("block", "Node 版本过旧")):
+            with self.assertRaises(SystemExit) as cm:
+                self.h.invoke(["--until", "check"])
+        self.assertIn("Node 版本过旧", str(cm.exception))
+        self.assertEqual(self.h.gate_calls, 0)
+
+    def test_render_path_rejects_old_ffmpeg_before_cli(self):
+        """渲染要混音，ffmpeg < 5.0（setts bsf 缺 duration）必须在 CLI 前拦下。
+
+        与 node 闸同一条原则：版本是渲染前已知的前提，不是渲染失败后才猜的
+        病因。mock 成 block 时连 check 都不该跑到。
+        """
+        self.h.ffmpeg_gate_result = ("block", "ffmpeg 过旧")
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke([])
+        self.assertIn("ffmpeg 过旧", str(cm.exception))
+        self.assertEqual(self.h.gate_calls, 0)
+        self.assertEqual(self.h.render_calls, [])
+
+    def test_until_check_warns_but_does_not_block_old_ffmpeg(self):
+        """check 不混音，ffmpeg 4.x 也能跑：只出声提示渲染会被拦，不放倒它。"""
+        self.h.ffmpeg_gate_result = ("block", "ffmpeg 过旧")
+        out, err = self.h.invoke(["--until", "check"])
+        self.assertIn("ffmpeg 过旧", err)
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(self.h.render_calls, [])
+
+    def test_until_check_with_error_exits_nonzero(self):
+        """门禁有 error 就停，且把条目写进报告——否则报告看起来像通过。"""
+        self.h.gate_findings = [("error", "font_family_without_font_face", "缺 @font-face")]
+        with self.assertRaises(SystemExit):
+            self.h.invoke(["--until", "check"])
+        gate = self.h.report()["gate"]
+        self.assertEqual(gate[0]["rule"], "font_family_without_font_face")
+
+    def test_render_path_runs_gate_first(self):
+        """定稿路径：先门禁后渲染，报告里两步都在。"""
+        self.h.invoke([])
+        self.assertEqual(self.h.gate_calls, 1)
+        self.assertEqual(len(self.h.render_calls), 1)
+        names = [s["name"] for s in self.h.report()["steps"]]
+        self.assertLess(names.index("官方门禁 check"), names.index("渲染"))
+
+    def test_gate_error_blocks_render(self):
+        """门禁 error 拦在渲染前：不花几分钟渲染一版已知有问题的片子。"""
+        self.h.gate_findings = [("error", "clip_media_fit", "音频短于段时长")]
+        with self.assertRaises(SystemExit):
+            self.h.invoke([])
+        self.assertEqual(self.h.render_calls, [], "有 error 就不该起渲染")
+
+    def test_unregistered_warning_does_not_block(self):
+        """未登记的新 warning 只点名、不拦——它是"去读一眼新规则"的提示。"""
+        self.h.gate_findings = [("warning", "unregistered:brand_new", "新检查")]
+        _, err = self.h.invoke([])
+        self.assertIn("brand_new", err)
+        self.assertEqual(len(self.h.render_calls), 1)
+        gate_step = next(s for s in self.h.report()["steps"]
+                         if s["name"] == "官方门禁 check")
+        self.assertTrue(gate_step["ok"], "非阻断 warning 不应把报告步骤记成失败")
+
+
+class BeatsReachesManifest(unittest.TestCase):
+    """`_group_segments` 逐字段搬可选键，漏了 `beats`。
+
+    修复前：source 里写了 beats → `build_from_structured` 收进 `Block.extra`
+    → `pipeline` 分组时**没有这个键** → manifest 里没有 beats → `run.py` 的
+    `_beats.audit` 读到的恒为 None → SKILL.md 承诺的"句序越界 exit 2"永不触发，
+    `production_report.beats` 恒为 `{total:0, errors:0, warnings:0}`。
+    而作者数出的句序与重分句后的句数天然不一致，这正是那道闸存在的理由。
+    """
+
+    def _group(self, seg):
+        sents = [{"index": 0, "text": "甲。", "start_time": 0.0, "duration": 1.0},
+                 {"index": 1, "text": "乙。", "start_time": 1.0, "duration": 1.0}]
+        return pipeline._group_segments([seg], sents, {})[0]
+
+    def test_beats_is_carried_into_manifest_segment(self):
+        seg = {"id": "seg1", "title": "标题", "tagline": "补充阅读",
+               "accent": "amber", "start": 0, "end": 2,
+               "beats": [{"on": 0, "change": "开场"}]}
+        self.assertEqual(self._group(seg).get("beats"),
+                         [{"on": 0, "change": "开场"}])
+
+    def test_passthrough_list_names_every_key_manifest_schema_accepts(self):
+        """搬运清单是**枚举式**的：漏一个键不报错。所以清单本身要有锁。
+
+        拿 `_manifest_schema` 认的段落级可选键对账——那边加了一个透传字段，
+        这边没跟上，这条先红（而不是等某个作者写了 beats 才发现闸是空的）。
+        """
+        import _manifest_schema as _MS
+        schema = open(_MS.__file__, encoding="utf-8").read()
+        accepted = set()
+        for key in ("speed", "layout", "voice_id", "voice_style", "takeaway",
+                    "turns", "beats"):
+            if key in schema:
+                accepted.add(key)
+        self.assertTrue(accepted, "_manifest_schema 里找不到已知的可选段落键，"
+                                  "这条对账本身失效了")
+        for key in sorted(accepted):
+            self.assertIn(key, pipeline.PASSTHROUGH_SEG_KEYS,
+                          f"_manifest_schema 认 '{key}'，但 pipeline 没搬它")
+
+
+
+class BeatsGate(unittest.TestCase):
+    """台词板的句序核对接在"manifest 已校验、HTML 未生成"这个位置上。
+
+    为什么要在编排层测：越界本身是静默失效（成片里完全看不出来），它唯一能被
+    挡住的机会就是这道闸；闸站在哪一步比闸本身更容易写错——早一步拿不到最终
+    句数，晚一步已经烧进产物。
+    """
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.cleanup)
+
+    def test_out_of_range_on_blocks_before_html(self):
+        # seg-a 在样例稿里只有 2 句；on=5 落在空处。
+        self.h.put_beats("seg-a", [{"on": 0, "change": "点亮 a"},
+                                   {"on": 5, "change": "推到第六态"}])
+        with self.assertRaises(SystemExit) as cm:
+            self.h.invoke(["--until", "html"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("越界", self.h.last_err)
+        self.assertIsNone(self.h.gen_argv, "越界时不该生成 HTML")
+
+    def test_valid_beats_pass_and_are_reported(self):
+        self.h.put_beats("seg-a", [{"on": 1, "change": "把第一条压暗"}])
+        self.h.add_motion("seg-a", [{"at": 1, "target": "#a", "to": {"opacity": 0.3}}])
+        self.h.invoke(["--until", "html"])
+        self.assertIsNotNone(self.h.gen_argv)
+        self.assertEqual(self.h.report()["beats"],
+                         {"total": 1, "errors": 0, "warnings": 0})
+
+    def test_beats_without_any_tween_warns_but_does_not_block(self):
+        # 台词板写成愿望清单：要点名，但不该拦——这一版仍然能出片，
+        # 拦下来的结果是作者只能删掉台词板，那反而丢掉了意图记录。
+        self.h.put_beats("seg-a", ["把第一条压暗"])
+        _, err = self.h.invoke(["--until", "html"])
+        self.assertIn("画面不会动", err)
+        self.assertIsNotNone(self.h.gen_argv)
+        self.assertEqual(self.h.report()["beats"]["warnings"], 1)
+
+    def test_draft_does_not_skip_the_beats_gate(self):
+        """--draft 放松的是占位/比例/字号这类"还没画完"的档，句序错位不是——
+        它会让整段台词板错位，而草稿同样交付给人看。"""
+        self.h.put_beats("seg-a", [{"on": 9, "change": "推到第十态"}])
+        with self.assertRaises(SystemExit):
+            self.h.invoke(["--until", "html", "--draft"])
+        self.assertIsNone(self.h.gen_argv)
+
+
+if __name__ == "__main__":
+    unittest.main()

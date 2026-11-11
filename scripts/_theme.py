@@ -1,0 +1,404 @@
+"""主题注册表。配色数据直接内联在本模块。包含：
+  - "dark"：背景/文字主题配色（get_theme_colors；单一主题，无选择面）
+  - "_ACCENT_PALETTE"：8 色 accent 色板，供 build_from_structured
+    沿色温弧分配给各内容段（arc_accent_indices）
+  - "_DEFAULT_ACCENT"：默认段落强调色
+  - "_ARC_CYCLE"：情绪弧循环，沿色板下标序列走一圈（arc_accent_indices）
+  - "_ARC_PEAK"：弧上峰值档位（arc_accent_indices 保证段数再少也走到）
+  - "arc_accent"：弧上位 → 实际颜色（整档原色、中间混色，与 CSS color-mix 同构）
+  - 颜色数学（纯函数）：hex 解析 / 色名表 / WCAG 亮度对比度 / 混色 /
+    ensure_text_contrast（accent 文字色的对比度保底）
+
+为什么色板要带"顺序"，而不是 8 支互相等价的色：色板原先是一个无序集合，
+按段序轮询 = 每段随机发一支，于是第一期片子开场是黄、第二段是蓝、第三段是
+绿……颜色只承担"这页和上页不一样"，不承担"我们讲到哪儿了"。前沿的章节式
+解说与产品片（按章节换主色、按产品线换主色）用的都不
+是随机，而是**一条弧**：冷开场 → 推进段偏暖/中性 → 结论回到品牌色。观众在不
+知不觉中把"色温"读成"进度"，这是免费的一层信息。
+"""
+import copy
+import functools
+import math
+import re
+# ── 主题注册表──
+# 单一主题 dark。accent 相关是独立常量：混在一张 dict 里要靠 startswith("_")
+# 区分，新加的下划线键容易被误当成配色。
+_THEMES = {
+    "dark": {
+        "bg_gradient": "linear-gradient(135deg,#060709 0%,#0d0f13 45%,#080a0c 100%)",
+        # 网格色从"极淡 accent 绿"改成中性灰：原来那档 rgba(0,220,150,0.055) 在
+        # #0d0f13 页底上只差 1 级灰阶（实测成片对比度 1.08:1），再经卡片整体
+        # alpha 合成一次就彻底消失——整片背景只剩渐变一块。纹理色不承担"这段是
+        # 什么颜色"的叙事（那是 .seg-card::after 氛围光的活），所以不带色相，
+        # 免得和每段 accent 抢语义。0.10 在页底留 1.20:1，压缩后仍在。
+        "grid_color": "rgba(170,185,190,0.10)",
+        "text_color": "#eef2ee",
+    },
+}
+DEFAULT_THEME = "dark"
+_DEFAULT_ACCENT = "#2dd4bf"
+# 下标即"弧上的位置"（0 = 开场冷调，3 = 中段最暖，7 = 收束最冷）——顺序是有
+# 语义的，`tests/check_numbers.py` 不锁它，但 `_ARC_CYCLE` 依赖它。改顺序等于
+# 改全片色温走向，改之前先看一遍 test_arc_accent 里的期望序列。
+_ACCENT_PALETTE = [
+    "#4fc3f7", "#81c784", "#4dd0e1", "#ffb74d",
+    "#ffd54f", "#f06292", "#ba68c8", "#ef5350",
+]
+# 一条完整弧 = 开场一支 → 中段偏暖 → 收束回到冷调。8 支色板上走 6 步，
+# 跳过的是 1（#81c784 与 2 的青色太近，进入弧里读成"同一段"）与 6（紫，
+# 与 5 粉撞）。推进第 4 步（#ffd54f 黄，全片最亮）是全片的"峰值"——派给它
+# 的那一段在视觉上最有分量，写稿时留给结论/转折最狠的那一段。
+_ARC_CYCLE = (0, 2, 3, 4, 5, 7)
+# 弧上"峰值"位置：全片最亮的一档（#ffd54f）。arc_accent_indices 保证段数再少
+# 也走到这里，否则两三段的稿子永远看不到峰值色。
+_ARC_PEAK = 3
+
+
+def get_theme_colors(theme):
+    """根据主题名返回主题配色字典。
+
+    影响背景渐变、网格线与文字颜色；每段 accent 彩色不受影响。
+
+    Args:
+        theme: 主题名，当前只有 "dark"。
+
+    Returns:
+        dict: 包含 bg_gradient, grid_color, text_color 三个键。
+    """
+    if theme not in _THEMES:
+        # 不做静默回退：未知主题名直接报错并列出可用主题。
+        raise ValueError(
+            f"[theme] 未知主题名: {theme!r}（可用: {', '.join(sorted(_THEMES))}）")
+    return copy.deepcopy(_THEMES[theme])
+
+
+def get_accent_palette():
+    """返回 accent 色板（8 色列表，顺序即色温弧上的位置）。
+
+    唯一权威来源是本模块的 _ACCENT_PALETTE 常量；Python 侧
+    （build_from_structured.py）必须从本函数读取，不要再落一份硬编码副本。
+    取色请用 `arc_accent_indices(count)` 得到下标，**不要**自己 `% len()`——
+    那会退化成"每段随机换一支"（理由见模块头）。
+    """
+    return list(_ACCENT_PALETTE)
+
+
+def get_default_accent():
+    """返回默认段落强调色（opening/closing 与 fallback 分组使用）。
+
+    唯一权威来源是本模块的 _DEFAULT_ACCENT 常量
+    （单一数据源：改动默认色只改这一处，不散落字面量）。
+    """
+    return _DEFAULT_ACCENT
+
+
+def arc_accent_indices(count):
+    """把 count 段映射到色板下标序列：沿 `_ARC_CYCLE` 走一条色温弧。
+
+    **为什么不是 `range(count) % len(palette)`**：那是"每段换一支"，相邻段
+    只保证不同、不保证有方向；count 一旦超过弧长就绕回开头，观众读到的是
+    "颜色又回来了"而非"又深了一层"。
+
+    **为什么返回的"下标"可以是小数**：色板只有 8 支，段数一多，整数档位
+    必然让相邻两段撞在同一支上（count=7 时中间两段同色，读成一段）。而
+    色板短本身就是事实——不该为了"每段一支整色"把弧切成碎块。所以这里按弧
+    等分取**连续位置** `pos_k = k × (span−1) / (count−1)`，小数部分表示
+    "在弧上第 i 档与第 i+1 档之间"：
+
+        3 段 → 0, 1.5, 3（冷 → 中间色 → 峰值黄）
+        4 段 → 0, 1, 2, 3（冷 → 青 → 橙 → 峰值黄）
+        6 段 → 0, 1, 2, 3, 4, 5（正好步步落在 _ARC_CYCLE 上，取到的都是原色；
+              色板下标即 _ARC_CYCLE 本身：0, 2, 3, 4, 5, 7）
+
+    （这些数是**弧上位**——`_ARC_CYCLE` 的下标，不是色板下标；`arc_accent()`
+    才把它们换成颜色：整档取原色、中间混两支近邻色。）
+
+    弧尾按 `min(count, 弧长)` 与"至少走到峰值"两条取大：段数少时也要看得见
+    峰值，段数多时整条弧压进 count 段。
+
+    Returns:
+        list[float]：长度 count 的弧上位置（0 起，≤ n−1）；`int()` 得档位，
+        小数部分交给 `arc_accent()` 混色。
+    """
+    n = len(_ARC_CYCLE)
+    if count <= 0 or n == 0:
+        return []
+    if count == 1 or n == 1:
+        return [0.0] * count
+    last = count - 1
+    # 走到弧的哪一步为止：色板只有 8 支，count 一多就装不下——此时把整条弧
+    # 压进 count 段，相邻段靠 arc_accent 的中间色区分（见 docstring）。
+    # 至少走到弧上最亮那一档（_ARC_PEAK）：段数极少时若只取前两三档，全片
+    # 就永远到不了"峰值"，弧读成一条没有高潮的直线。
+    end = max(min(count, n), _ARC_PEAK + 1)
+    return [k * (end - 1) / last for k in range(count)]
+
+
+def arc_accent(pos, palette=None):
+    """把弧上位置换成实际颜色：整档取原色，中间位置按比例混两支近邻色。
+
+    混色公式与 CSS `color-mix(in srgb, A 50%, B)` 同构（sRGB 通道线性插值），
+    所以同一段 accent 在 Python 侧（manifest / 画布自查）与浏览器侧
+    （`--seg-accent` 染氛围光、字幕、进度条）读到的是同一种颜色。
+    """
+    pal = palette or _ACCENT_PALETTE
+    lo = max(0, min(int(pos), len(_ARC_CYCLE) - 1))
+    frac = pos - lo
+    if frac <= 0.02 or lo == len(_ARC_CYCLE) - 1:
+        return pal[_ARC_CYCLE[lo]]
+    hi = pal[_ARC_CYCLE[lo + 1]]
+    if frac >= 0.98:
+        return hi
+    a = _hex_rgb_bytes(pal[_ARC_CYCLE[lo]])
+    b = _hex_rgb_bytes(hi)
+    return "#" + "".join(
+        "%02x" % int(round(a[i] + (b[i] - a[i]) * frac)) for i in range(3))
+
+
+def _point_seg_distance(p, a, b):
+    """RGB 空间里点 p 到线段 ab 的距离（弧是这里的折线段）。"""
+    ab = [b[i] - a[i] for i in range(3)]
+    ap = [p[i] - a[i] for i in range(3)]
+    ab2 = sum(v * v for v in ab)
+    if ab2 <= 0:
+        return math.sqrt(sum(v * v for v in ap))
+    t = sum(ap[i] * ab[i] for i in range(3)) / ab2
+    t = max(0.0, min(1.0, t))
+    return math.sqrt(sum((ap[i] - t * ab[i]) ** 2 for i in range(3)))
+
+
+def on_arc(color):
+    """颜色是否落在 accent 色温弧上：色板成员，或相邻两支之间的弧上混色。
+
+    `arc_accent` 的中间档产出的是 `_ARC_CYCLE` 相邻两支按通道线性插值的混色
+    （3 段时的 `#a6c497` 就是冷蓝与青中间的色）。消费侧要分辨"照抄本段
+    accent"与"另挑一支"时用这条判据：混色**在弧上**，不是脱弧——把它判成
+    "脱出全片色温走向"是冤枉的（`references/canvas.md` 要求画布 spec 照抄
+    本段 accent，作者每次生成都吃一条假 hint，训练人忽略提示）。
+
+    判据用点到折线段的距离而不是逐通道解 t：混色后每通道 round 到整数，
+    delta 小的通道上 t 的误差能被放大成假阴性；距离容差 1.5 吸收末位舍入
+    （最坏 sqrt(3×0.5²)≈0.87）。读不出 hex 返回 True——颜色合法性归契约层
+    （is_safe_css_color）管，这里不添 second opinion。
+    """
+    c = css_color_to_hex(color)
+    if c is None:
+        return True
+    if c in _ACCENT_PALETTE:
+        return True
+    rgb = _hex_rgb_bytes(c)
+    if rgb is None:
+        return True
+    for lo, hi in zip(_ARC_CYCLE, _ARC_CYCLE[1:]):
+        a = _hex_rgb_bytes(_ACCENT_PALETTE[lo])
+        b = _hex_rgb_bytes(_ACCENT_PALETTE[hi])
+        if _point_seg_distance(rgb, a, b) <= 1.5:
+            return True
+    return False
+
+
+# ── 颜色数学 ────
+# 纯函数、无注册表依赖：用于运行时的明暗适配与颜色数学。
+
+
+def _hex_rgb_bytes(hex_color):
+    """'#rrggbb'/'#rgb' → (r,g,b) 整数 0–255；解析不了返回 None。
+
+    3 位缩写（#fff）先展开成 6 位——is_safe_css_color 放行用户传入的
+    "#rgb" 缩写色，不展开会解析失败返回 None，深浅主题判断
+    静默失效（dark 被当浅色，tagline 走压暗分支，对比度掉到 ~2.1）。
+    全模块的 hex 解析只有这一份：hex_to_rgb01 / css_color_to_hex
+    各自再写一遍 3 位展开与 int(h,16) 迟早漂移。
+    """
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6 or not all(c in "0123456789abcdef" for c in h.lower()):
+        return None
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def hex_to_rgb01(hex_color):
+    """'#rrggbb'/'#rgb' → (r,g,b) 归一化到 0-1；解析不了返回 None。"""
+    rgb = _hex_rgb_bytes(hex_color)
+    if rgb is None:
+        return None
+    return tuple(v / 255 for v in rgb)
+
+
+def is_safe_css_color(color):
+    """颜色值是否是浏览器真正认得的 hex / CSS 颜色名（且可安全嵌入 HTML 属性）。
+
+    accent 来自稿件（信源内容经模型写入），本项目把它当**不可信数据**：
+    它会被拼进 `data-accent="..."` 与 `style="background:..."` 两处 HTML
+    上下文（GSAP 补间只写 opacity/scale/width，颜色经 CSS 变量派生，不进 JS
+    字面量）。只放行两种形态——`#rgb`/`#rrggbb`
+    十六进制，或 CSS 标准颜色名（`red` / `tomato`）——从而排除引号、
+    分号、括号、反斜杠等一切能闭合属性/声明/字符串的字符。成片 HTML 会被
+    preview.js 打开、被 headless Chrome 渲染，所以
+    `x"><script>...</script>` 这类值必须在契约层就挡下，不能指望下游转义。
+
+    色名要求**查得到表**而不是"纯字母"：`hazyblue` 这种拼错的色名如果只按
+    字母放行，会过了校验再在下游被静默换成默认色——用户在契约层就该听到
+    拒绝，而不是渲染完才发现颜色不对却无从下手。需要 `rgb(...)`/`var(...)`
+    等函数式写法时请直接给 6 位 hex（括号会打开注入面）。
+    """
+    return css_color_to_hex(color) is not None
+
+
+# 浏览器标准色名全集（name-hex 紧凑副本，首次使用时解析）。stdlib 没有
+# 现成的色名表可借（没有 html.color；colorsys 只有换算函数），只能内嵌。
+_CSS3_NAMES_SRC = """
+aliceblue-f0f8ff antiquewhite-faebd7 aqua-00ffff aquamarine-7fffd4 azure-f0ffff
+beige-f5f5dc bisque-ffe4c4 black-000000 blanchedalmond-ffebcd blue-0000ff
+blueviolet-8a2be2 brown-a52a2a burlywood-deb887 cadetblue-5f9ea0
+chartreuse-7fff00 chocolate-d2691e coral-ff7f50 cornflowerblue-6495ed
+cornsilk-fff8dc crimson-dc143c cyan-00ffff darkblue-00008b darkcyan-008b8b
+darkgoldenrod-b8860b darkgray-a9a9a9 darkgreen-006400 darkgrey-a9a9a9
+darkkhaki-bdb76b darkmagenta-8b008b darkolivegreen-556b2f darkorange-ff8c00
+darkorchid-9932cc darkred-8b0000 darksalmon-e9967a darkseagreen-8fbc8f
+darkslateblue-483d8b darkslategray-2f4f4f darkslategrey-2f4f4f
+darkturquoise-00ced1 darkviolet-9400d3 deeppink-ff1493 deepskyblue-00bfff
+dimgray-696969 dimgrey-696969 dodgerblue-1e90ff firebrick-b22222
+floralwhite-fffaf0 forestgreen-228b22 fuchsia-ff00ff gainsboro-dcdcdc
+ghostwhite-f8f8ff gold-ffd700 goldenrod-daa520 gray-808080 green-008000
+greenyellow-adff2f grey-808080 honeydew-f0fff0 hotpink-ff69b4
+indianred-cd5c5c indigo-4b0082 ivory-fffff0 khaki-f0e68c lavender-e6e6fa
+lavenderblush-fff0f5 lawngreen-7cfc00 lemonchiffon-fffacd lightblue-add8e6
+lightcoral-f08080 lightcyan-e0ffff lightgoldenrodyellow-fafad2
+lightgray-d3d3d3 lightgreen-90ee90 lightgrey-d3d3d3 lightpink-ffb6c1
+lightsalmon-ffa07a lightseagreen-20b2aa lightskyblue-87cefa
+lightslategray-778899 lightslategrey-778899 lightsteelblue-b0c4de
+lightyellow-ffffe0 lime-00ff00 limegreen-32cd32 linen-faf0e6 magenta-ff00ff
+maroon-800000 mediumaquamarine-66cdaa mediumblue-0000cd mediumorchid-ba55d3
+mediumpurple-9370db mediumseagreen-3cb371 mediumslateblue-7b68ee
+mediumspringgreen-00fa9a mediumturquoise-48d1cc mediumvioletred-c71585
+midnightblue-191970 mintcream-f5fffa mistyrose-ffe4e1 moccasin-ffe4b5
+navajowhite-ffdead navy-000080 oldlace-fdf5e6 olive-808000 olivedrab-6b8e23
+orange-ffa500 orangered-ff4500 orchid-da70d6 palegoldenrod-eee8aa
+palegreen-98fb98 paleturquoise-afeeee palevioletred-db7093 papayawhip-ffefd5
+peachpuff-ffdab9 peru-cd853f pink-ffc0cb plum-dda0dd powderblue-b0e0e6
+purple-800080 rebeccapurple-663399 red-ff0000 rosybrown-bc8f8f
+royalblue-4169e1 saddlebrown-8b4513 salmon-fa8072 sandybrown-f4a460
+seagreen-2e8b57 seashell-fff5ee sienna-a0522d silver-c0c0c0 skyblue-87ceeb
+slateblue-6a5acd slategray-708090 slategrey-708090 snow-fffafa
+springgreen-00ff7f steelblue-4682b4 tan-d2b48c teal-008080 thistle-d8bfd8
+tomato-ff6347 turquoise-40e0d0 violet-ee82ee wheat-f5deb3 white-ffffff
+whitesmoke-f5f5f5 yellow-ffff00 yellowgreen-9acd32
+"""
+
+
+@functools.lru_cache(maxsize=1)
+def _css_name_table():
+    """CSS 颜色名 → hex（无 #）映射表。
+
+    既是 normalize_accent 的换算依据，也是 is_safe_css_color 的色名白名单：
+    表里没有的色名在契约层就被拒。
+    """
+    return dict(tok.split("-", 1) for tok in _CSS3_NAMES_SRC.split())
+
+
+def css_color_to_hex(color):
+    """任意安全颜色（#rgb/#rrggbb/CSS 色名）→ '#rrggbb'；解析不了返回 None。
+
+    alpha 后缀（{ac}40 / {ac}15）只能拼在 6 位 hex 上：色名拼后缀会产出
+    `red40` 这类非法值，整条声明被浏览器静默丢弃。所有要拼 alpha 的
+    accent 必须先过本函数归一化成 6 位 hex。
+    """
+    if not isinstance(color, str):
+        return None
+    c = color.strip().lower()
+    if not c:
+        return None
+    if c.startswith("#"):
+        rgb = _hex_rgb_bytes(c)
+        return None if rgb is None else "#{:02x}{:02x}{:02x}".format(*rgb)
+    if c.isalpha():
+        hex_digits = _css_name_table().get(c)
+        return "#" + hex_digits if hex_digits else None
+    return None
+
+
+def normalize_accent(color, default):
+    """不可信 accent → 保证可安全拼 alpha 的 '#rrggbb'；解析不了回落 default。"""
+    return css_color_to_hex(color) or default
+
+
+def relative_luminance(hex_color):
+    """WCAG 相对亮度（用于判断主题深浅底）。"""
+    rgb = hex_to_rgb01(hex_color)
+    if rgb is None:
+        return None
+    lin = tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                for c in rgb)
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def mix(hex_color, other_hex, ratio):
+    """按比例混两色（0=全 hex_color，1=全 other_hex）。"""
+    a = hex_to_rgb01(hex_color)
+    b = hex_to_rgb01(other_hex)
+    if a is None or b is None:
+        return hex_color
+    mixed = (round(255 * (a[i] * (1 - ratio) + b[i] * ratio)) for i in range(3))
+    return "#{:02x}{:02x}{:02x}".format(*mixed)
+
+
+def contrast_ratio(color_a, color_b):
+    """WCAG 对比度（1.0–21.0）；任一色解析不了返回 0.0（视为不达标）。"""
+    la = relative_luminance(color_a)
+    lb = relative_luminance(color_b)
+    if la is None or lb is None:
+        return 0.0
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def theme_bg_stops(theme):
+    """主题背景渐变里的十六进制色标——文字真正落其上的候选底色集合。"""
+    return re.findall(r"#[0-9a-fA-F]{6}", get_theme_colors(theme)["bg_gradient"])
+
+
+def worst_contrast(color, theme):
+    """该色对主题页底**最坏一档**的对比度。
+
+    文字具体落在哪一档底色上由版面决定，判读只能按最坏那档算；取 min 两边自动
+    选对——深底上的浅字怕最亮那档，浅底上的深字怕最暗那档。早年版手挑中间档当
+    唯一边界，那是在赌；改取最坏后槽位判定一字不变，只是不再赌。
+
+    判据**只此一份**：check_svg（门禁）与 canvas_kit（取色）都调它。两处各写一
+    遍 min 的那天，两边就只是"恰好相等"——改一边另一边静默分家。
+    """
+    return min(contrast_ratio(color, s) for s in theme_bg_stops(theme))
+
+
+def ensure_text_contrast(color, backgrounds, target=4.5):
+    """accent 文字色的对比度保底：达标原样返回，否则朝黑/白逐步推移到达标。
+
+    darken/mix 的固定系数只保证"典型 accent × 典型底色"的观感，色板里的
+    中亮度色（黄、天蓝）在浅色主题下会跌破 hyperframes check 的门禁——
+    本函数把"调到位"从经验常数变成可证明的下界。方向跟随底色深浅
+    （浅底压向黑、深底提向白），推移从给定色起步。
+
+    默认 4.5 取的是 check 门禁的**最严一档**：同一元素在不同画幅会被
+    按不同字号阈值判 3.0/4.0/4.5（实测：kicker 横屏判 3:1、竖屏判
+    4.5:1），按最严的保底才能让两个画幅、任意 accent 都不再触发。
+    """
+    if not backgrounds:
+        return color
+
+    def worst(c):
+        return min(contrast_ratio(c, b) for b in backgrounds)
+
+    if worst(color) >= target:
+        return color
+    # 最坏底色决定推移方向
+    bg = min(backgrounds, key=lambda b: contrast_ratio(color, b))
+    lum = relative_luminance(bg)
+    toward = "#ffffff" if lum is not None and lum < 0.4 else "#000000"
+    # 停在"首个达标档"的下一档：check 与这里的亮度换算存在末位舍入差
+    # （实测 4.50 vs 4.48），留一档余量才不会贴着门禁线抖动。
+    for k in range(1, 19):  # 最多推到 0.90，仍不达标就用最极端的一档
+        if worst(mix(color, toward, k * 0.05)) >= target:
+            return mix(color, toward, min(0.95, (k + 1) * 0.05))
+    return mix(color, toward, 0.95)

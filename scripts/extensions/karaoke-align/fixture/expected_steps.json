@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"at_time": 0, "target": ".kch", "set": {"fill": "#5b6478"}, "duration": 0.01},
+    {"at_time": 0.12, "target": "#k0", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 0.38, "target": "#k1", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 0.61, "target": "#k2", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 0.9, "target": "#k3", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 1.2, "target": "#k4", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 1.55, "target": "#k5", "set": {"fill": "#f8d66d"}, "duration": 0.12},
+    {"at_time": 1.9, "target": "#k6", "set": {"fill": "#f8d66d"}, "duration": 0.12}
+  ]
+}

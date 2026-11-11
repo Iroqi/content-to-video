@@ -541,7 +541,12 @@ body{font-family:var(--ctv-font-family)}
    此行高下同样有余量，且两画幅 maxRows 预算都放得下（横屏 40px×1.4 的 7 行
    仍低于定高列预算）。1.25 时字形墨迹溢出被 overflow:hidden 裁掉。 */
 .ag-name{font-size:var(--ctv-ag-name);font-weight:700;line-height:1.4;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 45%,transparent)}
+/* 55% 是对比度下限算出来的，不是"看起来淡一点"的手调：45% 时把文字色按 alpha
+   合成到 dark 三档页底，最坏只有 4.087:1，低于 ensure_text_contrast 定的 4.5:1
+   （hyperframes check 对竖屏小字判的最严一档）。48% 刚过线，取 55% 留余量，
+   且仍明显弱于 100% 文字色的 16.96:1——时长是行尾次要信息，不该抢行名。
+   别改回 45%，也别直接换成实色：tests/test_text_contrast.py 守着这两件事。 */
+.ag-dur{margin-left:auto;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-dur);color:color-mix(in srgb,var(--ctv-text-color) 55%,transparent)}
 /* agenda 内的句子流随 flex 列文档流锚底：豁免竖屏钉底绝对定位，但保留
    与内容段同高的定高窗口（--ctv-verse-h）与 mask 渐隐——height:auto 会让
    长旁白按句数无限撑高、吃掉整列预算，把行列表挤出屏幕；定高窗口 +

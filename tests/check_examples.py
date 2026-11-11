@@ -60,6 +60,13 @@ EXAMPLES = [
         "anchor": '"title": "营收同比增长"',
         "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
     },
+    # 科普专项的六段推演稿：kicker 当进度、accent 当概念身份、推演段带 beats。
+    # 这份同时是「科普片从哪起手」的样板，必须整稿过 --dry-run。
+    {
+        "doc": os.path.join("references", "science.md"),
+        "anchor": '"title": "多数人的两个答案"',
+        "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
+    },
 ]
 
 

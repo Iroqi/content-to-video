@@ -21,16 +21,17 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 产物标 degraded）。打开 hf-project/index.html 看版式；配音后去掉 --until 才是出片。
 ```
 
-只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`kicker` 省了就没有标题上沿那行分类小字，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
+只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`kicker` 省了就没有标题上沿那行分类小字，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带；科普推演片的 `beats` 例外，必须在第 1 步写稿时定，见 `references/science.md`）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
 
 ## 这份文档怎么用
 按此刻这一步找那一行，出错按症状找同一张表。前五步对应 `run.py` 的五个阶段；第 3 步内部分 3a / 3b——**3a 选形式，看稿子就能答；3b 画图写编排，要等 `timing_manifest.json` 出来才卡得准点**。
 
 | 你正要做的事 / 症状 | 读这一份 | 什么时候可以跳过 |
 | --- | --- | --- |
-| 第 1 步写稿：`segments_source.json`；契约报错（字段名/取值/上墙字数）；**顺带定"演什么"**（`layout` / `beats`） | `references/writing.md` | 从不（第 1 步就要用） |
+| 第 1 步写稿：`segments_source.json`；契约报错（字段名/取值/上墙字数）；**顺带定"演什么"**（`layout` / `beats`）；**科普片按六步推演写、推演段必写 `beats`** → `references/science.md`（含可跑示例） | `references/writing.md` | 从不（第 1 步就要用） |
 | 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
 | 第 3a 步选形式：这一页要不要演、配图从哪来；缺图 / 图糊 / 被裁 / 生图崩字；「像手画的 / 像素风 / 要个会转的东西」这类说不出名字的画面 | `references/imagery.md` | 全片只要默认版式、不挑画风时 |
+| **科普 / 知识讲解片（主要用途）**：六步推演结构、术语首次定义、语义色、事实回查、意图→编排原语对照表、装饰档边界 | `references/science.md` | 不做科普片时；其余体裁见 `references/writing.md` |
 | 第 3b 步画 SVG：几何、对比度、字号、数据自查 | `references/canvas.md` | 不画 SVG 就不用读 |
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、每一拍怎么写 | `references/motion.md` | 该段不演时就跳过（演什么已在第 1 步定完） |
 | 第 3b 步一组元素逐个出场：多久演完、怎么分、从哪头起（`stagger`） | `references/stagger.md` | 这一拍只改一个元素时 |
@@ -40,12 +41,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 3b 步一组图形要"主体先动、链尾晚半拍跟上、全链一起落定"（拖曳档 `drag`） | `references/drag.md` | 元素本就该逐个出现（用 `stagger`）时 |
 | 第 3b 步要"一张画停几帧、换画时刻带手作不规则"（定格档 `step`） | `references/step.md` | 文字/表格要逐行落定、或要丝滑落位时 |
 | 第 3b 步落位之后别让画面整段静帧：静止窗口留多久、hold 期间推多少、怎么量"在不在动" | `references/hold.md` | 该段写了 `animate` 或本来就是满幅画布时 |
-| 第 3b 步要"不规则但逐帧可复现"的呼吸/漂浮、液态起伏（有机档 `organic`） | `references/organic.md` | 要到位停住、或本来就该完全周期时 |
-| 第 3b 步要"一帧里同时看见主体和它的几个过去"（残影档 `trail`） | `references/trail.md` | 要安静落位、文字数据图、或本来就不该有拖尾时 |
-| 第 3b 步要"一个扰动按几何距离传过去、每个格子波过回原位"（波场档 `wave`） | `references/wave.md` | 要逐个出现并留在画面上、文字数据图、或只有两三个元素时 |
-| 第 3b 步要"一整片元素沿画好的曲线流过去、各处朝不同方向拐弯"（流线档 `flow`） | `references/flow.md` | 要逐个出现、按距离扩散、文字数据图、或元素都在一段直线上时 |
-| 第 3b 步要"一枚透镜扫过、元素的位移方向在拍内跟着转、扫完精确回原位"（透镜档 `lens`） | `references/lens.md` | 要按距离扩散、沿曲线流走、文字数据图、或只有两三个元素时 |
-| 第 3b 步要"一整片点自己散开、互相避让、绕着彼此盘旋再收回"（群集档 `swarm`） | `references/swarm.md` | 要按距离扩散、沿曲线流走、逐个出现、文字数据图、或只有两三个元素时 |
+| 第 3b 步装饰性场档：`organic` 呼吸 / `trail` 残影 / `wave` 波场 / `flow` 流线 / `lens` 透镜 / `swarm` 群集 | 各自 `references/` 下同名文档，选型见 `references/motion.md` | 文字 / 公式 / 数据图与科普推演段一律不用，见 `references/science.md` |
 | 第 4 步预览、渲染、调性能参数；官方门禁 | `references/rendering.md` | 从不（第 4 步就要用） |
 | 第 4 步版式、动画落地、字幕怎么跟着念 | `references/look.md` | 全走默认版式时 |
 | 画面空 / 不动 / 换了页没东西 / 不知道该改哪 | `references/troubleshooting.md` | 没出问题就不用 |

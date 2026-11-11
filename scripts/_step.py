@@ -6,7 +6,7 @@
 配上每帧时刻的细微不规则，复刻定格动画与手绘的有机节奏。它不是「降帧率」——
 成片仍是 24fps 逐帧渲染，变的是**画面多久才换一张**。
 
-本仓库此前把一条运动能拆的域都拆完了：位置/形状（`to` / `morph` / `draw`）、
+已有档位把一条运动能拆的域都拆完了：位置/形状（`to` / `morph` / `draw`）、
 阻尼（`spring`）、速度（`momentum`）、相位（`drag`）、静止（`hold`）、时序
 （`stagger` / `decode`）。它们共同的前提是**连续、光滑、按满帧采样**：
 `_momentum.frames` / `_drag.frames` 都按 `duration × fps` 生成一条 `tl.set`，

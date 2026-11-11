@@ -10,7 +10,7 @@ images.json 的校验层；而 NaN 的**任何比较都为 False**（`nan < 0` �
 `hyperframes check` 全都一声不吭。这类"看起来校验过了"的静默退化，正是契约层
 该在入口挡掉的东西。
 
-本轮补的两类（修复前全绿，一条都没锁住）：
+契约层还要挡住两类容易整条漏过的输入：
 
 - **大到 float 装不下的整数**。JSON 允许任意精度数字，`json.load` 会把 `10**400`
   原样留成 int，而 `float(v)` 转不动它抛 `OverflowError`。守卫自己炸掉时调用链
@@ -21,8 +21,8 @@ images.json 的校验层；而 NaN 的**任何比较都为 False**（`nan < 0` �
   `1e-6 * length` 这条退化阈值变成 inf（有限跨度反被误判成「同一弧长」），
   `ends > length` 这条越界闸也被绕过——守卫失效且零报错。
 
-本轮再补两类。上一轮把谓词改成了纯判定，但没查「调用谓词之前还有没有裸
-`float()`」、也没查「补间变量这一层有没有调用谓词」：
+另有两类漏网出在「判定与取值的先后」上：谓词是纯判定，但仍要查「调用谓词之前
+有没有裸 `float()`」、以及「补间变量这一层有没有调用谓词」：
 
 - **补间变量表漏了有限性守卫**。`_validate_tween_leaf` 把 NaN / Infinity /
   `10**400` 当合法标量放行，而 `json.dumps` 会把前两个写成裸字面量（不是合法
@@ -258,7 +258,7 @@ class FlowGeometryRejectsNonFinite(unittest.TestCase):
         self.assertIn("非有限", str(cm.exception))
 
 
-# ── 本轮：契约层自己的两处漏网 ────────────────────────────────────────
+# ── 契约层入口的两类漏网 ────────────────────────────────────────
 
 # 覆盖尽量多数值字段的合法 images.json：属性补间一份、参数演绎一份。
 # 属性门禁拿它当底板，逐个数值叶子注入坏值——将来新增字段忘了守卫就会红。
@@ -433,10 +433,10 @@ class EveryMotionPlanUsesOneBoundsGuard(unittest.TestCase):
     """修复前：九个动效档各抄一份 `float(duration)` + `math.isfinite()`。
 
     超大整数（JSON 允许任意精度）让 `float()` 抛 OverflowError，调用链只捕
-    ValueError，整条 build traceback；而 `test_motion_validators_and_plans_reject_it`
-    只测了当时修过的 flow / lens 两档，其余七档一直漏着。现在所有档都委托
-    `_validate.plan_bounds`：行为判据锁在共享函数上，再用一道源码扫描钉住
-    「每一档都得调它」，免得下一档又自带一份 float() 重新分家。
+    ValueError，整条 build traceback；各档各自实现时，行为判据只能逐档补，
+    漏一档就漏一类坏输入。现在所有档都委托 `_validate.plan_bounds`：行为判据
+    锁在共享函数上，再用一道源码扫描钉住「每一档都得调它」，防止新增档位
+    把真源重新拆开。
     """
 
     BAD_BOUNDS = (HUGE, -HUGE, float("nan"), float("inf"), float("-inf"),

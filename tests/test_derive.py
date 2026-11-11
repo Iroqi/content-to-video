@@ -492,7 +492,7 @@ class Renderer(unittest.TestCase):
 
 
 class DeadCodeStaysOut(unittest.TestCase):
-    """本轮清掉的死代码：它们在仓库里零调用方，靠"将来可能用得上"续命。
+    """不许留死代码：它们在仓库里零调用方，靠"将来可能用得上"续命。
 
     `_derive.span()` 尤其典型——docstring 说"起点 + 时长"，函数体只取了
     duration。契约与实现不符却没人发现，正是因为它一次都没被调用过。

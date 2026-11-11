@@ -571,7 +571,7 @@ class SvgChecker(unittest.TestCase):
             '<line x1="100" y1="500" x2="400" y2="500" stroke="#fff" data-free-ends="1"/></svg>'))
         self.assertFalse(any("端点悬空" in w for w in warns), warns)
 
-    # ── 本轮帕累托修复的证伪 ──────────────────────────────
+    # ── 帕累托边界的证伪 ──────────────────────────────
 
     def test_line_ending_on_filled_path_edge_passes(self):
         """证伪：填充态 path 的轮廓也是合法落点，此前只收 stroke_on 的 path。

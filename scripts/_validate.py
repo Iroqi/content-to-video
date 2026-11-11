@@ -105,11 +105,11 @@ def is_finite_number(value):
 def finite_float(value, where, field):
     """把任意输入安全地转成有限 float；坏输入只抛带定位的 ValueError。
 
-    动效档的 `plan()` 过去各抄一份 `float(v)` + `math.isfinite(v)`。JSON 允许
-    任意精度整数（`10**400` 原样留成 int），`float()` 转不动它抛 OverflowError；
-    调用链只捕 ValueError，整条 build 会 traceback 且丢掉「哪一拍坏了」的现场。
-    NaN/±Inf 同理：任何比较都为 False，范围检查会把它整条放行。这一层把三类
-    坏输入统一收成一条 ValueError，谓词复用 is_finite_number（真源只有一份）。
+    JSON 允许任意精度整数（`10**400` 原样留成 int），`float()` 转不动它抛
+    OverflowError；调用链只捕 ValueError，整条 build 会 traceback 且丢掉
+    「哪一拍坏了」的现场。NaN/±Inf 同理：任何比较都为 False，范围检查会把它
+    整条放行。这一层把三类坏输入统一收成一条 ValueError，谓词复用
+    is_finite_number（真源只有一份），动效档的 `plan()` 都从这儿进。
     """
     if not is_finite_number(value):
         raise ValueError(f"{where} 的 {field} 必须是有限数（实际: {value!r}）")

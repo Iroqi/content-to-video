@@ -246,9 +246,9 @@ def _official_gate(project, command):
 def _run_perceptual(project, tm, aspect, command):
     """跑观感门禁，把判词写进制作报告并打到 stdout（只报不拦）。
 
-    `--until html` / `check` / 定稿渲染三档共用这一份。三档都调它，是因为
-    "在 html 与 render 分支各贴一段、漏了 check" 正是本轮要修的那种失效：
-    漏贴不报错，只是那一档的判词凭空消失、报告里连一条 skipped 都没有。
+    `--until html` / `check` / 定稿渲染三档共用这一份。三档都调它，是为了不让
+    "在 html 与 render 分支各贴一段、漏了 check" 这种漏贴发生：漏贴不报错，
+    只是那一档的判词凭空消失、报告里连一条 skipped 都没有。
     三档的帧都取自同一份已生成的 HTML，量的是编排本身。
     """
     _r = perceptual.run_gate(project, tm, os.path.join(project, "perceptual"),

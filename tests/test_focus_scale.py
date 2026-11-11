@@ -2,11 +2,11 @@
 
 动机：焦点衰减只做了一维——"远"只被表达
 成"暗"，同一档里第 2 行和第 4 行一样远。前沿歌词 UI（逐行歌词、逐字
-Music Like Lyrics 的 spring）让层级同时落在透明度与缩放上。本轮补上尺寸那一维：
+Music Like Lyrics 的 spring）让层级同时落在透明度与缩放上。尺寸那一维这样落：
 同一条几何曲线、另一个 ratio，走 transform 而不是 font-size（改字号会重排：折行
 点变、offsetTop 变、覆盖层折到别处＝重影）。
 
-这轮还顺手堵了一个覆盖层的坑：`--ctv-ved-dx` 用 getBoundingClientRect 量，而
+另有覆盖层的一个坑：`--ctv-ved-dx` 用 getBoundingClientRect 量，而
 覆盖层首次上屏几乎总在换句那一帧、正是 scale 最小的时候——不除回 scale，对话段
 首句会少算 6%，覆盖层整体左移 4.1px。
 """

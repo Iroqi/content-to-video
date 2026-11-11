@@ -1,4 +1,4 @@
-"""本轮复审修的每一条，配一条**在修复前会红**的测试。
+"""跨模块契约键与几何判据：每条配一条**在修复前会红**的测试。
 
 每条注释写明"修复前它是什么样"——测试要锁的是那个错误行为不再回来，不是锁
 当前的某个数字。
@@ -97,8 +97,8 @@ class AspectToleranceSingleSource(unittest.TestCase):
 class CrossModuleKeysSingleSource(unittest.TestCase):
     """跨模块契约键/阈值只有一份字面量。
 
-    上一轮修的是"合成 ID 三处硬编码"。同一类病没修完：下面每条在修复前都是
-    **两处各写一个字面量**，靠注释约定"两边必须一致"——而注释不会拦人。
+    下面每条在修复前都是**两处各写一个字面量**，靠注释约定"两边必须一致"
+    ——而注释不会拦人。
     值相等的断言本身很弱（短字符串会被 intern，`is` 也相等），所以每条都配
     一句源码级断言：常量只能在一处被**赋值**。
     """
@@ -184,9 +184,8 @@ class CrossModuleKeysSingleSource(unittest.TestCase):
 class NoDuplicatedCrossModuleConstants(unittest.TestCase):
     """跨模块同名同值的模块级常量，一个都不留。
 
-    上一轮修了"合成 ID 三处硬编码"，本轮又修了 `attr` 键名、`data-ctv-stage`、
-    渲染超时 1800、padding 解析——**每次都是靠人读代码发现的**。这条把发现动作
-    自动化：顶层 `NAME = 字面量` 若在两个以上模块各写一份，就是同一语义各自维护，
+    跨模块键名、告警文案里的 `data-ctv-stage`、渲染超时 1800、padding 解析这类
+    常量，靠人读代码才能发现它们被写了两份。这条把发现动作自动化：顶层 `NAME = 字面量` 若在两个以上模块各写一份，就是同一语义各自维护，
     改一处漏一处且不报错。`from x import Y` 不是赋值，导入方不算重复。
     """
 

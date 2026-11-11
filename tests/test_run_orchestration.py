@@ -761,7 +761,7 @@ class CheckUntilRunsPerceptual(unittest.TestCase):
         self.assertNotIn("perceptual", self.h.report())
 
     def test_html_and_check_share_one_implementation(self):
-        """两档的判词必须同源：各贴一段正是本轮失效的成因。"""
+        """两档的判词必须同源：各贴一段就会漏掉一档。"""
         self._invoke(["--until", "html", "--perceptual"])
         html_report = self.h.report()["perceptual"]
         _fake_gate.calls = []

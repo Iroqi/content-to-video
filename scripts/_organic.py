@@ -65,7 +65,8 @@ import math
 # 就会改一处漏一处，而且不报任何错（test_shared_geometry 钉着这条纪律）。
 from _drag import PRODUCT_EPS, SCAN_SAMPLES
 from _momentum import SAMPLES_MIN, SAMPLES_MAX
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）────────────────────────────
 # 谐波层数。少于 3 层读不出「不重复」，多于 5 层在 24fps 下会读成高频噪声。
@@ -176,14 +177,7 @@ def plan(cfg, duration, fps, where="organic"):
     渲染端写 `tl.set` 需要的全部数值，不在两处各算一遍。
     """
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur < MIN_DURATION:
-        raise ValueError(f"{where} 的 duration 必须 ≥ {MIN_DURATION}s（帧时刻锁"
-                         f"两位，短于此会让两个采样撞进同一格、静默少一帧；"
-                         f"实际: {duration!r}）")
-    f = float(fps)
-    if not math.isfinite(f) or f <= 0:
-        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    dur, f = plan_bounds(duration, fps, where, min_duration=MIN_DURATION)
     return {
         "cfg": c,
         "duration": dur,

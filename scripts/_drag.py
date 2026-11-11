@@ -51,7 +51,8 @@ from _ease import curve, split_ease, validate_ease, reject_overshoot
 # 生成期采样密度是两档共用的同一条工程判据（每帧一条 tl.set、下限看得见、
 # 上限防产物膨胀）。写成两份字面量就会改一处漏一处，且不报任何错。
 from _momentum import SAMPLES_MIN, SAMPLES_MAX
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）────────────────────────────
 # 链尾的最大相位滞后 / 总时长。超过 1/3 时链首已落定、链尾还没起步，读到的是
@@ -152,9 +153,7 @@ def _local_progress(q, phi):
 def plan(cfg, duration, fps, where="drag"):
     """把一条 `drag` 拍编译成链上每个元素的相位与幅度。生成期与判据共用这一份。"""
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur <= 0:
-        raise ValueError(f"{where} 的 duration 必须 > 0（实际: {duration!r}）")
+    dur, f = plan_bounds(duration, fps, where, allow_equal_min=False, fps_floor=1.0)
     n = len(c["chain"])
     phases = [c["lag"] * i / (n - 1) for i in range(n)]
     amps = [c["overshoot"] * c["decay"] ** i for i in range(n)]
@@ -164,7 +163,7 @@ def plan(cfg, duration, fps, where="drag"):
         "curve": curve(c["ease"], DEFAULT_EASE),
         "phases": phases,
         "amps": amps,
-        "fps": max(1.0, float(fps)),
+        "fps": f,
     }
 
 

@@ -84,8 +84,10 @@ from _ease import curve, split_ease, validate_ease, reject_overshoot
 from _drag import (PRODUCT_EPS, SCAN_SAMPLES, DEFAULT_EASE,
                    _ALLOWED_FAMILIES, _ALLOWED_DIRECTIONS)
 from _organic import MIN_DURATION
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
-from _field import clamp as _clamp, clean as _clean, frame_count  # noqa: E402  采样骨架只有一份
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
+from _field import (clamp as _clamp, clean as _clean, frame_count,  # noqa: E402  采样骨架只有一份
+                    sample_frames)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）────────────────────────────
 # 影子层数。前沿工作流的口径是 2~5 份副本；1 层读不出「一串」，多于 6 层在
@@ -178,11 +180,7 @@ def _raw_speed(u, f):
 def _core(cfg, duration, target, where="trail"):
     """与 fps 无关的轨迹内核。plan 与跨段接续共用这一份，不各写一遍公式。"""
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur < MIN_DURATION:
-        raise ValueError(f"{where} 的 duration 必须 ≥ {MIN_DURATION}s（帧时刻锁"
-                         f"两位，短于此会让两个采样撞进同一格、静默少一帧；"
-                         f"实际: {duration!r}）")
+    dur = plan_duration(duration, where, min_duration=MIN_DURATION)
     f = curve(c["ease"], DEFAULT_EASE)
     # 速度门 G = W·f′ 的峰值。窗口与速度各自归一再相乘会叠成两级衰减，
     # 影子暗到看不见；这里只归一一次，G 的峰值恰为 1。
@@ -198,9 +196,7 @@ def _core(cfg, duration, target, where="trail"):
 def plan(cfg, duration, fps, target, where="trail"):
     """把一条 `trail` 拍编译成可采样的计划。生成期与判据共用这一份。"""
     p = _core(cfg, duration, target, where)
-    f = float(fps)
-    if not math.isfinite(f) or f <= 0:
-        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    _, f = plan_bounds(p["duration"], fps, where)
     p["fps"] = f
     c = p["cfg"]
     k = len(c["ghosts"])
@@ -261,16 +257,8 @@ def frames(p):
     时刻按 1/fps 网格取、精度锁两位；排序键是 (时刻, 层下标)，不是 id 字面量——
     层序是导演意图（主体在前、影子按滞后递增），不能被字典序洗掉。
     """
-    n = frame_count(p)
-    acc = {}
-    for k in range(n + 1):
-        t = p["duration"] * k / n
-        tr = round(t, 2)
-        for i, sel in enumerate(p["selectors"]):
-            acc[(tr, i)] = (sel, {key: _clean(v)
-                                  for key, v in state_at(t, p, i).items()})
-    return [(tr, sel, vars_)
-            for (tr, _i), (sel, vars_) in sorted(acc.items())]
+    return sample_frames(p, state_at,
+                         transform=lambda v: {k: _clean(x) for k, x in v.items()})
 
 
 def start(p, i=0):

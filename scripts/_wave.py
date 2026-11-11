@@ -87,8 +87,10 @@ from _drag import PRODUCT_EPS
 from _organic import MIN_DURATION
 from _cam_crop import CAM_ID, decompose_transform, _box
 from _svg_sanitize import _local
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
-from _field import clamp as _clamp, clean as _clean, frame_count  # noqa: E402  采样骨架只有一份
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
+from _field import (clamp as _clamp, clean as _clean, frame_count,  # noqa: E402  采样骨架只有一份
+                    sample_frames)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）──────────────────────────
 # 参与格子数。1 个谈不上「传」，多于 12 个在 24fps 下每帧 12 条以上 tl.set，
@@ -274,14 +276,7 @@ def geometry(svg_text, cfg, where="wave"):
 def plan(cfg, duration, fps, svg_text, target, where="wave"):
     """把一条 `wave` 拍编译成可采样的计划。生成期与判据共用这一份。"""
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur < MIN_DURATION:
-        raise ValueError(f"{where} 的 duration 必须 ≥ {MIN_DURATION}s（帧时刻锁"
-                         f"两位，短于此会让两个采样撞进同一格、静默少一帧；"
-                         f"实际: {duration!r}）")
-    f = float(fps)
-    if not math.isfinite(f) or f <= 0:
-        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    dur, f = plan_bounds(duration, fps, where, min_duration=MIN_DURATION)
     if c["cells"][0] != target:
         raise ValueError(f"{where}.cells[0] 必须等于 target={target!r}：波头就是"
                          "这一拍的目标，接续烘焙与按文件拦都只认 step 级 target"
@@ -348,15 +343,7 @@ def frames(p):
     时刻按 1/fps 网格取、精度锁两位；排序键是 (时刻, 格子下标)，不是 id 字面量——
     写入顺序是作者给的 `cells` 序（导演意图），不能被字典序洗掉。
     """
-    n = frame_count(p)
-    acc = {}
-    for k in range(n + 1):
-        t = p["duration"] * k / n
-        tr = round(t, 2)
-        for i, sel in enumerate(p["selectors"]):
-            acc[(tr, i)] = (sel, state_at(t, p, i))
-    return [(tr, sel, vars_)
-            for (tr, _i), (sel, vars_) in sorted(acc.items())]
+    return sample_frames(p, state_at)
 
 
 def start(p, i=0):

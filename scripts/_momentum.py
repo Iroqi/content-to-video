@@ -42,7 +42,8 @@ bounce）与弹簧的速度会反号，拉伸变成挤压，语义就翻了。
 import math
 
 from _ease import curve, split_ease, validate_ease, reject_overshoot
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）────────────────────────────
 # 预备幅度 / 行程：超过 1/3 就不是「蓄力」，是一次看得见的反向运动。
@@ -164,9 +165,7 @@ def plan(cfg, duration, fps, where="momentum"):
     渲染端写 `tl.set` 需要的全部数值，不在两处各算一遍。
     """
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur <= 0:
-        raise ValueError(f"{where} 的 duration 必须 > 0（实际: {duration!r}）")
+    dur, fps_val = plan_bounds(duration, fps, where, allow_equal_min=False, fps_floor=1.0)
     a = dur * ANTICIPATION_TIME_FRAC
     fol = dur * FOLLOW_TIME_FRAC
     f, v = _velocity_pack(c["ease"])
@@ -180,7 +179,7 @@ def plan(cfg, duration, fps, where="momentum"):
         "follow_duration": fol,
         "curve": f,
         "velocity": v,
-        "fps": max(1.0, float(fps)),
+        "fps": fps_val,
     }
 
 

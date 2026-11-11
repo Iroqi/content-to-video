@@ -63,7 +63,8 @@ from _drag import (DEFAULT_EASE, PRODUCT_EPS,
 # 满帧数/every，不会比 momentum 的满帧采样更膨胀；直接复用常量，不在
 # 本模块另写一份字面量。
 from _momentum import SAMPLES_MAX as MAX_STEPS
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）──────────────────────────
 # 每步帧数：1 就是满帧（没有定格可谈），>4 时 24fps 下只剩 6 张/秒，
@@ -162,10 +163,7 @@ def _weights(m, wavelength):
 def plan(cfg, duration, fps, where="step"):
     """把一条 `step` 拍编译成 M+1 张唯帧的时刻与位置比。生成期与判据共用这一份。"""
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur <= 0:
-        raise ValueError(f"{where} 的 duration 必须 > 0（实际: {duration!r}）")
-    f = max(1.0, float(fps))
+    dur, f = plan_bounds(duration, fps, where, allow_equal_min=False, fps_floor=1.0)
     k = c["every"]
     m = math.ceil(dur * f / k)
     if m + 1 < MIN_UNIQUE_FRAMES:

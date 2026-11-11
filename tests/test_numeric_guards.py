@@ -49,6 +49,7 @@ import _momentum
 import _organic
 import _step as STEP_MOD  # 不能叫 _step：本文件已有的 _step() helper 会把它遮掉
 import _trail
+import _swarm
 import _wave
 from _images_schema import validate_images_json
 from _script_utils import num_fmt
@@ -426,6 +427,46 @@ class EveryNumericLeafIsGuarded(unittest.TestCase):
                             validate_images_json(data)
         self.assertGreaterEqual(
             total, 15, "底板要真的覆盖到足够多的数值字段，否则这道闸是空的")
+
+
+class EveryMotionPlanUsesOneBoundsGuard(unittest.TestCase):
+    """修复前：九个动效档各抄一份 `float(duration)` + `math.isfinite()`。
+
+    超大整数（JSON 允许任意精度）让 `float()` 抛 OverflowError，调用链只捕
+    ValueError，整条 build traceback；而 `test_motion_validators_and_plans_reject_it`
+    只测了当时修过的 flow / lens 两档，其余七档一直漏着。现在所有档都委托
+    `_validate.plan_bounds`：行为判据锁在共享函数上，再用一道源码扫描钉住
+    「每一档都得调它」，免得下一档又自带一份 float() 重新分家。
+    """
+
+    BAD_BOUNDS = (HUGE, -HUGE, float("nan"), float("inf"), float("-inf"),
+                  None, [], "1", True)
+
+    def test_shared_bounds_turn_every_bad_value_into_value_error(self):
+        from _validate import plan_bounds, plan_duration
+        for bad in self.BAD_BOUNDS:
+            for field in ("duration", "fps"):
+                kw = {"duration": 1.2, "fps": 24}
+                kw[field] = bad
+                with self.subTest(field=field, bad=repr(bad)[:20]):
+                    with self.assertRaises(ValueError):
+                        plan_bounds(kw["duration"], kw["fps"], "用例")
+                    with self.assertRaises(ValueError):
+                        plan_duration(bad, "用例")
+        self.assertEqual(plan_bounds(1.2, 24, "用例"), (1.2, 24))
+        self.assertEqual(plan_bounds(1.2, 0.01, "用例", fps_floor=1.0),
+                         (1.2, 1.0))
+
+    def test_no_motion_plan_casts_bounds_itself(self):
+        import inspect
+        for mod in (_drag, _flow, _lens, _momentum, _organic,
+                    STEP_MOD, _trail, _swarm, _wave):
+            with self.subTest(mod=mod.__name__):
+                body = inspect.getsource(mod.plan)
+                self.assertIn("plan_bounds", body)
+                self.assertNotIn("float(duration)", body)
+                self.assertNotIn("float(fps)", body)
+        self.assertIn("plan_duration", inspect.getsource(_trail._core))
 
 
 if __name__ == "__main__":

@@ -102,6 +102,49 @@ def is_finite_number(value):
         return False
 
 
+def finite_float(value, where, field):
+    """把任意输入安全地转成有限 float；坏输入只抛带定位的 ValueError。
+
+    动效档的 `plan()` 过去各抄一份 `float(v)` + `math.isfinite(v)`。JSON 允许
+    任意精度整数（`10**400` 原样留成 int），`float()` 转不动它抛 OverflowError；
+    调用链只捕 ValueError，整条 build 会 traceback 且丢掉「哪一拍坏了」的现场。
+    NaN/±Inf 同理：任何比较都为 False，范围检查会把它整条放行。这一层把三类
+    坏输入统一收成一条 ValueError，谓词复用 is_finite_number（真源只有一份）。
+    """
+    if not is_finite_number(value):
+        raise ValueError(f"{where} 的 {field} 必须是有限数（实际: {value!r}）")
+    return float(value)
+
+
+def plan_duration(duration, where, *, min_duration=0.0, allow_equal_min=True):
+    """step 级时长的统一入口：返回 float，坏值只抛带 where 的 ValueError。"""
+    dur = finite_float(duration, where, "duration")
+    if dur < min_duration or (not allow_equal_min and dur == min_duration):
+        op = "≥" if allow_equal_min else ">"
+        note = ("（帧时刻锁两位，短于此会让两个采样撞进同一格、静默少一帧）"
+                if min_duration > 0 else "")
+        raise ValueError(f"{where} 的 duration 必须 {op} {min_duration}s{note}"
+                         f"（实际: {duration!r}）")
+    return dur
+
+
+def plan_bounds(duration, fps, where, *, min_duration=0.0,
+                allow_equal_min=True, fps_floor=0.0):
+    """动效档 `plan()` 的 duration/fps 统一入口，返回 `(dur, f)`。
+
+    九个档曾各抄一份这段校验，修一处漏七处：只有 flow / lens 用上了数值守卫，
+    其余七档遇到 `10**400` 仍把 OverflowError 漏给调用方。收敛到这一份之后，
+    新档只要调它就不会重犯。fps_floor 保留 drag/step/momentum 三档「至少
+    1 帧/秒」的钳制语义，其余档传 0.0，只做正有限数校验。
+    """
+    dur = plan_duration(duration, where, min_duration=min_duration,
+                        allow_equal_min=allow_equal_min)
+    f = finite_float(fps, where, "fps")
+    if f <= 0:
+        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    return dur, max(f, fps_floor)
+
+
 def _validate_finite_number(value, where, *, nonnegative=False, positive=False):
     """Validate numeric manifest fields without accepting booleans or NaN/Inf."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):

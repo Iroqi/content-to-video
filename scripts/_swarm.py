@@ -93,7 +93,9 @@ from _organic import MIN_DURATION
 from _cam_crop import CAM_ID
 from _svg_sanitize import _local
 from _lens import _bbox_of  # noqa: E402  包围盒/仿射口径只有一份，见模块头
-from _field import clamp as _clamp, clean as _clean, frame_count  # noqa: E402  采样骨架只有一份
+from _field import (clamp as _clamp, clean as _clean, frame_count,  # noqa: E402  采样骨架只有一份
+                    sample_frames)
+from _validate import plan_bounds  # noqa: E402  plan 的数值守卫只有一份真源
 
 # ── 红线（工程判据，不进模板、不给 --set 改）──────────────────────────
 # 参与元素数。2 个只能「互相推开」，谈不上群集，也排不出两个不同朝向；
@@ -318,14 +320,7 @@ def geometry(svg_text, cfg, where="swarm"):
 def plan(cfg, duration, fps, svg_text, target, where="swarm"):
     """把一条 `swarm` 拍编译成可采样的计划。生成期与判据共用这一份。"""
     c = validate(cfg, where)
-    dur = float(duration)
-    if not math.isfinite(dur) or dur < MIN_DURATION:
-        raise ValueError(f"{where} 的 duration 必须 ≥ {MIN_DURATION}s（帧时刻锁"
-                         f"两位，短于此会让两个采样撞进同一格、静默少一帧；"
-                         f"实际: {duration!r}）")
-    f = float(fps)
-    if not math.isfinite(f) or f <= 0:
-        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    dur, f = plan_bounds(duration, fps, where, min_duration=MIN_DURATION)
     if c["cells"][0] != target:
         raise ValueError(f"{where}.cells[0] 必须等于 target={target!r}：群头就是"
                          "这一拍的目标，接续烘焙与按文件拦都只认 step 级 target"
@@ -378,15 +373,7 @@ def frames(p):
     时刻按 1/fps 网格取、精度锁两位；排序键是 (时刻, 元素下标)，不是 id 字面量——
     写入顺序是作者给的 `cells` 序（导演意图），不能被字典序洗掉。
     """
-    n = frame_count(p)
-    acc = {}
-    for k in range(n + 1):
-        t = p["duration"] * k / n
-        tr = round(t, 2)
-        for i, sel in enumerate(p["selectors"]):
-            acc[(tr, i)] = (sel, state_at(t, p, i))
-    return [(tr, sel, vars_)
-            for (tr, _i), (sel, vars_) in sorted(acc.items())]
+    return sample_frames(p, state_at)
 
 
 def start(p, i=0):

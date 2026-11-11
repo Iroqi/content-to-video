@@ -743,7 +743,6 @@ def _validate_steps(key, block, what="steps"):
     return block
 
 
-
 # 已删除的键 → "现在怎么表达同一件事"。这些键不进键集（写了照样报未知键），但报错
 # 文案要替作者把路指对：只说"不认识 stage"等于把人留在原地。
 RETIRED_ENTRY_KEYS = {
@@ -1137,7 +1136,7 @@ def validate_derive(key, block):
             raise ValueError(
                 f"{where}.params 的参数名 {name!r} 不合法：它要出现在表达式里，"
                 "只收字母或下划线开头、字母/数字/下划线、≤32 字符")
-        if not _finite(v):
+        if not is_finite_number(v):
             raise ValueError(f"{where}.params.{name} 的初值必须是有限数字"
                              f"（NaN/Infinity 不算数；实际: {v!r}）")
     steps = block.get("steps")
@@ -1180,7 +1179,7 @@ def validate_derive(key, block):
             raise ValueError(f"{w} 缺 'to'（这一步要把 {pname} 推到多少）——"
                              "参数演绎必须给终点")
         for k in ("to", "from"):
-            if k in st and not _finite(st[k]):
+            if k in st and not is_finite_number(st[k]):
                 raise ValueError(f"{w} 的 {k} 必须是有限数字（实际: {st[k]!r}）")
     binds = block.get("bind")
     if not isinstance(binds, list) or not binds:
@@ -1207,10 +1206,6 @@ def validate_derive(key, block):
         except ExprError as e:
             raise ValueError(str(e))
     return block
-
-
-def _finite(v):
-    return is_finite_number(v) and not isinstance(v, bool)
 
 
 def _validate_steps_probe(step, where):

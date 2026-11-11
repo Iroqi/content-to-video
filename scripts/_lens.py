@@ -91,8 +91,10 @@ from _organic import MIN_DURATION
 from _cam_crop import CAM_ID, _box
 from _svg_sanitize import _local
 from _wave import affine_to  # noqa: E402  包围盒/仿射口径只有一份
-from _validate import is_finite_number as _finite  # noqa: E402  数值守卫只有一份真源（拒 NaN/Inf/超大整数）
-from _field import clamp as _clamp, clean as _clean, frame_count  # noqa: E402  采样骨架只有一份
+from _validate import (is_finite_number as _finite, plan_bounds,  # noqa: E402  数值守卫 / plan 入口只有一份真源
+                       plan_duration)
+from _field import (clamp as _clamp, clean as _clean, frame_count,  # noqa: E402  采样骨架只有一份
+                    sample_frames)
 
 # ── 红线（工程判据，不进模板、不给 --set 改）──────────────────────────
 # 参与元素数。1 个谈不上「一整片被折射」；多于 12 个在 24fps 下每帧 12 条
@@ -290,17 +292,7 @@ def geometry(svg_text, cfg, where="lens"):
 def plan(cfg, duration, fps, svg_text, target, where="lens"):
     """把一条 `lens` 拍编译成可采样的计划。生成期与判据共用这一份。"""
     c = validate(cfg, where)
-    # 先过数值守卫再 float()：JSON 允许任意精度整数，float(10**400) 抛
-    # OverflowError；调用链只捕获 ValueError，守卫自己炸掉会让整条 build
-    # traceback 而不是报「哪一条拍的 duration 坏了」。
-    dur = float(duration) if _finite(duration) else None
-    if dur is None or dur < MIN_DURATION:
-        raise ValueError(f"{where} 的 duration 必须 ≥ {MIN_DURATION}s（帧时刻锁"
-                         f"两位，短于此会让两个采样撞进同一格、静默少一帧；"
-                         f"实际: {duration!r}）")
-    f = float(fps) if _finite(fps) else None
-    if f is None or f <= 0:
-        raise ValueError(f"{where} 的 fps 必须是正的有限数（实际: {fps!r}）")
+    dur, f = plan_bounds(duration, fps, where, min_duration=MIN_DURATION)
     if c["cells"][0] != target:
         raise ValueError(f"{where}.cells[0] 必须等于 target={target!r}：折射头就是"
                          "这一拍的目标，接续烘焙与按文件拦都只认 step 级 target"
@@ -378,15 +370,7 @@ def frames(p):
     时刻按 1/fps 网格取、精度锁两位；排序键是 (时刻, 元素下标)，不是 id 字面量——
     写入顺序是作者给的 `cells` 序（导演意图），不能被字典序洗掉。
     """
-    n = frame_count(p)
-    acc = {}
-    for k in range(n + 1):
-        t = p["duration"] * k / n
-        tr = round(t, 2)
-        for i, sel in enumerate(p["selectors"]):
-            acc[(tr, i)] = (sel, state_at(t, p, i))
-    return [(tr, sel, vars_)
-            for (tr, _i), (sel, vars_) in sorted(acc.items())]
+    return sample_frames(p, state_at)
 
 
 def start(p, i=0):

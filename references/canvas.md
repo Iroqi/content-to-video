@@ -4,6 +4,8 @@
 
 > **动笔前先读这五节**：「画布几何」「不铺满幅底」「图内文字的对比度」「数据图的几何自查」「文字与尺寸」——画错不会有任何报错，只在成片上看出来。整页画布（`layout:"canvas"`）再加「整页画布的密度与层次」。选不选 SVG 见 `references/writing.md`「哪些段值得交给 canvas」与 `references/imagery.md`；画面出问题按 `references/troubleshooting.md`查。
 
+**名词先说清**：`layout:"canvas"` 是「整页画布」这个版式的名字，**不是** HTML `<canvas>` 元素，本文件里所有画面都是 SVG。外部图以 `<img>` 载入，写了 `animate` 的那张才内联成活 DOM 由时间线按 `#id` 驱动；仓库没有 2D context / WebGL，也不在渲染端塞第三方库。换画风走编译期扩展（见 `references/extensions.md`），要 shader / 三维 / 角色表演走预渲染素材（见 `references/formats.md` 第三节）。
+
 ## SVG 矢量示意图
 
 数据图、公式、示意图走这一条；不带文字的画面先走生图。**图不等于简笔线框图**：渐变、光影层次、等距视角、装饰细节都该上。

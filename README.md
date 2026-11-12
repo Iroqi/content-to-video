@@ -114,6 +114,7 @@ scripts/     脚本与页面资产（只依赖标准库）
   html_renderer.py    稿件时间轴 → 成片 HTML（含 GSAP 时间线）
   perceptual.py       观感门禁：取帧、量画面、出 contact sheet（交付第 3 道）
   check_svg.py        画好的 SVG 过一遍几何/对比度/字号/数据自查
+  attach_media.py     主管线之外：预渲染视频素材接成合规 images.json 条目
   _template.py        视觉真源：版式、字体、动画参数的**唯一**来源
   _theme.py           配色真源
   _assets/            页面资产：composition.css / runtime.js / preview.js
@@ -131,6 +132,7 @@ tests/       契约测试 ＋ 五道检查脚本
 | 你正要做的事 / 症状 | 读这一份 |
 | --- | --- |
 | 第 1 步写稿、字段报错、字数上墙；顺带定"演什么"（`layout` / `beats`） | [`references/writing.md`](references/writing.md) |
+| 八类体裁各能交到什么程度；三维 / 着色器 / 网页导览共用的预渲染素材接入片段与管家 CLI | [`references/formats.md`](references/formats.md) |
 | 第 2 步配音、音色表、降级行为 | [`references/tts_pipeline.md`](references/tts_pipeline.md) |
 | 第 3a 步选形式、素材落 `images.json`、生图崩字；「像手画的 / 像素风 / 要个会转的东西」这类说不出名字的画面 | [`references/imagery.md`](references/imagery.md) |
 | 给扩展作者：编译期扩展点的契约、红线、内置画风映射 | [`references/extensions.md`](references/extensions.md) |

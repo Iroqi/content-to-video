@@ -59,6 +59,10 @@ SNIPPETS = [
      '"cells": ["#d1"', "lens.md「契约与旋钮」的透镜拍示例"),
     (os.path.join("references", "swarm.md"),
      '"swarm": {"cells": ["#d1"', "swarm.md「契约与旋钮」的群集拍示例"),
+    # 体裁适配矩阵里 B 档三类共用的预渲染素材接入片段：三维 / 着色器 /
+    # 网页导览都照抄这一份，字段名拼错一半时契约层要当场报出来。
+    (os.path.join("references", "formats.md"),
+     '"media_start": 0.4', "formats.md 的 B 档素材接入片段"),
 ]
 
 

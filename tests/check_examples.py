@@ -67,6 +67,13 @@ EXAMPLES = [
         "anchor": '"title": "多数人的两个答案"',
         "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
     },
+    # 体裁适配矩阵的网页导览稿：B 档素材段也按普通解说写，整稿可过 dry-run。
+    # 与同文档里那份 images.json 片段配对，抄过去就能直接出预览。
+    {
+        "doc": os.path.join("references", "formats.md"),
+        "anchor": '"title": "仓库网页导览"',
+        "argv": ["scripts/run.py", "--source", "{spec}", "--dry-run"],
+    },
 ]
 
 

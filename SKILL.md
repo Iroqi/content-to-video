@@ -32,6 +32,7 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 | 第 2 步配音 | `references/tts_pipeline.md` | 参数与音色全走默认时 |
 | 第 3a 步选形式：这一页要不要演、配图从哪来；缺图 / 图糊 / 被裁 / 生图崩字；「像手画的 / 像素风 / 要个会转的东西」这类说不出名字的画面 | `references/imagery.md` | 全片只要默认版式、不挑画风时 |
 | **科普 / 知识讲解片（主要用途）**：六步推演结构、术语首次定义、语义色、事实回查、意图→编排原语对照表、装饰档边界 | `references/science.md` | 不做科普片时；其余体裁见 `references/writing.md` |
+| **八类体裁的能力边界**（宣传片 / 数据动画 / 代码讲解 / 三维 / 数学 / 着色器 / 角色动画 / 网页导览）：评级、代码真源、缺口、预渲染素材接入清单 | `references/formats.md` | 已定体裁、只需核对写法时 |
 | 第 3b 步画 SVG：几何、对比度、字号、数据自查 | `references/canvas.md` | 不画 SVG 就不用读 |
 | 第 3b 步把台词板落成 `animate`：该不该动、动多快、每一拍怎么写 | `references/motion.md` | 该段不演时就跳过（演什么已在第 1 步定完） |
 | 第 3b 步一组元素逐个出场：多久演完、怎么分、从哪头起（`stagger`） | `references/stagger.md` | 这一拍只改一个元素时 |

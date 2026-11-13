@@ -25,6 +25,7 @@
 IFD0 0x0112）；只交换尺寸，不做像素旋转——这里从不解码。
 """
 import struct
+from fractions import Fraction
 
 try:  # 主路径：Pillow（可选依赖，见模块说明）
     from PIL import Image as _PILImage
@@ -302,14 +303,32 @@ def cover_crop_fraction(box, size):
     return 1.0 - min(r_w, r_h) / max(r_w, r_h)
 
 
-def aspect_note(src, size, box):
-    """素材比例与槽位比例不一致、裁掉面积超阈值时的人话说明；不出声返回 None。
+def _box_ratio(bw, bh):
+    """目标框比例：化简后的 (分子, 分母) 与人话标签，**只从 box 自己算**。
 
-    必须讲清两件事，缺一件这条 warn 就白打：
+    这条 warn 同时服务两种框：槽位版式的 4:3 图槽（`get_image_box`），以及
+    整页画布版式铺的整幅画幅（`get_canvas`，竖屏 3:4 / 横屏 16:9）。把框
+    写成"4:3 横版"只对第一种成立；满幅段会收到一句既是假描述、又是错建议
+    的告警——见 `aspect_note` 的说明。`limit_denominator(16)` 把按整数像素
+    取整过的 1067×800 收敛回 4/3，而不是报一个没人认得的 1067:800。
+    """
+    f = Fraction(int(bw), int(bh)).limit_denominator(16)
+    orient = "横版" if bw > bh else ("竖版" if bw < bh else "方版")
+    return (f.numerator, f.denominator), f"{f.numerator}:{f.denominator} {orient}"
+
+
+def aspect_note(src, size, box):
+    """素材比例与目标框比例不一致、裁掉面积超阈值时的人话说明；不出声返回 None。
+
+    必须讲清三件事，缺一件这条 warn 就白打：
     1. **是裁边不是留黑边**——渲染端是 `object-fit: cover`，作者按"contain 会
        容纳"的预期出竖图，成片里看到的是上下被切掉的构图；
     2. **裁掉的是哪一块由 cover 定，不由作者定**——框居中、图居中，溢出的部分
-       上下/左右对称裁掉，想保住主体只能入库前自己裁（去水印同一步）。
+       上下/左右对称裁掉，想保住主体只能入库前自己裁（去水印同一步）；
+    3. **说的是这一个框**——`box` 可能是 4:3 图槽，也可能是整幅画幅。此前
+       两边都写成"槽位是 … 的 4:3 横版"并推荐 1536×1024：一张 1536×1024
+       铺进 1080×1440 的满幅竖版会被左右裁掉 50%，而告警一边报这 50%、
+       一边把同一张图当解法推荐。描述与去处都得跟着 box 走，别替调用方猜。
     """
     crop = cover_crop_fraction(box, size)
     if crop is None or crop <= CROP_WARN:
@@ -326,8 +345,15 @@ def aspect_note(src, size, box):
         shape = "宽图"
     # 图相对更窄更高 → 缩放后宽先贴住、高溢出 → 裁上下；反之裁左右。
     side = "上下" if src_ratio < box_ratio else "左右"
-    return (f"{src} 是 {shape} {sw}×{sh}，槽位是 {bw}×{bh} 的 4:3 横版——"
+    pair, label = _box_ratio(bw, bh)
+    # 1536×1024 是能力端三档里离 4:3 最近的一档，只对 4:3 图槽成立。满幅
+    # 画幅没有对应的三档，照它出图只会裁得更多——那里给同比例出图的去处。
+    if pair == (4, 3):
+        advice = "出图选最接近 4:3 的档位（如 1536×1024）"
+    else:
+        advice = (f"出图按目标框的 {pair[0]}:{pair[1]} 比例来"
+                  f"（如 {bw}×{bh} 或更大的同比例素材），别照 4:3 槽位的档位出")
+    return (f"{src} 是 {shape} {sw}×{sh}，目标框是 {bw}×{bh} 的 {label}——"
             f"渲染端 cover 会**{side}裁掉约 {crop * 100:.0f}% 的画面**"
             f"（居中对称裁边，不是 contain 留黑边）。"
-            f"出图选最接近 4:3 的档位（如 1536×1024），或入库前自己裁成 "
-            f"{bw}:{bh} 保住主体")
+            f"{advice}，或入库前自己裁成 {bw}:{bh} 保住主体")

@@ -426,6 +426,33 @@ class CropWarnAtGeneration(unittest.TestCase):
         self.assertIn("50%", out)
         self.assertIn("不是 contain 留黑边", out)
 
+    def test_warn_names_the_box_it_was_actually_given(self):
+        """满幅段传进来的框是整幅画幅，不是 4:3 图槽。
+
+        修复前 aspect_note 把任何 box 都写成"槽位是 … 的 4:3 横版"并推荐
+        1536×1024：一张 1536×1024 铺进 1080×1440 会被左右裁掉 50%，而告警
+        一边报这 50%、一边把同一张图当解法推荐。这条锁落在生成期那一层——
+        真走 validate_images_files，确认 seg_boxes 给的整幅框被如实说出来；
+        第一格反向钉住槽位框仍说 4:3、仍给三档建议，别把修复做成一刀切。
+        """
+        # (框, 必须出现的比例名, 必须同时出现, 必须不出现)
+        cases = (
+            ((980, 735), "4:3 横版", ("1536×1024",), ("3:4 竖版", "16:9 横版")),
+            ((1080, 1440), "3:4 竖版", (), ("4:3 横版", "1536×1024")),
+            ((1920, 1080), "16:9 横版", (), ("4:3 横版", "1536×1024")),
+        )
+        for box, want, also, absent in cases:
+            with self.subTest(box=box):
+                out = self._run("seg-a.png", _png(1024, 1024), box)
+                self.assertIn("比例不贴合", out)
+                self.assertIn(want, out)
+                self.assertIn("不是 contain 留黑边", out)
+                self.assertIn("入库前", out)
+                for s in also:
+                    self.assertIn(s, out)
+                for s in absent:
+                    self.assertNotIn(s, out)
+
     def test_exif_rotated_portrait_warns_crop(self):
         """手机竖拍：像素横存 400×300 + Orientation=6，屏幕上是 300×400 竖图。
 

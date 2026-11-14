@@ -1044,6 +1044,42 @@ class DocRefChecker(unittest.TestCase):
         self.assertFalse(os.path.isfile(check_docs._target_path("nope.md")))
 
 
+class GateListChecker(unittest.TestCase):
+    """本地验证清单必须与 CI、与 tests/check_*.py 是同一套。
+
+    修复前：CI 接了六道，README「验证」节的命令块只列四道、目录节写「五道」——
+    照 README 跑的人漏掉 test budget 与进程编码两道闸，而 CI 自己全绿。
+    反向断言：删一条命令、多一个没接线的脚本、写错道数，检查器都得报得出来。
+    """
+
+    def test_repo_gate_lists_agree(self):
+        self.assertEqual(check_docs.gate_lists(), [])
+
+    def test_checker_catches_every_kind_of_drift(self):
+        D = check_docs
+        ci = D._read(D.GATE_CI)
+        rd = D._read(D.GATE_DOC)
+        # 1) README 命令块里删掉一条 → 本地漏跑
+        dropped = rd.replace("python tests/check_subprocess_encoding.py\n", "")
+        self.assertNotEqual(dropped, rd, "README 里没找到那条命令，注入不成立")
+        self.assertTrue(any("check_subprocess_encoding.py" in p[2]
+                            for p in D.gate_lists(ci_text=ci, readme_text=dropped)))
+        # 2) 新增一个脚本却没接进 CI / README → 两边都得报漏
+        extra = D._gate_files() | {"check_new_gate.py"}
+        drift = D.gate_lists(ci_text=ci, readme_text=rd, files=extra)
+        for src in (D.GATE_CI, D.GATE_DOC):
+            with self.subTest(src=src):
+                self.assertTrue(any(p[0] == src and "check_new_gate.py" in p[2]
+                                   for p in drift), drift)
+        # 3) 目录节道数写错
+        wrong = rd.replace("六道检查脚本", "五道检查脚本")
+        self.assertNotEqual(wrong, rd)
+        self.assertTrue(any("道" in p[3] for p in D.gate_lists(
+            ci_text=ci, readme_text=wrong)))
+        # 4) 干净的两份零问题——防止上面的注入把检查器状态改脏
+        self.assertEqual(D.gate_lists(ci_text=ci, readme_text=rd), [])
+
+
 class SubprocessEncodingChecker(unittest.TestCase):
     """`text=True` 的子进程调用必须显式写 `encoding=`。
 

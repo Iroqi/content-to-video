@@ -42,8 +42,8 @@ jobs:
         run: python -m unittest discover -s . -v
         timeout-minutes: 5
 
-      # 三道文档契约检查（cross-refs · numbers · examples）都是"文档与代码
-      # 是否还诚实"的同一件事，并成一步；本地维护者跑法相同：
+      # 四道文档契约检查（cross-refs · numbers · examples · image-snippets）
+      # 都是"文档与代码是否还诚实"的同一件事，并成一步；本地维护者跑法相同：
       #   check_docs   ——「指向哪」：章节交叉引用有没有悬空、文档有没有重新膨胀
       #   check_numbers——「是几」：文档里的数字必须等于代码常量（决策阈值最小集）
       #   check_examples——「能不能跑」：文档示例退化成"看起来对"的那天，读者要

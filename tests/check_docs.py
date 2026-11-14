@@ -22,7 +22,12 @@
 `references/rendering.md` 是给人看的那份复制品。复制品会漂——代码登记了、文档没写，
 读者就以为那是新错误；文档写了、代码漏了，那条会被当成 error 拦下来。两边逐码对账。
 
-用法：python tests/check_docs.py          # 有悬空引用时退出码 1
+还有一道「门禁清单对账」：`tests/check_*.py` 是实有的闸，CI 与 README「验证」节
+是它的两份复制品。后来补的两道闸都接进了 CI，README 的命令却停在四道、目录节还
+写着「五道」——本地照文档跑，两道闸静默不跑，而 CI 自己全绿。三处逐项对账，连
+目录节那个手写的「几道」一起锁。
+
+用法：python tests/check_docs.py          # 有悬空引用或漂移时退出码 1
 """
 import glob
 import os
@@ -162,6 +167,77 @@ def noise_table_drift():
             for c in sorted(code - documented)]
 
 
+# ── 门禁清单对账 ───────────────────────────────────────────────────────────
+# 实有的闸是 tests/check_*.py；CI 里真正调用的那几条、README「验证」节给维护者
+# 抄的那几条，都是它的复制品。三处必须同一套，否则「本地全绿」不等于「过门禁」。
+GATE_CI = os.path.join(".github", "workflows", "ci.yml")
+GATE_DOC = "README.md"
+# 只认带 tests/ 前缀的调用：scripts/check_svg.py 是生产工具，不是检查脚本。
+# 三处统一用「从仓库根跑」的写法；写成 cd tests && python check_x.py 也该被报。
+GATE_SCRIPT = re.compile(r"tests/(check_[a-z_]+\.py)")
+GATE_VERIFY = ("## 5. 验证", "## 6. 目录")
+GATE_COUNT = re.compile(r"([一二三四五六七八九十]+|\d+)\s*道检查脚本")
+CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _read(rel):
+    with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+def _gate_files():
+    return {os.path.basename(p)
+            for p in glob.glob(os.path.join(ROOT, "tests", "check_*.py"))}
+
+
+def _fenced_commands(text):
+    """只取 ``` 围栏里的命令行：正文提一句脚本名不算「列了这条命令」。"""
+    return "\n".join(re.findall(r"```[a-zA-Z]*\n(.*?)```", text, re.S))
+
+
+def gate_lists(ci_text=None, readme_text=None, files=None):
+    """三方对账 + 目录节道数，返回差异说明（[] = 一致）。
+
+    `ci_text` / `readme_text` / `files` 只给测试注入用：门禁不能只会永远绿，
+    喂一份删过一行的 README、或多一个没接线的脚本，它必须报得出来。
+    """
+    files = set(files) if files is not None else _gate_files()
+    ci = _read(GATE_CI) if ci_text is None else ci_text
+    readme = _read(GATE_DOC) if readme_text is None else readme_text
+    problems = []
+
+    verify = readme
+    if GATE_VERIFY[0] in readme:
+        verify = readme.split(GATE_VERIFY[0], 1)[1]
+        if GATE_VERIFY[1] in verify:
+            verify = verify.split(GATE_VERIFY[1], 1)[0]
+    seen = {
+        GATE_CI: set(GATE_SCRIPT.findall(ci)),
+        GATE_DOC: set(GATE_SCRIPT.findall(_fenced_commands(verify))),
+    }
+    for src, got in seen.items():
+        for name in sorted(files - got):
+            problems.append((src, "门禁清单", name,
+                             "没列 %s —— 本地照文档跑会漏一道闸" % name))
+        for name in sorted(got - files):
+            problems.append((src, "门禁清单", name,
+                             "列了 %s，但 tests/ 里没有这个脚本" % name))
+
+    # 目录节「N 道检查脚本」是同一个数的第二份手写副本，一并锁住。
+    m = GATE_COUNT.search(readme)
+    if not m:
+        problems.append((GATE_DOC, "门禁清单", "?", "目录节找不到「N 道检查脚本」这句"))
+    else:
+        raw = m.group(1)
+        n = int(raw) if raw.isdigit() else CN_DIGITS.get(raw)
+        if n != len(files):
+            problems.append((GATE_DOC, "门禁清单", raw,
+                             "目录节写「%s 道」，tests/ 里实际有 %d 个检查脚本"
+                             % (raw, len(files))))
+    return problems
+
+
 def main():
     cache, bad = {}, []
     sources = [os.path.join(ROOT, "SKILL.md")]
@@ -198,6 +274,7 @@ def main():
                         "H1 不是 `第 N 步 · 主题` 模板，改标题或改检查"))
     bad += noise_table_drift()
     bad += pinned_package_drift()
+    bad += gate_lists()
     for src, target, name, why in bad:
         print(f"[dangling] {os.path.relpath(src, ROOT)}: {target}「{name}」 — {why}")
     n = skill_md_lines()

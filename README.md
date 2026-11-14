@@ -81,16 +81,22 @@ python scripts/run.py --source S -o OUT                  # 定稿：TTS → 配�
 
 ## 5. 验证
 
-```bash
-# 结构门禁：文档交叉引用、数字契约、示例可跑、images 片段过契约层
-python tests/check_docs.py && python tests/check_numbers.py
-python tests/check_examples.py && python tests/check_image_snippets.py
+本地这套就是 CI `test` job 的同一套：六道检查 + 单元测试，再单独验出片。`tests/check_*.py` 的实际文件、CI 里真正调用的命令、下面给维护者抄的命令，三处由 `check_docs.py` 逐项对账——加一道闸时三处必须同步，否则本地会静默漏跑。两段 `unittest` 各用子 shell 起，粘成一整块连续执行不会把工作目录越 `cd` 越深。
 
-# 测试套件（约 8 秒，不含真渲染）
-cd tests && python3 -m unittest discover -s .
+```bash
+# 结构门禁：六道，与 .github/workflows/ci.yml 的 test job 逐条对上
+python tests/check_docs.py
+python tests/check_numbers.py
+python tests/check_examples.py
+python tests/check_image_snippets.py
+python tests/check_test_budget.py
+python tests/check_subprocess_encoding.py
+
+# 测试套件（十秒级，不含真渲染）
+(cd tests && python3 -m unittest discover -s .)
 
 # 真的出一支 mp4 并看它一眼（需 Node 22+ / headless Chrome / 带 libx264 且 ≥ 5.0 的 ffmpeg）
-cd tests && python3 -m unittest test_e2e_render -v
+(cd tests && python3 -m unittest test_e2e_render -v)
 ```
 
 `test_e2e_render.py` 是**唯一真的出片并看画面**的用例，其余全部用假进程替掉了 Node、Chrome 和 ffmpeg。它的三种结果刻意分得开：缺依赖 → 跳过并说缺什么；渲不出来 → 跳过并说卡在哪一步（装浏览器 / 一帧没抓出 / 抓帧太慢）；渲完但结果不对 → **失败**。CI 的 `e2e` job 用 `CTV_E2E_REQUIRED=1`，缺依赖即失败——防止"全绿"再次只证明字符串拼得对。
@@ -120,7 +126,7 @@ scripts/     脚本与页面资产（只依赖标准库）
   _assets/            页面资产：composition.css / runtime.js / preview.js
                       只放结构与选择器，不放观感常量
 references/  分步文档，见下节
-tests/       契约测试 ＋ 五道检查脚本
+tests/       契约测试 ＋ 六道检查脚本
 ```
 
 **三条不许破的规则**：随画幅变的观感常量写 `_template.py`，别在 CSS 里存第二份；配色写 `_theme.py`，别散在各处；`--ctv-*` 令牌的注入与消费两侧必须对得上（`var()` 取不到值时是静默失效，页面照样生成、门禁照样全绿——由 `test_every_consumed_token_is_injected` 钉住）。

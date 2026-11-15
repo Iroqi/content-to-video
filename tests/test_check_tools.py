@@ -1045,38 +1045,80 @@ class DocRefChecker(unittest.TestCase):
 
 
 class GateListChecker(unittest.TestCase):
-    """本地验证清单必须与 CI、与 tests/check_*.py 是同一套。
+    """本地验证清单必须与 CI、与 tests/check_*.py 是同一套，且认的是命令行。
 
     修复前：CI 接了六道，README「验证」节的命令块只列四道、目录节写「五道」——
     照 README 跑的人漏掉 test budget 与进程编码两道闸，而 CI 自己全绿。
-    反向断言：删一条命令、多一个没接线的脚本、写错道数，检查器都得报得出来。
+    修复前（另一半）：清单对账全文搜 `tests/check_*.py`，注释掉一行、改成
+    `echo '…check_x.py…'` 仍算「接了线」——三方一致，闸却根本没跑。
+    反向断言：删命令、注释命令、伪命令、多一个没接线的脚本、写错道数，都得报。
     """
 
     def test_repo_gate_lists_agree(self):
         self.assertEqual(check_docs.gate_lists(), [])
 
+    def test_gate_invocations_only_counts_executable_command_lines(self):
+        """正反同测：真命令都认，注释 / 散文 / 吞退出码的尾巴都不认。"""
+        D = check_docs
+        text = "\n".join([
+            "run: |",
+            "  python tests/check_docs.py",
+            "  python3 tests/check_numbers.py",
+            "  python -u tests/check_examples.py",
+            "run: python tests/check_test_budget.py",
+            "# python tests/check_image_snippets.py",   # 整行注释：闸没跑
+            "echo 'python tests/check_image_snippets.py 已迁走'",  # 散文
+            "python tests/check_image_snippets.py || true",  # 吞掉失败
+            "  python tests/check_unwired.py && echo done",
+        ])
+        self.assertEqual(D._gate_invocations(text), {
+            "check_docs.py", "check_numbers.py", "check_examples.py",
+            "check_test_budget.py"})
+
     def test_checker_catches_every_kind_of_drift(self):
         D = check_docs
         ci = D._read(D.GATE_CI)
         rd = D._read(D.GATE_DOC)
+        cmd = "python tests/check_numbers.py"
+        self.assertIn(cmd, ci)
+        self.assertIn(cmd, rd)
+
+        def missing(ci_text, rd_text, src):
+            return any(p[0] == src and "check_numbers.py" in p[2]
+                       for p in D.gate_lists(ci_text=ci_text, readme_text=rd_text))
+
         # 1) README 命令块里删掉一条 → 本地漏跑
         dropped = rd.replace("python tests/check_subprocess_encoding.py\n", "")
         self.assertNotEqual(dropped, rd, "README 里没找到那条命令，注入不成立")
         self.assertTrue(any("check_subprocess_encoding.py" in p[2]
                             for p in D.gate_lists(ci_text=ci, readme_text=dropped)))
-        # 2) 新增一个脚本却没接进 CI / README → 两边都得报漏
+        # 2) 命令还在、但已经不是命令：注释掉 / 改成 echo / 尾部吞掉退出码
+        for label, repl in (("CI 注释掉", "# " + cmd),
+                            ("CI 改成 echo", "echo '" + cmd + " 已迁移'"),
+                            ("CI 挂 || true", cmd + " || true")):
+            with self.subTest(case=label):
+                bad_ci = ci.replace(cmd, repl)
+                self.assertNotEqual(bad_ci, ci, "注入不成立")
+                self.assertTrue(missing(bad_ci, rd, D.GATE_CI),
+                                label + " 没被报成漏闸")
+        # README 围栏里注释掉同一条，也必须报
+        bad_rd = rd.replace(cmd, "# " + cmd)
+        self.assertNotEqual(bad_rd, rd)
+        self.assertTrue(missing(ci, bad_rd, D.GATE_DOC),
+                        "README 注释掉一道闸没被报")
+        # 3) 新增一个脚本却没接进 CI / README → 两边都得报漏
         extra = D._gate_files() | {"check_new_gate.py"}
         drift = D.gate_lists(ci_text=ci, readme_text=rd, files=extra)
         for src in (D.GATE_CI, D.GATE_DOC):
             with self.subTest(src=src):
                 self.assertTrue(any(p[0] == src and "check_new_gate.py" in p[2]
                                    for p in drift), drift)
-        # 3) 目录节道数写错
+        # 4) 目录节道数写错
         wrong = rd.replace("六道检查脚本", "五道检查脚本")
         self.assertNotEqual(wrong, rd)
         self.assertTrue(any("道" in p[3] for p in D.gate_lists(
             ci_text=ci, readme_text=wrong)))
-        # 4) 干净的两份零问题——防止上面的注入把检查器状态改脏
+        # 5) 干净的两份零问题——防止上面的注入把检查器状态改脏
         self.assertEqual(D.gate_lists(ci_text=ci, readme_text=rd), [])
 
 

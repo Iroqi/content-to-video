@@ -23,9 +23,10 @@
 读者就以为那是新错误；文档写了、代码漏了，那条会被当成 error 拦下来。两边逐码对账。
 
 还有一道「门禁清单对账」：`tests/check_*.py` 是实有的闸，CI 与 README「验证」节
-是它的两份复制品。后来补的两道闸都接进了 CI，README 的命令却停在四道、目录节还
-写着「五道」——本地照文档跑，两道闸静默不跑，而 CI 自己全绿。三处逐项对账，连
-目录节那个手写的「几道」一起锁。
+是它的两份复制品。对账认的是**真正会执行的命令行**（`python tests/check_x.py`），
+不是全文任意出现的脚本名：把一道闸注释掉、改成 `echo '…check_x.py…'`、或在命令
+尾巴挂 `|| true`，全文搜文件名照样命中，于是「清单三方一致、闸却根本没跑」。
+三处逐条命令行对账，连目录节那个手写的「几道」一起锁。
 
 用法：python tests/check_docs.py          # 有悬空引用或漂移时退出码 1
 """
@@ -174,7 +175,16 @@ GATE_CI = os.path.join(".github", "workflows", "ci.yml")
 GATE_DOC = "README.md"
 # 只认带 tests/ 前缀的调用：scripts/check_svg.py 是生产工具，不是检查脚本。
 # 三处统一用「从仓库根跑」的写法；写成 cd tests && python check_x.py 也该被报。
-GATE_SCRIPT = re.compile(r"tests/(check_[a-z_]+\.py)")
+#
+# 关键：匹配的是**整条命令行**，不是文件名。全文 `tests/(check_*.py)` 的写法把
+# 注释、散文、`echo` 字符串里的脚本名也算成「接了线」——把那一行注释掉，清单
+# 依旧三方一致，而闸根本没跑。`run: |` 块里的裸命令、单步的 `run: python …`、
+# README 围栏里的命令都要认；`|| true` / `&& …` 这类吞掉退出码的尾巴不认。
+GATE_INVOCATION = re.compile(
+    r"^(?:-\s*)?(?:run:\s*)?(?:python3?|py)\s+"
+    r"(?:(?:-\w+|--[\w-]+)\s+)*"
+    r"tests/(check_[a-z_]+\.py)\s*$"
+)
 GATE_VERIFY = ("## 5. 验证", "## 6. 目录")
 GATE_COUNT = re.compile(r"([一二三四五六七八九十]+|\d+)\s*道检查脚本")
 CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
@@ -196,11 +206,29 @@ def _fenced_commands(text):
     return "\n".join(re.findall(r"```[a-zA-Z]*\n(.*?)```", text, re.S))
 
 
+def _gate_invocations(text):
+    """返回文本里真正会执行的 `tests/check_*.py` 命令名集合。
+
+    逐行判断：整行注释跳过，行首必须是 python/py 命令、行尾必须紧跟脚本名。
+    这样 `echo '…check_x.py…'`、注释、带 `|| true` 的命令都算「没接线」。
+    """
+    found = set()
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        m = GATE_INVOCATION.match(s)
+        if m:
+            found.add(m.group(1))
+    return found
+
+
 def gate_lists(ci_text=None, readme_text=None, files=None):
     """三方对账 + 目录节道数，返回差异说明（[] = 一致）。
 
     `ci_text` / `readme_text` / `files` 只给测试注入用：门禁不能只会永远绿，
-    喂一份删过一行的 README、或多一个没接线的脚本，它必须报得出来。
+    喂一份删过一行的 README、把某道闸注释掉、或多一个没接线的脚本，
+    它必须报得出来。
     """
     files = set(files) if files is not None else _gate_files()
     ci = _read(GATE_CI) if ci_text is None else ci_text
@@ -213,8 +241,8 @@ def gate_lists(ci_text=None, readme_text=None, files=None):
         if GATE_VERIFY[1] in verify:
             verify = verify.split(GATE_VERIFY[1], 1)[0]
     seen = {
-        GATE_CI: set(GATE_SCRIPT.findall(ci)),
-        GATE_DOC: set(GATE_SCRIPT.findall(_fenced_commands(verify))),
+        GATE_CI: _gate_invocations(ci),
+        GATE_DOC: _gate_invocations(_fenced_commands(verify)),
     }
     for src, got in seen.items():
         for name in sorted(files - got):

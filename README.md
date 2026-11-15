@@ -81,7 +81,7 @@ python scripts/run.py --source S -o OUT                  # 定稿：TTS → 配�
 
 ## 5. 验证
 
-本地这套就是 CI `test` job 的同一套：六道检查 + 单元测试，再单独验出片。`tests/check_*.py` 的实际文件、CI 里真正调用的命令、下面给维护者抄的命令，三处由 `check_docs.py` 逐项对账——加一道闸时三处必须同步，否则本地会静默漏跑。两段 `unittest` 各用子 shell 起，粘成一整块连续执行不会把工作目录越 `cd` 越深。
+本地这套就是 CI `test` job 的同一套：六道检查 + 单元测试，再单独验出片。`tests/check_*.py` 的实际文件、CI 里真正调用的命令、下面给维护者抄的命令，三处由 `check_docs.py` 逐项对账——加一道闸时三处必须同步，否则本地会静默漏跑。对账认的是**真正会执行的命令行**：把一条命令注释掉、改成 `echo '…check_x.py…'`，或挂个 `|| true` 吞掉退出码，脚本名仍在文本里，但那道闸已经不跑了，检查器会报成漏闸。两段 `unittest` 各用子 shell 起，粘成一整块连续执行不会把工作目录越 `cd` 越深。
 
 ```bash
 # 结构门禁：六道，与 .github/workflows/ci.yml 的 test job 逐条对上

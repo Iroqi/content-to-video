@@ -84,7 +84,13 @@ body{font-family:var(--ctv-font-family)}
 /* 开屏编排副光斑：与主光错位的一枚冷调光，负责"漂移"的景深层次——主光呼吸 +
    副光 x/y/scale 漂移 = 双光斑，比单枚静态光斑的"贴纸感"更有层次。颜色固定
    冷色系（sky），与任意 accent 主光都能形成双色对比。漂移由 GSAP 编排。 */
-.full-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 30%,transparent),transparent 70%)}
+/* 副光斑浓度 30%→20%：它是"漂移的景深副光"，职责是在主光呼吸之外添一层冷调
+   错位，不是第二主光。原值与主光 34% 叠加后（开场实拍帧）标题四周泛起一团青绿，
+   文字退成光晕的注脚——挑剔的审查里这是"背景喧宾夺主"。降到 20% 仍保住双色
+   对比（accent 暖主光 + 冷副光），但冷光退回衬底，标题重新是画面的主角。
+   GSAP 那边对 #glow-opening 的淡入/漂移参数（opacity 0.50→0.28 等）不变——
+   那些是补间的"动作幅度"，这里调的是光斑"自身浓度"，两件事互不覆盖。 */
+.full-glow{position:absolute;inset:0 0 42% 0;z-index:-1;pointer-events:none;background:radial-gradient(42% 78% at 68% 30%,color-mix(in srgb,#7dd3fc 20%,transparent),transparent 70%)}
 /* 开屏编排标题的逐字 span（渲染器只在开屏编排时拆字）：inline-block 让 GSAP
    的 transform 生效（inline 元素不能 transform），white-space:pre 保住空格宽度
    与折行；静态开场标题是纯文本、不命中这里。 */
@@ -530,10 +536,30 @@ body{font-family:var(--ctv-font-family)}
    .agenda-tail（cta 尾行）与题头、句子流窗口都 flex-shrink:0，永远完整。 */
 .agenda{margin-top:var(--ctv-ag-list-mt);flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:space-evenly}
 .agenda-tail{flex-shrink:0}
-.agenda-row{display:flex;align-items:baseline;gap:var(--ctv-ag-gap);padding:var(--ctv-ag-row-pad) 4px;border-top:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
-.agenda-row:last-child{border-bottom:1px solid color-mix(in srgb,var(--ctv-text-color) 14%,transparent)}
+/* 分隔线 14%→10%：原值与行名（100% 文字色）、序号（accent）同框时，三行字被
+   三条横线框成一张表格——agenda 读起来像"填空清单"而不是"目录"。压到 10% 后
+   线只在两行之间留一道退到背景里的接缝，行本身浮出来成为阅读单位。仍高于
+   完全消失（0% 时行与行之间没有节拍，长列表读成一整块）。 */
+.agenda-row{display:flex;align-items:baseline;gap:var(--ctv-ag-gap);padding:var(--ctv-ag-row-pad) 4px;border-top:1px solid color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
+.agenda-row:last-child{border-bottom:1px solid color-mix(in srgb,var(--ctv-text-color) 10%,transparent)}
 .agenda-tail .agenda-row:first-child{border-top:0}
-.ag-idx{font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
+/* 目录刻度：每行序号左侧一枚 accent 短竖，把被 space-evenly 摊到首/中/尾的几行
+   在视觉上重读成"一列目录"——每段行名都从同一条看不见的竖轴起排，眼睛落点为
+   一条线而非三处孤岛。这是编辑式目录里最常见的锚点手法（刻度 + 序号 + 名称），
+   不占布局宽（absolute + 负 left），不改 flex 几何，也不推挤行名。竖线高度贴
+   行名（按 idx 字号比例），比整行高更克制；70% 透明度是"读得出是同一列、又不
+   抢序号"的一档。
+
+   垂直定位**不能用 top:50%+translateY**：.agenda-row 是 align-items:baseline
+   且上下各垫 rowPad，行盒比文字高不少，盒中线明显在文字上方——首版实拍帧里
+   竖线就悬在序号头顶半行，像"举着的天线"。真正的锚是序号本身：刻度挂在
+   .ag-idx 上，height 用 1em 即 idx 字号（不是继承来的 body 字号），top:0 与
+   序号齐平。left 取负的固定偏移让它落在序号左缘之外、不压字；min-width 是
+   idx 列宽，够放下这段偏移。伪元素豁免 _css_guard 的 transform 检查，这里也
+   不写 transform，与 GSAP 补间的 .ag-idx 本体（scale/blur/opacity）不抢属性：
+   补间打在元素上，刻度是它的伪元素，两套渲染各归各。 */
+.ag-idx{position:relative;font-family:var(--ctv-font-mono);font-size:var(--ctv-ag-idx);font-weight:700;min-width:var(--ctv-ag-idx-min);color:var(--seg-accent-text)}
+.ag-idx::before{content:"";position:absolute;left:-10px;top:0;height:1em;width:3px;border-radius:1.5px;background:color-mix(in srgb,var(--seg-accent) 70%,transparent)}
 /* 行名单行硬约束：折行会让行高翻倍、成倍吃掉定高列预算，超长直接省略号
    （Python 侧 nameTrim 已先按字数截断，这里兜住半角/混排的宽度偏差）。
    行高 1.4 = Noto Sans CJK Bold 实测墨迹下限（hyperframes 判 clipped_text 的

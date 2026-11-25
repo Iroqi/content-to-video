@@ -40,6 +40,20 @@ ET.register_namespace("xlink", XLINK_NS)
 # 成片 HTML 就是 script 元素（同源活 DOM，直接执行）。判定层必须先折成小写再比，
 # 合法 SVG 标签本就小写（foreignObject 是唯一驼峰，折后仍命中）。
 _DROP_TAGS = {"script", "foreignobject"}
+# HTML 的嵌入 / 外载元素。它们不是 SVG 标签，但只要落进了 HTML 集成点（见下一组）
+# 就会被 HTML 解析器当成真元素：`<iframe srcdoc>` 直接执行脚本，`<base href>` 改掉
+# 整个文档的相对路径基准，`<object>/<embed>/<link>/<img>/<video>` 发起外部请求。
+# 它们的载荷走 `src` / `srcdoc` / `data`，下面只审 `href` 与 `on*` 的属性清理看不见。
+_HTML_EMBED_TAGS = frozenset({
+    "iframe", "object", "embed", "applet", "frame", "frameset", "base", "link",
+    "meta", "img", "video", "audio", "source", "track", "input", "form",
+    "button", "select", "textarea", "template", "noscript",
+})
+# HTML 集成点（HTML Standard §13.2.6.5）：`<title>` / `<desc>` 的**子节点**由 HTML
+# 解析器按 HTML 语法解析，不再是 SVG 命名空间——一份过了属性清理的 `<iframe>`
+# 藏在这里，内联后就是活的 HTML 元素。按 SVG 规范这两个元素的内容只有文本，
+# 所以子元素整体摘掉、只留文本（`<foreignObject>` 同为集成点，已在上面整颗删除）。
+_HTML_INTEGRATION_TAGS = frozenset({"title", "desc"})
 # 墙钟动画元素：逐帧 seek 下不可复现，内联档剥掉，运动交给时间线补间。
 _WALLCLOCK_TAGS = {"animate", "animatetransform", "animatemotion", "set"}
 # CSS 里驱动墙钟动画的属性名（在 <style> 文本与 inline style 上都清）。
@@ -629,6 +643,25 @@ def sanitize_svg_for_inline(raw):
                 p.remove(el)
             notes.append(f"<{tag}> 已删除（内联后会执行脚本/嵌入 HTML）")
             continue
+        if tag in _HTML_EMBED_TAGS:
+            p = parent.get(el)
+            if p is not None:
+                p.remove(el)
+            notes.append(f"<{tag}> 已删除（HTML 嵌入/外载元素：内联后会进入文档"
+                         "或发起外部请求）")
+            continue
+        if tag in _HTML_INTEGRATION_TAGS and len(el):
+            # 子元素的 tail 文本并回父文本，别把作者 `<title>说明<t/>补充</title>`
+            # 里的"补充"一起丢了。
+            kids = list(el)
+            el.text = (el.text or "") + "".join(k.tail or "" for k in kids)
+            for k in kids:
+                el.remove(k)
+                # 父指针表同步摘掉：下面的循环还会走到这些节点（快照是开遍前
+                # 拍的），留着会让 `_DROP_TAGS` 分支对已不在树里的节点再
+                # remove 一次——抛 ValueError，调用方把它当"坏 SVG"整份拒收。
+                parent.pop(k, None)
+            notes.append(f"<{tag}> 是 HTML 集成点，其子元素已删除（只保留文本）")
         if tag in _WALLCLOCK_TAGS:
             p = parent.get(el)
             if p is not None:

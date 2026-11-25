@@ -12,16 +12,25 @@
 2. **统一校验**：扩展输出走与手写 SVG 完全相同的净化与门禁，不设豁免分支。
    尤其 `#id` 集合必须前后一致——这是「换画风不动一行 animate.steps」的机器判据。
 3. **确定性**：同一 (spec, ctx) 两次编译必须逐字节一致。随机、墙钟、网络、
-   子进程在编译期一律禁用（AST 层拦），对账兜住漏网的。
+   子进程在编译期一律禁用，对账兜住漏网的。
+
+编译期隔离分三层，缺一层都实测过能被绕过（见 `_check_source` 的契约注释）：
+AST 层给**早期、可读的拒收理由**；运行期层（受限 `__builtins__` ＋ 白名单导入
+钩子 ＋ `os` 代理）才是真正的墙——AST 只是文本扫描，`getattr` / 别名 / 字符串拼
+出来的调用它看不见。它不是对抗蓄意攻击的安全边界：扩展包是作者显式指定路径
+加载的本地代码，**装之前先读一遍**仍是第一道门；这三层保证的是"一份看起来
+老实的扩展做不到它声明不做的事"。
 
 Python 3.9 兼容，只用标准库；不写 pyc（`exec` 隔离命名空间而非 importlib 缓存）。
 """
 
 import ast
+import builtins as _builtins
 import hashlib
 import json
 import os
 import re
+import types
 import xml.etree.ElementTree as ET
 
 MANIFEST_NAME = "manifest.json"
@@ -38,15 +47,50 @@ REQUIRED_MANIFEST_KEYS = ("name", "version", "kind", "outputs")
 ALLOWED_KINDS = frozenset({"style-filter", "asset-transcoder", "steps-compiler"})
 ALLOWED_OUTPUTS = frozenset({"svg", "steps", "media"})
 
-# 编译期禁用的顶层模块。理由不是"这些库不好"，是它们会让同一份稿件两次生成
-# 不一致，或把不可信输入带进生成期进程。os 不禁（os.path 是纯函数），但子进程
-# 与网络入口全封。
-FORBIDDEN_MODULES = frozenset({
-    "random", "secrets", "time", "datetime", "urllib", "urllib2", "requests",
-    "socket", "http", "ftplib", "smtplib", "subprocess", "multiprocessing",
-    "asyncio", "threading", "webbrowser", "ctypes",
+# 编译期**可导入**的顶层模块（白名单，不是黑名单）。只放纯计算的标准库；`os`
+# 单独处理（见 `_os_proxy`）。黑名单的教训：按模块名拦 `subprocess`，而
+# `import os; os.system(...)`、`importlib.import_module("random")`、
+# `sys.modules["subprocess"]` 一个都不在表上，却都做成了同一件事——黑名单只能
+# 拦"作者恰好写了被点名的那一个"。
+#   不收 operator（attrgetter 是 getattr 的别名）、types（FunctionType 能从码对象
+#   造函数）、copy/copypickle 一类（对象图里能摸到任意属性）。
+ALLOWED_MODULES = frozenset({
+    "math", "re", "json", "xml", "html", "unicodedata", "itertools", "functools",
+    "collections", "string", "textwrap", "fractions", "decimal", "statistics",
+    "bisect", "hashlib", "base64", "struct", "numbers",
 })
-FORBIDDEN_CALLS = frozenset({"eval", "exec", "__import__", "compile", "open"})
+# 编译期禁调的内建名。AST 层拦 Name 形式的直接调用，运行期层把它们整个从
+# 扩展的 `__builtins__` 里摘掉（别名、当值传、从字典里取都拿不到）。
+FORBIDDEN_CALLS = frozenset({
+    "eval", "exec", "compile", "open", "__import__",
+    "getattr", "setattr", "delattr", "vars", "globals", "locals",
+    "input", "breakpoint",
+})
+# 不许读取的模块级 dunder 名：`__builtins__`/`__loader__` 能摸回完整内建与导入
+# 机器，`__import__` 的别名赋值（`_imp = __import__`）也走这里拦。
+FORBIDDEN_GLOBALS = frozenset({
+    "__builtins__", "__import__", "__loader__", "__spec__", "__package__",
+    "__file__", "__cached__", "__path__",
+})
+# 允许出现的 dunder **属性**（`x.__init__` 这类对对象方法的正常调用）。
+# 其余 dunder 属性一律拒：`__class__.__base__.__subclasses__()` /
+# `__init__.__globals__` / `__self__`（print.__self__ 就是 builtins 模块）都是
+# 从任意对象走回完整解释器的通用梯子，合法扩展没有理由踩。
+DUNDER_ATTR_ALLOW = frozenset({
+    "__init__", "__str__", "__repr__", "__len__", "__call__", "__iter__",
+    "__next__", "__enter__", "__exit__", "__contains__", "__eq__", "__hash__",
+    "__getitem__", "__setitem__", "__index__", "__int__", "__float__", "__bool__",
+    "__name__",
+})
+# `os` 只开放这些属性；`os.path` 只开放纯字符串路径函数（exists/getsize 一类
+# 要碰文件系统，不收；relpath/abspath 依赖 cwd，两次编译可能不一致，不收）。
+_OS_ATTR_ALLOW = frozenset({
+    "path", "sep", "altsep", "curdir", "pardir", "extsep", "name",
+})
+_OS_PATH_ALLOW = frozenset({
+    "join", "split", "splitext", "dirname", "basename", "normpath", "normcase",
+    "isabs", "commonpath", "commonprefix",
+})
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -153,37 +197,75 @@ def _read_manifest(path):
     return raw, _where(name)
 
 
+def _is_dunder(name):
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
 def _check_source(src, where):
-    """AST 层拦墙钟 / 随机 / 网络 / 子进程 / 动态执行。"""
+    """AST 层：导入白名单、禁调内建、dunder 梯子、`os` 属性面、跨次状态。
+
+    这一层只负责**早期、可读**的拒收；真正的墙在运行期（见 `_restricted_builtins`）。
+    这里漏一条不该是漏洞——但每一条都要给作者一个说清楚"为什么不行"的报错，
+    而不是一个来自 `__import__` 钩子的 ImportError。
+    """
     tree = ast.parse(src, filename=COMPILE_NAME)
+
+    def reject(msg):
+        raise ExtensionError("%s 的 %s %s" % (where, COMPILE_NAME, msg))
+
+    # 模块别名表：`import os as o` / `import os.path as p` / `from os import path as p`
+    # 之后，`o.system` / `p.exists` 要按别名识别，不能只认字面 `os.`。
+    os_names, path_names = set(), set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 top = alias.name.split(".")[0]
-                if top in FORBIDDEN_MODULES:
-                    raise ExtensionError(
-                        "%s 的 %s 导入了禁用模块 %r：编译期不许读墙钟/随机/网络/子进程"
-                        % (where, COMPILE_NAME, top))
+                if top == "os":
+                    if alias.name == "os.path":
+                        (path_names if alias.asname else os_names).add(alias.asname or "os")
+                    elif alias.name == "os":
+                        os_names.add(alias.asname or "os")
+                    else:
+                        reject("导入了 %r：os 只开放 os.path" % alias.name)
+                elif top not in ALLOWED_MODULES:
+                    reject("导入了禁用模块 %r：编译期只许用白名单里的纯计算标准库"
+                           "（%s）" % (top, "、".join(sorted(ALLOWED_MODULES))))
         elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                top = node.module.split(".")[0]
-                if top in FORBIDDEN_MODULES:
-                    raise ExtensionError(
-                        "%s 的 %s 从禁用模块 %r 导入：编译期不许读墙钟/随机/网络/子进程"
-                        % (where, COMPILE_NAME, top))
+            if node.level:
+                reject("用了相对导入：扩展包是单文件，没有包上下文")
+            if node.module == "os" or node.module == "os.path":
+                allow = _OS_ATTR_ALLOW if node.module == "os" else _OS_PATH_ALLOW
+                for alias in node.names:
+                    if alias.name not in allow:
+                        reject("从 %s 导入了 %r：os 只开放纯路径函数"
+                               % (node.module, alias.name))
+                    if alias.name == "path":      # from os import path [as p]
+                        path_names.add(alias.asname or "path")
+            elif node.module.split(".")[0] not in ALLOWED_MODULES:
+                reject("从禁用模块 %r 导入：编译期只许用白名单里的纯计算标准库"
+                       "（%s）" % (node.module.split(".")[0], "、".join(sorted(ALLOWED_MODULES))))
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in FORBIDDEN_CALLS:
-                raise ExtensionError(
-                    "%s 的 %s 调用了 %s()：生成期不收动态执行与文件 IO，"
-                    "产物请用返回值交回"
-                    % (where, COMPILE_NAME, node.func.id))
+                reject("调用了 %s()：生成期不收动态执行、属性反射与文件 IO，"
+                       "产物请用返回值交回" % node.func.id)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            reject("用了 global/nonlocal：compile() 必须是纯函数，不许跨次携带状态")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if _is_dunder(node.attr) and node.attr not in DUNDER_ATTR_ALLOW:
+                reject("访问了 dunder 属性 %r：这是走回解释器内部的梯子，"
+                       "纯计算用不到" % node.attr)
+            if isinstance(node.value, ast.Name):
+                if (node.value.id in os_names and node.attr not in _OS_ATTR_ALLOW) or \
+                        (node.value.id in path_names and node.attr not in _OS_PATH_ALLOW):
+                    reject("用了 os.%s：编译期只开放 os.path 的纯路径函数" % node.attr)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in FORBIDDEN_GLOBALS:
+                reject("读取了 %s：它会摸回完整内建或导入机器" % node.id)
+
     # 全局可变状态会让第二次 compile() 带上第一次的残留。只拦真正危险的两类：
     # compile() 里写全局、以及模块级的可变容器常量；纯 tuple/字符串常量放行。
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            raise ExtensionError(
-                "%s 的 %s 用了 global/nonlocal：compile() 必须是纯函数，"
-                "不许跨次携带状态" % (where, COMPILE_NAME))
     for node in tree.body:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -192,9 +274,63 @@ def _check_source(src, where):
                                          ast.ListComp, ast.DictComp, ast.SetComp))
             for t in targets:
                 if isinstance(t, ast.Name) and t.id.isupper() and mutable:
-                    raise ExtensionError(
-                        "%s 的 %s 定义了模块级可变容器 %s：它会污染第二次编译，"
-                        "把表放进 compile() 内部或换成 tuple" % (where, COMPILE_NAME, t.id))
+                    reject("定义了模块级可变容器 %s：它会污染第二次编译，"
+                           "把表放进 compile() 内部或换成 tuple" % t.id)
+
+
+# ── 运行期隔离层 ───────────────────────────────────────────────────
+# AST 只是文本扫描：`getattr(os, "system")`、别名、从字典里取函数它都看不见。
+# 所以扩展拿到的 `__builtins__` 是一份**摘掉了危险名字的新字典**，`__import__`
+# 换成白名单钩子，`os` 换成只含纯路径函数的代理——这三样是解释器真正执行时
+# 走的门，不依赖源码长什么样。
+
+_REAL_IMPORT = _builtins.__import__
+
+
+def _os_proxy():
+    """`import os` 在扩展里看到的东西：一个只带纯路径函数的命名空间，不是 os 模块。"""
+    path = types.SimpleNamespace(**{
+        n: getattr(os.path, n) for n in _OS_PATH_ALLOW if hasattr(os.path, n)})
+    return types.SimpleNamespace(path=path, **{
+        n: getattr(os, n) for n in _OS_ATTR_ALLOW - {"path"}})
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """扩展的 `__import__`：只放白名单顶层模块；`os` 返回代理。"""
+    if level:
+        raise ImportError("扩展包是单文件，不支持相对导入")
+    top = (name or "").split(".")[0]
+    if top == "os":
+        if name == "os.path" and fromlist:
+            return _os_proxy().path      # from os.path import join
+        return _os_proxy()               # import os / import os.path / from os import path
+    if top not in ALLOWED_MODULES:
+        raise ImportError(
+            "扩展编译期只能导入白名单标准库（%s），不接受 %r"
+            % ("、".join(sorted(ALLOWED_MODULES)), top))
+    return _REAL_IMPORT(name, globals, locals, fromlist, level)
+
+
+def _restricted_builtins():
+    """扩展的 `__builtins__`：纯计算内建 ＋ 全部异常类 ＋ 类定义所需的
+    `__build_class__` ＋ 白名单 `__import__`。每次新建一份字典，扩展改不到别人。"""
+    ns = {n: getattr(_builtins, n) for n in _SAFE_BUILTINS if hasattr(_builtins, n)}
+    for obj in vars(_builtins).values():
+        if isinstance(obj, type) and issubclass(obj, BaseException):
+            ns[obj.__name__] = obj
+    ns["__import__"] = _safe_import
+    return ns
+
+
+_SAFE_BUILTINS = (
+    "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes", "callable",
+    "chr", "classmethod", "complex", "dict", "divmod", "enumerate", "filter",
+    "float", "format", "frozenset", "hash", "hex", "id", "int", "isinstance",
+    "issubclass", "iter", "len", "list", "map", "max", "min", "oct", "ord", "pow",
+    "print", "property", "range", "repr", "reversed", "round", "set", "slice",
+    "sorted", "staticmethod", "str", "sum", "super", "tuple", "type", "zip",
+    "object", "NotImplemented", "__build_class__", "__debug__",
+)
 
 
 def load_extension(path):
@@ -219,9 +355,16 @@ def load_extension(path):
         raise ExtensionError("%s 的 %s 有语法错误：%s" % (where, COMPILE_NAME, exc))
 
     # 隔离命名空间：不进 sys.modules、不写 pyc、扩展之间互不看见对方的全局。
-    namespace = {"__name__": "ctv_ext_" + manifest["name"], "__builtins__": __builtins__}
+    # 隔离命名空间：不进 sys.modules、不写 pyc、扩展之间互不看见对方的全局；
+    # `__builtins__` 是摘过危险名字的新字典（见 `_restricted_builtins`）。
+    namespace = {"__name__": "ctv_ext_" + manifest["name"],
+                 "__builtins__": _restricted_builtins()}
     code = compile(src, cpath, "exec")
-    exec(code, namespace)  # noqa: S102  源码已过 AST 白名单，产物只经返回值交回
+    try:
+        exec(code, namespace)  # noqa: S102  三层隔离之后才执行，产物只经返回值交回
+    except ImportError as exc:
+        # 模块级的越界导入：钩子在 exec 期才触发，按扩展不合规打回而不是裸栈
+        raise ExtensionError("%s 的 %s %s" % (where, COMPILE_NAME, exc)) from exc
     fn = namespace.get("compile")
     if not callable(fn):
         raise ExtensionError(

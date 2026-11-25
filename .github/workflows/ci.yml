@@ -15,6 +15,15 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         # 采样而非全矩阵：下限（SKILL.md 声明的 3.9+）、一个中位、本机开发用的两档
         python: ["3.9", "3.12", "3.13", "3.14"]
+        # 3.9 单独钉在 ubuntu-24.04：ubuntu-latest 已切到 26.04，setup-python 没有
+        # 26.04 的 3.9 构建，这一档在"Set up Python"就死（main 自 2026-11-16 起一直红，
+        # 与代码无关）。下限档仍要测——README 承诺 3.9+——只是换个还有 3.9 的镜像。
+        exclude:
+          - os: ubuntu-latest
+            python: "3.9"
+        include:
+          - os: ubuntu-24.04
+            python: "3.9"
     runs-on: ${{ matrix.os }}
     env:
       # 脚本输出含中文；Windows runner 控制台默认 cp1252，直接 print 会 UnicodeEncodeError

@@ -354,7 +354,6 @@ def load_extension(path):
     except SyntaxError as exc:
         raise ExtensionError("%s 的 %s 有语法错误：%s" % (where, COMPILE_NAME, exc))
 
-    # 隔离命名空间：不进 sys.modules、不写 pyc、扩展之间互不看见对方的全局。
     # 隔离命名空间：不进 sys.modules、不写 pyc、扩展之间互不看见对方的全局；
     # `__builtins__` 是摘过危险名字的新字典（见 `_restricted_builtins`）。
     namespace = {"__name__": "ctv_ext_" + manifest["name"],

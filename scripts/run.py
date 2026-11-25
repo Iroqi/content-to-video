@@ -346,20 +346,22 @@ def _image_coverage(manifest_path, images_json):
 
 # 默认 help 里不出现的参数：调参、低配兜底、以及"关掉某道闸"的逃生口。
 #
-# 判据是"第一次用要不要知道它"——不是"重不重要"。--workers 与 --allow-degraded
-# 都很重要，但前者只在机器拖不动时才有意义，后者是明知有降级还要出片的例外路径；
-# 把它们摆在 --source/--until 旁边，等于让每个新读者先读完 25 个旗标才能开始。
+# 判据是"第一次用要不要知道它"——不是"重不重要"。--render-workers 与
+# --allow-degraded 都很重要，但前者只在机器拖不动时才有意义，后者是明知有降级
+# 还要出片的例外路径；把它们摆在 --source/--until 旁边，等于让每个新读者先读完
+# 25 个旗标才能开始。
 # 隐藏≠删除：仍然能解析、仍然进报告，只是要 --help-all 才列出来。
 _HIDDEN_OPTIONS = frozenset({
-    "--project", "--workers", "--low-memory-mode", "--no-low-memory-mode",
+    "--project", "--render-workers", "--workers", "--low-memory-mode", "--no-low-memory-mode",
     "--allow-degraded", "--allow-best-effort", "--placeholder-missing",
     "--on-fail", "--allow-ease", "--allow-infinite-loop",
     "--voice-style", "--gap", "--check-frames", "--slot-no-image",
 })
 
 
-# 只作用于 TTS 步骤的旗标集中定义在这里；render 侧参数（--fps/--quality/--workers）
-# 走 hyperframes 字面透传，不复制第二份默认值。
+# 只作用于 TTS 步骤的旗标集中定义在这里；render 侧参数
+# （--fps/--quality/--render-workers）走 hyperframes 字面透传，不复制第二份默认值。
+# pipeline.py 的 --workers 是 TTS 并发数，与本名无关；旧名在本入口保留为 alias。
 def _build_parser(show_all=False):
     parser = argparse.ArgumentParser(
         prog="run.py",
@@ -398,10 +400,12 @@ def _build_parser(show_all=False):
                              "交付档。standard / high 是不带 CRF 覆写的裸档——同样写着"
                              "standard，looks 比它多一层 CRF 16，成片更清楚也更大，"
                              "所以默认选官方那一档而不是裸档")
-    parser.add_argument("--workers", type=int, default=4,
+    parser.add_argument("--render-workers", "--workers", dest="render_workers",
+                        type=int, default=4,
                         help="渲染抓帧 worker 数（默认 4，每 worker 一个独立 Chrome）。"
                              "8 之前有效、之后饱和；低配机器遇 V8 堆崩溃或配图"
-                             "体积大时降到 2")
+                             "体积大时降到 2。--workers 是旧名，保留为 alias；"
+                             "pipeline.py 的同名旗标是 TTS 并发数，两者不是一回事")
     # 低内存档是官方 CLI 的旗标（--help：钉 1 worker + screenshot capture +
     # 跳过自动 worker 校准，默认按总内存 ≤8GB 自判）。低配机器非它不可——实测
     # 3.9GB/2 核机上不加就落在抓帧超时重抓。三态：不给 = 交给 CLI 自判，
@@ -411,7 +415,7 @@ def _build_parser(show_all=False):
                      default=None,
                      help="强制开 Hyperframes 低内存渲染档（worker 钉 1、screenshot "
                           "capture、跳过 worker 自动校准）；低配机器（≤8GB、/dev/shm "
-                          "偏小）用它。会覆盖 --workers")
+                          "偏小）用它。会覆盖 --render-workers")
     _lm.add_argument("--no-low-memory-mode", dest="low_memory", action="store_false",
                      help="强制关低内存档（CLI 默认按总内存自判，≤8GB 会自动开）")
     parser.add_argument("--allow-degraded", action="store_true",
@@ -513,15 +517,16 @@ def main():
     # ——实测把 run.py 的校验删掉后 `--speed nan` 会写出 "speed": NaN，
     # Python 读得回、jq / JSON.parse 读不回。fail-fast 在前，报告里就永远只
     # 会有合法数值。
-    # --workers 更是只有这一份：它不进 tts_cmd（run.py 的是渲染抓帧 worker 数，
-    # pipeline 的同名旗标是 TTS 并发数），交给下游拦就是
-    # `npx hyperframes render --workers 0` 的莫名失败。
+    # --render-workers 更是只有这一份：它不进 tts_cmd（run.py 的是渲染抓帧
+    # worker 数，pipeline 的 --workers 是 TTS 并发数，旧时同名才需要正名），
+    # 交给下游拦就是 `npx hyperframes render --workers 0` 的莫名失败。
+    # 最后那句里的 --workers 是 hyperframes CLI 自己的旗标名，不能改。
     try:
         validate_speed(args.speed)
     except ValueError as e:
         parser.error(str(e))
-    if args.workers < 1:
-        parser.error("--workers 必须是正整数")
+    if args.render_workers < 1:
+        parser.error("--render-workers 必须是正整数")
     # 占位档只对预览有意义：带它渲染等于把占位图烧进成片，那是交付事故而不是
     # 迭代便利。与其在渲染跑到一半才发现，不如在入口说清。
     # --draft 例外：草稿档的成片本来就是"粗剪看节奏"，占位页/空位是草稿的
@@ -559,7 +564,7 @@ def main():
         "canvas": "{}x{}".format(*get_canvas(args.aspect)),
         "fps": args.fps,
         "quality": args.quality,
-        "workers": args.workers,
+        "workers": args.render_workers,
         "low_memory": args.low_memory,
         "speed": args.speed,
         "voice_id": args.voice_id,
@@ -897,11 +902,11 @@ def main():
 
 
     out_video = os.path.join(project, "out.mp4")
-    if args.low_memory and args.workers != 1:
+    if args.low_memory and args.render_workers != 1:
         # CLI 的低内存档把 worker 钉成 1（它自己的 --help 写明）。这里不出声，
-        # 用户会以为自己写的 --workers 生效了，然后对着"怎么这么慢"找半天原因。
+        # 用户会以为自己写的 --render-workers 生效了，然后对着"怎么这么慢"找半天原因。
         print(f"[run][warn] 已开 --low-memory-mode：Hyperframes 会把抓帧 worker 钉成 1，"
-              f"本次的 --workers {args.workers} 不生效（低内存档靠它避免内存抖动）。",
+              f"本次的 --render-workers {args.render_workers} 不生效（低内存档靠它避免内存抖动）。",
               file=sys.stderr)
     # --draft 隐含 best-effort：粗剪档允许媒体缺失/抓帧未就绪也照出片，成片可能
     # 无声或缺帧——这正是"先看一版动起来"要的宽容；报告已记 draft 留痕。
@@ -912,7 +917,7 @@ def main():
               "渲染器照旧出片，成片可能无声或整段缺帧——这是调试档，不要拿去交付。",
               file=sys.stderr)
     hf_render = build_render_command(
-        out_video, args.quality, args.fps, args.workers, command=_HF_COMMAND,
+        out_video, args.quality, args.fps, args.render_workers, command=_HF_COMMAND,
         low_memory=args.low_memory, allow_best_effort=_best_effort,
     )
     # 渲染等待上限跟着成片时长走。实测渲染耗时约为视频时长的 1.2–3 倍
@@ -966,7 +971,7 @@ def main():
             f"（容差 {_tol:.2f}s）——后段内容可能整个不在片里。\n"
             "      常见成因：抓帧超时后重抓丢帧、worker 崩溃、Chrome 提前退出。\n"
             "      先看渲染日志（成片同目录的 out.render.log）里有没有"
-            "`Parallel capture timed out`；有的话降 --workers 到 2 重渲。\n"
+            "`Parallel capture timed out`；有的话降 --render-workers 到 2 重渲。\n"
             "      确认画面确实完整、只是尾帧差这点时长时，重跑本命令再核一次。"
             f"成片已留在 {out_video}，未删除。", file=sys.stderr)
         sys.exit(4)

@@ -224,9 +224,13 @@ class FlagPassthrough(unittest.TestCase):
             self.assertNotIn(opt, short, opt)
             self.assertIn(opt, full, opt)
         args = R._build_parser().parse_args(
-            ["--source", "s.json", "--workers", "2", "--allow-degraded",
+            ["--source", "s.json", "--render-workers", "2", "--allow-degraded",
              "--gap", "0.7"])
-        self.assertEqual(args.workers, 2)
+        self.assertEqual(args.render_workers, 2)
+        # 旧名留一版 alias：正名不能让既有命令静默失效。
+        legacy = R._build_parser().parse_args(
+            ["--source", "s.json", "--workers", "3"])
+        self.assertEqual(legacy.render_workers, 3)
         self.assertTrue(args.allow_degraded)
         self.assertEqual(args.gap, 0.7)
 

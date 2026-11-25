@@ -4,6 +4,8 @@
 其余用例都是替它站岗的边界。
 """
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -133,13 +135,76 @@ class TestCompileTimeRedlines(unittest.TestCase):
                 shutil.rmtree(d)
 
     def test_禁用动态执行与文件IO(self):
-        d = _temp_extension(_manifest(),
-                            "def compile(spec, ctx):\n    return {'svg': eval('1')}\n")
-        try:
-            with self.assertRaisesRegex(_extensions.ExtensionError, "动态执行"):
-                _extensions.load_extension(d)
-        finally:
-            shutil.rmtree(d)
+        """直接写法与绕过写法都要在 AST 层被拦，且报错说得出原因。
+
+        修复前这张表里除第一条外全部放行：黑名单按模块名拦 `subprocess`，
+        `import os; os.system(...)`、`importlib.import_module("random")`、
+        `sys.modules["subprocess"]`、`getattr(os, "popen")`、`__builtins__["open"]`、
+        `__import__` 的别名一个都不在表上；dunder 梯子
+        `().__class__.__base__.__subclasses__()` 更是连看都没人看。
+        """
+        cases = [
+            ("动态执行", "def compile(s, c):\n    return {'svg': eval('1')}\n"),
+            ("纯路径函数", "import os\ndef compile(s, c):\n    os.system('echo x')\n    return {'svg': s['svg']}\n"),
+            ("纯路径函数", "import os as o\ndef compile(s, c):\n    o.popen('echo x')\n    return {'svg': s['svg']}\n"),
+            ("纯路径函数", "from os import system\ndef compile(s, c):\n    return {'svg': s['svg']}\n"),
+            ("禁用模块", "import importlib\ndef compile(s, c):\n    return {'svg': importlib.import_module('random').random()}\n"),
+            ("禁用模块", "import sys\ndef compile(s, c):\n    return {'svg': sys.modules['subprocess'] and s['svg']}\n"),
+            ("摸回完整内建", "def compile(s, c):\n    return {'svg': __builtins__['open'] and s['svg']}\n"),
+            ("摸回完整内建", "_imp = __import__\ndef compile(s, c):\n    return {'svg': _imp('time') and s['svg']}\n"),
+            ("动态执行", "import os\ndef compile(s, c):\n    return {'svg': getattr(os, 'system')('echo x') or s['svg']}\n"),
+            ("dunder 属性", "def compile(s, c):\n    return {'svg': str(len(().__class__.__base__.__subclasses__()))}\n"),
+            ("相对导入", "from . import x\ndef compile(s, c):\n    return {'svg': s['svg']}\n"),
+        ]
+        for needle, source in cases:
+            d = _temp_extension(_manifest(), source)
+            try:
+                with self.subTest(source=source.splitlines()[0][:60]):
+                    with self.assertRaisesRegex(_extensions.ExtensionError, needle):
+                        _extensions.load_extension(d)
+            finally:
+                shutil.rmtree(d)
+
+    def test_运行期隔离层不依赖AST层独立站得住(self):
+        """AST 只是文本扫描；真正的墙是受限 `__builtins__` ＋ 白名单导入钩子。
+
+        这里**绕过 `_check_source`**，直接把源码 exec 进扩展拿到的命名空间：
+        恶意源码必须失败，合法源码（类定义 / super / 异常 / os.path 全家 /
+        xml.etree / f-string）必须照常跑出结果。修复前这份命名空间拿到的是
+        完整内建，`open`、`eval`、`os.system`、`import subprocess` 全部成立。
+        """
+        def run(source):
+            ns = {"__name__": "probe", "__builtins__": _extensions._restricted_builtins()}
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                exec(compile(source, "compile.py", "exec"), ns)   # noqa: S102  受测的正是这份命名空间
+                return ns["compile"]({"svg": "<svg/>"}, {})
+
+        for label, source in {
+            "os.system": "import os\ndef compile(s, c):\n    os.system('echo x')\n    return {'svg': s['svg']}",
+            "subprocess": "import subprocess\ndef compile(s, c):\n    return {'svg': s['svg']}",
+            "open": "def compile(s, c):\n    open('x', 'w')\n    return {'svg': s['svg']}",
+            "eval 别名": "def compile(s, c):\n    e = eval\n    return {'svg': s['svg']}",
+            "getattr": "import os\ndef compile(s, c):\n    getattr(os, 'system')\n    return {'svg': s['svg']}",
+            "from os import system": "from os import system\ndef compile(s, c):\n    return {'svg': s['svg']}",
+            "os.path.exists": "from os.path import exists\ndef compile(s, c):\n    return {'svg': s['svg']}",
+            "__loader__": "def compile(s, c):\n    __loader__\n    return {'svg': s['svg']}",
+        }.items():
+            with self.subTest(label):
+                with self.assertRaises((NameError, ImportError, AttributeError)):
+                    run(source)
+        good = ("import os\nimport os.path as p2\nfrom os import path as p3\n"
+                "from os.path import join\nimport re\n"
+                "class P:\n    def __init__(self):\n        self.r = re.compile('a+')\n"
+                "    def __repr__(self):\n        return 'P'\n"
+                "def compile(s, c):\n"
+                "    try:\n        raise ValueError('x')\n    except ValueError:\n        pass\n"
+                "    tail = join(os.sep, p2.dirname(p3.join('a', 'b.svg')))\n"
+                "    return {'svg': f'{P()}{tail}'}")
+        self.assertEqual(run(good), {"svg": "P/a"})
+        self.assertNotIn("open", _extensions._restricted_builtins())
+        self.assertNotIn("getattr", _extensions._restricted_builtins())
+        self.assertIs(_extensions._restricted_builtins()["__import__"], _extensions._safe_import)
 
     def test_禁用跨次全局状态(self):
         d = _temp_extension(_manifest(),

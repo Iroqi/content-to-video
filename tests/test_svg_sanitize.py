@@ -455,6 +455,46 @@ class TagCaseAndSlashEquivalence(unittest.TestCase):
                 self.assertNotIn("evil.com", out, body)
                 self.assertTrue(any("已删除" in n for n in notes), (body, notes))
 
+    def test_html_integration_point_children_and_embed_tags_are_dropped(self):
+        """`<title>` / `<desc>` 是 HTML 集成点，其子元素按 HTML 解析；HTML 嵌入元素一律删。
+
+        修复前 `<title><iframe srcdoc="<script>…">` 过得了全部属性清理（它不带 href、
+        不带 on*），内联后在 Chromium 里脚本真的执行；`<object data>` / `<base href>` /
+        `<link rel=stylesheet>` 同理会变成活的 HTML 元素。`<text><tspan>` 不是集成点，
+        必须原样保留——这条锁的是"只摘集成点的子元素"，不是"见子元素就删"。
+        """
+        payloads = (
+            '<title><iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe></title>',
+            '<desc><object data="https://evil.com/x.html"></object></desc>',
+            '<desc><embed src="https://evil.com/x.swf"/></desc>',
+            '<title><img src="https://evil.com/p.png"/></title>',
+            '<title><base href="https://evil.com/"/></title>',
+            '<title><link rel="stylesheet" href="https://evil.com/a.css"/></title>',
+            '<title><video src="https://evil.com/v.mp4"></video></title>',
+            '<iframe src="https://evil.com/"></iframe>',
+            '<META http-equiv="refresh" content="0;url=https://evil.com/"/>',
+            # 子元素不在嵌入表里：集成点规则照样摘，文本（含 tail）留下
+            '<title>说明<b/>补充</title>',
+        )
+        for body in payloads:
+            with self.subTest(body=body):
+                out, notes = self._sanitize(
+                    f'<svg xmlns="{S.SVG_NS}">{body}'
+                    '<rect width="10" height="10"/></svg>')
+                low = out.lower()
+                for tag in ("iframe", "object", "embed", "img", "base", "link",
+                            "video", "meta", "srcdoc", "evil.com", "<b"):
+                    self.assertNotIn(tag, low, (body, out))
+                self.assertIn("<rect", out, body)          # 别把作者的画也带走了
+                self.assertTrue(any("已删除" in n for n in notes), (body, notes))
+        # 集成点只摘子元素：说明文字与 tail 都留，`<text>` 的 `<tspan>` 不受影响
+        out, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><title>说明<b/>补充</title>'
+            '<text><tspan>ok</tspan></text></svg>')
+        self.assertIn("<title>说明补充</title>", out)
+        self.assertIn("<tspan>ok</tspan>", out)
+        self.assertTrue(any("集成点" in n for n in notes), notes)
+
     def test_uppercase_smil_is_dropped(self):
         """`<ANIMATE>`（任意大小写）是墙钟动画，逐帧 seek 下不可复现。"""
         for body in ('<animate attributeName="opacity" to="0" dur="1s"/>',

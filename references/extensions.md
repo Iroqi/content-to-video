@@ -58,14 +58,23 @@ skill 的甜区是「一份不可信的信源 → 确定性 HTML composition」�
 `spec` 是作者写的 JSON 对象（键集由扩展包自己定），`ctx` 首版为空对象，留作
 将来传画幅与主题的入口。
 
-编译期禁用的东西由 `scripts/_extensions.py` 在 AST 层拦，不是靠自觉：
+编译期禁用的东西由 `scripts/_extensions.py` 分两层拦，不是靠自觉——AST 层给
+可读的拒收理由，运行期层（受限 `__builtins__` ＋ 白名单导入钩子）才是墙：
 
-- 不许导入 `random` / `time` / `datetime` / `urllib` / `requests` / `socket` /
-  `subprocess` / `threading` 等——墙钟、随机、网络、子进程、并发。
-- 不许调 `eval` / `exec` / `__import__` / `compile` / `open`。产物用返回值交回，
+- **导入白名单**：只许 `math` / `re` / `json` / `xml` / `html` / `itertools` /
+  `functools` / `collections` 等纯计算标准库；`random` / `time` / `datetime` /
+  `urllib` / `socket` / `subprocess` / `sys` / `importlib` 一律拒收。`os` 只开放
+  `os.path` 的纯路径函数（`join` / `split` / `dirname` / `normpath`…）。
+- 不许调 `eval` / `exec` / `compile` / `open` / `__import__` / `getattr` /
+  `globals`，不许读 `__builtins__` / `__loader__`，不许访问 `__class__` /
+  `__subclasses__` 这类 dunder 属性——它们都是从任意对象走回解释器的梯子。
+  运行期扩展拿到的 `__builtins__` 本来就没有这些名字。产物用返回值交回，
   扩展自己不写文件。
 - 不许用 `global` / `nonlocal`，不许定义模块级可变容器常量。第二次编译不能
   带上第一次的残留。
+
+> 这两层保证的是「一份看起来老实的扩展做不到它声明不做的事」，**不是**对抗蓄意
+> 攻击的安全边界：扩展包是你显式指定路径加载的本地代码，装之前先读一遍。
 
 `seed` 这类需要「看起来随机」的量由作者显式写进 `spec`，同一份 spec 两次编译
 必须逐字节一致（`assert_deterministic` 对账）。这与 `canvas_kit.py` 的

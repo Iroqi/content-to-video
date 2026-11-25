@@ -25,14 +25,14 @@ python scripts/gen_hyperframes.py -m audio_output/timing_manifest.json \
 
 ## 渲染性能：什么时候该动这几个参数
 
-默认值见 `run.py --help-all`（`--fps 24`、`--workers 4`、`--quality looks`）。`--set 键=值`（可重复）改一个模板视觉参数——**只在本次进程生效**，定下来的值写回 `scripts/_template.py`。
+默认值见 `run.py --help-all`（`--fps 24`、`--render-workers 4`、`--quality looks`）。`--set 键=值`（可重复）改一个模板视觉参数——**只在本次进程生效**，定下来的值写回 `scripts/_template.py`。
 
 - **最优组合别猜，让机器量**：`npx -y hyperframes@0.8.185 benchmark <项目> --runs 3 --json`。下面的经验值换机器、换稿件规模就该重跑。
 - `fps`：抓帧耗时与帧数线性，唯一一阶杠杆。快速看画面用 `--fps 12 --quality draft`。
-- `workers`：`run.py` **恒显式传**，拿不到 CLI 的自动校准。8 之前有效、之后饱和；迭代片 `--workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。
+- `render-workers`：`run.py` **恒显式传**，拿不到 CLI 的自动校准。8 之前有效、之后饱和；迭代片 `--render-workers 8`；V8 堆崩溃降到 2。偏慢时先在 `out.render.log` 找 `Parallel capture timed out`。旧名 `--workers` 仍可解析，但它是 `pipeline.py` 的 TTS 并发数旗标，新稿别混用。
 - `quality`：五档透传，底层只有三档——`looks` = standard + CRF 16（默认），**`delivery` 就是 high**；`draft` 省约 15%。
 - **固定开销**：每调用一次约白付 8.5s，冷跑多约 6s。先 `--until html` 看够再整片渲一次。
-- **低配机器**：`--low-memory-mode` 把 worker 钉成 1（总内存 ≤8GB 自判），与 `--workers` 冲突时 CLI 赢。**容器读的是宿主机总内存**，小限额容器要显式 `PRODUCER_LOW_MEMORY_MODE=true`（CLI 的环境变量，取值是 `true`/`false`，写 `1` 不认）。Chrome 超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
+- **低配机器**：`--low-memory-mode` 把 worker 钉成 1（总内存 ≤8GB 自判），与 `--render-workers` 冲突时 CLI 赢。**容器读的是宿主机总内存**，小限额容器要显式 `PRODUCER_LOW_MEMORY_MODE=true`（CLI 的环境变量，取值是 `true`/`false`，写 `1` 不认）。Chrome 超时另有 `--browser-timeout` / `--protocol-timeout`（`run.py` 不透传）。
 
 ## 官方校验命令
 

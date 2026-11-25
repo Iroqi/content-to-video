@@ -48,18 +48,6 @@ _STRUCTURAL_TAGS = frozenset({"svg", "defs", "title", "desc", "metadata", "style
                               "lineargradient", "radialgradient", "filter"})
 
 
-def is_motion(entry):
-    """这条条目要不要"内联 + 补间"（而不是当静态 `<img>`）。"""
-    return bool(steps_of(entry))
-
-
-def steps_of(entry):
-    """从 images.json 条目（或它的 opts）里取 steps；没有就 []。"""
-    if not isinstance(entry, dict):
-        return []
-    return list(entry.get("steps") or [])
-
-
 def animate_of(entry):
     """条目里的 animate 块（允许省略 `"animate": {...}` 这层壳，直接写 steps）。"""
     if not isinstance(entry, dict):
@@ -70,18 +58,6 @@ def animate_of(entry):
     if "steps" in entry:
         return {k: entry[k] for k in ("steps", "params", "bind") if k in entry}
     return {}
-
-
-def selectors_of(entry):
-    """这条编排会改写的选择器（`#id` / `.class`）。"""
-    out = []
-    for st in steps_of(entry):
-        if isinstance(st, dict) and isinstance(st.get("target"), str):
-            out.append(st["target"])
-    for b in animate_of(entry).get("bind") or []:
-        if isinstance(b, dict) and isinstance(b.get("target"), str):
-            out.append(b["target"])
-    return out
 
 
 # ── 起点态 ────────────────────────────────────────────────────────────

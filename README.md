@@ -43,17 +43,18 @@ GSAP 不随技能包分发：生成时依次从项目 `vendor/`、`~/.cache/cont
 一份最小的稿件——只有 `title` 与 `text` 是硬要求：
 
 ```json
-{"title": "本期标题", "opening": "一句开场白，说清主题和为什么值得看。",
+{"title": "本期标题",
  "segments": [
    {"id": "seg1", "title": "第一个要点", "text": "第一句。第二句。"},
-   {"id": "seg2", "title": "第二个要点", "text": "第一句。第二句。"}],
- "closing": "一句收束。", "cta": "关注我们"}
+   {"id": "seg2", "title": "第二个要点", "text": "第一句。第二句。"}]}
 ```
 
 ```bash
 python scripts/run.py --source segments_source.json -o audio_output --until html
 # 没有 key 也能跑：自动降级成无配音预览。打开 hf-project/index.html 看版式。
 ```
+
+**结构页不是默认件**：`opening` / `closing` 是 agenda 目录/小结卡，适合章节型稿件；叙述展开型（故事、案例、影评）不写 `opening`，让第一段第一句直接进场——见 `references/formats.md`「结构页按体裁路由」。
 
 预览满意再补配图与动效，然后去掉 `--until` 出片。**前三次迭代不要碰 `layout`、配图、`animate`**：默认槽位版式最稳，版式自带入场动画，先把链路跑通。**科普推演片例外**：画面要跟着旁白分步变的段，第 1 步写稿时就得定 `beats`，否则会落成念稿配静图——结构、图示选型与专项验收见 `references/science.md`。
 

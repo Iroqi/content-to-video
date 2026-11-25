@@ -7,13 +7,12 @@ description: 把文本、文档、网页或结构化资料做成带字幕、配�
 一条链：结构化写稿 → TTS 配音 → 配图 → 生成 HTML 预览 → 渲染 MP4。
 ## 最小可跑路径（先跑通，再看规则）
 ```json
-{"title": "本期标题", "opening": "一句开场白，说清主题和为什么值得看。",
+{"title": "本期标题",
  "segments": [
    {"id": "seg1", "title": "第一个要点", "kicker": "第一章 · 起跑线",
     "tagline": "背景", "text": "第一句。第二句。", "takeaway": "带走这一句"},
    {"id": "seg2", "title": "第二个要点", "kicker": "第二章 · 进展",
-    "tagline": "进展", "text": "第一句。第二句。", "takeaway": "带走这一句"}],
- "closing": "回顾主线，一句收束。", "cta": "关注我们"}
+    "tagline": "进展", "text": "第一句。第二句。", "takeaway": "带走这一句"}]}
 ```
 ```bash
 python scripts/run.py --source segments_source.json -o audio_output --until html
@@ -21,7 +20,8 @@ python scripts/run.py --source segments_source.json -o audio_output --until html
 # 产物标 degraded）。打开 hf-project/index.html 看版式；配音后去掉 --until 才是出片。
 ```
 
-只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`kicker` 省了就没有标题上沿那行分类小字，`opening`/`closing` 省了就没有那两页）。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带；科普推演片的 `beats` 例外，必须在第 1 步写稿时定，见 `references/science.md`）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
+只有 `title` 与 `text` 是硬要求（`takeaway` 省了回退标题，`tagline` 省了兜底"补充阅读"，`kicker` 省了就没有标题上沿那行分类小字）。
+**结构页按体裁加，不是默认件**：章节型（周报 / 宣传片 / 科普六步）才写 `opening`/`closing` 当目录与小结卡；叙述展开型（故事 / 案例 / 影评）不写 `opening`，让首段第一句带钩子直接进场，见 `references/formats.md`「结构页按体裁路由」。这一步不用管 `layout`（默认槽位版式最稳）、配图（没图只是警告，槽位页照样出 HTML）、动画（版式自带；科普推演片的 `beats` 例外，必须在第 1 步写稿时定，见 `references/science.md`）。预览满意再补配图（`imagery.md`）、该演的段写 `beats`（`motion.md`）、节奏配色（`look.md`「动画：实现要点」）；**没有配音 key 时先看版式**。报错直接查下表，别通读文档。
 
 ## 这份文档怎么用
 按此刻这一步找那一行，出错按症状找同一张表。前五步对应 `run.py` 的五个阶段；第 3 步内部分 3a / 3b——**3a 选形式，看稿子就能答；3b 画图写编排，要等 `timing_manifest.json` 出来才卡得准点**。

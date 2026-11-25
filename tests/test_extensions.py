@@ -201,7 +201,7 @@ class TestCompileTimeRedlines(unittest.TestCase):
                 "    try:\n        raise ValueError('x')\n    except ValueError:\n        pass\n"
                 "    tail = join(os.sep, p2.dirname(p3.join('a', 'b.svg')))\n"
                 "    return {'svg': f'{P()}{tail}'}")
-        self.assertEqual(run(good), {"svg": "P/a"})
+        self.assertEqual(run(good), {"svg": "P" + os.sep + "a"})   # os.sep：Windows 是反斜杠
         self.assertNotIn("open", _extensions._restricted_builtins())
         self.assertNotIn("getattr", _extensions._restricted_builtins())
         self.assertIs(_extensions._restricted_builtins()["__import__"], _extensions._safe_import)

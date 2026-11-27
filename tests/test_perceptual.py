@@ -29,9 +29,7 @@ try:
 except ImportError:                     # 可选依赖：缺了整份跳过（见 SKILL.md「环境」）
     HAS_PIL = False
 
-if HAS_PIL:
-    import perceptual as P
-
+import perceptual as P
 import _animate as EV
 
 # 竖屏页底色（与模板 dark 主题的渐变中段接近，四条判据都不依赖精确色值）
@@ -81,6 +79,7 @@ def _verse(img, d, n=2):
         d.text((25, H - 120 + i * 26), "字幕一句在这里。", fill=(150, 175, 200))
 
 
+@unittest.skipUnless(HAS_PIL, "观感门禁要吃像素，缺 Pillow 跑不了")
 class TestPerceptual(unittest.TestCase):
 
     def setUp(self):
@@ -262,6 +261,7 @@ class TestPerceptual(unittest.TestCase):
 
 
 
+@unittest.skipUnless(HAS_PIL, "观感门禁要吃像素，缺 Pillow 跑不了")
 class SnapshotKeepsTheFramesItJustTook(unittest.TestCase):
     """`_snapshot` 把 `rmtree(outdir)` 写在了 `subprocess.run` **之后**。
 
@@ -328,6 +328,7 @@ class SnapshotKeepsTheFramesItJustTook(unittest.TestCase):
 # ── 取帧命令：与渲染侧同一条解析链 ────────────────────────────────────
 
 
+@unittest.skipUnless(HAS_PIL, "观感门禁要吃像素，缺 Pillow 跑不了")
 class SnapshotCommandIsResolved(unittest.TestCase):
     """`_snapshot` 直接 `subprocess.run(["npx", ...])`，绕开了 `resolve_command`。
 
@@ -382,8 +383,6 @@ class TestGateIsolation(unittest.TestCase):
         import builtins
         tmp = tempfile.mkdtemp(prefix="perc-nopil-")
         try:
-            _frame(os.path.join(tmp, "frame-00-at-1.00s.png"),
-                   lambda img, d: _title(img, d))
             man = {"segments": [{"id": "seg1",
                                  "sentences": [{"start_time": 1.0, "duration": 3.0}]}]}
             real = builtins.__import__
@@ -400,8 +399,10 @@ class TestGateIsolation(unittest.TestCase):
                 fdir = os.path.join(tmp, "out", "frames")
                 os.makedirs(fdir)
                 for t in P.sample_times(man["segments"])["seg1"]:
-                    _frame(os.path.join(fdir, f"frame-00-at-{t:.2f}s.png"),
-                           lambda img, d: _title(img, d))
+                    # run_gate 在读像素前就会因缺 Pillow 返回 error；占位字节足够。
+                    with open(os.path.join(fdir, f"frame-00-at-{t:.2f}s.png"),
+                              "wb") as fh:
+                        fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
                 r = P.run_gate("", man, os.path.join(tmp, "out"))
             finally:
                 builtins.__import__ = real
@@ -416,8 +417,8 @@ class TestGateIsolation(unittest.TestCase):
         old = os.path.join(tempfile.mkdtemp(prefix="perc-old-"), "p")
         try:
             os.makedirs(old)
-            _frame(os.path.join(old, "frame-00-at-1.00s.png"),
-                   lambda img, d: _title(img, d))
+            with open(os.path.join(old, "frame-00-at-1.00s.png"), "wb") as fh:
+                fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
             with self.assertRaises(RuntimeError):
                 P._snapshot(".", [1.0], old,
                             [sys.executable, "-c", "import sys;sys.exit(3)"])

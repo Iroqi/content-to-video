@@ -95,7 +95,7 @@ class Reuse(unittest.TestCase):
 
 
 class _FakeClient:
-    """不联网的 TTS：恒返回同一段 0.5s 静音 WAV（够 atempo 与量时长）。"""
+    """不联网的 TTS：恒返回同一段 0.5s 的非静音 WAV（够 atempo 与量时长）。"""
 
     def __init__(self):
         self.calls = []
@@ -103,7 +103,7 @@ class _FakeClient:
     def synthesize(self, text, voice_id, voice_style, model, timeout):
         self.calls.append(text)
         n = int(8000 * 0.5)
-        frames = b"".join(struct.pack("<h", 0) for _ in range(n))
+        frames = b"".join(struct.pack("<h", 4000) for _ in range(n))
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)

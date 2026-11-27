@@ -44,12 +44,12 @@ class NoTtsRun(unittest.TestCase):
         self.source = os.path.join(self.tmp, "segments_source.json")
         write_json_atomic(self.source, H.sample_source())
 
-    def _run(self, extra=()):
+    def _run(self, extra=(), silence=_silence):
         argv = ["pipeline.py", "--source", self.source, "-o", self.out,
                 "--gap", "0.4", "--no-tts"] + list(extra)
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(P, "generate_silence", _silence), \
+                mock.patch.object(P, "generate_silence", silence), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             P.main()
         return out.getvalue(), err.getvalue()
@@ -117,12 +117,30 @@ class NoTtsRun(unittest.TestCase):
         会把静音当成"同一段音频，指纹未变"，整片永远无声。"""
         sdir = os.path.join(self.out, "sentences")
         os.makedirs(sdir, exist_ok=True)
-        for name in ("s001.wav.sha", "s001.wav.spd", "s001.wav" + P._FAILED_SUFFIX):
+        stale_names = (
+            "s001.wav.sha", "s001.wav.spd", "s001.wav.orig.wav",
+            "s001.wav" + P._FAILED_SUFFIX, "s001.wav.spd.abc.tmp.wav",
+            "s001.wav.sha.stale", "s001.wav.orig.wav.stale",
+        )
+        for name in stale_names:
             with open(os.path.join(sdir, name), "w", encoding="utf-8") as f:
                 f.write("stale")
-        self._run()
+        observed = []
+
+        def observe_before_write(_ffmpeg, _dur, path):
+            if os.path.basename(path) == "s001.wav":
+                observed.append(sorted(
+                    n for n in os.listdir(sdir)
+                    if n.startswith("s001.wav") and n != "s001.wav"))
+            _silence(_ffmpeg, _dur, path)
+
+        self._run(silence=observe_before_write)
+        # 关键顺序：写占位 WAV 之前，旧语音的全部认证/变速状态就已作废。
+        # 即使两步之间被中断，也不会留下“静音 WAV + 旧 .sha/.orig.wav”。
+        self.assertEqual(observed, [[]])
         left = sorted(os.listdir(sdir))
         self.assertFalse([n for n in left if n.endswith((".sha", ".spd",
+                                                          ".orig.wav", ".tmp.wav",
                                                           P._FAILED_SUFFIX))],
                          f"边车没清干净：{left}")
 

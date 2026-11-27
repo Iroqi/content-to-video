@@ -113,6 +113,17 @@ def _validate_voiced_span(s, where):
             "这一句没有发声区间可言，删掉 onset/voiced 两个字段即可。")
 
 
+def _sentence_render_fields(s):
+    """段内句子与顶层句子必须一致的渲染字段。
+
+    speaker 决定行首标签，onset 决定 cue 开口，voiced 决定卡拉OK与收束的终点。
+    缺省 onset 与 0 在 renderer 里等价，speaker 缺省与 None 也等价，先归一化再比。
+    """
+    return (s.get("speaker"),
+            float(s.get("onset") or 0.0),
+            float(s.get("voiced") or 0.0))
+
+
 def validate_timing_manifest(data):
     """timing_manifest.json：sentences（非空）与 total_duration（数值）必填。"""
     if not isinstance(data, dict):
@@ -218,6 +229,7 @@ def validate_timing_manifest(data):
 
     seen_indices = set()
     top_by_index = {}
+    prev_index = None
     prev_start = None
     prev_end = None
     for i, s in enumerate(sentences):
@@ -225,6 +237,12 @@ def validate_timing_manifest(data):
         idx = s["index"]
         if idx in seen_indices:
             raise ValueError(f"timing_manifest.json 的 sentence index 重复：{idx}")
+        if prev_index is not None and idx <= prev_index:
+            raise ValueError(
+                f"timing_manifest.json 的 sentences[{i}].index={idx} 不是严格递增句序"
+                f"——保留原始句序时允许跳号（前一句失败/丢弃），但 index 必须"
+                f"唯一且按时间顺序递增（上一句为 {prev_index}）")
+        prev_index = idx
         seen_indices.add(idx)
         top_by_index[idx] = s
         start = float(s["start_time"])
@@ -262,6 +280,7 @@ def validate_timing_manifest(data):
             "该字段，手写/裁剪 manifest 请按格式给出分组）")
     _seen_sids = set()
     assigned_indices = set()
+    previous_assigned_index = None
     previous_segment_end = None
     for i, sg in enumerate(segs):
         if not isinstance(sg, dict):
@@ -427,6 +446,13 @@ def validate_timing_manifest(data):
             if s["index"] in assigned_indices:
                 raise ValueError(
                     f"timing_manifest.json 的 sentence index {s['index']} 被多个段落重复引用")
+            if (previous_assigned_index is not None
+                    and s["index"] <= previous_assigned_index):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentences "
+                    f"必须按严格递增的原始句序排列（允许跳号，上一句 index 为 "
+                    f"{previous_assigned_index}，实际 {s['index']}）")
+            previous_assigned_index = s["index"]
             top_sentence = top_by_index[s["index"]]
             if s.get("text") != top_sentence.get("text"):
                 raise ValueError(
@@ -437,6 +463,11 @@ def validate_timing_manifest(data):
                 raise ValueError(
                     f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
                     f"index {s['index']} 的时间轴与顶层 sentences 不一致")
+            if _sentence_render_fields(s) != _sentence_render_fields(top_sentence):
+                raise ValueError(
+                    f"timing_manifest.json 的段落 '{sg.get('id', '?')}' sentence "
+                    f"index {s['index']} 的 speaker/onset/voiced 与顶层 sentences "
+                    "不一致——这些字段会改变说话人标签、字幕开口或卡拉OK进度")
             segment_seen.add(s["index"])
             assigned_indices.add(s["index"])
             start = float(s["start_time"])

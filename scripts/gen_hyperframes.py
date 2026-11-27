@@ -162,11 +162,14 @@ from _audio import (ffmpeg_usable, get_ffmpeg, measure_duration,  # noqa: E402
                     parse_duration, parse_video_size, COMBINED_AUDIO_NAME)
 from _media_size import raster_size, upscale_note, aspect_note  # noqa: E402
 from _svg_sanitize import (_CSS_COMMENT, _local, _parse_num, _style_map,  # noqa: E402
-                           is_full_bleed_backdrop, sanitize_svg_for_inline,
-                           root_px_size, root_viewbox_size)  # noqa: E402  与 check_svg 共用 root_px_size
+                           _ORIGINAL_ID, _SCOPE_DATA, is_full_bleed_backdrop,
+                           sanitize_svg_for_inline, rewrite_inline_svg_selectors,
+                           root_px_size, root_viewbox_size)  # noqa: E402
 from _cam_crop import crop_warnings  # noqa: E402
 from _stage_carry import (bake_settled_state, carry_pages,  # noqa: E402
-                          global_ref_leaks, judging_row)
+                          global_ref_leaks, inline_svg_author_view, judging_row,
+                          rebase_inline_svg_namespace,
+                          rewrite_inline_svg_animate_targets)
 from _timeline import (DEFAULT_FPS, beat_positions, beat_span,  # noqa: E402
                        beat_cycles, duration_tolerance)
 
@@ -1115,26 +1118,32 @@ def _zorder_warnings(markup, steps):
     因为跨句的先后本来就是作者按稿序写的，再按秒比分不出新东西。
     """
     from check_svg import _shape_bounds
-    order = {}                       # target id → 最早揭示的排序键 (句序, 句内秒, 步骤下标)
-    for i, step in enumerate(steps):
-        t = (step.get("target") or "").strip()
-        if t.startswith("#") and len(t) > 1 and t[1:] not in order:
-            if "at" in step:
-                at = float(step["at"])
-                order[t[1:]] = (int(at), at - int(at), i)
-            else:
-                order[t[1:]] = (float("inf"), 0.0, i)
-    if len(order) < 2:
-        return []
     try:
         root = ET.fromstring(markup)
     except ET.ParseError:
         return []
+    if root.get(_SCOPE_DATA) == "1":
+        steps = rewrite_inline_svg_animate_targets({"steps": steps}, markup)["steps"]
+    order = {}                       # target id → 最早揭示的排序键 (句序, 句内秒, 步骤下标)
+    for i, step in enumerate(steps):
+        t = (step.get("target") or "").strip()
+        if t.startswith("#") and len(t) > 1:
+            target_id = t.rsplit(" ", 1)[-1][1:]
+            if target_id not in order:
+                if "at" in step:
+                    at = float(step["at"])
+                    order[target_id] = (int(at), at - int(at), i)
+                else:
+                    order[target_id] = (float("inf"), 0.0, i)
+    if len(order) < 2:
+        return []
     parent = {c: p for p in root.iter() for c in p}
     dom = []
+    labels = {}
     for el in root.iter():
         if el.get("id"):
             dom.append(el)
+            labels[el.get("id")] = el.get(_ORIGINAL_ID) or el.get("id")
     pos = {el.get("id"): j for j, el in enumerate(dom)}
     ids = [i for i in order if i in pos]
     by_id = {el.get("id"): el for el in dom}
@@ -1164,11 +1173,12 @@ def _zorder_warnings(markup, steps):
                 continue          # 包围盒不相交：叠压顺序无从生效
             earlier, later = (a, b) if order[a] < order[b] else (b, a)
             if pos[earlier] > pos[later]:
+                a_label, b_label = labels.get(earlier, earlier), labels.get(later, later)
                 warns.append(
-                    f"z 序与揭示顺序相反：#{earlier} 在第 {order[earlier][2]} 步先亮，"
-                    f"却写在 #{later}（第 {order[later][2]} 步后亮）的 DOM 后面——两者在"
+                    f"z 序与揭示顺序相反：#{a_label} 在第 {order[earlier][2]} 步先亮，"
+                    f"却写在 #{b_label}（第 {order[later][2]} 步后亮）的 DOM 后面——两者在"
                     f"画面上重叠，先亮的会把后亮的盖住。SVG 的叠压顺序 = DOM 顺序，"
-                    f"后亮的内容要写在后面（上面）；把 #{earlier} 挪到 #{later} 前面，"
+                    f"后亮的内容要写在后面（上面）；把 #{a_label} 挪到 #{b_label} 前面，"
                     f"或确认这是故意垫底")
     return warns
 
@@ -1273,7 +1283,8 @@ def animate_prepare(images, segments, out_dir):
         if not block:
             continue
         src = entry["src"]
-        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns)
+        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns,
+                                   namespace=sid)
         if out is None:
             continue
         raw, markup = out
@@ -1290,7 +1301,12 @@ def animate_prepare(images, segments, out_dir):
     return errs, warns
 
 
-def _read_svg_for_inline(sid, src, out_dir, what, errs, warns):
+def _sanitize_svg_for_card(raw, namespace):
+    """执行唯一的 inline 命名空间净化；扩展落盘产物已是 standalone 安全 SVG。"""
+    return sanitize_svg_for_inline(raw, namespace=namespace)
+
+
+def _read_svg_for_inline(sid, src, out_dir, what, errs, warns, namespace=None):
     """读盘 + 净化，返回 (源文本, 净化内联串)；读不了/净化不了就报错并返回 None。"""
     path = os.path.join(out_dir, src)
     if not os.path.isfile(path):
@@ -1303,7 +1319,7 @@ def _read_svg_for_inline(sid, src, out_dir, what, errs, warns):
         errs.append(f"段落 '{sid}' 的 {what} 配图 {src} 读不了: {e}")
         return None
     try:
-        markup, notes = sanitize_svg_for_inline(raw)
+        markup, notes = _sanitize_svg_for_card(raw, namespace)
     except ValueError as e:
         errs.append(f"段落 '{sid}' 的 {what} 配图 {src} 无法净化内联: {e}")
         return None
@@ -1388,9 +1404,10 @@ def _animate_checks(sid, src, raw, block, holder, seg, segments, dflt_dur,
     #    是合法演法，这里只报"静止位看不见的内容"。接续页跳过——起点是上一页演完的
     #    画面，盘上原图对接续页是假话，由 _stage_carry_pass 拿烘焙后的副本重算。
     if not carried:
-        for w in crop_warnings(_inline_markup(holder), block["steps"]):
+        markup = _inline_markup(holder)
+        for w in crop_warnings(inline_svg_author_view(markup), block["steps"]):
             warns.append(f"{where} 的配图 {src}：{w}")
-        for w in _zorder_warnings(_inline_markup(holder), block["steps"]):
+        for w in _zorder_warnings(markup, block["steps"]):
             warns.append(f"{where} 的配图 {src}：{w}")
     # ⑤ 节拍↔旁白对轴：落在 clip 窗口外的那一拍是**静默不演**（引擎按
     #    data-start/data-duration 硬切可见性）。这里同时握有 steps 与 manifest 句子，
@@ -1430,7 +1447,8 @@ def _prepare_compare_panes(sid, entry, out_dir, seg, segments, dflt_dur,
         src = srcs[i] if i < len(srcs) else None
         if not src:
             continue
-        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns)
+        out = _read_svg_for_inline(sid, src, out_dir, "animate", errs, warns,
+                                   namespace=f"{sid}-{i}")
         if out is None:
             continue
         raw, markup = out
@@ -1637,11 +1655,12 @@ def _stage_carry_pass(images, segments, dflt_dur, errs, warns):
             continue
         for n in notes:
             warns.append(f"{where}：{n}")
+        markup = rebase_inline_svg_namespace(markup, sid)
         entry["inline_svg"] = markup
         # 接续页的运镜自查拿**烘焙后**的副本来算：这一页的相机姿态是在上一页推近的画
         # 面之上再乘一层，只看盘上原图会把已经出画的元素当成"在幅内"。
         own = animate_of(entry).get("steps")
-        for w in crop_warnings(markup, own):
+        for w in crop_warnings(inline_svg_author_view(markup), own):
             warns.append(f"段落 '{sid}' 的 animate 配图 {entry['src']}：{w}")
         # step_i 不叫 i：外层 for i, seg 用的是段序，内层复用 i 会静默把它
         # 换成 step 下标——今天块内不读外层 i 所以无害，下一行加一句用 i 的

@@ -317,14 +317,14 @@ class CarryContract(unittest.TestCase):
         self.assertEqual(notes, [])
         for sel in CHAIN:
             with self.subTest(sel=sel):
-                el = root.find(".//*[@id='%s']" % sel[1:])
+                el = root.find(".//*[@data-ctv-original-id='%s']" % sel[1:])
                 self.assertIsNotNone(el)
                 self.assertIn("translate(0,-160)", el.get("transform", ""))
         # x 轴同样精确
         out_x, _ = SC.bake_settled_state(
             raw, [step_with(axis="x", distance=120)])
         for sel in CHAIN:
-            el = ET.fromstring(out_x).find(".//*[@id='%s']" % sel[1:])
+            el = ET.fromstring(out_x).find(".//*[@data-ctv-original-id='%s']" % sel[1:])
             self.assertIn("translate(120,0)", el.get("transform", ""))
 
     def test_missing_chain_node_fails_at_generation(self):

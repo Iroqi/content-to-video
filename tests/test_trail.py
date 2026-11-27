@@ -327,11 +327,11 @@ class CarryContract(unittest.TestCase):
         out, notes = SC.bake_settled_state(raw, [step_with()])
         self.assertEqual(notes, [])
         root = ET.fromstring(out)
-        hero = root.find(".//*[@id='hero']")
+        hero = root.find(".//*[@data-ctv-original-id='hero']")
         self.assertEqual(hero.get("transform"), "translate(320,0)")
         for gid in ("g1", "g2", "g3"):
             with self.subTest(gid=gid):
-                el = root.find(".//*[@id='%s']" % gid)
+                el = root.find(".//*[@data-ctv-original-id='%s']" % gid)
                 self.assertIn("opacity:0", (el.get("style") or "").replace(" ", ""))
                 self.assertFalse((el.get("transform") or "").strip())
 

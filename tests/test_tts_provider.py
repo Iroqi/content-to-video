@@ -6,8 +6,10 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import _helpers as H  # noqa: F401  sys.path 装配
@@ -41,7 +43,7 @@ class MimoRequestShape(unittest.TestCase):
             return FakeResponse(json.dumps(payload).encode("utf-8"))
 
         client = T.MimoTtsClient("k", "https://x.example/v1/")
-        with mock.patch.object(T.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(T, "_open", fake_urlopen):
             audio = client.synthesize(text, voice_id, voice_style, model, timeout)
         return captured, audio
 
@@ -57,6 +59,58 @@ class MimoRequestShape(unittest.TestCase):
         self.assertEqual(captured["timeout"], 30)
         self.assertEqual(audio, b"RIFFfake")
 
+        # 真实本地 HTTP：跨 origin 重定向必须在发出第二个请求前被拒绝，
+        # bearer token 不能跟到另一台服务器。这里不 mock 网络层。
+        received = []
+
+        class SinkHandler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def _reply(self):
+                received.append(self.headers.get("Authorization"))
+                body = json.dumps(_audio_payload()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = _reply
+            do_POST = _reply
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(302)
+                self.send_header("Location", sink_url)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        sink = ThreadingHTTPServer(("127.0.0.1", 0), SinkHandler)
+        redirect = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        sink_url = "http://127.0.0.1:%d/v1/chat/completions" % sink.server_address[1]
+        threads = [threading.Thread(target=s.serve_forever, daemon=True)
+                   for s in (sink, redirect)]
+        for thread in threads:
+            thread.start()
+        try:
+            client = T.MimoTtsClient(
+                "top-secret", "http://127.0.0.1:%d/v1" % redirect.server_address[1])
+            with self.assertRaises(T.BadAudioResponseError) as cm:
+                client.synthesize("你好。", "茉莉", None, "m", 5)
+            self.assertIn("跨 origin 重定向", str(cm.exception))
+            self.assertEqual(received, [], "Authorization 被转发到了另一 origin")
+        finally:
+            for server in (sink, redirect):
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join(timeout=5)
+
     def test_voice_style_prepended_as_user_message(self):
         captured, _ = self._capture(_audio_payload(), voice_style="轻松一些")
         msgs = captured["body"]["messages"]
@@ -69,7 +123,7 @@ class MimoRequestShape(unittest.TestCase):
 
     def test_response_without_audio_is_deterministic_failure(self):
         client = T.MimoTtsClient("k", "https://x.example/v1")
-        with mock.patch.object(T.urllib.request, "urlopen",
+        with mock.patch.object(T, "_open",
                                lambda req, timeout=None: FakeResponse(
                                    json.dumps({"choices": [{"message": {"content": "纯文本"}}]}).encode())):
             with self.assertRaises(T.BadAudioResponseError) as cm:
@@ -145,7 +199,7 @@ class RetryVerdict(unittest.TestCase):
         def boom(req, timeout=None):
             raise UnreadableHTTPError("http://x", 401, "Unauthorized", {}, None)
 
-        with mock.patch.object(T.urllib.request, "urlopen", boom):
+        with mock.patch.object(T, "_open", boom):
             with self.assertRaises(T.TtsHttpError) as cm:
                 T.MimoTtsClient("k", "http://x").synthesize("你好", "v", "", "m", 1)
         self.assertEqual(cm.exception.status_code, 401)
@@ -165,7 +219,7 @@ class RetryVerdict(unittest.TestCase):
         def boom(req, timeout=None):
             raise ValueError("unknown url type: 'not-a-url'")
 
-        with mock.patch.object(T.urllib.request, "urlopen", boom):
+        with mock.patch.object(T, "_open", boom):
             with self.assertRaises(T.BadAudioResponseError) as cm:
                 T.MimoTtsClient("k", "not-a-url").synthesize(
                     "你好", "v", "", "m", 1)
@@ -174,7 +228,7 @@ class RetryVerdict(unittest.TestCase):
 
     def test_http_200_html_body_is_still_bad_json(self):
         """200 但 body 是 HTML（网关错误页）：仍是确定性失败，且归因不变。"""
-        with mock.patch.object(T.urllib.request, "urlopen",
+        with mock.patch.object(T, "_open",
                                lambda req, timeout=None: FakeResponse(
                                    b"<html>502 Bad Gateway</html>")):
             with self.assertRaises(T.BadAudioResponseError) as cm:
@@ -205,7 +259,7 @@ class TtsBodyDecoding(unittest.TestCase):
 
     def test_non_utf8_body_reports_the_body(self):
         """修复前：报的是"TTS 请求地址不合法（'utf-8' codec can't decode …）"。"""
-        with mock.patch.object(urllib.request, "urlopen",
+        with mock.patch.object(T, "_open",
                                return_value=self._resp(b"\xff\xfe\x00bad gateway")):
             c = T.MimoTtsClient("k", "https://api.example.com/v1")
             with self.assertRaises(T.BadAudioResponseError) as cm:
@@ -218,7 +272,7 @@ class TtsBodyDecoding(unittest.TestCase):
         """反向：urlopen 真的抛 `unknown url type` 时，诊断仍指向地址。"""
         def boom(_req, timeout=None):
             raise ValueError("unknown url type: 'notaurl'")
-        with mock.patch.object(urllib.request, "urlopen", side_effect=boom):
+        with mock.patch.object(T, "_open", side_effect=boom):
             c = T.MimoTtsClient("k", "notaurl")
             with self.assertRaises(T.BadAudioResponseError) as cm:
                 c.synthesize("你好", "冰糖", "", "m", 30)

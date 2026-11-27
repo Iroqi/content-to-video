@@ -317,13 +317,13 @@ class CarryContract(unittest.TestCase):
         steps = [step_with()]
         out, notes = SC.bake_settled_state(raw, steps)
         root = ET.fromstring(out)
-        el = root.find(".//*[@id='%s']" % "ball")
+        el = root.find(".//*[@data-ctv-original-id='ball']")
         self.assertIsNotNone(el)
         self.assertIn("translate(0,-180)", el.get("transform", ""))
         self.assertEqual(notes, [])
         # x 轴同样精确
         out_x, _ = SC.bake_settled_state(raw, [step_with(axis="x", distance=120)])
-        el_x = ET.fromstring(out_x).find(".//*[@id='%s']" % "ball")
+        el_x = ET.fromstring(out_x).find(".//*[@data-ctv-original-id='ball']")
         self.assertIn("translate(120,0)", el_x.get("transform", ""))
 
     def test_carry_does_not_leak_scale_and_no_notes(self):

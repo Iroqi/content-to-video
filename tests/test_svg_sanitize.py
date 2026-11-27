@@ -6,6 +6,7 @@
 它认哪些写法、不误报哪些。
 """
 import os
+import re
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -29,6 +30,44 @@ def _check_svg_text(raw, tmpdir=None):
 def _clean(css):
     """过一遍 <style> 文本的净化，只返回产物（notes 是给人看的，这里不关心）。"""
     return S._clean_style_text(css, [])
+
+
+def _matches_scoped_selector(selector, element, root, parents):
+    """按生成产物的实际 DOM 关系判断选择器是否命中（不依赖字符串包含）。
+
+    这里只实现 `_scope_selector` 会产生的形态：外层候选集是根或根后代，内层
+    是类型 / #id / .class / :is()。它让回归测试真正验证“根能不能被匹配”，
+    而不是再次断言我们刚写下的选择器字面量。
+    """
+    m = re.fullmatch(r":is\((#[^,]+),#\S+ \*\):is\((.*)\)", selector, re.S)
+    if not m or root.get("id") != m.group(1)[1:]:
+        return False
+    if element is not root and root not in _ancestors(element, parents):
+        return False
+
+    def match_inner(inner):
+        inner = inner.strip()
+        if inner.startswith(":is(") and inner.endswith(")"):
+            return any(match_inner(part) for part in inner[4:-1].split(","))
+        if inner.startswith("#"):
+            return element.get("id") == inner[1:]
+        if inner.startswith("."):
+            return inner[1:] in (element.get("class") or "").split()
+        if inner == "*":
+            return True
+        return S._local(element.tag) == inner
+
+    return match_inner(m.group(2))
+
+
+def _ancestors(element, parents):
+    out = []
+    cur = parents.get(element)
+    while cur is not None:
+        out.append(cur)
+        cur = parents.get(cur)
+    return out
+
 
 
 class SvgEntityGuard(unittest.TestCase):
@@ -166,9 +205,9 @@ class AtRulesAndStrings(unittest.TestCase):
 
 
 class ExternalUrls(unittest.TestCase):
-    def _sanitize(self, markup):
+    def _sanitize(self, markup, **kwargs):
         """过一遍整份 SVG 的净化器，返回 (产物, notes)。"""
-        return S.sanitize_svg_for_inline(markup)
+        return S.sanitize_svg_for_inline(markup, **kwargs)
 
     def test_presentation_attribute_urls_are_neutralized_too(self):
         """呈现属性里的 url() 也是外链入口，不能只管 style 那一处。
@@ -189,8 +228,38 @@ class ExternalUrls(unittest.TestCase):
         out, notes = self._sanitize(
             f'<svg xmlns="{S.SVG_NS}"><defs><linearGradient id="g"/></defs>'
             '<rect fill="url(#g)"/></svg>')
-        self.assertIn('url(#g)', out)
+        root = ET.fromstring(out)
+        gradient = next(e for e in root.iter() if e.get("data-ctv-original-id") == "g")
+        self.assertEqual(gradient.get("id"), root.get("id") + "--g")
+        self.assertIn('url(#' + gradient.get("id") + ')', out)
         self.assertEqual(notes, [])
+        # 两张卡即使源文相同，显式 per-card namespace 也必须把它们彻底分开；
+        # 同一张卡重复净化仍逐字节一致（不依赖随机数、墙钟或全局计数器）。
+        again, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><defs><linearGradient id="g"/></defs>'
+            '<rect fill="url(#g)"/></svg>')
+        left, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><rect id="root" class="verse"/></svg>',
+            namespace="seg-a")
+        right, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><rect id="root" class="verse"/></svg>',
+            namespace="seg-b")
+        self.assertEqual(again, out)
+        self.assertNotEqual(ET.fromstring(left).get("id"), ET.fromstring(right).get("id"))
+        for scoped, other in ((left, right), (right, left)):
+            scoped_root, other_root = ET.fromstring(scoped), ET.fromstring(other)
+            self.assertNotIn(other_root.get("id"), scoped)
+            self.assertNotIn(other_root.get("id") + "--", scoped)
+            self.assertNotIn("verse", (scoped_root[0].get("class") or "").split())
+            self.assertNotEqual(scoped_root[0].get("id"), "root")
+
+        collision_left, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"><rect id="b"/></svg>', namespace="seg-a")
+        collision_right, _ = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}"/>', namespace="seg-a--b")
+        left_ids = {e.get("id") for e in ET.fromstring(collision_left).iter() if e.get("id")}
+        right_ids = {e.get("id") for e in ET.fromstring(collision_right).iter() if e.get("id")}
+        self.assertFalse(left_ids & right_ids)
 
     def test_local_file_url_is_neutralized(self):
         """file: 与 http 同档：遍历本机磁盘的外链不该进成片。"""
@@ -222,8 +291,8 @@ class ParserEquivalentView(unittest.TestCase):
         那条 animation 曾是活的。
     """
 
-    def _sanitize(self, markup):
-        return S.sanitize_svg_for_inline(markup)
+    def _sanitize(self, markup, **kwargs):
+        return S.sanitize_svg_for_inline(markup, **kwargs)
 
     def test_href_char_ref_tab_is_still_external(self):
         """字符引用解码出的制表/换行拦不住 scheme 判定：浏览器抹得，判定也要抹得。"""
@@ -243,7 +312,9 @@ class ParserEquivalentView(unittest.TestCase):
         out, notes = self._sanitize(
             f'<svg xmlns="{S.SVG_NS}"><defs><rect id="r"/></defs>'
             '<use href="#r"/></svg>')
-        self.assertIn('href="#r"', out)
+        root = ET.fromstring(out)
+        target = next(e for e in root.iter() if e.get("data-ctv-original-id") == "r")
+        self.assertIn('href="#' + target.get("id") + '"', out)
         self.assertEqual(notes, [])
 
     def test_css_escape_cannot_hide_a_url(self):
@@ -436,8 +507,8 @@ class TagCaseAndSlashEquivalence(unittest.TestCase):
     两条都实测绕过（净化层零 note、浏览器执行/请求），判定层必须先归一。
     """
 
-    def _sanitize(self, markup):
-        return S.sanitize_svg_for_inline(markup)
+    def _sanitize(self, markup, **kwargs):
+        return S.sanitize_svg_for_inline(markup, **kwargs)
 
     def test_uppercase_script_and_foreignobject_are_dropped(self):
         """`<SCRIPT>` / `<FOREIGNOBJECT>`（任意大小写）都必须删：浏览器认小写。"""
@@ -513,7 +584,106 @@ class TagCaseAndSlashEquivalence(unittest.TestCase):
             '<STYLE>@import url("https://evil.com/x.css"); .a{fill:red}</STYLE></svg>')
         self.assertNotIn("evil.com", out)
         self.assertNotIn("@import", out)
-        self.assertIn(".a{fill:red}", out)
+        root = ET.fromstring(out)
+        prefix = root.get("id") + "--"
+        self.assertIn(":is(#" + root.get("id") + ",#" + root.get("id") + " *):is(."
+                      + prefix + "a){fill:red}", out)
+
+        # 宿主选择器、重名 id/class、内部 url()/href 与 animate 寻址共用一个作用域。
+        scoped, notes = self._sanitize(
+            f'<svg xmlns="{S.SVG_NS}" id="root" class="verse root-only">'
+            '<style>body,#root,.verse,svg{fill:url(#g)}'
+            ' .a > .b,[data-label=".verse"],[id="a"],[class~="b"]{stroke:red}'
+            ' .c{fill:url("#g");content:"url(#g)"}</style>'
+            '<defs><linearGradient id="g"/><clipPath id="g"/></defs>'
+            '<g id="a" class="verse a"><rect class="b" fill="url(#g)" '
+            'style="fill:url(#g)"/></g>'
+            '<use href="#a"/></svg>', namespace="card-1")
+        root = ET.fromstring(scoped)
+        rid, prefix = root.get("id"), root.get("id") + "--"
+        ids = [e.get("id") for e in root.iter() if e.get("id")]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn(prefix + "g", ids)
+        self.assertIn(prefix + "g-dup-2", ids)
+        self.assertFalse(any("verse" in (e.get("class") or "").split()
+                             for e in root.iter()))
+        self.assertNotIn("root", [e.get("id") for e in root.iter()])
+        self.assertNotIn('href="#a"', scoped)
+        self.assertIn('href="#' + prefix + 'a"', scoped)
+        self.assertIn('fill:url(#' + prefix + 'g)', scoped)  # url("#id") 也重写
+        styled = next(e for e in root.iter() if e.get("style"))
+        self.assertEqual(styled.get("style"), "fill:url(#" + prefix + "g)")
+        self.assertIn('content:"url(#g)"', scoped)           # 字符串内容不重写
+        self.assertIn(":is(#" + rid + ",#" + rid + " *):is(body)", scoped)
+        self.assertIn(":is(#" + rid + ",#" + rid + " *):is(#" + rid + ")", scoped)
+        self.assertIn(":is(#" + rid + ",#" + rid + " *):is(." + prefix + "verse)", scoped)
+        self.assertIn('[data-label=".verse"]', scoped)
+        self.assertIn('[data-ctv-original-id="a"]', scoped)
+        self.assertIn('[data-ctv-original-class~="b"]', scoped)
+
+        # 真 DOM 匹配语义：根上的 :root / svg / 作者 #id 都必须命中根；body 不能
+        # 因为“根 inclusive”而误命中。后代 class 仍只命中对应后代。
+        parents = {c: p for p in root.iter() for c in p}
+        root_rules = {
+            ":root": ":is(#" + rid + ",#" + rid + " *):is(:is(#" + rid + "))",
+            "svg": ":is(#" + rid + ",#" + rid + " *):is(svg)",
+            "#root": ":is(#" + rid + ",#" + rid + " *):is(#" + rid + ")",
+            "body": ":is(#" + rid + ",#" + rid + " *):is(body)",
+        }
+        for authored, scoped_selector in root_rules.items():
+            with self.subTest(authored=authored):
+                self.assertEqual(
+                    _matches_scoped_selector(scoped_selector, root, root, parents),
+                    authored != "body")
+        verse = next(e for e in root.iter() if e is not root
+                     and prefix + "verse" in (e.get("class") or "").split())
+        verse_rule = ":is(#" + rid + ",#" + rid + " *):is(." + prefix + "verse)"
+        self.assertTrue(_matches_scoped_selector(verse_rule, verse, root, parents))
+        self.assertTrue(_matches_scoped_selector(verse_rule, root, root, parents))
+        a_rule = ":is(#" + rid + ",#" + rid + " *):is(." + prefix + "a)"
+        self.assertTrue(_matches_scoped_selector(a_rule, verse, root, parents))
+        self.assertFalse(_matches_scoped_selector(a_rule, root, root, parents))
+
+        self.assertEqual(S.rewrite_inline_svg_selector("#a", scoped),
+                         "#" + rid + " #" + prefix + "a")
+        self.assertEqual(S.rewrite_inline_svg_selector("#root", scoped), "#" + rid)
+        self.assertEqual(S.rewrite_inline_svg_selector(".verse", scoped),
+                         ":is(#" + rid + "." + prefix + "verse,#" + rid + " "
+                         + prefix + "verse)")
+        self.assertEqual(S.rewrite_inline_svg_selector(".root-only", scoped),
+                         ":is(#" + rid + "." + prefix + "root-only,#" + rid + " "
+                         + prefix + "root-only)")
+        self.assertEqual(S.rewrite_inline_svg_selector("#missing", scoped),
+                         "#" + rid + " #" + prefix + "missing")
+        self.assertEqual(S.rewrite_inline_svg_selector("svg", scoped), "svg")
+        self.assertEqual(S.inline_svg_original_ids(scoped), ["a", "root"])
+        block = {"steps": [{"target": "#a", "drag": {"chain": [".verse"]}}],
+                 "bind": [{"target": "#a", "attr": "cx"}], "label": "plain"}
+        rewritten = S.rewrite_inline_svg_selectors(block, scoped)
+        self.assertEqual(rewritten["steps"][0]["target"], "#" + rid + " #" + prefix + "a")
+        self.assertEqual(rewritten["steps"][0]["drag"]["chain"],
+                         [":is(#" + rid + "." + prefix + "verse,#" + rid + " "
+                           + prefix + "verse)"])
+        self.assertEqual(rewritten["bind"][0]["target"], "#" + rid + " #" + prefix + "a")
+        self.assertEqual(rewritten["label"], "plain")
+
+        # standalone 模式只做安全净化：作者身份、尺寸、CSS 选择器与内部 url(#id)
+        # 原样保留，绝不提前套内联命名空间或改成 100% cover。
+        standalone, _ = S.sanitize_svg_for_standalone(
+            f'<svg xmlns="{S.SVG_NS}" id="root" class="verse" width="640" height="480" '
+            'preserveAspectRatio="xMinYMin meet">'
+            '<style>.verse{fill:url(#g)}</style><defs><linearGradient id="g"/></defs>'
+            '<rect class="verse" fill="url(#g)" onload="alert(1)"/></svg>')
+        sroot = ET.fromstring(standalone)
+        self.assertEqual(sroot.get("id"), "root")
+        self.assertEqual(sroot.get("class"), "verse")
+        self.assertEqual(sroot.get("width"), "640")
+        self.assertEqual(sroot.get("height"), "480")
+        self.assertEqual(sroot.get("preserveAspectRatio"), "xMinYMin meet")
+        self.assertIn(".verse{fill:url(#g)}", standalone)
+        self.assertIn('fill="url(#g)"', standalone)
+        self.assertNotIn("onload", standalone)
+        self.assertNotIn(S._SCOPE_DATA, standalone)
 
     def test_uppercase_rect_full_bleed_is_detected(self):
         """`<RECT>` 铺满 viewBox 也是满幅底板：大小写不敏感。

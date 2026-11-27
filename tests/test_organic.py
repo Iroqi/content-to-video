@@ -298,7 +298,7 @@ class CarryContract(unittest.TestCase):
         """接续页第 0 帧：收尾精确回原位，一个 transform 都不该折，也不出声。"""
         raw, _ = sanitize_svg_for_inline(CARRY_SVG)
         out, notes = SC.bake_settled_state(raw, [step_with()])
-        el = ET.fromstring(out).find(".//*[@id='%s']" % "blob")
+        el = ET.fromstring(out).find(".//*[@data-ctv-original-id='blob']")
         self.assertIsNotNone(el)
         self.assertFalse((el.get("transform") or "").strip())
         self.assertEqual(notes, [])

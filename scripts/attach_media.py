@@ -21,9 +21,11 @@ images.json，run.py 不认识这个工具，也不该认识。三维、着色�
 """
 
 import argparse
+import contextlib
 import json
 import os
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 
@@ -58,6 +60,15 @@ def _guard_output(path, where):
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
     return ap
+
+
+def _file_fingerprint(path):
+    """读-改-写期间的乐观锁指纹；文件不存在返回 None。"""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns
 
 
 def build_video_entry(src, **opts):
@@ -102,20 +113,47 @@ def build_video_entry(src, **opts):
     return entry
 
 
-def attach(images_path, segment, entry, force=False, dry_run=False):
-    """把条目合并进 images.json；返回合并后的整份数据（dry_run 时不写盘）。
+@contextlib.contextmanager
+def _images_lock(path):
+    """Hold the stable sidecar lock for a whole images.json transaction.
 
-    - 目标段已存在时默认拒绝覆盖，`force=True` 才允许；
-    - 已存在的段挂着 `animate` 时一律拒（哪怕 force）——视频段不能逐拍编排，
-      这正是 B 档体裁的硬边界，静默替换会让作者以为标注还在；
-    - 合并后整份过契约层，别让工具成为绕开校验的后门。
+    The sidecar is intentionally never unlinked: unlinking it would let a waiter
+    lock the old inode while a new writer locks a replacement inode.
     """
-    if not is_valid_sid(segment):
-        raise ValueError("段 id %r 不合法（规则见 _segments.SID_RULE）" % segment)
-    if not isinstance(entry, dict):
-        raise ValueError("entry 必须是媒体条目对象")
+    lock_path = os.path.abspath(path) + ".lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    locked = False
+    try:
+        # Windows locks a byte range, so make the one-byte region exist. Racing
+        # first writers all write the same byte before taking the lock.
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        locked = True
+        yield
+    finally:
+        try:
+            if locked:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
-    ap = os.path.abspath(images_path)
+
+def _attach_locked(ap, segment, entry, force, dry_run):
+    """Read-merge-validate-replace while the caller holds the sidecar lock."""
+    original = _file_fingerprint(ap)
     data = {}
     if os.path.isfile(ap):
         with open(ap, encoding="utf-8") as f:
@@ -137,13 +175,55 @@ def attach(images_path, segment, entry, force=False, dry_run=False):
     validate_images_json(merged)
     if dry_run:
         return merged
-    out = _guard_output(ap, "images.json")
-    tmp = out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(merged, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    os.replace(tmp, out)
+    # 同目录唯一临时文件：两个 attach 进程不会再同时写死名的 images.json.tmp。
+    # 指纹检查继续防御不遵守锁协议的直接写者；遵守协议的进程则在锁内重读，
+    # 因而不会在检查与 os.replace 之间丢失彼此的合并。
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(ap) + ".",
+                               suffix=".tmp", dir=os.path.dirname(ap))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = None
+            json.dump(merged, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        if _file_fingerprint(ap) != original:
+            raise ValueError(
+                "images.json 在读取后已被其他进程修改，本次合并没有覆盖它；"
+                "请重新运行 attach_media")
+        os.replace(tmp, ap)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
     return merged
+
+
+def attach(images_path, segment, entry, force=False, dry_run=False):
+    """把条目合并进 images.json；返回合并后的整份数据（dry_run 时不写盘）。
+
+    写盘事务从读取到替换始终持有同目录稳定 sidecar 锁，避免两个遵守协议的
+    进程都读到旧内容、随后各自覆盖对方。目标段已存在时默认拒绝覆盖，
+    `force=True` 才允许；挂着 `animate` 的段一律拒（哪怕 force）。
+    """
+    if not is_valid_sid(segment):
+        raise ValueError("段 id %r 不合法（规则见 _segments.SID_RULE）" % segment)
+    if not isinstance(entry, dict):
+        raise ValueError("entry 必须是媒体条目对象")
+
+    ap = os.path.abspath(images_path)
+    if dry_run:
+        return _attach_locked(ap, segment, entry, force, dry_run)
+    # _guard_output also creates the sidecar's parent directory before locking.
+    out = _guard_output(ap, "images.json")
+    with _images_lock(out):
+        return _attach_locked(out, segment, entry, force, dry_run)
 
 
 def _parser():

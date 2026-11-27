@@ -10,6 +10,7 @@
 
 基于 ElementTree 结构化改写，不用正则删标签（那种能被绕过）。
 """
+import hashlib
 import os
 import re
 import sys
@@ -609,17 +610,302 @@ def parse_svg_strict(raw):
     return ET.fromstring(raw)
 
 
-def sanitize_svg_for_inline(raw):
-    """把 SVG 源文本净化成可内联的活 DOM 串。
+# 内联 SVG 的作用域。默认按源文摘取名，同一份源在重复编译时逐字节一致；
+# 同一文档里重复使用同一源时，调用方应传稳定的 per-card namespace（例如 sid）。
+_SCOPE_DATA = "data-ctv-svg-scope"
+_ORIGINAL_ID = "data-ctv-original-id"
+_ORIGINAL_CLASS = "data-ctv-original-class"
+_CSS_NAME = r"[A-Za-z_\u0080-\uffff-][\w\u0080-\uffff-]*"
+_FRAGMENT_URL = re.compile(
+    r"url\(\s*(['\"]?)#([^)'\"\s]+)\1\s*\)", re.I)
 
-    Returns:
-        (markup, notes)：markup 是改写后的 `<svg …>…</svg>` 字符串（root 已按
-        cover 语义重写为 100%×100% + preserveAspectRatio slice，viewBox 保留）；
-        notes 是人类可读的净化说明（去掉了什么），调用方按 [warn] 打出来。
 
-    Raises:
-        ValueError：不是 SVG / 含 DOCTYPE-ENTITY / 解析失败——一律拒绝内联，
-        退回 `<img>`（报错口径由调用方定）。
+def inline_svg_root_id(raw, namespace=None):
+    """净化后 SVG 根元素的固定 id；namespace 省略时按源文内容确定。"""
+    if namespace is None:
+        token = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    else:
+        namespace = str(namespace)
+        if (re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", namespace)
+                and "--" not in namespace and not namespace.startswith("n_")):
+            token = namespace
+        else:
+            token = "n_" + namespace.encode("utf-8").hex()
+    return "ctv-svg-" + token
+
+
+def _fragment_urls(value, prefix, aliases=None):
+    """重写 url(#id)；未知 id 也加同一前缀，避免落到宿主文档的同名定义。"""
+    def replace(m):
+        target = (aliases or {}).get(m.group(2), prefix + m.group(2))
+        return "url(#" + target + ")"
+
+    out, i = [], 0
+    while i < len(value):
+        if value[i:i + 4].lower() == "url(":
+            # url("#id") 的引号属于 URL 语法，不能当作普通 content 字符串跳过。
+            j, quote = i + 4, ""
+            while j < len(value):
+                if quote:
+                    if value[j] == "\\":
+                        j += 2
+                        continue
+                    if value[j] == quote:
+                        quote = ""
+                elif value[j] in "\"'":
+                    quote = value[j]
+                elif value[j] == ")":
+                    j += 1
+                    break
+                j += 1
+            out.append(_FRAGMENT_URL.sub(replace, value[i:j]))
+            i = j
+            continue
+        if value[i] in "\"'":
+            j = _CSS_STRING.match(value, i).end()
+            out.append(value[i:j])
+            i = j
+        else:
+            out.append(value[i])
+            i += 1
+    return "".join(out)
+
+
+def _scope_selector(selector, root_id, prefix, aliases=None):
+    """把一条选择器限制在本 SVG 根及其后代，并重写其中的 id/class。
+
+    作用域候选集用 `:is(#root,#root *)`，再与作者选择器组成复合选择器。
+    这样 `:root` / `svg` / 根 `#id` 能命中 SVG 根本身，后代规则也照常匹配；
+    不能只写 `#root :is(...)`——那个后代组合器永远把根排除在外。裸 `body`
+    仍不会命中宿主或 SVG 根，因为作者选择器也必须对同一个元素成立。
+    """
+    out, i, n = [], 0, len(selector)
+    while i < n:
+        if selector[i] in "\"'":
+            m = _CSS_STRING.match(selector, i)
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        if selector[i] == "[":
+            j, depth = i + 1, 1
+            while j < n and depth:
+                if selector[j] in "\"'":
+                    j = _CSS_STRING.match(selector, j).end()
+                    continue
+                depth += (selector[j] == "[") - (selector[j] == "]")
+                j += 1
+            bracket = selector[i:j]
+            bracket = re.sub(
+                r"^(\[\s*)(id|class)(?=\s*(?:[~|^$*]?=|\]))",
+                lambda m: m.group(1) + "data-ctv-original-" + m.group(2).lower(),
+                bracket, flags=re.I)
+            out.append(bracket)
+            i = j
+            continue
+        m = re.match(r":root\b|([#.])(" + _CSS_NAME + r")", selector[i:])
+        if not m:
+            out.append(selector[i])
+            i += 1
+            continue
+        if m.group(0).startswith(":root"):
+            out.append(":is(#" + root_id + ")")
+        elif m.group(1) == "#" and aliases and m.group(2) in aliases:
+            out.append("#" + aliases[m.group(2)])
+        else:
+            out.append(m.group(1) + prefix + m.group(2))
+        i += m.end()
+    return ":is(#" + root_id + ",#" + root_id + " *):is(" + "".join(out) + ")"
+
+
+def _scope_style_text(css, root_id, prefix, aliases=None):
+    """重写净化后 <style> 的选择器与内部片段引用（字符串内容保持不动）。"""
+    out, i, n = [], 0, len(css)
+    while i < n:
+        if css[i] in "\"'":
+            m = _CSS_STRING.match(css, i)
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        if css[i] == "@":
+            # sanitize_svg_for_inline 已删完 at-rule；畸形残文不猜语义。
+            out.append(css[i])
+            i += 1
+            continue
+        if css[i] == "{":
+            j, depth = i + 1, 1
+            while j < n and depth:
+                if css[j] in "\"'":
+                    j = _CSS_STRING.match(css, j).end()
+                    continue
+                depth += {"{": 1, "}": -1}.get(css[j], 0)
+                j += 1
+            body = css[i + 1:j - 1] if depth == 0 else css[i + 1:j]
+            out.append("{" + _fragment_urls(body, prefix, aliases))
+            if depth == 0:
+                out.append("}")
+            i = j
+            continue
+        # 规则题头到下一个块边界；按顶层逗号切开，[]/() 内的逗号不是选择器列表。
+        j, square, parens = i, 0, 0
+        parts, last = [], i
+        while j < n and css[j] not in "{}":
+            if css[j] in "\"'":
+                j = _CSS_STRING.match(css, j).end()
+                continue
+            square += (css[j] == "[") - (css[j] == "]")
+            parens += (css[j] == "(") - (css[j] == ")")
+            if css[j] == "," and not square and not parens:
+                parts.append(css[last:j])
+                last = j + 1
+            j += 1
+        parts.append(css[last:j])
+        out.append(",".join(_scope_selector(p.strip(), root_id, prefix, aliases)
+                            for p in parts))
+        i = j
+    return "".join(out)
+
+
+def _namespace_svg_tree(root, root_id):
+    """给树上的 id/class 与引用加同一作用域。"""
+    prefix = root_id + "--"
+    root.set(_SCOPE_DATA, "1")
+    id_counts = {}
+    root_original_id = root.get("id")
+
+    for el in root.iter():
+        old = el.get("id")
+        if old and el is not root:
+            # 文档内重名按浏览器 getElementById 的首个定义；后续定义仍保留唯一
+            # id，避免净化只是把文档内碰撞换成另一组碰撞。
+            count = id_counts.get(old, 0) + 1
+            id_counts[old] = count
+            suffix = "" if count == 1 else "-dup-" + str(count)
+            el.set("id", prefix + old + suffix)
+            el.set(_ORIGINAL_ID, old)
+        old_classes = (el.get("class") or "").split()
+        if old_classes:
+            names = []
+            names = [prefix + old_class for old_class in old_classes]
+            el.set("class", " ".join(names))
+            el.set(_ORIGINAL_CLASS, " ".join(old_classes))
+    def rewrite_ref(value):
+        return re.sub(r"^#(.*)$", lambda m: "#" + (
+            root_id if root_original_id and m.group(1) == root_original_id
+            else prefix + m.group(1)), value)
+
+    for el in root.iter():
+        for key, value in list(el.attrib.items()):
+            local = _local(key).lower()
+            if local == "href":
+                el.set(key, rewrite_ref(value) if re.match(r"^\s*#", value)
+                       else _fragment_urls(value, prefix))
+            elif local not in ("id", "class", _ORIGINAL_ID, _ORIGINAL_CLASS):
+                aliases = {root_original_id: root_id} if root_original_id else None
+                el.set(key, _fragment_urls(value, prefix, aliases))
+    root.set("id", root_id)
+    if root_original_id:
+        root.set(_ORIGINAL_ID, root_original_id)
+    for el in root.iter():
+        if _local(el.tag).lower() == "style" and el.text:
+            aliases = {root_original_id: root_id} if root_original_id else None
+            el.text = _scope_style_text(el.text, root_id, prefix, aliases)
+
+
+def rewrite_inline_svg_selector(selector, markup):
+    """作者选择器 → 指定净化产物的作用域选择器；非简单 #id/.class 原样返回。
+
+    渲染与生成期校验必须消费同一份 markup，否则一边用原名、一边用净化后的名字，
+    动画会静默落空。这里不猜 namespace，直接读产物根 id，保证两边永远同源。
+    """
+    if not isinstance(selector, str) or not re.fullmatch(r"[#.]" + _CSS_NAME, selector):
+        return selector
+    try:
+        root = ET.fromstring(markup)
+    except ET.ParseError:
+        return selector
+    root_id = root.get("id", "")
+    if root.get(_SCOPE_DATA) != "1" or not root_id:
+        return selector
+    prefix = root_id + "--"
+    if selector[0] == "#":
+        if root.get(_ORIGINAL_ID) == selector[1:]:
+            return "#" + root_id
+        return "#" + root_id + " #" + prefix + selector[1:]
+    target = prefix + selector[1:]
+    if selector[1:] in (root.get(_ORIGINAL_CLASS) or "").split():
+        return ":is(#" + root_id + "." + target + ",#" + root_id + " " + target + ")"
+    return "#" + root_id + " " + target
+
+
+def inline_svg_original_ids(markup):
+    """净化产物仍按扩展判据的原口径对账作者 id 集合。
+
+    这里延迟导入并复用 `_extensions.svg_ids`，不另抄一份"定义性子树"名单；
+    动画 target 则必须使用 rewrite_inline_svg_selector(s)，不能拿原 id 直接
+    查询净化后的活 DOM。
+    """
+    try:
+        root = ET.fromstring(markup)
+    except ET.ParseError:
+        return []
+    for el in root.iter():
+        original = el.get(_ORIGINAL_ID)
+        if original is not None:
+            el.set("id", original)
+        elif el is root and el.get(_SCOPE_DATA) == "1":
+            # 根的作用域 id 不是作者 id；没有原文 id 时不能让它混进集合。
+            del el.attrib["id"]
+    from _extensions import svg_ids
+    return svg_ids(ET.tostring(root, encoding="unicode"))
+
+
+def rewrite_inline_svg_selectors(value, markup):
+    """递归重写 animate 块里的简单 #id/.class 字符串（steps/bind/chain 等通用）。"""
+    if isinstance(value, dict):
+        return {k: rewrite_inline_svg_selectors(v, markup) for k, v in value.items()}
+    if isinstance(value, list):
+        return [rewrite_inline_svg_selectors(v, markup) for v in value]
+    if isinstance(value, str):
+        return rewrite_inline_svg_selector(value, markup)
+    return value
+
+
+def rewrite_inline_svg_fragment_urls(value, markup):
+    """递归重写补间/演绎载荷里的 `url(#id)`，其它字符串逐字节不动。
+
+    这里不能复用 `rewrite_inline_svg_selectors`：后者会把 `#f00` 这类颜色值
+    当成 id 选择器。片段 URL 只认 CSS 的 `url(#…)` 词法，因此 hex 颜色、路径、
+    普通文案都不会被误伤；未知 id 也与 SVG 树内引用采用同一前缀规则。
+    """
+    try:
+        root = ET.fromstring(markup)
+    except (ET.ParseError, TypeError):
+        return value
+    root_id = root.get("id", "")
+    if root.get(_SCOPE_DATA) != "1" or not root_id:
+        return value
+    prefix = root_id + "--"
+    original_root_id = root.get(_ORIGINAL_ID)
+    aliases = {original_root_id: root_id} if original_root_id else None
+
+    def walk(item):
+        if isinstance(item, dict):
+            return {k: walk(v) for k, v in item.items()}
+        if isinstance(item, list):
+            return [walk(v) for v in item]
+        if isinstance(item, tuple):
+            return tuple(walk(v) for v in item)
+        if isinstance(item, str):
+            return _fragment_urls(item, prefix, aliases)
+        return item
+
+    return walk(value)
+
+
+def _sanitize_svg_root(raw):
+    """解析并执行 standalone / inline 两种输出共用的安全净化。
+
+    返回 `(root, notes)`；命名空间、root cover 尺寸等呈现策略由调用方决定。
     """
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("SVG 内容为空")
@@ -699,6 +985,35 @@ def sanitize_svg_for_inline(raw):
                 if _EXT_URL.search(decoded):
                     el.set(k, _EXT_URL.sub("url(about:blank)", decoded))
                     notes.append(f"<{tag}> 的 {_local(k)} 属性外链 url() 已中和")
+
+    return root, list(dict.fromkeys(notes))
+
+
+def sanitize_svg_for_standalone(raw):
+    """净化可独立交付的 SVG，但保留作者 id/class/尺寸与内部引用。
+
+    扩展编译产物会先落盘，再由 gen_hyperframes 内联。若这里提前做命名空间或
+    cover 尺寸改写，第二次内联净化就会把作者身份再套一层前缀。因此 standalone
+    只执行安全净化；内联命名空间与 root cover 语义是 inline 模式的独占步骤。
+    """
+    root, notes = _sanitize_svg_root(raw)
+    return ET.tostring(root, encoding="unicode"), notes
+
+
+def sanitize_svg_for_inline(raw, *, namespace=None):
+    """把 SVG 源文本净化成可内联的活 DOM 串。
+
+    `namespace` 是稳定的每卡命名空间（例如 manifest sid）；省略时按源文内容
+    摘要取名。返回 `(markup, notes)`：root 按 cover 语义改写为 100%×100% +
+    preserveAspectRatio slice，id/class/片段引用/CSS 选择器均限制在本 SVG 的
+    作用域。动画校验与发射必须对同一份 markup 调
+    `rewrite_inline_svg_animate_targets`，不得直接把作者选择器用于净化后的 DOM。
+    """
+    root, notes = _sanitize_svg_root(raw)
+
+    # 内联后 SVG 与宿主共用文档：id/class/url(#id)/选择器全部进入同一命名空间。
+    # 必须先净化再取名，确保被删节点不参与重名计数；同一源与 namespace 的输出确定。
+    _namespace_svg_tree(root, inline_svg_root_id(raw, namespace))
 
     # root 重写成 cover 语义：铺满 .seg-image 容器，短边对齐、长边居中裁切，
     # 和 <img>+object-fit:cover 的取景一致（作者按 4:3 槽位或整幅画布画的

@@ -430,7 +430,7 @@ class CarryContract(unittest.TestCase):
         baked = ET.fromstring(out)
         for sel, var in expected:
             with self.subTest(sel=sel):
-                el = baked.find(".//*[@id='%s']" % sel[1:])
+                el = baked.find(".//*[@data-ctv-original-id='%s']" % sel[1:])
                 tr = el.get("transform") or ""
                 self.assertIn("translate(", tr)
                 self.assertIn("%.6f" % var["x"], tr)

@@ -1,4 +1,5 @@
 """SVG 编排的时间线（`animate`）：净化、schema、渲染、生成期门禁的回归。"""
+import json
 import os
 import tempfile
 import unittest
@@ -34,7 +35,7 @@ SVG_WITH_ALL = (
 
 class Sanitize(unittest.TestCase):
     def test_strips_scripts_handlers_and_externals(self):
-        markup, notes = SAN.sanitize_svg_for_inline(SVG_WITH_ALL)
+        markup, notes = SAN.sanitize_svg_for_inline(SVG_WITH_ALL, namespace="card")
         self.assertNotIn("<script>", markup)
         self.assertNotIn("PWNED", markup)
         self.assertNotIn("onclick", markup)
@@ -44,15 +45,27 @@ class Sanitize(unittest.TestCase):
         self.assertNotIn("animation:", markup)            # CSS 动画已剥
         self.assertNotIn("@keyframes", markup)            # 墙钟动画的定义也剥净
         self.assertNotIn("pulse", markup)
-        self.assertIn(".b{fill:#dbe6f5}", markup)         # 非墙钟样式保留
+        self.assertIn("ctv-svg-card--b", markup)            # 非墙钟样式保留并限制在本卡作用域
+        self.assertIn("fill:#dbe6f5", markup)
         self.assertTrue(notes)
 
     def test_root_rewritten_for_cover_with_single_xmlns(self):
-        markup, _ = SAN.sanitize_svg_for_inline(SVG_WITH_ALL)
+        standalone, _ = SAN.sanitize_svg_for_standalone(SVG_WITH_ALL)
+        self.assertIn('width="980"', standalone)
+        self.assertIn('height="735"', standalone)
+        self.assertIn('id="node"', standalone)
+        self.assertNotIn("data-ctv-svg-scope", standalone)
+
+        # 扩展落盘 → gen_hyperframes：只做一次 inline 命名空间，不能把 standalone
+        # 的作者 id 再套一层前缀。
+        markup, _ = G._sanitize_svg_for_card(standalone, "card")
         self.assertEqual(markup.count("xmlns=\"http://www.w3.org/2000/svg\""), 1)
         self.assertIn('width="100%"', markup)
         self.assertIn('height="100%"', markup)
         self.assertIn('preserveAspectRatio="xMidYMid slice"', markup)
+        self.assertIn('id="ctv-svg-card--node"', markup)
+        self.assertIn('data-ctv-original-id="node"', markup)
+        self.assertNotIn("ctv-svg-card--ctv-svg-", markup)
 
     def test_local_file_and_data_scheme_hrefs_are_stripped(self):
         """净化器对外链的判定按"任何 scheme"收口：file:/data: 等与 http 同级
@@ -78,8 +91,10 @@ class Sanitize(unittest.TestCase):
                '<use href="#c" x="10" y="10"/>'
                '<image href="images/photo.png" x="0" y="0" width="20" height="20"/>'
                "</svg>")
-        markup, notes = SAN.sanitize_svg_for_inline(svg)
-        self.assertIn('href="#c"', markup)
+        markup, notes = SAN.sanitize_svg_for_inline(svg, namespace="card")
+        self.assertIn('id="ctv-svg-card--c"', markup)
+        self.assertIn('data-ctv-original-id="c"', markup)
+        self.assertIn('href="#ctv-svg-card--c"', markup)
         self.assertIn('href="images/photo.png"', markup)
         self.assertEqual([n for n in notes if "href" in n], [])
 
@@ -96,8 +111,11 @@ class Sanitize(unittest.TestCase):
         self.assertIn('viewBox="0 0 980 735"', markup)    # 几何 viewBox 保留
 
     def test_keeps_ids_for_director_targets(self):
-        markup, _ = SAN.sanitize_svg_for_inline(SVG_WITH_ALL)
-        self.assertIn('id="node"', markup)
+        markup, _ = SAN.sanitize_svg_for_inline(SVG_WITH_ALL, namespace="card")
+        self.assertIn('id="ctv-svg-card--node"', markup)
+        self.assertIn('data-ctv-original-id="node"', markup)
+        self.assertEqual(SAN.rewrite_inline_svg_selector("#node", markup),
+                         "#ctv-svg-card #ctv-svg-card--node")
 
     def test_entity_declaration_refused(self):
         with self.assertRaises(ValueError):
@@ -115,6 +133,14 @@ class Schema(unittest.TestCase):
             {"at": 0, "target": "#a", "set": {"opacity": 1}},
             {"at": 1, "target": "#b", "to": {"strokeDashoffset": 0, "attr": {"r": 5}},
              "duration": 0.6, "ease": "power2.out"}]}}})
+        # attr 通道保留正常 SVG 几何/呈现动画与内部 paint-server 引用；data-*/aria-*
+        # 是惰性元数据，也继续放行。
+        validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
+            {"at": 0, "target": "#a", "to": {"attr": {
+                "d": "M0 0L10 10", "x": 2, "y": 3, "fill": "url(#grad)",
+                "stroke": "#123456", "opacity": 0.5, "transform": "translate(2 3)",
+                "filter": "url(#soft)", "data-role": "marker", "aria-label": "节点",
+            }}}]}}})
 
     def test_fractional_at_and_draw_accepted(self):
         validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {"steps": [
@@ -192,6 +218,38 @@ class Schema(unittest.TestCase):
 
     def test_callback_key_rejected(self):
         self._one_step({"at": 0, "target": "#a", "to": {"onStart": "x"}})
+        # attr 在静态 SVG 净化之后直接写活 DOM：可导航/可执行属性名与外链 CSS
+        # 必须在这里挡住。转义与注释变体按 CSS 解析口径还原后再判。
+        bad_attrs = (
+            {"href": "javascript:alert(1)"},
+            {"xlink:href": "https://evil.example/x"},
+            {"style": "fill:url(https://evil.example/x)"},
+            {"onload": "alert(1)"},
+            {"fill": "url(https://evil.example/x.svg#g)"},
+            {"stroke": "url(//evil.example/x)"},
+            {"filter": "url(javascript:alert(1))"},
+            {"fill": r"u\72l(https://evil.example/x)"},
+            {"clip-path": "u/**/rl(https://evil.example/x)"},
+            {"fill": "url(data:image/svg+xml,<svg onload=alert(1)>)"},
+            {"fill": "javascript:alert(1)"},
+            {"fill": "expression(alert(1))"},
+            {"fill": "url(#ok);background:url(https://evil.example/x)"},
+            {"fill": "url(#ok"},
+        )
+        for attrs in bad_attrs:
+            with self.subTest(attrs=attrs):
+                with self.assertRaises(ValueError):
+                    validate_images_json({"seg4": {"src": "images/seg4.svg", "animate": {
+                        "steps": [{"at": 0, "target": "#a", "to": {"attr": attrs}}]}}})
+        bad_css = (
+            {"backgroundImage": 'image-set("https://evil.example/x")'},
+            {"backgroundImage": 'image-set("//evil.example/x")'},
+            {"backgroundImage": 'cross-fade("https://evil.example/x", red)'},
+            {"background": 'linear-gradient(red, blue), image-set("https://evil.example/x")'},
+        )
+        for vars_ in bad_css:
+            with self.subTest(vars_=vars_):
+                self._one_step({"at": 0, "target": "#a", "to": vars_})
 
     def test_bad_target_rejected(self):
         self._one_step({"at": 0, "target": "#a .b", "set": {"opacity": 1}})
@@ -529,6 +587,41 @@ class Renderer(unittest.TestCase):
         # 普通 SVG（seg-b）仍是 <img>，没有内联
         self.assertIn('<img src="images/seg-b.svg"', html)
 
+        # 正常 attr 几何/呈现值仍原样进入 GSAP；内部 url(#id) 随 inline SVG
+        # 命名空间重写，hex 颜色不能被当成选择器。
+        imgs = self._images()
+        scoped, _ = SAN.sanitize_svg_for_inline(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 735">'
+            '<defs><linearGradient id="grad"/></defs><g id="node"/></svg>',
+            namespace="seg-a")
+        imgs["seg-a"]["inline_svg"] = scoped
+        imgs["seg-a"]["animate"]["steps"][0]["to"]["attr"] = {
+            "d": "M0 0L1 1", "x": 2, "y": 3, "fill": "url(#grad)",
+            "stroke": "#123456", "opacity": 0.5, "transform": "translate(2 3)",
+        }
+        html = HR.generate_html(m, "audio/combined.wav", images=imgs, aspect="portrait")
+        self.assertIn('tl.to("#img-seg-a #ctv-svg-seg-a #ctv-svg-seg-a--node", ', html)
+        self.assertIn('"attr": {"d": "M0 0L1 1", "x": 2, "y": 3, '
+                      '"fill": "url(#ctv-svg-seg-a--grad)", "stroke": "#123456", '
+                      '"opacity": 0.5, "transform": "translate(2 3)"}', html)
+
+        # 渲染端是第二道闸：即使调用方绕过 schema，危险 attr 也不能被序列化。
+        bad_maps = (
+            {"href": "javascript:alert(1)"},
+            {"onload": "alert(1)"},
+            {"fill": "url(https://evil.example/x.svg#g)"},
+            {"filter": r"u\72l(//evil.example/x)"},
+        )
+        for kind in ("from", "to", "set"):
+            for attrs in bad_maps:
+                with self.subTest(kind=kind, attrs=attrs):
+                    imgs = self._images()
+                    step = imgs["seg-a"]["animate"]["steps"][0]
+                    step.setdefault(kind, {})["attr"] = attrs
+                    with self.assertRaises(ValueError):
+                        HR.generate_html(m, "audio/combined.wav", images=imgs,
+                                         aspect="portrait")
+
     def test_video_entry_renders_video_tag_with_playback_attrs(self):
         """视频素材出 <video> 而非 <img>：四个播放开关默认全开（渲染端按
         opts.get(flag, True) 取值），poster 只在给了的时候拼上去。
@@ -859,6 +952,24 @@ class Renderer(unittest.TestCase):
         # 补间行会被黏成 `tl.xxx(...)(function...)()`，运行期抛 "is not a function"、
         # 主时间轴中断（__timelines.main 永不注册）。回归 entropy demo 首帧空轴 bug。
         self.assertIn(';(function(){var e=document.querySelector', html)
+
+        # 稿件字符串不能闭合内联 <script>。JSON 的引号转义不够，HTML parser 会在
+        # 字符串字面量里看见 </script> 就结束脚本；序列化器必须写成 Unicode 转义，
+        # 同时保持 json.loads 能还原原值（即仍是合法 JS/JSON 字符串）。
+        attack = '</script><script>globalThis.PWNED=1</script>&>\u2028\u2029'
+        encoded = HR._js_json(attack, ensure_ascii=False)
+        self.assertEqual(json.loads(encoded), attack)
+        for raw in ("<", ">", "&", "\u2028", "\u2029"):
+            self.assertNotIn(raw, encoded)
+        for odometer in (False, True):
+            with self.subTest(odometer=odometer):
+                imgs["seg-a"]["animate"]["steps"][0]["count"].update({
+                    "prefix": attack, "suffix": attack, "odometer": odometer,
+                })
+                html = HR.generate_html(m, "audio/combined.wav", images=imgs,
+                                        aspect="portrait")
+                self.assertNotIn(attack, html)
+                self.assertIn(encoded, html)
 
     def test_type_emits_typewriter_tween(self):
         # type：渲染端读 <text> 现成文本、代理 p.k 从 0→长度、onUpdate 逐字切片写回

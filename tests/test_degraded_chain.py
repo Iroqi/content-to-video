@@ -27,7 +27,7 @@ def _have_ffmpeg():
 class _FakeClient:
     """按句子文本决定成败：文本里带 "坏" 的确定性失败，其余成功。
 
-    成功时返回真 WAV 头 + 一点静音，够 ffmpeg 量出时长。
+    成功时返回带非静音采样的真 WAV，够 ffmpeg 量出时长。
     """
     def __init__(self):
         self.calls = []
@@ -44,7 +44,7 @@ def _tiny_wav(seconds=0.5, rate=8000):
     import struct
     import wave
     n = int(rate * seconds)
-    frames = b"".join(struct.pack("<h", 0) for _ in range(n))
+    frames = b"".join(struct.pack("<h", 4000) for _ in range(n))
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
@@ -160,14 +160,17 @@ class DegradedChainIntegration(unittest.TestCase):
                 json.dump({
                     "title": "残留 sidecar 测试",
                     "segments": [
+                        # 首句失败、次句正常：首句被丢弃后，保留下来的原始
+                        # index=1 必须仍能通过 manifest 的非连续句序校验。
                         {"id": "seg-a", "title": "段一", "text": "这句是坏的。"},
                         {"id": "seg-b", "title": "段二", "text": "这句正常，能合成。"},
                     ],
                 }, f, ensure_ascii=False)
             out = os.path.join(td, "out")
-            os.makedirs(out, exist_ok=True)
-            # 预置一个删不掉的 .orig.wav
-            locked = os.path.join(out, "s000.orig.wav")
+            sent_dir = os.path.join(out, "sentences")
+            os.makedirs(sent_dir, exist_ok=True)
+            # 预置一个删不掉的 .orig.wav，路径必须与句级产物一致。
+            locked = os.path.join(sent_dir, "s001.wav.orig.wav")
             with open(locked, "wb") as f:
                 f.write(b"RIFFstale")
 
@@ -177,15 +180,33 @@ class DegradedChainIntegration(unittest.TestCase):
             argv = ["pipeline.py", "--source", src_path, "-o", out,
                     "--api-key", "test-key", "--base-url", "https://x.example/v1",
                     "--on-fail", "silence", "--speed", "1.0", "--workers", "1"]
+            real_clear = P._clear_stale_sidecars
+
+            def fail_only_stale_sentence(path, extra_suffixes=()):
+                if os.path.basename(path) == "s001.wav":
+                    return False
+                return real_clear(path, extra_suffixes)
+
             with mock.patch.object(P.sys, "argv", argv), \
                     mock.patch.object(P, "TTS_CLIENT_FACTORY", lambda *a, **k: client), \
-                    mock.patch.object(P, "_clear_stale_sidecars", return_value=False), \
+                    mock.patch.object(P, "_clear_stale_sidecars",
+                                      side_effect=fail_only_stale_sentence), \
                     mock.patch.object(P, "generate_silence") as gen_silence, \
                     mock.patch.object(P.time, "sleep"):
                 P.main()
-            # 全局 mock 了 _clear_stale_sidecars，所以整篇都不落静音；
-            # 这条真正要钉的是"清理失败时不调 generate_silence"。
+            # 失效必须发生在写占位之前：清不掉旧 sidecar 时不能继续落静音。
             gen_silence.assert_not_called()
+            self.assertTrue(os.path.exists(locked),
+                            "清理失败时旧 .orig.wav 仍在，绝不能被静音覆盖")
+            with open(os.path.join(out, "timing_manifest.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["degraded"]["tts_lost_sentence_count"], 1)
+            self.assertEqual(len(manifest["sentences"]), 1)
+            self.assertEqual(manifest["sentences"][0]["index"], 1,
+                             "首句失败被丢弃后必须保留原始句序，而不是重编号")
+            self.assertFalse(manifest["sentences"][0].get("synth_failed"))
+            from _manifest_schema import validate_timing_manifest
+            validate_timing_manifest(manifest)
 
 
 class ResumeFingerprintCoversEndpoint(unittest.TestCase):

@@ -626,11 +626,25 @@ class CheckOutputParsing(unittest.TestCase):
                + json.dumps(report).encode()
                + b"\n[cli] done\n")
         with mock.patch.object(RB.subprocess, "run",
-                               lambda *a, **k: mock.Mock(stdout=raw, stderr=b"")), \
+                               lambda *a, **k: mock.Mock(
+                                   returncode=0, stdout=raw, stderr=b"")), \
              mock.patch.object(RB, "build_check_command",
                                lambda p, command=None: _py("pass")):
             findings, _sec = RB.run_check("proj")
         self.assertEqual(findings, [])
+
+        # 非零退出时必须阻断：stdout 里即使有半份“ok” JSON 也不是门禁报告，
+        # stderr 要原样带进 RuntimeError，方便定位 CLI/浏览器阶段失败。
+        with mock.patch.object(RB.subprocess, "run",
+                               lambda *a, **k: mock.Mock(
+                                   returncode=7, stdout=b'{"ok": true',
+                                   stderr=b"browser stage crashed\n")), \
+             mock.patch.object(RB, "build_check_command",
+                               lambda p, command=None: _py("pass")):
+            with self.assertRaises(RuntimeError) as cm:
+                RB.run_check("proj")
+        self.assertIn("exit 7", str(cm.exception))
+        self.assertIn("browser stage crashed", str(cm.exception))
 
 
 class SnapshotKeepsTheEndFrame(unittest.TestCase):

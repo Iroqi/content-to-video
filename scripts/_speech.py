@@ -40,6 +40,10 @@ _SIL_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SIL_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
 
 
+class AllSilenceError(Exception):
+    """silencedetect 成功测量了整段音频，但没有任何可用的发声区间。"""
+
+
 def _quantize(seconds):
     """对齐到扫描帧网格（静音检测报的边界本来就是这个粒度）。就近取整。"""
     return round(round(seconds / _FRAME) * _FRAME, 3)
@@ -70,6 +74,29 @@ def _parse_silences(stderr_text):
     if pending is not None:
         spans.append((pending, None))
     return spans
+
+
+def _spans_cover_duration(pitches, total):
+    """检测到的静音段是否覆盖整个文件（允许一帧量化误差）。
+
+    这与“量不出来”不同：ffmpeg 正常退出并明确报了从 0 到文件末尾的静音，
+    是 measured all-silence；子进程失败、非 WAV 才是 unmeasurable。没有
+    silence_* 输出是正常的“没有静音”测量，不应被误判为全静音。
+    """
+    total = float(total)
+    if total <= 0:
+        return False
+    spans = [(max(0.0, s), total if e is None else min(total, e))
+             for s, e in pitches or []]
+    spans = [(s, e) for s, e in spans if e > s]
+    covered = 0.0
+    for start, end in sorted(spans):
+        if start > covered + _FRAME:
+            return False
+        covered = max(covered, end)
+        if covered >= total - _FRAME:
+            return True
+    return False
 
 
 def _wav_rate(path):
@@ -157,11 +184,12 @@ def voiced_span(pitches, file_seconds):
 
 
 def measure_voiced_span(ffmpeg, path, file_seconds):
-    """量一句音频的 (onset, voiced)；量不出来返回 None（调用方退回文件长度）。
+    """量一句音频的 (onset, voiced)；量不出来返回 None。
 
-    量不出来 = 不是可读 WAV、ffmpeg 不在/超时、整句静音。**不进 degraded**：
-    这改变的不是产物内容（少了"这句话说到哪"的精度），而 `degraded` 的语义是
-    "用户显式要的东西没做到"——混进去会让正式渲染被一条无关紧要的 warn 拦下。
+    unmeasurable（非可读 WAV、ffmpeg 不在/超时/失败）返回 None，调用方退回
+    文件长度计时。若 silencedetect 正常完成并明确测得整段都是静音，则抛
+    AllSilenceError：这不是“少了一点精度”，而是这句话没有可交付的声音，
+    调用方必须失败或降级，不能把它写进 status=ok 的成片。
     """
     if not ffmpeg or not os.path.exists(path):
         return None
@@ -172,8 +200,13 @@ def measure_voiced_span(ffmpeg, path, file_seconds):
     stderr = _run_silencedetect(ffmpeg, path)
     if stderr is None:
         return None
-    span = voiced_span(_parse_silences(stderr), file_seconds)
+    pitches = _parse_silences(stderr)
+    span = voiced_span(pitches, file_seconds)
     if span is None:
+        if _spans_cover_duration(pitches, file_seconds):
+            raise AllSilenceError(
+                f"{os.path.basename(path)} 经 silencedetect 测得整段静音，"
+                f"没有可交付的发声区间")
         print(f"  [speech] {os.path.basename(path)} 量不出发声区间，"
               f"这一句按文件长度计时", file=sys.stderr)
     return span

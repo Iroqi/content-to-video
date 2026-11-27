@@ -9,8 +9,11 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _helpers as H  # noqa: F401  仅副作用：把 scripts/ 放进 sys.path
 import attach_media as M
@@ -57,12 +60,17 @@ class AttachContract(unittest.TestCase):
         """合并只改目标段；同段重复接入必须显式 --force，不能悄悄换素材。"""
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump({"seg1": {"src": "images/cover.png"}}, f)
+        fixed_tmp = self.path + ".tmp"
+        with open(fixed_tmp, "w", encoding="utf-8") as f:
+            f.write("another writer")
         entry = M.build_video_entry("images/tour.mp4", loop=True, media_start=0.4)
         merged = M.attach(self.path, "seg2", entry)
         self.assertEqual(merged["seg1"], {"src": "images/cover.png"})
         self.assertEqual(merged["seg2"]["media_start"], 0.4)
         with open(self.path, encoding="utf-8") as f:
             self.assertEqual(json.load(f), merged)
+        with open(fixed_tmp, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "another writer")
         with self.assertRaises(ValueError) as ctx:
             M.attach(self.path, "seg2", entry)
         self.assertIn("--force", str(ctx.exception))
@@ -70,6 +78,72 @@ class AttachContract(unittest.TestCase):
                  force=True)
         with open(self.path, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["seg2"]["src"], "images/other.webm")
+
+        # 读取期间若另一进程改了目标，不能静默覆盖：保留对方更新并报冲突。
+        real_dump = json.dump
+
+        def dump_then_concurrent_update(obj, fp, **kwargs):
+            real_dump(obj, fp, **kwargs)
+            with open(self.path, "w", encoding="utf-8") as dst:
+                real_dump({"seg9": {"src": "images/concurrent.png"}}, dst)
+
+        with mock.patch.object(M.json, "dump",
+                               side_effect=dump_then_concurrent_update):
+            with self.assertRaises(ValueError) as cm:
+                M.attach(self.path, "seg3", M.build_video_entry("images/new.mp4"))
+        self.assertIn("其他进程修改", str(cm.exception))
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f),
+                             {"seg9": {"src": "images/concurrent.png"}})
+        self.assertFalse([n for n in os.listdir(self.tmp.name)
+                          if n.startswith("images.json.") and n.endswith(".tmp")
+                          and n != "images.json.tmp"])
+
+        # The sidecar is stable across success and failure; it must never be
+        # unlinked while another process may be waiting on its inode.
+        lock_path = self.path + ".lock"
+        lock_id = os.stat(lock_path).st_ino
+        with mock.patch.object(M.os, "replace", side_effect=OSError("boom")):
+            with self.assertRaisesRegex(OSError, "boom"):
+                M.attach(self.path, "seg3", M.build_video_entry("images/new.mp4"))
+        self.assertTrue(os.path.isfile(lock_path))
+        self.assertEqual(os.stat(lock_path).st_ino, lock_id)
+        self.assertFalse([n for n in os.listdir(self.tmp.name)
+                          if n.startswith("images.json.") and n.endswith(".tmp")
+                          and n != "images.json.tmp"])
+        # A successful follow-up proves the failing transaction released its lock.
+        M.attach(self.path, "seg3", M.build_video_entry("images/new.mp4"))
+        self.assertEqual(os.stat(lock_path).st_ino, lock_id)
+
+        # Real processes must serialize the entire read-merge-replace operation:
+        # every distinct segment survives, not merely the last fingerprint winner.
+        concurrent_path = os.path.join(self.tmp.name, "concurrent.json")
+        writers = []
+        script = os.path.join(os.path.dirname(M.__file__), "attach_media.py")
+        try:
+            for index in range(12):
+                writers.append(subprocess.Popen(
+                    [sys.executable, script, "--images", concurrent_path,
+                     "--segment", "seg%d" % (index + 1),
+                     "--src", "images/tour%d.mp4" % index],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+            for index, process in enumerate(writers):
+                stdout, stderr = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, 0,
+                                 "writer %d: %s" % (index, stderr.decode("utf-8")))
+            with open(concurrent_path, encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(len(data), 12)
+            for index in range(12):
+                self.assertEqual(data["seg%d" % (index + 1)]["src"],
+                                 "images/tour%d.mp4" % index)
+            validate_images_json(data)
+            self.assertTrue(os.path.isfile(concurrent_path + ".lock"))
+        finally:
+            for process in writers:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
 
     def test_refuses_to_replace_an_animated_segment(self):
         """原本挂 animate 的段一律不换成视频：标注会静默消失，force 也不放行。"""

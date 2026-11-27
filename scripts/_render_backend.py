@@ -409,6 +409,13 @@ def run_check(project, command=None, timeout=1800):
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(f"官方门禁跑不起来（{type(e).__name__}: {e}）")
     raw = (r.stdout or b"").decode("utf-8", "replace")
+    stderr = (r.stderr or b"").decode("utf-8", "replace").strip()
+    if r.returncode != 0:
+        # 非零退出时 stdout 可能已经有半份 JSON；那不是门禁报告，不能拿去
+        # check_verdict 后当“部分通过”。这里先阻断，并把 CLI 的真实错误带上。
+        detail = stderr or raw.strip() or "（进程没有输出 stderr）"
+        raise RuntimeError(
+            f"官方门禁失败（exit {r.returncode}）：{detail[-4000:]}")
     # --json 把整份报告打到 stdout，前后可能夹着 CLI 的进度行。
     report = _first_json_object(raw)
     return check_verdict(report), time.monotonic() - t0

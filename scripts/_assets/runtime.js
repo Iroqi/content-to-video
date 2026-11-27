@@ -54,10 +54,7 @@ const verseCacheOf = (v) => {
       em: ln.querySelector(".verse-em") !== null,
       // 覆盖层元素（生成期就位的空盒子，见 html_renderer._ved_layer）
       ved: ln.querySelector(".verse-ved"),
-      lastK: -1,
-      // 收束是否已经演过（一次性）：清场时一起复位，往回 seek 到句尾会重演，
-      // 与"cue 切回来重播词级强调"同一口径。
-      settled: false});
+      lastK: -1});
   }
   verseCache.set(v, c);
   return c;
@@ -316,7 +313,6 @@ const verseEmClear = (L) => {
   // 早退会让这些类永远没人摘（症状：已过的行留着覆盖层，颜色对不齐）。全量重置
   // 是幂等空操作，每帧多花的只是几个属性赋值。
   L.lastK = -1;
-  L.settled = false;
   L.el.classList.remove("verse-ved-on", "verse-ved-settled");
   if (L.vedSpans) for (const sp of L.vedSpans) sp.style.opacity = "";
 };
@@ -332,24 +328,36 @@ const verseEmUpdate = (c, si, t) => {
     const on = parseInt(el.getAttribute("data-i"), 10) === si
       && isFinite(L.t0) && isFinite(L.t1) && L.t1 > L.t0;
     if (!on) { verseEmClear(L); continue; }
-    // 念到句尾那一刻做一次收束（见 verseEmSettle）。判据是**时间**、且必须写在
-    // 下面那道"跨格才刷"的门**之前**：k 是取整后的字序号，最后不足一个字的行程里
-    // k 已经停在 n 不动，门一关这条判据就被整个跳过——收束永远不触发，且没有任何
-    // 报错（踩过）。settle 自身幂等，每帧判一次代价为零。
-    if (t >= verseEmEnd(L) - 1e-6) verseEmSettle(L);
-    const p = Math.max(0, Math.min(1, (t - L.t0) / (verseEmEnd(L) - L.t0)));
+    const end = verseEmEnd(L);
+    const wasSettled = el.classList.contains("verse-ved-settled");
+    const settling = isFinite(t) && t >= end - 1e-6 && verseSettleMs() > 0;
+    // 直接 seek 到句尾时，跨格门可能还没把覆盖层建出来；收束必须先有逐字 span。
+    // 先上屏再量原点，顺序与下面的跨格刷新完全一致。
+    if (settling) {
+      el.classList.add("verse-ved-on");
+      verseVedOrigin(L);
+      verseVedGlyphs(L);
+    }
+    // 收束是 (L, t) 的纯函数：每次 tick 都重算，不记「演过没有」。函数在跨格门
+    // 之前取得，实际写入放在基础卡拉OK之后，避免被本帧的逐字进度覆盖。
+    const settle = verseEmSettle(L);
+    const p = Math.max(0, Math.min(1, (t - L.t0) / (end - L.t0)));
     const h = verseHeadAt(el, p);
     const k = h.k;
     // 整数部分照旧"跨格才刷"：O(n) 的全量覆盖只发生在换格的那一帧。
-    // 亚字那一位**不进这道门**——它本来就是每帧都变的那一位，关进门里就退回按字跳格。
+    // 从收束态往回 seek 时，即使 k 没变也必须用基础进度覆盖一次 0.62 的收束值。
+    let crossed = false;
     if (k !== L.lastK) {
+      crossed = true;
       L.lastK = k;
-      // 先上屏（display:block 之后才有盒子可测），再对原点、再逐字上 alpha。
+    }
+    if (crossed || wasSettled) {
       el.classList.add("verse-ved-on");
       verseVedOrigin(L);
       verseVedApply(L, k);
     }
     verseEdgeSet(L, k, h.f);
+    settle(t);
   }
 };
 // ── 念完之后的收束（settle）：把整句的 accent 交还给"下一句" ──────────────
@@ -373,29 +381,27 @@ const verseSettleMs = () => {
   const raw = getComputedStyle(document.documentElement).getPropertyValue("--ctv-ved-settle");
   return parseFloat(raw) || 0;
 };
+// 与旧 CSS cubic-bezier(.16,1,.3,1) 同族的 expo.out；只用 t 求值，不经过墙钟过渡。
+const verseSettleEase = (q) => q >= 1 ? 1 : 1 - Math.pow(2, -10 * q);
 // 口径：整段回落铺满留白（见 _ved_settle_span 的推导），每字间隔 = 时长 ÷ 字数，
-// 于是第一个字在留白开头、最后一个字在留白收尾退回。
-const verseEmSettle = (L) => {
-  if (L.settled) return;
-  L.settled = true;
-  // 收束标记挂上（逐字延迟也要算），时长是否为 0 只决定"会不会真演"：CSS 那边
-  // 读到 0s 就是不演。这样"要不要演"只有一个判断点（生成期算出的那个数），
-  // 运行时不再重复决定一次。
-  if (verseSettleMs() <= 0) return;
-  const spans = L.vedSpans || [];
-  if (!spans.length) return;
-  // 逐字错峰：第 i 个字在「句首 + i×(时长÷字数)」那一刻开始退。整段因此恰好铺满
-  // 留白——第一个字在留白开头动，最后一个字在下一句开口前退回。
-  const step = verseSettleMs() / spans.length;
-  for (let i = 0; i < spans.length; i++) {
-    const sp = spans[i];
-    // 秒，三位小数：0.6s / 13 字 = 0.046s，`.toFixed(3)` 留得住；用两位小数会把
-    // 短句的间隔全部压成 0，整句同时退，读成闪烁（踩过）。
-    sp.style.transitionDelay = (i * step).toFixed(3) + "s";
-    // 已念的字（alpha 0）才需要退；还没念到的字本来就压暗，保持不动
-    if (sp.style.opacity === verseVedLit) sp.style.opacity = verseVedSettled;
+// 于是第一个字在留白开头、最后一个字在留白收尾退回。返回 painter 是为了让
+// verseEmUpdate 先建好 glyph、写完基础进度，再用同一个 t 覆盖收束值。
+const verseEmSettle = (L) => (t) => {
+  const ms = verseSettleMs();
+  const end = verseEmEnd(L);
+  if (!(ms > 0) || !isFinite(t) || t < end - 1e-6) {
+    L.el.classList.remove("verse-ved-settled");
+    return;
   }
+  const spans = verseVedGlyphs(L);
+  if (!spans.length) return;
   L.el.classList.add("verse-ved-settled");
+  const step = (ms / 1000) / spans.length;
+  for (let i = 0; i < spans.length; i++) {
+    const q = Math.max(0, Math.min(1, (t - end - i * step) / step));
+    const v = (parseFloat(verseVedSettled) * verseSettleEase(q)).toFixed(3);
+    if (spans[i].style.opacity !== v) spans[i].style.opacity = v;
+  }
 };
 // ── 时间轴"这一刻"从哪来 ─────────────────────────────────────────────────
 // 逐帧渲染（截图档）**只**把 tl.time() 拨到帧时刻、不回调 onUpdate，回调只在该
@@ -627,10 +633,6 @@ const RELAY_SECONDS = isFinite(_relaySecRaw) ? Math.max(_relaySecRaw, 0) : 0.32;
 const _relayRaw = parseFloat(getComputedStyle(document.documentElement)
   .getPropertyValue("--ctv-relay-from"));
 const RELAY_FROM = isFinite(_relayRaw) ? Math.min(Math.max(_relayRaw, 0), 0.99) : 0.35;
-const _cueStart = (si) => {
-  for (let i = 0; i < cues.length; i++) if (cues[i].si === si) return cues[i].t;
-  return NaN;
-};
 // ── 焦点层级的第三个维度：位置（滚动）─────────────────────────────────
 //
 // 前沿歌词 UI（逐行歌词与逐字歌词 UI）的 spring 同时管
@@ -770,16 +772,35 @@ const verseRelay = (c, t, t0, si) => {
   }
 };
 const verseTick = (t) => {
-  // 只看当前 cue：句间 gap 里 si 保持最后一句（整句已念完、窗口不回滚）
+  if (!cues.length) return;
+  // 每一 tick 都从 t 重选 cue：活跃区间取当前 cue，gap 取它前面的 cue，
+  // 首句之前则让第一句进入 lead-in。cueSi 只保存本次选择，绝不参与选择本身。
   let found = -1;
+  let preceding = -1;
   for (let i = 0; i < cues.length; i++) {
+    if (t >= cues[i].t) preceding = i;
     if (t >= cues[i].t && t < cues[i].t + Math.max(cues[i].d, 0.01)) { found = i; break; }
   }
   if (found < 0) {
-    // 片头/片尾的 lead-in 与 gap：沿用最后一句，但把它的 data-t1 时间之上的状态
-    // 钉死在句尾——p 会随 t 继续涨，k 早已到 n，结果与句尾一致。
-    if (cueSi < 0) return;
-    const tailT0 = _cueStart(cueSi);
+    if (t < cues[0].t) {
+      const firstT0 = cues[0].t;
+      const firstSi = cues[0].si;
+      if (firstSi !== cueSi) verseApply(firstSi);
+      cueSi = firstSi;
+      for (const v of verses) {
+        const c = verseCacheOf(v);
+        verseEmUpdate(c, cueSi, t);
+        verseRelay(c, t, firstT0, cueSi);
+        verseScroll(c, t, firstT0, cueSi);
+      }
+      return;
+    }
+    // 片尾或 rounding 留下的 gap： preceding 由 t 得出，句尾状态钉在 1e9。
+    const tail = preceding >= 0 ? preceding : cues.length - 1;
+    const tailT0 = cues[tail].t;
+    const tailSi = cues[tail].si;
+    if (tailSi !== cueSi) verseApply(tailSi);
+    cueSi = tailSi;
     for (const v of verses) {
       const c = verseCacheOf(v);
       verseEmUpdate(c, cueSi, 1e9);
@@ -791,9 +812,10 @@ const verseTick = (t) => {
   const curT0 = cues[found].t;
   const curSi = cues[found].si;
   if (curSi !== cueSi) verseApply(curSi);
+  cueSi = curSi;
   for (const v of verses) {
     const c = verseCacheOf(v);
-    verseEmUpdate(c, cueSi, t);
+    verseEmUpdate(c, curSi, t);
     verseRelay(c, t, curT0, curSi);
     verseScroll(c, t, curT0, curSi);
   }

@@ -24,6 +24,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 # 默认模型名/base URL 只在这里写一次：--help 文案、"没配 key"的报错和实际请求
 # 用的必须是同一个值，否则改了默认还在告诉用户旧的。
@@ -46,6 +47,38 @@ class TtsHttpError(Exception):
     def __init__(self, status_code, detail):
         super().__init__(f"Error code: {status_code} - {detail}")
         self.status_code = status_code
+
+
+def _origin(url):
+    """URL 的安全比较用 origin；补上 scheme 默认端口，避免把 :443 当成异构。"""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    port = parts.port
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parts.hostname or "").lower(), port
+
+
+class _RejectCrossOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """禁止把带 Authorization 的请求转发到另一个 origin。
+
+    urllib 默认的 redirect_request 会复制原请求头，因此 301/302/303/307/308
+    可能把 bearer token 带给攻击者控制的域名。跨 origin 直接按确定性失败拒绝，
+    同 origin 的常规重定向仍交给标准库处理。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _origin(req.full_url) != _origin(newurl):
+            raise BadAudioResponseError(
+                f"TTS 端点试图跨 origin 重定向（{code}）：{req.full_url} -> "
+                f"{newurl}；已拒绝转发 Authorization，请检查 --base-url")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open(req, timeout):
+    """带重定向隔离的 urlopen；单独成函数便于协议测试替换网络边界。"""
+    opener = urllib.request.build_opener(_RejectCrossOriginRedirectHandler())
+    return opener.open(req, timeout=timeout)
 
 
 class MimoTtsClient:
@@ -87,7 +120,7 @@ class MimoTtsClient:
                          "Content-Type": "application/json"})
             # Request() 构造与 urlopen 都可能对畸形 URL 抛 ValueError
             # （`unknown url type`）：构造阶段就抛，所以两者必须在同一段 try 里。
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _open(req, timeout=timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             # 响应体单独兜一层：连接已在断的边缘时 `e.read()` 自己会抛（超时/

@@ -61,7 +61,10 @@ import xml.etree.ElementTree as ET
 from _cam_crop import (CAM_ID, cam_projection_origin, cam_resting_pose,
                        decompose_transform, resolve_num)
 from _svg_sanitize import (_local, _style_map,  # noqa: E402  SVG DOM 的读法只有一份
-                           SVG_NS)  # noqa: E402  命名空间串也随净化同一份，不在这里重声明
+                           _ORIGINAL_CLASS, _ORIGINAL_ID, _SCOPE_DATA,
+                           SVG_NS, inline_svg_root_id,
+                           rewrite_inline_svg_fragment_urls,
+                           rewrite_inline_svg_selectors)  # noqa: E402
 from _script_utils import NUMERIC_ONLY, num_fmt  # noqa: E402
 from _segments import is_next_page_continuing  # noqa: E402  接续判据只有一份
 from _timeline import beat_cycles, ends_at_start
@@ -82,6 +85,57 @@ import _swarm  # noqa: E402  群集档收尾态的真源（端点精确回 0，�
 # 净化后的副本再序列化时不给标签套 ns0: 前缀（与 _svg_sanitize 同一套；重复注册无害）。
 # SVG_NS 自 _svg_sanitize 导入：同一个命名空间串只声明一次。
 ET.register_namespace("", SVG_NS)
+
+
+def inline_svg_author_view(markup):
+    """把净化副本还原成作者 id/class 视图，供只认原选择器的几何判据使用。
+
+    净化后的活 DOM 必须继续带 per-card 命名空间；但 `_cam_crop` 与若干离散帧档的
+    公共判据是按作者 `#id` / `.class` 写的。这里只在调用这些判据前还原身份，几何、
+    样式与结构一律来自同一份净化副本，不读回未净化的源文件。
+    """
+    root = ET.fromstring(markup)
+    for el in root.iter():
+        original_id = el.get(_ORIGINAL_ID)
+        if original_id is not None:
+            el.set("id", original_id)
+        elif el is root and el.get(_SCOPE_DATA) == "1":
+            el.attrib.pop("id", None)
+        original_class = el.get(_ORIGINAL_CLASS)
+        if original_class is not None:
+            el.set("class", original_class)
+    return ET.tostring(root, encoding="unicode")
+
+
+def rebase_inline_svg_namespace(markup, namespace):
+    """把已净化副本迁到另一张卡的稳定命名空间，保留作者身份元数据。"""
+    root = ET.fromstring(markup)
+    old_root = root.get("id") or ""
+    new_root = inline_svg_root_id("", namespace)
+    if not old_root or old_root == new_root or root.get(_SCOPE_DATA) != "1":
+        return ET.tostring(root, encoding="unicode")
+
+    def replace_refs(value):
+        return value.replace("#" + old_root, "#" + new_root)
+
+    for el in root.iter():
+        for key, value in list(el.attrib.items()):
+            if key in (_ORIGINAL_ID, _ORIGINAL_CLASS):
+                continue
+            local = _local(key).lower()
+            if local == "id":
+                el.set(key, value.replace(old_root, new_root))
+            elif local == "class":
+                el.set(key, " ".join(new_root + token[len(old_root):]
+                                     if token.startswith(old_root) else token
+                                     for token in value.split()))
+            elif local == "style":
+                el.set(key, replace_refs(value))
+            else:
+                el.set(key, replace_refs(value))
+        if _local(el.tag).lower() == "style" and el.text:
+            el.text = el.text.replace(old_root, new_root)
+    return ET.tostring(root, encoding="unicode")
 
 
 def _fmt(v):
@@ -195,10 +249,70 @@ def _targets(root, selector):
     那个引号截断，ElementTree 抛 SyntaxError——而调用方只接 ParseError /
     ValueError，于是整次生成裸栈中断，报错里看不出是 SVG 里的一个引号。
     """
-    kind, name = selector[0], selector[1:]
+    if not selector:
+        return []
+    root_class = re.fullmatch(
+        r":is\(#([^\s.,#)]+)\.([^\s.,#)]+),#\1 ([^\s.,#)]+)\)", selector)
+    if root_class:
+        scope, own_class, child_class = root_class.groups()
+        if root.get("id") != scope:
+            return []
+        found = [root] if own_class in (root.get("class") or "").split() else []
+        found.extend(el for el in root.iter() if el is not root
+                     and child_class in (el.get("class") or "").split())
+        return found
+    if selector[0] not in ("#", "."):
+        return []
+    parts = selector[1:].split()
+    kind = selector[0]
+    if len(parts) == 2:
+        # rewrite_inline_svg_selector 的作用域写法：#root #id / #root .class。
+        # 只认这份精确产物，不退回作者 id，避免命中另一份同名 SVG。
+        scope, name = parts
+        if root.get("id") != scope:
+            return []
+        if name[:1] in ("#", "."):
+            kind, name = name[0], name[1:]
+    elif len(parts) == 1:
+        name = parts[0]
+        if kind == "#" and name == root.get("id"):
+            return [root]
+    else:
+        return []
     if kind == "#":
         return [el for el in root.iter() if (el.get("id") or "") == name]
     return [el for el in root.iter() if name in (el.get("class") or "").split()]
+
+
+def rewrite_inline_svg_animate_targets(block, markup):
+    """重写 animate 寻址字段，并递归改写补间载荷里的内部片段 URL。
+
+    `rewrite_inline_svg_selectors` 接受任意 JSON 形状，直接扫整块会把颜色值
+    (`"#f00"`)、路径字符串等也当成 id 选择器。因此选择器只认
+    `steps[].target` / `bind[].target`；`from` / `to` / `set` 载荷则走更窄的
+    `url(#id)` 改写，hex 颜色与普通文案保持原样。
+    """
+    out = dict(block)
+    steps = []
+    for step in block.get("steps") or []:
+        if isinstance(step, dict):
+            step = dict(step)
+            if isinstance(step.get("target"), str):
+                step["target"] = rewrite_inline_svg_selectors(step["target"], markup)
+            for key in ("from", "to", "set"):
+                if key in step:
+                    step[key] = rewrite_inline_svg_fragment_urls(step[key], markup)
+        steps.append(step)
+    out["steps"] = steps
+    if isinstance(block.get("bind"), list):
+        binds = []
+        for bind in block["bind"]:
+            if isinstance(bind, dict) and isinstance(bind.get("target"), str):
+                bind = dict(bind)
+                bind["target"] = rewrite_inline_svg_selectors(bind["target"], markup)
+            binds.append(bind)
+        out["bind"] = binds
+    return out
 
 
 def _ordered(steps, beats):
@@ -297,28 +411,33 @@ def _settle_cam_payload(el, step):
     return skipped
 
 
-def _settle_step(root, step):
+def _settle_step(root, step, source_step=None, author_markup=None):
     """一步的结束态：draw / morph / count / momentum / drag / step / organic / trail /
     wave / flow / lens / swarm / set / to（from-only 是 no-op）。
 
-    返回 (搬不动的 transform 键, 落错元素的 count 标签)，由调用方合成说明——跳过必须
-    出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页怎么回去了"。
+    `step` 的 target 已按本份净化 markup 重写；`source_step` 保留作者选择器，供只认
+    原 id 的几何判据使用。返回 (搬不动的 transform 键, 落错元素的 count 标签)，由调用方
+    合成说明——跳过必须出声：静默"少搬一样东西"就是成片里那种"我明明演了，下一页
+    怎么回去了"。
     """
     selector = step["target"]
+    source_selector = (source_step or step).get("target", selector)
+    source_markup = author_markup or ET.tostring(root, encoding="unicode")
+    live_markup = ET.tostring(root, encoding="unicode")
     transforms, misfires = [], []
     if "swarm" in step:
         # 群集档与波场档 / 透镜档同属「收尾态 = 起始态」：u(t)=sin²(πt/D) 在 D
         # 处精确归零，每个元素都回到原位，没有残留姿态可折。这里同样必须**显式
         # 认这一拍**——落到下面的 set/to 循环虽是 no-op，那份 no-op 只是「这一拍
         # 恰好没写补间」的巧合；将来给这一档加任何终态，页界就会静默闪一下。
-        _swarm.settle_state(step["swarm"], "swarm 接续烘焙")
+        _swarm.settle_state((source_step or step)["swarm"], "swarm 接续烘焙")
         return transforms, misfires
     if "lens" in step:
         # 透镜档与波场档同属「收尾态 = 起始态」：u(t)=sin²(πt/D) 在 D 处精确
         # 归零，每个元素都回到原位，没有残留姿态可折。这里同样必须**显式认
         # 这一拍**——落到下面的 set/to 循环虽是 no-op，那份 no-op 只是「这一拍
         # 恰好没写补间」的巧合；将来给这一档加任何终态，页界就会静默闪一下。
-        _lens.settle_state(step["lens"], "lens 接续烘焙")
+        _lens.settle_state((source_step or step)["lens"], "lens 接续烘焙")
         return transforms, misfires
     if "flow" in step:
         # 流线档是本仓库第一个「收尾位由几何算出来」的档：每个元素落在
@@ -327,10 +446,9 @@ def _settle_step(root, step):
         # 再量一次曲线（`ET.tostring` 与生成期读的是同一份内联副本），逐元素
         # 折出 translate。不认这一拍，接续页第 0 帧整组元素会静默弹回原位；
         # 只折流头则链尾弹回——正是 `drag.md` 记过的那一类页界错。
-        markup = ET.tostring(root, encoding="unicode")
-        for sel, payload in _flow.settle_state(step["flow"], markup, selector,
-                                               "flow 接续烘焙"):
-            for el in _targets(root, sel):
+        for sel, payload in _flow.settle_state((source_step or step)["flow"], source_markup,
+                                               source_selector, "flow 接续烘焙"):
+            for el in _targets(root, rewrite_inline_svg_selectors(sel, live_markup)):
                 transforms += _settle_payload(el, payload)
         return transforms, misfires
     if "wave" in step:
@@ -339,7 +457,7 @@ def _settle_step(root, step):
         # **显式认这一拍**——落到下面的 set/to 循环虽同样是 no-op，那份 no-op
         # 是「这一拍恰好没写补间」的巧合；将来给波场档加任何终态，页界就会
         # 静默闪一下。settle_state 返回空表，但会先把旋钮过一遍红线。
-        _wave.settle_state(step["wave"], "wave 接续烘焙")
+        _wave.settle_state((source_step or step)["wave"], "wave 接续烘焙")
         return transforms, misfires
     if "trail" in step:
         # 残影档：主体精确落在 distance，K 层影子在页界处只折 opacity:0。
@@ -347,9 +465,9 @@ def _settle_step(root, step):
         # 时已归零，但那份归零是运行期补间写的，静态副本里根本没有），直到
         # 本段第一条补间才收掉——页界一次静默的闪，生成期零报错。
         # 影子的 x/y 不折：它们不可见，位置由下一段自己的第一帧接管。
-        for sel, payload in _trail.settle_state(step["trail"], selector,
-                                                "trail 接续烘焙"):
-            for el in _targets(root, sel):
+        for sel, payload in _trail.settle_state((source_step or step)["trail"],
+                                                source_selector, "trail 接续烘焙"):
+            for el in _targets(root, rewrite_inline_svg_selectors(sel, live_markup)):
                 transforms += _settle_payload(el, payload)
         return transforms, misfires
     if "drag" in step:
@@ -357,14 +475,14 @@ def _settle_step(root, step):
         # 所以没有残留姿态可搬。链头由 selector 兜住，其余节点只写在
         # drag.chain 里——只折链头的话，接续页第 0 帧链尾会静默弹回原位，
         # 正是 motion.md 记过的那一类「字从来就不在」的跨页静默错。
-        c = _drag.validate(step["drag"], "drag 接续烘焙")
+        c = _drag.validate((source_step or step)["drag"], "drag 接续烘焙")
         for sel in c["chain"]:
-            for el in _targets(root, sel):
+            for el in _targets(root, rewrite_inline_svg_selectors(sel, live_markup)):
                 transforms += _settle_payload(el, {c["axis"]: c["distance"]})
         return transforms, misfires
     for el in _targets(root, selector):
         tag = _local(el.tag)
-        if selector == "#" + CAM_ID:
+        if source_selector == "#" + CAM_ID:
             transforms += _settle_cam_payload(el, step)
             continue
         if "organic" in step:
@@ -425,6 +543,30 @@ def _pose_is_identity(pose):
             and abs(pose["y"]) < 1e-9)
 
 
+def _find_cam(root):
+    """在净化或作者视图里定位相机；两者消费的是同一棵几何树。"""
+    for el in root.iter():
+        if el.get("id") == CAM_ID or el.get(_ORIGINAL_ID) == CAM_ID:
+            return el
+    return None
+
+
+def _cam_projection_origin(root, pose):
+    """`_cam_crop` 的同一口径，临时把净化后的相机身份映射回作者 `#cam`。"""
+    cam = _find_cam(root)
+    if cam is None:
+        return None
+    old_id = cam.get("id")
+    cam.set("id", CAM_ID)
+    try:
+        return cam_projection_origin(root, pose)
+    finally:
+        if old_id is None:
+            cam.attrib.pop("id", None)
+        else:
+            cam.set("id", old_id)
+
+
 def _fold_camera(root, steps, center):
     """把 `#cam` 的收尾姿态折进一层包住其全部子元素的静态 `<g>`。
 
@@ -442,7 +584,7 @@ def _fold_camera(root, steps, center):
     pose = cam_resting_pose(steps)
     if pose is None or not pose.get("rests", True) or not pose.get("resolved", True):
         return None
-    cam = root.find(".//*[@id='%s']" % CAM_ID)
+    cam = _find_cam(root)
     if cam is None or not len(cam):
         return None
     if center is None:
@@ -479,16 +621,21 @@ def bake_settled_state(markup, steps, beats=None):
         root = ET.fromstring(markup)
     except ET.ParseError as e:
         raise ValueError(f"接续烘焙失败：上一段的内联副本解析不动（{e}）")
+    live_markup = ET.tostring(root, encoding="unicode")
+    live_steps = rewrite_inline_svg_animate_targets(
+        {"steps": steps or []}, live_markup)["steps"]
+    author_markup = inline_svg_author_view(live_markup)
     # 相机绕的那一点必须在**动这棵树之前**量：渲染器给这一页注入的 svgOrigin 就是拿这棵
     # （它被交到时那棵树）算的（`_cam_crop.cam_default_origin`），烘焙若改用结算之后的
     # 树，两边又分家——而分家正是这次要修的跨页阶跃。结算会挪内容并集（元素平移、count
     # 重写文本），中心跟着走，所以这个先后不是洁癖。
     pose = cam_resting_pose(steps or [])
-    pre_center = cam_projection_origin(root, pose) if pose else None
+    pre_center = _cam_projection_origin(root, pose) if pose else None
     notes = []
     transforms, misfires = [], []
     loops, cam_loops = [], []
-    for _i, step in _ordered(steps or [], beats):
+    for i, live_step in _ordered(live_steps, beats):
+        step = (steps or [])[i]
         # 没有收尾态的两种一步都不搬：`repeat:-1` 永远演不完（终点无从谈起），`yoyo` 走
         # 偶数遍的元素回到它原来的样子（搬了等于凭空挪走一个从没出现过的状态）。前者必须
         # 出声，后者什么都不必说。相机步单独记账：它决定 _fold_camera 折不折（见下）。
@@ -498,7 +645,7 @@ def bake_settled_state(markup, steps, beats=None):
             continue
         if ends_at_start(step):
             continue
-        t, m = _settle_step(root, step)
+        t, m = _settle_step(root, live_step, step, author_markup)
         transforms += t
         misfires += m
     if loops:
@@ -577,7 +724,8 @@ def global_ref_leaks(markup, steps):
         sel = step.get("target")
         if not isinstance(sel, str) or sel[:1] not in ("#", "."):
             continue
-        for el in _targets(root, sel):
+        live_sel = rewrite_inline_svg_selectors(sel, markup)
+        for el in _targets(root, live_sel):
             if (el.get("id") or "") in shared:
                 out.append((i, sel))
                 break

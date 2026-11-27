@@ -410,7 +410,7 @@ class CarryContract(unittest.TestCase):
         baked = ET.fromstring(out)
         for i in range(1, 7):
             with self.subTest(gid="d%d" % i):
-                el = baked.find(".//*[@id='d%d']" % i)
+                el = baked.find(".//*[@data-ctv-original-id='d%d']" % i)
                 self.assertFalse((el.get("transform") or "").strip())
                 self.assertNotIn("opacity:0", (el.get("style") or ""))
 

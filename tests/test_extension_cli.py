@@ -23,9 +23,13 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import extension  # noqa: E402
 
 BASE_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="980" height="735" '
+    '<svg xmlns="http://www.w3.org/2000/svg" id="root" class="art" '
+    'width="980" height="735" preserveAspectRatio="xMinYMin meet" '
     'viewBox="0 0 980 735">'
-    '<rect id="bar-a" x="10" y="10" width="100" height="100" fill="#6ee7c8"/>'
+    '<defs><linearGradient id="grad"><stop offset="0" stop-color="#6ee7c8"/>'
+    '</linearGradient></defs>'
+    '<rect id="bar-a" class="shape" x="10" y="10" width="100" height="100" '
+    'fill="url(#grad)"/>'
     '</svg>'
 )
 
@@ -34,7 +38,8 @@ STEPS_BODY = '''def compile(spec, ctx):
                        "to": {"opacity": 1}, "duration": 0.5}]}
 '''
 SVG_BODY = '''def compile(spec, ctx):
-    return {"svg": spec["svg"]}
+    return {"svg": spec["svg"].replace(
+        "<rect ", '<script>alert(1)</script><rect onload="alert(1)" ', 1)}
 '''
 MEDIA_BODY = '''def compile(spec, ctx):
     return {"media": "images/clip.mp4"}
@@ -92,10 +97,27 @@ class CliOutputContract(unittest.TestCase):
         out = os.path.join(self.tmp, "out.svg")
         rc, log = _run(ext, out)
         self.assertEqual(rc, 0, log)
-        with open(out, encoding="utf-8") as f:
-            text = f.read()
+        with open(out, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8")
         self.assertTrue(text.startswith("<svg"), text[:120])
         self.assertNotIn('"svg":', text)
+        # verify_output 的净化结果才是实际落盘字节，compile() 的原始 SVG 不能
+        # 带着 script/onload 绕过最后一步写盘。
+        self.assertNotIn(b"<script", raw.lower())
+        self.assertNotIn(b"onload=", raw.lower())
+        self.assertNotIn(b"alert(1)", raw.lower())
+        # standalone 落盘保留作者身份、尺寸与内部引用；内联命名空间只能由
+        # gen_hyperframes 后面那一次净化添加。
+        self.assertIn('id="root"', text)
+        self.assertIn('class="art"', text)
+        self.assertIn('class="shape"', text)
+        self.assertIn('width="980"', text)
+        self.assertIn('height="735"', text)
+        self.assertIn('preserveAspectRatio="xMinYMin meet"', text)
+        self.assertIn('fill="url(#grad)"', text)
+        self.assertNotIn("data-ctv-svg-scope", text)
+        self.assertNotIn("ctv-svg-", text)
 
     def test_media_产物落成可解析的JSON(self):
         ext = _make_ext(self.tmp, "asset-transcoder", ["media"], MEDIA_BODY)

@@ -368,6 +368,56 @@ class ManifestValidation(unittest.TestCase):
 class ImagesJson(unittest.TestCase):
     def test_relative_paths_ok(self):
         IMG.validate_images_json({"seg-a": {"src": "images/seg-a.svg"}})
+        # 正常 SVG 属性动画与内部渐变/滤镜引用保持可用。
+        IMG.validate_images_json({"seg-a": {"src": "images/seg-a.svg", "animate": {
+            "steps": [{"at": 0, "target": "#a", "to": {"attr": {
+                "d": "M0 0L1 1", "x": 1, "y": 2, "fill": "url(#grad)",
+                "stroke": "#fff", "opacity": 1, "transform": "translate(1 2)",
+                "filter": "url(#soft)", "data-role": "node",
+            }}}]}}})
+        # 非 attr 的 CSS 通道保持正常补间可用，内部渐变/滤镜引用也保留。
+        for payload in (
+                {"x": 10, "y": -5, "scale": 1.2, "opacity": 0.5},
+                {"transform": "translate(10px, 20px) rotate(15deg)"},
+                {"fill": "tomato", "stroke": "#fff", "color": "rgb(1, 2, 3)"},
+                {"filter": "url(#soft)", "fill": "url(#gradient)"},
+                {"nested": {"x": ["1", "2"], "scale": [1, 1.2]}}):
+            with self.subTest(payload=payload):
+                IMG.validate_images_json({"seg-a": {"src": "images/seg-a.svg",
+                    "animate": {"steps": [{"at": 0, "target": "#a", "to": payload}]}}})
+        # 非 attr 通道不能覆盖命名空间身份，也不能改写 DOM、导航或内联样式。
+        for key in ("id", "class", "innerHTML", "outerHTML", "textContent",
+                    "innerText", "value", "href", "src", "style", "ID", "Class"):
+            with self.subTest(key=key):
+                bad(IMG.validate_images_json, {"seg-a": {"src": "images/seg-a.svg",
+                    "animate": {"steps": [{"at": 0, "target": "#a",
+                                           "to": {key: "overwritten"}}]}}})
+        # 外链在转义/注释归一后仍要拦；裸 URL、协议相对和脚本/旧式 CSS 同拒。
+        for value in (
+                "url(https://evil.example/x)", "url(//evil.example/x)",
+                "https://evil.example/x", "//evil.example/x",
+                r"u\72l(https://evil.example/x)", r"url(\68 ttps://evil.example/x)",
+                "u/**/rl(https://evil.example/x)", "java\tscript:alert(1)",
+                r"java\73 cript:alert(1)", "expression(alert(1))",
+                r"expre\73 sion(alert(1))", "@import url(//evil.example/x)",
+                "behavior:url(#x)", "-moz-binding:url(#x)",
+                "url(#gradient);fill:url(https://evil.example/x)"):
+            with self.subTest(value=value):
+                bad(IMG.validate_images_json, {"seg-a": {"src": "images/seg-a.svg",
+                    "animate": {"steps": [{"at": 0, "target": "#a",
+                                           "to": {"filter": value}}]}}})
+        bad(IMG.validate_images_json, {"seg-a": {"src": "images/seg-a.svg",
+            "animate": {"steps": [{"at": 0, "target": "#a",
+                                   "to": {"nested": ["url(https://evil.example/x)"]}}]}}})
+        # 但净化后直接写 DOM 的 attr 不接受可导航属性或外部/脚本 URL。
+        for attrs in ({"href": "javascript:alert(1)"},
+                      {"style": "fill:url(https://evil.example/x)"},
+                      {"fill": "url(//evil.example/x)"},
+                      {"filter": "url(data:image/svg+xml,<svg/>)"}):
+            with self.subTest(attrs=attrs):
+                bad(IMG.validate_images_json, {"seg-a": {"src": "images/seg-a.svg",
+                    "animate": {"steps": [{"at": 0, "target": "#a",
+                                           "to": {"attr": attrs}}]}}})
 
     def test_path_escape_rejected(self):
         for evil in ("../x.png", "/etc/passwd", "images/../../x.png", "C:\\x.png", "http://x/y.png"):

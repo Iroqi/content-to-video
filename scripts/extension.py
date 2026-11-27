@@ -27,20 +27,18 @@ import sys
 sys.dont_write_bytecode = True
 
 import _extensions  # noqa: E402  扩展契约的唯一真源
+from _script_utils import is_inside  # noqa: E402  与其它产物入口共用 realpath 守卫
 
-SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILL_ROOT = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _guard_output(path, where):
     """输出不许落进技能目录：那是源码，不是制作产物（同 canvas_kit 的口径）。"""
-    ap = os.path.abspath(path)
-    # 注意：ExtensionError 继承 ValueError，不能在下面的 except 里 raise——
-    # 会被同一句 except 吞掉，守卫静默失守（这正是本技能最该拦的那类坏）。
-    try:
-        common = os.path.commonpath([ap, SKILL_ROOT])
-    except ValueError:
-        common = None  # Windows 不同盘符，天然不落在技能目录
-    if common == SKILL_ROOT:
+    ap = os.path.realpath(path)
+    # is_inside 会 realpath 归一父子路径并 normcase，因此指向技能目录的软链接
+    # 父目录也不能把真实产物绕进源码树。ExtensionError 继承 ValueError，不能
+    # 被 commonpath 的 except ValueError 吞掉，守卫必须显式抛给调用方。
+    if is_inside(ap, SKILL_ROOT):
         raise _extensions.ExtensionError(
             "%s 落在技能目录内：%s。先 cd 到项目目录再跑，"
             "产物和源码不能共用一个目录" % (where, ap))

@@ -124,20 +124,32 @@ class RuntimeContract(unittest.TestCase):
     def test_settle_var_is_read_from_root(self):
         """运行期只读一个 CSS 变量、不做第二次判断（"要不要演"只在生成期决定）。"""
         src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
+        css = (SKILL / "scripts" / "_assets" / "composition.css").read_text(encoding="utf-8")
         self.assertIn('getPropertyValue("--ctv-ved-settle")', src)
         self.assertIn("const verseEmSettle", src)
         self.assertIn("verse-ved-settled", src)
+        # 收束不能保留「演过没有」的锁存，也不能把延迟/过渡交回墙钟。
+        self.assertNotIn("L.settled", src)
+        self.assertNotIn("transitionDelay", src)
+        self.assertNotIn(".style.transition", src)
+        render_css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+        self.assertNotRegex(render_css, r"transition\s*:",
+                            "渲染路径不许留下 CSS transition")
 
     def test_settle_check_precedes_the_cross_gate(self):
         """收束判据必须写在"跨格才刷"那道门（`k !== L.lastK`）**之前**。
 
-        k 是取整后的字序号，最后不足一个字的行程里 k 已经停在 n 不动；门一关，这条
-        判据就被整个跳过，收束永远不触发且没有任何报错（踩过）。
+        而且直接 seek 到句尾时，glyph 必须先建好，收束 painter 才有 span 可写。
         """
         src = (SKILL / "scripts" / "_assets" / "runtime.js").read_text(encoding="utf-8")
         body = src.split("const verseEmUpdate = ", 1)[1].split("\n};", 1)[0]
-        self.assertIn("verseEmSettle(L)", body)
+        self.assertIn("const settle = verseEmSettle(L);", body)
+        self.assertLess(body.index("verseVedGlyphs(L)"),
+                        body.index("verseEmSettle(L)"))
         self.assertLess(body.index("verseEmSettle(L)"), body.index("L.lastK = k"))
+        self.assertGreater(body.index("settle(t);"), body.index("L.lastK = k"))
+        self.assertIn("const verseEmSettle = (L) => (t) => {", src)
+        self.assertIn("const step = (ms / 1000) / spans.length;", src)
 
     def test_verse_sync_does_not_trust_wall_clock(self):
         """`verseSync` 不许拿 `gsap.globalTimeline.time()` 当时钟锚。

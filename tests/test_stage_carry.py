@@ -43,19 +43,24 @@ def _bake(steps, markup=None, beats=None):
 
 def _find(markup, el_id):
     root = ET.fromstring(markup)
-    return root.find(".//*[@id='%s']" % el_id)
+    return next((el for el in root.iter()
+                 if el.get("id") == el_id
+                 or el.get("data-ctv-original-id") == el_id), None)
 
 
 class SettleElementState(unittest.TestCase):
     def test_to_and_set_become_inline_style_and_attribute(self):
         out, notes = _bake([
             {"target": "#plate", "to": {"opacity": 1}},
-            {"target": "#plate", "set": {"attr": {"fill": "#f00"}, "strokeWidth": 4}},
+            {"target": "#plate", "set": {"attr": {"fill": "url(#warm)", "stroke": "#f00"},
+                                         "strokeWidth": 4}},
         ])
         plate = _find(out, "plate")
+        prefix = ET.fromstring(out).get("id") + "--"
         self.assertIn("opacity:1", plate.get("style"))
         self.assertIn("stroke-width:4", plate.get("style"))   # 驼峰必须转成 CSS 认的名字
-        self.assertEqual(plate.get("fill"), "#f00")           # attr:{} 走 attribute
+        self.assertEqual(plate.get("fill"), "url(#" + prefix + "warm)")
+        self.assertEqual(plate.get("stroke"), "#f00")           # hex 颜色不能当选择器改写
         self.assertEqual(notes, [])
 
     def test_from_only_is_no_op(self):
@@ -211,7 +216,8 @@ class FoldCamera(unittest.TestCase):
         self.assertEqual(stage.tag, f"{{{NS}}}g")
         self.assertIn("translate(", stage.get("transform"))
         self.assertIn("scale(1.200000)", stage.get("transform"))
-        self.assertEqual([c.get("id") for c in list(stage)], ["plate", "line", "num"])
+        self.assertEqual([c.get("data-ctv-original-id") for c in list(stage)],
+                         ["plate", "line", "num"])
         self.assertTrue(any("相机收尾位" in n for n in notes), notes)
 
     def test_identity_pose_adds_no_layer(self):
@@ -230,7 +236,7 @@ class FoldCamera(unittest.TestCase):
         outer, inner = _find(two, "cam")[0], _find(two, "cam")[0][0]
         self.assertIn("translate(0.0000,300.0000)", outer.get("transform"))
         self.assertIn("translate(0.0000,200.0000)", inner.get("transform"))
-        num_box = [b[1] for b in cam_geometry(ET.fromstring(two))[2] if b[0] == "#num"][0]
+        num_box = [b[1] for b in cam_geometry(ET.fromstring(SC.inline_svg_author_view(two)))[2] if b[0] == "#num"][0]
         # 883（旧）→ 874：`<text id="num">` 没写 font-size，占位盒的兜底字号从
         # _cam_crop 自己那个字面量 17.0 换成 _template.svg_text_band 的
         # MIN_READABLE_FONT_PX（26）——与 check_svg 的密度/越界自查同一口径。
@@ -243,7 +249,7 @@ class FoldCamera(unittest.TestCase):
         carried, _ = _bake([{"target": "#cam", "to": {"y": 200}}])
         own = [{"target": "#cam", "to": {"y": 400}}]
         self.assertEqual(crop_warnings(raw, own), [])
-        warns = crop_warnings(carried, own)
+        warns = crop_warnings(SC.inline_svg_author_view(carried), own)
         self.assertTrue(any("#num" in w and "下边" in w for w in warns), warns)
 
 
@@ -407,7 +413,8 @@ class OriginSharedWithRenderer(unittest.TestCase):
         raw, _ = SAN.sanitize_svg_for_inline(STAGE_SVG)
         steps = [{"target": "#plate", "to": {"x": 500}},       # 结算会把内容并集挪走
                  {"target": "#cam", "to": {"scale": 1.2}}]
-        cx, cy = [float(v) for v in CC.cam_default_origin(raw, steps).split()]
+        cx, cy = [float(v) for v in CC.cam_default_origin(
+            SC.inline_svg_author_view(raw), steps).split()]
         out, _ = SC.bake_settled_state(raw, steps)
         e, f, s = _stage_pose(out)
         self.assertAlmostEqual(e, (1 - s) * cx, places=3)
@@ -418,14 +425,18 @@ class OriginSharedWithRenderer(unittest.TestCase):
         raw, _ = SAN.sanitize_svg_for_inline(STAGE_SVG)
         steps = [{"target": "#plate", "to": {"x": 500}},
                  {"target": "#cam", "to": {"scale": 1.2}}]
-        cx, _ = [float(v) for v in CC.cam_default_origin(raw, steps).split()]
+        cx, _ = [float(v) for v in CC.cam_default_origin(
+            SC.inline_svg_author_view(raw), steps).split()]
         out, _ = SC.bake_settled_state(raw, steps)
-        self.assertNotAlmostEqual(cx, cam_content_center(ET.fromstring(out))[0], places=0)
+        self.assertNotAlmostEqual(
+            cx, cam_content_center(ET.fromstring(SC.inline_svg_author_view(out)))[0],
+            places=0)
 
     def test_explicit_svgOrigin_wins_and_nothing_is_invented(self):
         raw, _ = SAN.sanitize_svg_for_inline(STAGE_SVG)
         steps = [{"target": "#cam", "to": {"scale": 1.2, "svgOrigin": "540 660"}}]
-        self.assertIsNone(CC.cam_default_origin(raw, steps))
+        self.assertIsNone(CC.cam_default_origin(
+            SC.inline_svg_author_view(raw), steps))
         e, f, s = _stage_pose(SC.bake_settled_state(raw, steps)[0])
         self.assertAlmostEqual(e, (1 - s) * 540, places=3)
         self.assertAlmostEqual(f, (1 - s) * 660, places=3)
@@ -763,6 +774,14 @@ class TargetsResolveQuotedIds(unittest.TestCase):
             '<rect id="a\'b" x="0" y="0" width="10" height="10" opacity="0"/>'
             '</g></svg>' % NS), steps=steps)
         self.assertIn("opacity:1", out)
+
+        out, _notes = _bake(
+            [{"at": 0, "target": ".root-only", "to": {"opacity": 0}}],
+            '<svg xmlns="%s" class="root-only">'
+            '<rect class="root-only" width="10" height="10" opacity="1"/></svg>' % NS)
+        baked = ET.fromstring(out)
+        self.assertIn("opacity:0", baked.get("style"))
+        self.assertIn("opacity:0", baked[0].get("style"))
 
 
 if __name__ == "__main__":

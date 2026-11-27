@@ -44,9 +44,17 @@ class RuntimeContract(unittest.TestCase):
         self.assertRegex(RUNTIME, r"verseScroll\(c, t, curT0, curSi\)")
         self.assertRegex(RUNTIME, r"verseScroll\(c, 1e9, tailT0, cueSi\)")
 
-    def test_gap_branch_also_scrolls(self):
-        """片头/片尾的 gap 分支也要收尾滚动，否则最后一帧会停在半路。"""
-        self.assertIn("verseScroll(c, 1e9, tailT0, cueSi)", RUNTIME)
+    def test_gap_and_lead_in_derive_the_cue_from_t(self):
+        """gap 取前一句、首句前取第一句：选择只由 t 推出，不信任旧 cueSi。"""
+        body = RUNTIME.split("const verseTick = ", 1)[1].split("\n};", 1)[0]
+        self.assertIn("let preceding = -1;", body)
+        self.assertIn("if (t >= cues[i].t) preceding = i;", body)
+        self.assertNotIn("if (cueSi < 0) return;", body)
+        self.assertIn("if (t < cues[0].t)", body)
+        self.assertIn("verseEmUpdate(c, cueSi, t);", body)
+        self.assertIn("verseScroll(c, t, firstT0, cueSi)", body)
+        self.assertIn("const tail = preceding >= 0 ? preceding : cues.length - 1;", body)
+        self.assertIn("verseScroll(c, 1e9, tailT0, cueSi)", body)
 
     def test_progress_is_a_function_of_t(self):
         """进度只由 (t − 本句 cue 起点) 算：乱序 seek 必须幂等。"""

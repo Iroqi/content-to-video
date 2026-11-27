@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 import wave
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _helpers import SKILL_DIR, make_manifest  # noqa: E402,F401
@@ -93,8 +94,24 @@ class VoicedSpan(unittest.TestCase):
 
     def test_all_silent_is_not_measurable(self):
         # 整句静音（TTS 兜底、或测试桩里的全零 WAV）没有"发声区间"可言：
-        # 量不出来 → 返回 None，调用方退回文件长度，manifest 仍合法。
+        # voiced_span 仍返回 None；measure_voiced_span 再把“实测全静音”与
+        # “根本量不出来”分开，前者必须抛错让管线失败/降级。
         self.assertIsNone(_speech.voiced_span([(0.0, None)], 1.2))
+        with tempfile.TemporaryDirectory() as td:
+            wav = os.path.join(td, "silent.wav")
+            with wave.open(wav, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(b"\x00\x00" * 28800)
+            with mock.patch.object(_speech, "_run_silencedetect",
+                                   return_value="silence_start: 0\n"):
+                with self.assertRaises(_speech.AllSilenceError):
+                    _speech.measure_voiced_span("ffmpeg", wav, 1.2)
+            with mock.patch.object(_speech, "_run_silencedetect",
+                                   return_value=None):
+                self.assertIsNone(_speech.measure_voiced_span("ffmpeg", wav, 1.2))
+        self.assertFalse(_speech._spans_cover_duration([(0.0, 0.4), (0.5, None)], 1.2))
 
     def test_remaining_room_is_the_ceiling(self):
         # 前导静音几乎吃掉整块（只剩 40ms）：voiced 不能取 100ms 的下限（那会
@@ -207,6 +224,11 @@ class MeasureOnRealWav(unittest.TestCase):
         onset, voiced = span
         self.assertAlmostEqual(onset, 0.30, delta=0.03)
         self.assertAlmostEqual(voiced, 1.0, delta=0.05)
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "silent.wav")
+            self._make(p, 0.0, 0.0, 1.2)
+            with self.assertRaises(_speech.AllSilenceError):
+                _speech.measure_voiced_span(ff, p, 1.2)
 
     def test_non_wav_gives_none(self):
         with tempfile.TemporaryDirectory() as td:

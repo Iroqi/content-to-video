@@ -23,7 +23,8 @@ from _template import (MIN_READABLE_FONT_PX, FOCUS_BLUR_MAX_EM, load_template,
                        get_canvas, get_image_box, normalize_aspect, seg_card_pad_x)
 from _images_schema import (classify_media_path, is_svg_path,  # noqa: E402
                             MEDIA_DUCK_VOLUME, ATTR_KEY,
-                            TYPE_DECODE_NARROW, TYPE_DECODE_WIDE)
+                            TYPE_DECODE_NARROW, TYPE_DECODE_WIDE,
+                            validate_svg_attr_map, validate_svg_attr_name)
 from _segments import (FULL_BLEED_LAYOUTS, is_content_sid,  # noqa: E402
                        is_full_bleed, seg_layout, seg_subtitle)
 from _path_morph import make_morph, interp as _morph_interp
@@ -34,6 +35,7 @@ from _ease import (spring_zeta, SPRING_CARRY, SPRING_SETTLE_EPS,  # noqa: E402
                    SPRING_ZETA_MIN, SPRING_ZETA_MAX)
 from _timeline import DEFAULT_FPS, beat_positions, beat_span, beat_cycles
 from _cam_crop import cam_default_origin
+from _svg_sanitize import rewrite_inline_svg_selectors
 from _animate import animate_of  # 编排块的唯一读法（steps/params/bind）
 from _hold import plan as hold_plan  # 静止窗口 / 慢推窗口的单一真源
 import _momentum  # noqa: E402  速度包络 / 三段编排 / 生成期采样的单一真源
@@ -45,7 +47,8 @@ import _wave  # noqa: E402  波前几何 / 紧支撑脉冲 / 生成期采样的�
 import _flow  # noqa: E402  曲线弧长场 / 相对位移 / 生成期采样的单一真源
 import _lens  # noqa: E402  瞬时折射场 / 方向随 t 旋转 / 生成期采样的单一真源
 import _swarm  # noqa: E402  闭式邻域场 / 元素互为源 / 生成期采样的单一真源
-from _stage_carry import carry_pages, judging_row
+from _stage_carry import (carry_pages, inline_svg_author_view, judging_row,
+                          rewrite_inline_svg_animate_targets)
 
 
 # ── 离散帧档的统一分派表 ────────────────────────────────────────────────
@@ -209,7 +212,7 @@ def _spring_registry_js(gsap_code):
                 f"[renderer] 产物里出现非法 spring 档 {spec!r}——ζ 不在 "
                 f"{SPRING_ZETA_MIN:.2f}~{SPRING_ZETA_MAX:.2f}，注册了也演不对")
         ease_validate(spec, "[renderer] spring 注册")
-        regs.append(f"gsap.registerEase({json.dumps(spec)}, ctvSpring({z:.6g}));")
+        regs.append(f"gsap.registerEase({_js_json(spec)}, ctvSpring({z:.6g}));")
     # 与 _ease.spring_raw / spring_curve 同一条闭式解，常量由 Python 侧注入，
     # 不在 JS 里再抄一份数字（两份常量必然漂移）。纯函数：给定 p 直接算，
     # 不读墙钟、不存上一帧状态——逐帧 seek 下第 N 帧与直接跳到第 N 帧一致。
@@ -282,6 +285,23 @@ def esc(text):
     字面量 &amp;，本模块没有这种调用点）。
     """
     return html.escape(text)
+
+
+def _js_json(value, **kwargs):
+    """Serialize a value as JSON that is safe inside an inline ``<script>``.
+
+    JSON string quoting alone does not protect the HTML script-element parser:
+    a literal ``</script>`` in any string closes the element even when it appears
+    inside a JavaScript string.  Escape the HTML-significant characters and the
+    two JavaScript line separators after ``json.dumps`` so the result remains a
+    valid JavaScript expression in every inline-script context.
+    """
+    return (json.dumps(value, **kwargs)
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029"))
 
 
 def segment_duration(seg):
@@ -2127,7 +2147,23 @@ def _cycle_vars(step):
 def _cycle_js(step):
     """count / type 的手写代理补间要的那段 JS（含尾逗号）；无循环时是空串。"""
     vars_ = _cycle_vars(step)
-    return "".join(f'{k}:{json.dumps(v)},' for k, v in vars_.items())
+    return "".join(f'{k}:{_js_json(v)},' for k, v in vars_.items())
+
+
+def _validate_step_attr_maps(block, where):
+    """渲染端再查一次 GSAP ``attr``，不把安全只寄托在调用方已过契约。
+
+    ``attr`` 直接写净化后的 SVG 活 DOM，href/style/on* 与外部 url() 都能绕过
+    静态 SVG 净化。校验放在画布首拍之前，确保 ``from`` 的瞬态也不会先被序列化。
+    """
+    for i, step in enumerate(block.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        for kind in ("from", "to", "set"):
+            vars_ = step.get(kind)
+            if isinstance(vars_, dict) and ATTR_KEY in vars_:
+                validate_svg_attr_map(
+                    vars_[ATTR_KEY], f"{where} steps[{i}].{kind}.attr")
 
 
 def _canvas_first_beat(card, block, beats):
@@ -2158,8 +2194,8 @@ def _canvas_first_beat(card, block, beats):
         if not src:
             continue
         seen.add(target)
-        sel = json.dumps(f"#img-{sid} {target}")
-        out.append(f"tl.set({sel},{json.dumps(src)},{card.s:.2f})")
+        sel = _js_json(f"#img-{sid} {target}")
+        out.append(f"tl.set({sel},{_js_json(src)},{card.s:.2f})")
     return out
 
 
@@ -2199,9 +2235,13 @@ def _derive_lines_for(rc, card, key):
     from _derive import compile_derive
 
     entry = rc.images.get(key)
-    block = animate_of((entry or {}).get("opts") or {})
+    opts = (entry or {}).get("opts") or {}
+    block = animate_of(opts)
     if not block.get("params"):
         return []
+    inline_svg = opts.get("inline_svg")
+    if inline_svg:
+        block = rewrite_inline_svg_animate_targets(block, inline_svg)
     block = dict(block, steps=[st for st in block["steps"] if "param" in st])
     # 作用域收窄到这一格的容器：多段内联同名 id 才不会串台（与属性补间同一条
     # 规则；分格再收一层到 `-{i}`，左右两格画同一张 SVG 也不会互相改写）。
@@ -2214,13 +2254,16 @@ def _derive_lines_for(rc, card, key):
         raise ValueError(f"段落 '{card.sid}' 的 animate.steps 有一步 {e}")
     d = compile_derive(block, dflt["duration"])
     payload = d.js_payload(scope)
+    for i, bind in enumerate(payload["binds"]):
+        validate_svg_attr_name(
+            bind["attr"], f"段落 '{card.sid}' 的 animate.bind[{i}]")
     # 本次未写 ease 的拍走模板缺省（与属性补间同一个数）
     for st in payload["steps"]:
         st["ease"] = st["ease"] or dflt["ease"]
 
     # 表达式必须逐条内联成闭包（渲染页里不能用 `eval`），所以生成期就把它排成一行行。
     lines = [
-        ";(function(){var D=" + json.dumps(payload, ensure_ascii=False) + ";"
+        ";(function(){var D=" + _js_json(payload, ensure_ascii=False) + ";"
         "var el=D.steps.map(function(){return 0;});"
         "var ez=D.steps.map(function(s){return gsap.parseEase(s.ease)||function(t){return t;};});"
         "var env=function(){var e={};"
@@ -2231,7 +2274,7 @@ def _derive_lines_for(rc, card, key):
     ]
     for j, b in enumerate(payload["binds"][1:], start=1):
         lines.append(f"var f{j}=function(e){{return {b['js']};}};")
-    pack = ", ".join(json.dumps([b["sel"], b["attr"], f"f{j}"], ensure_ascii=False)
+    pack = ", ".join(_js_json([b["sel"], b["attr"], f"f{j}"], ensure_ascii=False)
                      for j, b in enumerate(payload["binds"]))
     lines.append("var B=[" + pack + "];")
     lines.append(
@@ -2295,8 +2338,8 @@ def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
     # 浮点尾差（0.7×10 = 6.999… 不该被 floor 成 6）。
     return (
         ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
-        "var p={v:" + json.dumps(from_v) + "};"
-        "var D=" + str(dec) + ",P=" + json.dumps(pre) + ",S=" + json.dumps(suf) + ";"
+        "var p={v:" + _js_json(from_v) + "};"
+        "var D=" + str(dec) + ",P=" + _js_json(pre) + ",S=" + _js_json(suf) + ";"
         "var lv=function(v){var k=0;while(v>=Math.pow(10,k+1))k++;return k;};"
         "var dd=function(k){var m=Math.pow(10,k);"
         "return Math.floor(Math.floor(Math.abs(p.v)/m+1e-9)%10);};"
@@ -2307,10 +2350,10 @@ def _odometer_js(cnt, sel_js, cycle_js, pos, dur, ease):
         "e.textContent=(p.v<0?'-':'')+P+out+S;};"
         # 收尾钉在终点写法上：缓动停在 9.999 时末位会差一格，最后一帧必须是 to 的值。
         # 位数与 decimals 由生成期算好写死，不用运行时反推。
-        "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        "tl.to(p,{v:" + _js_json(to_v) + ",duration:" + _js_json(dur)
+        + ",ease:" + _js_json(ease) + "," + cycle_js
         + "onUpdate:f,onComplete:function(){"
-        "e.textContent=P+(" + json.dumps(to_v) + ").toFixed(" + str(dec) + ")+S;}},"
+        "e.textContent=P+(" + _js_json(to_v) + ").toFixed(" + str(dec) + ")+S;}},"
         + f"{pos:.2f}" + ");})();")
 
 
@@ -2364,8 +2407,8 @@ def _type_word_js(sel_js, dur, ease, cycle_js, pos):
         + "var N=G.length,p={g:0};"
         "var f=function(){var n=Math.floor(p.g+1e-6);"
         "if(n>N)n=N;e.textContent=n?s.slice(0,G[n-1]):'';};"
-        "f();tl.to(p,{g:N,duration:" + json.dumps(dur)
-        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        "f();tl.to(p,{g:N,duration:" + _js_json(dur)
+        + ",ease:" + _js_json(ease) + "," + cycle_js
         + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
 
 
@@ -2400,8 +2443,8 @@ def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=Fa
     汉字数字、半角格用半角大写、空白原样保留。字符数恒等、每格宽度类别不变，
     整行在解码途中不重排——文字盒左缘站定不动（look.md「三条换版式时会坏的」）。
     """
-    narrow = json.dumps(TYPE_DECODE_NARROW)
-    wide = json.dumps(TYPE_DECODE_WIDE)
+    narrow = _js_json(TYPE_DECODE_NARROW)
+    wide = _js_json(TYPE_DECODE_WIDE)
     # G[k] 是第 k 组的结束索引：word 档走共用切分，char 档一格一单元。
     units = ("var G=[],i=0;" + _TYPE_UNIT_SPLIT_BODY if by_word
              else "var G=[];for(var q=1;q<=L;q++)G.push(q);")
@@ -2410,7 +2453,7 @@ def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=Fa
         "var s=e.textContent||'',L=s.length;"
         + units +
         "var N=G.length;"
-        "var A=" + narrow + ",B=" + wide + ",F=" + json.dumps(anchor) + ";"
+        "var A=" + narrow + ",B=" + wide + ",F=" + _js_json(anchor) + ";"
         "var O=[];for(var k=0;k<N;k++)O.push(k);"
         "var d=function(k){if(F===\"start\")return k;"
         "if(F===\"end\")return N-1-k;"
@@ -2428,8 +2471,8 @@ def _type_decode_js(sel_js, dur, ease, cycle_js, pos, anchor="start", by_word=Fa
         "var out='';for(var i=0;i<L;i++){var u=s.charCodeAt(i);"
         "out+=(u<=32)?s.charAt(i):(lock[own[i]]?s.charAt(i):g(i,n));}"
         "e.textContent=out;};"
-        "f();tl.to(p,{k:N,duration:" + json.dumps(dur)
-        + ",ease:" + json.dumps(ease) + "," + cycle_js
+        "f();tl.to(p,{k:N,duration:" + _js_json(dur)
+        + ",ease:" + _js_json(ease) + "," + cycle_js
         + "onUpdate:f,onComplete:function(){e.textContent=s;}},"
         + f"{pos:.2f}" + ");})();")
 
@@ -2455,15 +2498,15 @@ def _type_decode_wave_js(sel_js, dur, ease, cycle_js, pos, anchor, by_word, stag
     切分复用 `_TYPE_UNIT_SPLIT_BODY`。判据在 tests/test_type_decode.py：同一文本、
     同一锚点、同一进度，两档必须给出同一行字——两份实现一起漂移时它才会红。
     """
-    narrow = json.dumps(TYPE_DECODE_NARROW)
-    wide = json.dumps(TYPE_DECODE_WIDE)
+    narrow = _js_json(TYPE_DECODE_NARROW)
+    wide = _js_json(TYPE_DECODE_WIDE)
     units = ("var G=[],i=0;" + _TYPE_UNIT_SPLIT_BODY if by_word
              else "var G=[];for(var q=1;q<=L;q++)G.push(q);")
     return (
         ";(function(){"
         "var ns=[].slice.call(document.querySelectorAll(" + sel_js + "));"
         "if(!ns.length)return;"
-        "var A=" + narrow + ",B=" + wide + ",F=" + json.dumps(anchor) + ";"
+        "var A=" + narrow + ",B=" + wide + ",F=" + _js_json(anchor) + ";"
         "var d=function(k,N){if(F===\"start\")return k;"
         "if(F===\"end\")return N-1-k;"
         "if(F===\"center\")return Math.abs(k-(N-1)/2);"
@@ -2487,8 +2530,8 @@ def _type_decode_wave_js(sel_js, dur, ease, cycle_js, pos, anchor, by_word, stag
         "var out='';for(var i=0;i<u.L;i++){var cc=s.charCodeAt(i);"
         "out+=(cc<=32)?s.charAt(i):(lock[u.own[i]]?s.charAt(i):g(i,n,s));}"
         "e.textContent=out;});};"
-        "f();tl.to(P,{k:1,duration:" + json.dumps(dur)
-        + ",ease:" + json.dumps(ease) + ",stagger:" + json.dumps(stagger) + ","
+        "f();tl.to(P,{k:1,duration:" + _js_json(dur)
+        + ",ease:" + _js_json(ease) + ",stagger:" + _js_json(stagger) + ","
         + cycle_js + "onUpdate:f,onComplete:f}," + f"{pos:.2f}" + ");})();")
 
 
@@ -2524,16 +2567,22 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
       错峰锁定）。这些块以 `(function…)()` 起头，故发射时
       一律前导 `;` 断掉上一条无分号的补间行（否则 ASI 会把 `tl.x(…)(function…)()` 黏成
       把 timeline 当函数调，主时间轴建到此处崩）。
-    - 补间变量经 json.dumps 序列化：schema 已挡掉 on* 回调与非标量，这里只把它
-      变成合法 JS 对象字面量，字符串引号/特殊字符由 JSON 转义兜住。
+    - 补间变量经 _js_json 序列化：schema 已挡掉 on* 回调与非标量；HTML-safe
+      JSON 同时避开 `</script>` 提前闭合与 U+2028/U+2029 的 JS 行终止符。
     """
     entry = (rc.images.get(card.sid) or {}) if pane is None else _pane_media(rc, card.sid, pane)
+    opts = entry.get("opts") or {}
+    inline_svg = opts.get("inline_svg")
+    source_block = block
+    if inline_svg:
+        block = rewrite_inline_svg_animate_targets(block, inline_svg)
     sentences = card.seg["sentences"]
     dflt = rc.anim["animate"]
     sid = card.sid
     # 并置对比的分格作用域：每格有自己的容器 id（img-{sid}-0/1），否则两格的
     # 同名 target（#a）会互相串台——左边那条补间打到右边那格上。
     scope = f"#img-{sid}" if pane is None else f"#img-{sid}-{pane}"
+    _validate_step_attr_maps(block, f"段落 '{sid}' 的 animate")
     # 节拍→绝对秒的解析在 _timeline.beat_positions，与生成期门禁/对轴报告共用一份
     # （两处各写一套，门禁就会对着渲染器不会用的时刻报错）。
     try:
@@ -2547,20 +2596,22 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
     # 槽位版式不调机位（契约层已拒相机属性），原点注入对它没有意义：那里的镜头由
     # 模板的入场收拢负责（配图不做持续推近，见 references/look.md），再钉一个
     # 原点只会让"图内原点"与"CSS transform-origin"两个中心打架。
-    pin = (cam_default_origin(entry.get("opts", {}).get("inline_svg"), block["steps"])
-           if pin_cam else None)
+    pin = (cam_default_origin(inline_svg_author_view(inline_svg),
+                              source_block["steps"])
+           if pin_cam and inline_svg else None)
 
     lines = []
     if pin_cam:
         lines.extend(_canvas_first_beat(card, block, beats))
-    for step, (pos, dur) in zip(block["steps"], beats):
+    for step_i, (step, (pos, dur)) in enumerate(zip(block["steps"], beats)):
         if "target" not in step:
             continue            # 参数推进的拍：由 _derive_timeline_lines 整块摊成代理补间
+        source_step = source_block["steps"][step_i]
         sel = f"{scope} {step['target']}"
-        sel_js = json.dumps(sel)
+        sel_js = _js_json(sel)
         ease = step.get("ease", dflt["ease"])
         stagger = step.get("stagger")   # 命中一组元素时逐个错峰（GSAP 原生 stagger）
-        cam_step = pin is not None and step["target"] == "#cam"
+        cam_step = pin is not None and source_step["target"] == "#cam"
 
         def _pin(v):
             return v if not cam_step else dict(v, svgOrigin=pin)
@@ -2576,7 +2627,6 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
 
         # 离散帧档：一张规格表 + 一条采样骨架。命中即发射 tl.set 并跳过后面的
         # 补间分支；分派优先级与旧 elif 链一致（表序即链序）。
-        inline_svg = entry.get("opts", {}).get("inline_svg")
         handled = False
         for kind, mod, plan_kind, check_kind, frame_kind, reason in _SOLO_RENDERERS:
             if kind not in step:
@@ -2584,7 +2634,9 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             where = f"段落 '{sid}' 的 {kind}"
             spec = step[kind]
             if plan_kind == "svg":
-                args = (spec, dur, rc.fps, inline_svg, step["target"], where)
+                args = (spec, dur, rc.fps,
+                        inline_svg_author_view(inline_svg) if inline_svg else inline_svg,
+                        source_step["target"], where)
             elif plan_kind == "target":
                 args = (spec, dur, rc.fps, step["target"], where)
             else:
@@ -2606,13 +2658,15 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             if frame_kind == "single":
                 for t, vars_ in mod.frames(p):
                     lines.append(
-                        f"tl.set({sel_js}, {json.dumps(vars_, sort_keys=True)}, "
+                        f"tl.set({sel_js}, {_js_json(vars_, sort_keys=True)}, "
                         f"{round(pos + t, 2):.2f})")
             else:
                 for t, member, vars_ in mod.frames(p):
-                    member_js = json.dumps(f"{scope} {member}")
+                    live_member = (rewrite_inline_svg_selectors(member, inline_svg)
+                                   if inline_svg else member)
+                    member_js = _js_json(f"{scope} {live_member}")
                     lines.append(
-                        f"tl.set({member_js}, {json.dumps(vars_, sort_keys=True)}, "
+                        f"tl.set({member_js}, {_js_json(vars_, sort_keys=True)}, "
                         f"{round(pos + t, 2):.2f})")
             handled = True
             break
@@ -2633,19 +2687,19 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 from_v = float(cnt.get("from", 0))
                 to_v = float(cnt["to"])
                 dec = int(cnt.get("decimals", 0))
-                pre = json.dumps(cnt.get("prefix", ""))
-                suf = json.dumps(cnt.get("suffix", ""))
+                pre = _js_json(cnt.get("prefix", ""))
+                suf = _js_json(cnt.get("suffix", ""))
                 lines.append(
                     # 前导分号：本行以 `(function...)()` 开头，若前一行是无分号的
                     # `tl.set(...)`/`tl.to(...)`（补间行都靠 ASI 断句），ASI 会把两者黏成
                     # `tl.set(...)(function...)()` —— 把 timeline 当函数调，运行期抛
                     # "is not a function"，整条主时间轴建到此处中断（__timelines.main 永不注册）。
                     ";(function(){var e=document.querySelector(" + sel_js + ");if(!e)return;"
-                    "var p={v:" + json.dumps(from_v) + "};"
+                    "var p={v:" + _js_json(from_v) + "};"
                     "var f=function(){e.textContent=" + pre + "+p.v.toFixed(" + str(dec) + ")+" + suf + ";};"
                     "f();"
-                    "tl.to(p,{v:" + json.dumps(to_v) + ",duration:" + json.dumps(dur)
-                    + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                    "tl.to(p,{v:" + _js_json(to_v) + ",duration:" + _js_json(dur)
+                    + ",ease:" + _js_json(ease) + "," + _cycle_js(step)
                     + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
@@ -2686,7 +2740,7 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 d = _morph_interp(pf, pt, ease_fn(p))
                 t = round(pos + u * span, 2)
                 lines.append(
-                    f"tl.set({sel_js}, {json.dumps({ATTR_KEY: {'d': d}})}, {t:.2f})")
+                    f"tl.set({sel_js}, {_js_json({ATTR_KEY: {'d': d}})}, {t:.2f})")
             continue
 
         if "type" in step:
@@ -2727,8 +2781,8 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
                 "var s=e.textContent||'';"
                 "var p={k:0};"
                 "var f=function(){e.textContent=s.slice(0,Math.round(p.k));};"
-                "f();tl.to(p,{k:s.length,duration:" + json.dumps(dur)
-                + ",ease:" + json.dumps(ease) + "," + _cycle_js(step)
+                "f();tl.to(p,{k:s.length,duration:" + _js_json(dur)
+                + ",ease:" + _js_json(ease) + "," + _cycle_js(step)
                 + "onUpdate:f}," + f"{pos:.2f}" + ");})();")
             continue
 
@@ -2742,27 +2796,27 @@ def _expand_steps(rc, card, block, pin_cam=True, pane=None):
             # 段起点之前元素处在收起态，与"这段还没开始画"的语义一致。
             lines.append(
                 f"tl.set({sel_js}, "
-                f"{json.dumps({ATTR_KEY: {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
+                f"{_js_json({ATTR_KEY: {'pathLength': 1}, 'strokeDasharray': 1, 'strokeDashoffset': 1})}, "
                 f"{card.s:.2f})")
             draw_vars = {"strokeDashoffset": 0, "duration": dur, "ease": ease}
             draw_vars.update(_cycle_vars(step))
             lines.append(
-                f"tl.to({sel_js}, {json.dumps(draw_vars)}, {pos:.2f})")
+                f"tl.to({sel_js}, {_js_json(draw_vars)}, {pos:.2f})")
         if "set" in step:
             set_vars = _pin(dict(step["set"]))
             if stagger is not None:
                 set_vars["stagger"] = stagger
-            lines.append(f"tl.set({sel_js}, {json.dumps(set_vars)}, {pos:.2f})")
+            lines.append(f"tl.set({sel_js}, {_js_json(set_vars)}, {pos:.2f})")
         if "from" in step and "to" in step:
             lines.append(
-                f"tl.fromTo({sel_js}, {json.dumps(_pin(step['from']))}, "
-                f"{json.dumps(_with_timing(step['to']))}, {pos:.2f})")
+                f"tl.fromTo({sel_js}, {_js_json(_pin(step['from']))}, "
+                f"{_js_json(_with_timing(step['to']))}, {pos:.2f})")
         elif "to" in step:
             lines.append(
-                f"tl.to({sel_js}, {json.dumps(_with_timing(step['to']))}, {pos:.2f})")
+                f"tl.to({sel_js}, {_js_json(_with_timing(step['to']))}, {pos:.2f})")
         elif "from" in step:
             lines.append(
-                f"tl.from({sel_js}, {json.dumps(_with_timing(step['from']))}, {pos:.2f})")
+                f"tl.from({sel_js}, {_js_json(_with_timing(step['from']))}, {pos:.2f})")
     return lines
 
 

@@ -32,7 +32,7 @@ from _timeline import (DEFAULT_SPEED, DEFAULT_GAP, TIMELINE_TOLERANCE,  # noqa: 
                        needs_speed_change, speed_marker_value, validate_speed)
 from _segments import is_content_sid  # noqa: E402
 from _voices import list_voice_ids  # noqa: E402
-from _speech import measure_voiced_span  # noqa: E402  句首发声点与发声长度（见 _speech.py）
+from _speech import AllSilenceError, measure_voiced_span  # noqa: E402  句首发声点与发声长度（见 _speech.py）
 from _source_schema import load_segments_source  # noqa: E402
 from _manifest_schema import validate_timing_manifest, MANIFEST_FILENAME  # noqa: E402
 import _degraded as D  # noqa: E402  降级键常量（拼错即 AttributeError）
@@ -189,7 +189,8 @@ def _sentence_entry(index, text, path, duration, ffmpeg_path):
     "有的句子有 `onset` 有的没有"，而下游是逐句读的，缺字段的句子静默退回旧行为。
 
     `onset`/`voiced` 见 `_speech.py`：量不出来就不写（下游按文件长度计时），
-    不进 degraded——只是少了精度，不改产物内容。
+    不进 degraded——只是少了精度，不改产物内容。实测整段静音会抛
+    AllSilenceError，调用方必须让这句失败/降级，不能把它当正常配音缓存。
     """
     dur = round(duration, 3)
     entry = {"index": index, "text": text, "file": path, "duration": dur}
@@ -226,8 +227,12 @@ def _sidecar_paths(out_path, suffixes):
         yield from glob.glob(base + ".stale")
 
 
-def _clear_stale_sidecars(out_path):
+def _clear_stale_sidecars(out_path, extra_suffixes=()):
     """新合成前清掉上一轮残留的变速/兜底 sidecar。
+
+    `extra_suffixes` 供需要连内容指纹一起作废的路径使用（例如 --no-tts 在写
+    静音占位之前必须清掉 .sha）；普通合成仍由成功后的
+    `_record_sentence_cache` 重写指纹。
 
     返回是否清干净（或本来没有残留）。删不掉（Windows 下被占用）就先改名加
     `.stale` 隔离；改名也失败才返回 False，调用方必须据此跳过变速——残留的旧
@@ -236,7 +241,7 @@ def _clear_stale_sidecars(out_path):
     删不掉也隔离过一轮了，不再改名也不再计失败。
     """
     ok = True
-    for p in _sidecar_paths(out_path, _SIDECAR_SUFFIXES):
+    for p in _sidecar_paths(out_path, tuple(extra_suffixes) + _SIDECAR_SUFFIXES):
         if p.endswith(".stale"):
             try:
                 os.remove(p)
@@ -747,11 +752,22 @@ def _run_without_tts(args):
         # 静音占位走与 --on-fail silence 同一条生成路径（ffmpeg lavfi → wave
         # 兜底），预览页的 <audio> 才不会 404。写失败不算致命：预览只在乎
         # 时间轴与画面。
-        try:
-            generate_silence(ffmpeg_path, dur, out_path)
-        except Exception as e:
-            print(f"  [s{i+1:03d}][warn] 静音占位生成失败（{type(e).__name__}: {e}）"
-                  f"，预览页该句无音频", file=sys.stderr)
+        #
+        # 必须先作废旧语音的全部伴生状态，再覆盖 WAV：否则在两步之间被中断，
+        # 盘上会留下“静音 WAV + 旧 .sha/.spd/.orig.wav”，下次 --resume 会把
+        # 这份静音当成已验证的真配音。.orig.wav 尤其危险：后续变速会把它当
+        # 原速源，直接让上一稿语音复活。清理失败时宁可这句不写占位，也不能
+        # 留下可被误认成有效缓存的静音。
+        if not _clear_stale_sidecars(out_path, (".sha",)):
+            print(f"  [s{i+1:03d}][warn] 旧音频 sidecar 无法清理，"
+                  f"跳过静音占位以避免被 --resume 误认成有效语音",
+                  file=sys.stderr)
+        else:
+            try:
+                generate_silence(ffmpeg_path, dur, out_path)
+            except Exception as e:
+                print(f"  [s{i+1:03d}][warn] 静音占位生成失败（{type(e).__name__}: {e}）"
+                      f"，预览页该句无音频", file=sys.stderr)
         sentence_data.append({"index": i, "text": text,
                               "start_time": round(cumulative, 3),
                               "duration": dur, "synth_failed": True})
@@ -767,14 +783,6 @@ def _run_without_tts(args):
         generate_silence(ffmpeg_path, max(0.1, total_dur), combined_path)
     except Exception as e:
         print(f"[warn] 母带静音生成失败（{type(e).__name__}: {e}）", file=sys.stderr)
-
-    # 覆盖本次涉及句子的 .failed / .spd 边车：无配音档产出的 wav 是静音，
-    # 留着上次真合成的 .sha 会让补上 key 后重跑时被 --resume 误判成"同一个
-    # 稿件的同一段音频"（文件在、指纹在，只是内容被换成了静音）。
-    for i in range(len(sentences)):
-        base = os.path.join(sentences_dir, f"s{i+1:03d}.wav")
-        for _s in (".sha", ".spd", _FAILED_SUFFIX):
-            remove_if_exists(base + _s)
 
     manifest_sentences = [
         {"index": s["index"], "text": s["text"],
@@ -1380,8 +1388,18 @@ def main(argv=None):
                         remove_if_exists(out_path + ".spd")
             # 缺 .sha 已在 resolve_resume_state 判为 regen：不给归属不明的
             # 旧音频盖上当前文本的指纹（补写一次就把错位永久固化）。
-            sd = _sentence_entry(i, sentences[i], out_path, dur,
-                                  ffmpeg_path)
+            try:
+                sd = _sentence_entry(i, sentences[i], out_path, dur,
+                                      ffmpeg_path)
+            except AllSilenceError as e:
+                # 旧版本可能把“合法 WAV、但实测全静音”的 TTS 响应认证成缓存。
+                # 这种文件不能继续进 status=ok 的时间轴；作废后重新合成，让
+                # 它按正常失败路径进入 --on-fail silence 或 failed。
+                print(f"  [{label}][warn] 缓存音频实测全静音（{e}），"
+                      f"改为重新合成这一句", file=sys.stderr)
+                _drop_stale_cache(out_path)
+                pending_tasks.append(task)
+                continue
             if i in sentence_speaker_labels:
                 sd["speaker"] = sentence_speaker_labels[i]
             if decision.synth_failed:
@@ -1453,31 +1471,43 @@ def main(argv=None):
                 if ok and os.path.exists(out_path):
                     dur = measure_duration(ffmpeg_path, out_path)
                     if dur > 0:
-                        # 落 sidecar：内容指纹 .sha（resume 校验用）+
-                        # 已施加语速 .spd（下次 resume 不必重放 atempo）。
-                        # 用带兜底的写入：磁盘满等 OSError 不能把这句已合成的
-                        # 音频变成"丢句"。
-                        _record_sentence_cache(
-                            out_path, task["text_tts"], task["speed"],
-                            speed_applied=speed_applied,
-                            voice_id=task["voice_id"],
-                            voice_style=task["voice_style"], model=model,
-                            base_url=base_url)
-                        sd = _sentence_entry(idx, sent_orig, out_path, dur,
-                                              ffmpeg_path)
-                        if idx in sentence_speaker_labels:
-                            sd["speaker"] = sentence_speaker_labels[idx]
-                        new_results.append(sd)
-                        # 这次是真的合成成功了——如果这句之前被 --on-fail silence
-                        # 兜底过、留了个 .failed marker（比如用户手动删了旧的静音
-                        # mp3 之后重跑、这次没再失败），清掉 marker，不然下次
-                        # resume 会把这个已经补录好的句子又标成 synth_failed。
-                        # remove_if_exists 内部已判过存在性，外面不必再问一次
-                        # ——两次判断之间还有个 TOCTOU 窗口。
-                        remove_if_exists(out_path + _FAILED_SUFFIX)
-                        print(f"[TTS {done_count}/{pending_count}] {label} "
-                              f"{preview} -> {dur:.2f}s", flush=True)
-                        continue
+                        try:
+                            sd = _sentence_entry(idx, sent_orig, out_path, dur,
+                                                  ffmpeg_path)
+                        except AllSilenceError as e:
+                            # “WAV 可读、时长为正”不等于“这句话有人声”。
+                            # silencedetect 明确测得全静音时，必须在写 .sha
+                            # 之前失败，交给下面的 on-fail 分支降级，不能把
+                            # 无声响应认证成 status=ok 的正式配音。
+                            print(f"    [{label}][warn] TTS 返回音频实测全静音"
+                                  f"（{e}），按合成失败处理", file=sys.stderr)
+                            # 作废这份“可读但无声”的响应，避免旧 .sha 或本次
+                            # 文件在 --on-fail error 时被下次 resume 复用。
+                            _drop_stale_cache(out_path)
+                        else:
+                            # 落 sidecar：内容指纹 .sha（resume 校验用）+
+                            # 已施加语速 .spd（下次 resume 不必重放 atempo）。
+                            # 用带兜底的写入：磁盘满等 OSError 不能把这句已合成的
+                            # 音频变成"丢句"。
+                            _record_sentence_cache(
+                                out_path, task["text_tts"], task["speed"],
+                                speed_applied=speed_applied,
+                                voice_id=task["voice_id"],
+                                voice_style=task["voice_style"], model=model,
+                                base_url=base_url)
+                            if idx in sentence_speaker_labels:
+                                sd["speaker"] = sentence_speaker_labels[idx]
+                            new_results.append(sd)
+                            # 这次是真的合成成功了——如果这句之前被 --on-fail silence
+                            # 兜底过、留了个 .failed marker（比如用户手动删了旧的静音
+                            # mp3 之后重跑、这次没再失败），清掉 marker，不然下次
+                            # resume 会把这个已经补录好的句子又标成 synth_failed。
+                            # remove_if_exists 内部已判过存在性，外面不必再问一次
+                            # ——两次判断之间还有个 TOCTOU 窗口。
+                            remove_if_exists(out_path + _FAILED_SUFFIX)
+                            print(f"[TTS {done_count}/{pending_count}] {label} "
+                                  f"{preview} -> {dur:.2f}s", flush=True)
+                            continue
 
                 if args.on_fail == "silence":
                     # 降级：该句反复失败（如触发内容审核）时不再直接丢弃，改为
@@ -1500,7 +1530,7 @@ def main(argv=None):
                         # 而残留的 .orig.wav 会在用户之后改 --speed 时被 _audio
                         # 当原速源做 atempo，新字幕配上一稿的旧配音——比直接丢
                         # 这句更难查。宁可让这句走下面的 failed 分支被如实报出。
-                        if not _clear_stale_sidecars(out_path):
+                        if not _clear_stale_sidecars(out_path, (".sha",)):
                             print(f"    [{label}][warn] 上一轮 sidecar 清理失败"
                                   f"（{out_path}.orig.wav 残留），跳过静音兜底："
                                   f"落静音会让下次 --resume 把上一稿音频当原速源"

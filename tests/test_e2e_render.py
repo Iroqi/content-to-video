@@ -51,6 +51,10 @@ REQUIRED_ENV = "CTV_E2E_REQUIRED"
 SENTENCE_SECONDS = 1.6
 GAP_SECONDS = 0.4
 FPS = 12
+# 每段取两帧：只取一段一帧时，不同页不同的墨迹占比也能伪装成"整片在动"。
+MOTION_SAMPLE_FRACTIONS = (0.25, 0.75)
+# 160×200 缩略图上至少 16 个像素发生明显变化，避开编码噪声造成的假运动。
+MOTION_MIN_CHANGED_RATIO = 0.0005
 # 渲染时限。这台机器上 11.6s / 12fps 的片子实测 ~40s 出片（含一次
 # 浏览器预热），10 倍余量足够；超过它就是卡在环境准备上，不是片子太慢。
 RENDER_TIMEOUT = 420
@@ -260,12 +264,18 @@ def _ink_ratio(im):
 class RenderEndToEnd(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if os.environ.get(SKIP_ENV):
+        required = bool(os.environ.get(REQUIRED_ENV))
+        skipped = bool(os.environ.get(SKIP_ENV))
+        if required and skipped:
+            raise AssertionError(
+                f"{REQUIRED_ENV} 与 {SKIP_ENV} 不能同时设置："
+                "required 模式不允许被跳过")
+        if skipped:
             raise unittest.SkipTest(f"{SKIP_ENV} 已设置")
         miss = _missing_deps()
         if miss:
             msg = "端到端渲染缺少依赖：" + "、".join(miss)
-            if os.environ.get(REQUIRED_ENV):
+            if required:
                 raise AssertionError(msg + "（CTV_E2E_REQUIRED=1 要求必须跑）")
             raise unittest.SkipTest(msg + f"（设 {REQUIRED_ENV}=1 可强制失败）")
         cls.tmp = tempfile.TemporaryDirectory()
@@ -278,7 +288,7 @@ class RenderEndToEnd(unittest.TestCase):
             tmp.cleanup()          # 半截项目留着没意义，还占几百 MB 图片
             msg = (f"渲染 {RENDER_TIMEOUT}s 未完成（环境问题，不是产物问题）。"
                    + _timeout_hint(cls.log))
-            if os.environ.get(REQUIRED_ENV):
+            if required:
                 raise AssertionError(msg + f"\n--- 日志尾 ---\n{cls.log}")
             raise unittest.SkipTest(msg)
 
@@ -307,32 +317,46 @@ class RenderEndToEnd(unittest.TestCase):
                         f"{tol:.2f}s——多半是抓帧中断、后段没渲进去")
 
     def test_03_frames_are_not_black_or_blank(self):
-        """逐段取帧：每一帧都得有东西（不是纯背景色）、且整片得有变化。
+        """逐段取两帧：每帧有内容，且每段内部相邻帧真的发生变化。
 
-        这一条是**唯一**会在 CI 里看画面像素的判据。它不看"好不好看"
-        （那要人翻 contact sheet），只回答两个机器能回答的问题：
-        有没有一页是空的？整片有没有动过？
+        只比较每段一张帧的墨迹占比，会被"每页都静止、但页与页墨迹不同"
+        骗过；因此运动判据只看同一段内两张相邻帧的像素差，不跨段比较。
         """
+        from PIL import ImageChops
         import _render_backend as RB
-        times = [round(self.manifest["segments"][0]["sentences"][0]["start_time"]
-                       + SENTENCE_SECONDS * 0.6, 2)]
-        for seg in self.manifest["segments"][1:]:
+        import perceptual as P
+        times = []
+        for seg in self.manifest["segments"]:
             first = seg["sentences"][0]
-            times.append(round(float(first["start_time"]) + SENTENCE_SECONDS * 0.6, 2))
+            start = float(first["start_time"])
+            duration = float(first["duration"])
+            for fraction in MOTION_SAMPLE_FRACTIONS:
+                times.append(round(start + duration * fraction, 2))
         out_dir = os.path.join(self.tmp.name, "frames")
         got, why = RB.snapshot_frames(self.project, self.video, times, out_dir)
         self.assertIsNotNone(got, f"取帧失败：{why}")
-        pngs = sorted(p for p in _walk(got)
-                      if p.lower().endswith((".png", ".jpg", ".jpeg")))
-        self.assertGreaterEqual(len(pngs), len(times),
-                                f"要 {len(times)} 帧，只取到 {len(pngs)} 张")
-        inks = [_ink_ratio(_gray_frame(p)) for p in pngs]
-        blank = [p for p, k in zip(pngs, inks) if k < FIRST_FRAME_MIN_INK]
+        pairs = P._scan_frames(got)
+        self.assertEqual([round(t, 2) for t, _ in pairs[:len(times)]], times,
+                         f"取帧时刻与请求不一致：{pairs}")
+        sampled = pairs[:len(times)]
+        frames = [_gray_frame(path) for _, path in sampled]
+        inks = [_ink_ratio(im) for im in frames]
+        blank = [path for (_, path), k in zip(sampled, inks)
+                 if k < FIRST_FRAME_MIN_INK]
         self.assertFalse(blank, "以下帧几乎没有内容（面积 >99% 是同一种颜色）：\n"
                          + "\n".join(blank) + f"\n墨迹占比：{[round(i, 4) for i in inks]}")
-        self.assertGreater(max(inks) - min(inks), 0.004,
-                           f"每一帧的墨迹占比几乎一样（{[round(i, 4) for i in inks]}），"
-                           "整片可能根本没动——GSAP 时间线没跑起来")
+        per_segment = len(MOTION_SAMPLE_FRACTIONS)
+        for i, seg in enumerate(self.manifest["segments"]):
+            lo = i * per_segment
+            segment_frames = frames[lo:lo + per_segment]
+            for before, after in zip(segment_frames, segment_frames[1:]):
+                changed = ImageChops.difference(before, after).point(
+                    lambda value: 255 if value > 18 else 0)
+                ratio = changed.histogram()[255] / (before.width * before.height)
+                self.assertGreater(
+                    ratio, MOTION_MIN_CHANGED_RATIO,
+                    f"{seg.get('id', i)} 内相邻帧没有实际像素变化，"
+                    "可能是 frozen slide / GSAP 时间线没有运行")
 
     def test_04_perceptual_gate_actually_sees_frames(self):
         """观感门禁的**成功路径**：取帧 → 判词 → contact sheet，一条都不能空。

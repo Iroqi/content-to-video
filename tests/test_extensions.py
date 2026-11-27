@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
@@ -125,7 +126,7 @@ class TestManifest(unittest.TestCase):
 class TestCompileTimeRedlines(unittest.TestCase):
 
     def test_禁用墙钟与随机模块(self):
-        for mod in ("random", "time", "subprocess"):
+        for mod in ("random", "time", "subprocess", "string"):
             d = _temp_extension(_manifest(),
                                 "import %s\ndef compile(spec, ctx):\n    return {'svg': spec['svg']}\n" % mod)
             try:
@@ -149,6 +150,7 @@ class TestCompileTimeRedlines(unittest.TestCase):
             ("纯路径函数", "import os as o\ndef compile(s, c):\n    o.popen('echo x')\n    return {'svg': s['svg']}\n"),
             ("纯路径函数", "from os import system\ndef compile(s, c):\n    return {'svg': s['svg']}\n"),
             ("禁用模块", "import importlib\ndef compile(s, c):\n    return {'svg': importlib.import_module('random').random()}\n"),
+            ("禁用模块", "import string\ndef compile(s, c):\n    string.Formatter().get_field('{0.__globals__[os].getcwd}', (__import__,), {})()\n    return {'svg': s['svg']}\n"),
             ("禁用模块", "import sys\ndef compile(s, c):\n    return {'svg': sys.modules['subprocess'] and s['svg']}\n"),
             ("摸回完整内建", "def compile(s, c):\n    return {'svg': __builtins__['open'] and s['svg']}\n"),
             ("摸回完整内建", "_imp = __import__\ndef compile(s, c):\n    return {'svg': _imp('time') and s['svg']}\n"),
@@ -188,6 +190,11 @@ class TestCompileTimeRedlines(unittest.TestCase):
             "getattr": "import os\ndef compile(s, c):\n    getattr(os, 'system')\n    return {'svg': s['svg']}",
             "from os import system": "from os import system\ndef compile(s, c):\n    return {'svg': s['svg']}",
             "os.path.exists": "from os.path import exists\ndef compile(s, c):\n    return {'svg': s['svg']}",
+            "string.Formatter get_field": (
+                "import string\ndef compile(s, c):\n"
+                "    string.Formatter().get_field("
+                "'{0.__globals__[os].getcwd}', (__import__,), {})()\n"
+                "    return {'svg': s['svg']}"),
             "__loader__": "def compile(s, c):\n    __loader__\n    return {'svg': s['svg']}",
         }.items():
             with self.subTest(label):
@@ -269,9 +276,28 @@ class TestOrthogonality(unittest.TestCase):
 
     def test_verify_output认净化与正交两条(self):
         ext = _sketch()
-        errs, warns = _extensions.verify_output(ext, _compile(), base_svg=BASE_SVG)
+        base = BASE_SVG.replace(
+            "<svg ", '<svg id="root" class="art" width="640" height="480" '
+                    'preserveAspectRatio="xMinYMin meet" ', 1)
+        out = {"svg": base.replace(
+            "<rect ", '<script>alert(1)</script><defs><linearGradient id="grad"/>'
+                      '</defs><rect class="shape" ', 1).replace(
+            'fill="#6ee7c8"', 'fill="url(#grad)"', 1)}
+        errs, warns = _extensions.verify_output(ext, out, base_svg=base)
         self.assertEqual(errs, [])
         self.assertEqual(warns, [])
+        root = ET.fromstring(out["svg"])
+        self.assertEqual(root.get("id"), "root")
+        self.assertEqual(root.get("class"), "art")
+        self.assertEqual(root.get("width"), "640")
+        self.assertEqual(root.get("height"), "480")
+        self.assertEqual(root.get("preserveAspectRatio"), "xMinYMin meet")
+        self.assertIn('class="shape"', out["svg"])
+        self.assertIn('fill="url(#grad)"', out["svg"])
+        self.assertNotIn("<script", out["svg"].lower())
+        self.assertNotIn("data-ctv-svg-scope", out["svg"])
+        self.assertNotIn("ctv-svg-", out["svg"])
+        self.assertEqual(_extensions.svg_ids(base), _extensions.svg_ids(out["svg"]))
 
     def test_扩展偷改id集合按文件拦(self):
         d = _temp_extension(
@@ -301,6 +327,18 @@ class TestProvenance(unittest.TestCase):
         with self.assertRaisesRegex(_extensions.ExtensionError, "技能目录"):
             extension._guard_output(
                 os.path.join(ROOT, "scripts", "leak.svg"), "-o")
+
+        # 父目录是软链接时，abspath/commonpath 仍把它当项目外路径；realpath
+        # 守卫必须看穿链接，拒绝借它把产物写进技能源码树。
+        with tempfile.TemporaryDirectory(prefix="ctv-ext-link-") as d:
+            link = os.path.join(d, "skill-link")
+            try:
+                os.symlink(ROOT, link, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest("本机不能建目录软链接：%s" % exc)
+            with self.assertRaisesRegex(_extensions.ExtensionError, "技能目录"):
+                extension._guard_output(
+                    os.path.join(link, "scripts", "leak.svg"), "-o")
 
     def test_来源记账带版本与源码哈希(self):
         p = _extensions.provenance(_sketch())

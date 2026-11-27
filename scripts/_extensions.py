@@ -53,10 +53,12 @@ ALLOWED_OUTPUTS = frozenset({"svg", "steps", "media"})
 # `sys.modules["subprocess"]` 一个都不在表上，却都做成了同一件事——黑名单只能
 # 拦"作者恰好写了被点名的那一个"。
 #   不收 operator（attrgetter 是 getattr 的别名）、types（FunctionType 能从码对象
-#   造函数）、copy/copypickle 一类（对象图里能摸到任意属性）。
+#   造函数）、copy/copypickle 一类（对象图里能摸到任意属性）。string 也不收：
+#   Formatter.get_field 会在受限命名空间里替扩展执行属性/下标遍历，已知可借
+#   __import__.__globals__ 摸回真实 os，等价于把 getattr 重新交了出去。
 ALLOWED_MODULES = frozenset({
     "math", "re", "json", "xml", "html", "unicodedata", "itertools", "functools",
-    "collections", "string", "textwrap", "fractions", "decimal", "statistics",
+    "collections", "textwrap", "fractions", "decimal", "statistics",
     "bisect", "hashlib", "base64", "struct", "numbers",
 })
 # 编译期禁调的内建名。AST 层拦 Name 形式的直接调用，运行期层把它们整个从
@@ -437,6 +439,9 @@ def assert_deterministic(ext, spec, ctx=None):
 def verify_output(ext, out, base_svg=None):
     """统一校验：扩展输出走与手写 SVG 同一套净化与门禁，返回 (errs, warns)。
 
+    SVG 净化成功后原地回写 out["svg"]，调用方随后落盘的就是这份已验证文本，
+    不能再把 compile() 的原始字符串当作安全产物。这里使用 standalone 净化：
+    保留作者 id/class/尺寸与内部引用，内联命名空间由 gen_hyperframes 独占一次。
     base_svg 给了就做正交判据——扩展前后的 `#id` 集合必须完全一致。这是
     「换画风不动一行 animate.steps」的机器判据：编排按 #id 寻址，画风不能
     偷偷改名、加壳、删节点。
@@ -447,18 +452,20 @@ def verify_output(ext, out, base_svg=None):
     if "svg" in out:
         try:
             import _svg_sanitize
-            clean, notes = _svg_sanitize.sanitize_svg_for_inline(out["svg"])
+            clean, notes = _svg_sanitize.sanitize_svg_for_standalone(out["svg"])
+            out["svg"] = clean
             if "<script" in clean.lower() or "<foreignobject" in clean.lower():
                 errs.append("%s 的 svg 净化后仍含脚本宿主" % where)
             for note in notes:
                 if "墙钟" in note or "SMIL" in note:
                     errs.append("%s 的 svg 含墙钟动画：逐帧 seek 下不可复现" % where)
         except Exception as exc:  # 净化器自身对坏 SVG 抛 ValueError，照单打回
-            errs.append("%s 的 svg 过不了内联净化：%s" % (where, exc))
+            errs.append("%s 的 svg 过不了安全净化：%s" % (where, exc))
             clean = None
         if clean is not None and base_svg is not None:
             try:
-                before, after = svg_ids(base_svg), svg_ids(clean)
+                before = svg_ids(base_svg)
+                after = svg_ids(clean)
             except ET.ParseError as exc:
                 errs.append("%s 的 svg 解析失败：%s" % (where, exc))
             else:

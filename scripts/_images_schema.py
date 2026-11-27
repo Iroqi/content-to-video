@@ -12,6 +12,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _animate  # noqa: E402  编排块的形状（steps/params/bind）只有一份读法
+from _svg_sanitize import (  # noqa: E402  SVG 净化与 URL/CSS 判据只有一份
+    _CSS_COMMENT, _css_unescape, _is_external_href,
+)
 from _script_utils import read_json_file  # noqa: E402
 from _segments import SID_RULE, is_valid_sid  # noqa: E402
 from _path_morph import check_morphable  # noqa: E402
@@ -162,6 +165,171 @@ _PAYLOAD_CONTROL_KEYS = frozenset({"duration", "ease", "delay", "stagger",
 # `tests/test_shared_geometry.py` 钉住。
 ATTR_KEY = "attr"
 
+# GSAP 的 attr 通道会绕过 SVG 净化器，直接对净化后的活 DOM 调 setAttribute。
+# 因此这里必须再收一次口：属性名只收 SVG 的安全白名单（外加 data-*/aria-*），
+# 值里的 url() 只允许内部片段。href/xlink:href/style/on* 一律不进——它们要么能
+# 导航执行脚本，要么能重新引入净化器已经剥掉的外链 CSS。
+_SVG_ATTR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_SVG_DATA_ATTR_RE = re.compile(r"^(?:data|aria)-[A-Za-z_][A-Za-z0-9_.-]*$")
+_SAFE_SVG_ATTRS = frozenset({
+    # 结构 / 文本
+    "id", "class", "role", "tabindex", "lang", "dir",
+    "viewBox", "preserveAspectRatio", "version", "baseProfile",
+    "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
+    "width", "height", "d", "points", "pathLength", "dx", "dy", "rotate",
+    "textLength", "lengthAdjust",
+    # 呈现属性（动画里最常用的 fill/stroke/opacity/transform 都在这里）
+    "transform", "opacity", "fill", "fill-opacity", "fill-rule",
+    "stroke", "stroke-width", "stroke-opacity", "stroke-dasharray",
+    "stroke-dashoffset", "stroke-linecap", "stroke-linejoin",
+    "stroke-miterlimit", "color", "display", "visibility", "overflow",
+    "clip", "clip-path", "clip-rule", "mask", "filter", "cursor",
+    "marker-start", "marker-mid", "marker-end", "marker",
+    "stop-color", "stop-opacity", "flood-color", "flood-opacity",
+    "lighting-color", "color-interpolation", "color-interpolation-filters",
+    "color-profile", "color-rendering", "image-rendering", "shape-rendering",
+    "text-rendering", "paint-order", "vector-effect", "pointer-events",
+    "font-family", "font-size", "font-size-adjust", "font-stretch",
+    "font-style", "font-variant", "font-weight", "text-anchor",
+    "text-decoration", "letter-spacing", "word-spacing", "kerning",
+    "dominant-baseline", "alignment-baseline", "baseline-shift",
+    "direction", "unicode-bidi", "writing-mode", "glyph-orientation-horizontal",
+    "glyph-orientation-vertical",
+    # 渐变 / 图案 / 标记 / 裁剪与滤镜的常用几何
+    "gradientUnits", "gradientTransform", "spreadMethod", "offset", "fx", "fy", "fr",
+    "patternUnits", "patternContentUnits", "patternTransform",
+    "markerUnits", "markerWidth", "markerHeight", "refX", "refY", "orient",
+    "clipPathUnits", "maskUnits", "maskContentUnits",
+    "filterUnits", "primitiveUnits", "in", "in2", "result", "type", "mode",
+    "operator", "values", "k1", "k2", "k3", "k4", "radius", "stdDeviation",
+    "baseFrequency", "numOctaves", "seed", "scale", "xChannelSelector",
+    "yChannelSelector", "edgeMode", "kernelMatrix", "divisor", "bias",
+    "targetX", "targetY", "preserveAlpha", "surfaceScale", "diffuseConstant",
+    "specularConstant", "specularExponent", "limitingConeAngle", "azimuth",
+    "elevation", "z", "pointsAtX", "pointsAtY", "pointsAtZ",
+})
+_FORBIDDEN_SVG_ATTRS = frozenset({
+    "href", "src", "style", "action", "formaction", "cite", "background",
+    "longdesc", "poster", "data", "codebase", "classid", "profile", "usemap",
+    "manifest", "icon", "ping", "srcdoc", "xmlns",
+})
+_CSS_URL_RE = re.compile(r"url\s*\(", re.I)
+_CSS_URL_CALL_RE = re.compile(
+    r"url\s*\(\s*(['\"]?)(.*?)\1\s*\)", re.I | re.S)
+_CSS_FRAGMENT_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_.:-]*$")
+_CSS_DANGER_RE = re.compile(
+    r"@\s*import|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding\s*:",
+    re.I)
+_CSS_EMBEDDED_URL_RE = re.compile(
+    r"(?:^|[\s(\"',=])(?:[a-z][a-z0-9+.-]*:|//)", re.I)
+# 非 attr 的 GSAP 通道最终都落到 CSS/DOM。id/class 会覆盖净化时加上的命名空间
+# 身份（后续 step 与跨段接续都按它找元素）；其余键则直接改写 DOM、导航或内联样式。
+# 大小写不敏感：浏览器/DOM 对这些名字按小写处理，不能靠 "ID" 绕过。
+_FORBIDDEN_TWEEN_CSS_KEYS = frozenset({
+    "id", "class", "innerhtml", "outerhtml", "textcontent", "innertext",
+    "value", "href", "src", "style",
+})
+_SVG_URL_ATTRS = frozenset({
+    "fill", "stroke", "filter", "clip-path", "mask", "marker-start",
+    "marker-mid", "marker-end", "marker", "cursor", "color-profile",
+})
+
+
+def validate_svg_attr_name(name, where):
+    """animate 的 ``attr`` 只允许安全 SVG 属性名。
+
+    白名单而不是“只挡 on*”：净化后的 SVG 已是同源活 DOM，href/style 这类名字
+    本身就能重新打开脚本导航或外链 CSS 的面。data-*/aria-* 是惰性元数据，按
+    合法 XML 属性名放行。
+    """
+    if not isinstance(name, str) or not _SVG_ATTR_NAME_RE.fullmatch(name):
+        raise ValueError(f"{where} 的属性名 {name!r} 不合法——只收 SVG 属性名")
+    lower = name.lower()
+    if (lower.startswith("on") or lower in _FORBIDDEN_SVG_ATTRS
+            or lower.startswith("xmlns")):
+        raise ValueError(
+            f"{where} 含不安全属性 {name!r}——animate 的 attr 不接受 href/style/"
+            "on* 等可执行或可导航属性")
+    if name in _SAFE_SVG_ATTRS or _SVG_DATA_ATTR_RE.fullmatch(name):
+        return name
+    raise ValueError(
+        f"{where} 含不支持的 SVG 属性 {name!r}——只收几何/呈现属性与 "
+        "data-*/aria-* 元数据")
+
+
+def _validate_svg_attr_text(name, value, where):
+    """attr 字符串值里的 CSS/URL 安全闸门。
+
+    先按 CSS 规则还原转义并剥注释，避免 ``\\68 ttps://`` / ``u/**/rl(...)`` 之类
+    在浏览器眼里成立、在正则眼里不存在的绕过。url() 只留内部片段引用（渐变、
+    滤镜、mask 都靠它），外链、协议相对与 file:/data:/javascript: 一律拒。
+    """
+    decoded = _CSS_COMMENT.sub("", _css_unescape(value))
+    if "\x00" in decoded:
+        raise ValueError(f"{where} 不得包含 NUL 字节")
+    if _CSS_DANGER_RE.search(decoded):
+        raise ValueError(f"{where} 含不安全 CSS（@import/expression/behavior）")
+    if _CSS_URL_RE.search(decoded):
+        calls = list(_CSS_URL_CALL_RE.finditer(decoded))
+        for match in calls:
+            target = match.group(2).strip()
+            if not _CSS_FRAGMENT_RE.fullmatch(target):
+                raise ValueError(
+                    f"{where} 的 url() 只允许内部片段引用（如 url(#gradient)），"
+                    f"实际: {value!r}")
+        # finditer 可能漏掉未闭合或嵌套写法；只要 url( 的个数与完整调用数不同，
+        # 就按无法证明安全拒收，不猜浏览器会怎么解析。
+        if len(calls) != len(_CSS_URL_RE.findall(decoded)):
+            raise ValueError(f"{where} 含无法解析的 url()，实际: {value!r}")
+    if name in _SVG_URL_ATTRS and _is_external_href(decoded):
+        raise ValueError(f"{where} 含外部或脚本 URL，实际: {value!r}")
+
+
+def _validate_tween_css_value(value, where):
+    """非 attr 通道的 CSS 字符串闸门（含数组里的每一项）。
+
+    与 attr 共用转义/注释归一和 url() 判据，但这里连裸的外部 URL 也拒：
+    这些值会被 GSAP 写进 style，`https://…` / `//…` 不能只等 url() 包裹才拦。
+    """
+    if isinstance(value, str):
+        _validate_svg_attr_text(None, value, where)
+        decoded = _CSS_COMMENT.sub("", _css_unescape(value))
+        if _is_external_href(decoded) or _CSS_EMBEDDED_URL_RE.search(decoded):
+            raise ValueError(f"{where} 含外部或脚本 URL，实际: {value!r}")
+        return
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            _validate_tween_css_value(item, f"{where}[{i}]")
+
+
+def _validate_svg_attr_value(name, value, where):
+    if isinstance(value, str):
+        _validate_svg_attr_text(name, value, where)
+        return
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            _validate_svg_attr_value(name, item, f"{where}[{i}]")
+        return
+    if isinstance(value, dict):
+        raise ValueError(f"{where} 必须是标量或数组（实际: {type(value).__name__}）")
+
+
+def validate_svg_attr_map(attrs, where):
+    """校验并原样返回 GSAP ``attr`` 映射（契约层与渲染端共用）。"""
+    if not isinstance(attrs, dict):
+        raise ValueError(f"{where} 必须是对象（SVG 属性名 → 值）")
+    clash = sorted(_PAYLOAD_CONTROL_KEYS & set(attrs))
+    if clash:
+        raise ValueError(
+            f"{where} 里写了 {clash}——这些旋钮只在 step 级有定义，"
+            "放在补间变量里要么被渲染端覆盖、要么让补间的真实跨度与门禁算的"
+            "那个数分家。把它们提到这一 step 上")
+    for name, value in attrs.items():
+        validate_svg_attr_name(name, f"{where} 的 {name!r}")
+        _validate_tween_leaf(value, f"{where} 的 {name!r}")
+        _validate_svg_attr_value(name, value, f"{where} 的 {name!r}")
+    return attrs
+
 # 无限循环（repeat:-1）的放行开关：与 `_ease.allow_extra` 同一个形状，只由
 # `gen_hyperframes --allow-infinite-loop`（预览档）在进程内打开。**契约层默认拒收**，
 # 因为它换不来任何画面收益，只换来一条 1e10 量级的总时长——而"按时刻取帧"是核对
@@ -181,11 +349,12 @@ _RELATIVE_AT_TIME_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 
 
 def _validate_tween_vars(vars_, where):
-    """GSAP 补间变量：只允许 JSON 可序列化的值，禁 on* 回调键与控制旋钮。
+    """GSAP 补间变量：禁回调/控制旋钮，并收紧非 attr 的 CSS/DOM 通道。
 
     这些字典会被 json.dumps 注入内联脚本：JSON 转义挡住了字符串注入，但 on*
     回调键等于在渲染页里执行任意 JS，一律不收。允许嵌套 dict（attr:{}），逐层
-    校验叶子是标量。
+    校验叶子是标量。attr 走 SVG 属性白名单；其余键会被 GSAP 写进 style，不能
+    覆盖 id/class 等命名空间身份，字符串也只收无外部 URL 的 CSS 安全值。
 
     控制旋钮（_PAYLOAD_CONTROL_KEYS）必须在这一层判：调用点只认顶层，
     `{"to": {"attr": {"duration": 2}}}` 会漏过去。
@@ -206,17 +375,25 @@ def _validate_tween_vars(vars_, where):
                 f"{where} 含回调键 {k!r}——animate 只接受可序列化的补间属性，"
                 "不接受 onStart/onUpdate/onComplete 这类回调（信源不可信，"
                 "回调等于在渲染页执行任意逻辑）")
-        if k == ATTR_KEY and not isinstance(v, dict):
+        if k.lower() in _FORBIDDEN_TWEEN_CSS_KEYS:
+            raise ValueError(
+                f"{where} 含不安全 CSS/DOM 键 {k!r}——非 attr 通道不接受会覆盖"
+                "命名空间 SVG 身份或改写 DOM/导航的 id、class、href、style 等键")
+        if k == ATTR_KEY:
             # GSAP 的 attr 是"SVG 属性名 → 值"的一集合。标量与数组在渲染端不报错
             # （补间静默无效），真正的坏在跨段接续：烘焙 _settle_payload 只认 dict，
             # 非 dict 掉进 CSS 通道，把 style="attr:5" 写死在下一页的起始画面上——
             # 本页看着没事，接续页第 0 帧就是坏的。
-            raise ValueError(
-                f"{where} 的 'attr' 必须是对象（SVG 属性名 → 值，如 "
-                f"{{\"d\": \"M0 0L1 1\"}}）（实际: {v!r}）——非对象写法不会当场报错，"
-                "只会在跨段接续的烘焙里被当成 CSS 属性写进 style，"
-                "让下一页的起始画面从第一帧就是坏的")
+            if not isinstance(v, dict):
+                raise ValueError(
+                    f"{where} 的 'attr' 必须是对象（SVG 属性名 → 值，如 "
+                    f"{{\"d\": \"M0 0L1 1\"}}）（实际: {v!r}）——非对象写法不会当场报错，"
+                    "只会在跨段接续的烘焙里被当成 CSS 属性写进 style，"
+                    "让下一页的起始画面从第一帧就是坏的")
+            validate_svg_attr_map(v, f"{where} 的 'attr'")
+            continue
         _validate_tween_leaf(v, f"{where} 的 {k!r}")
+        _validate_tween_css_value(v, f"{where} 的 {k!r}")
 
 
 def _validate_tween_leaf(v, where):

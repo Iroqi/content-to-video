@@ -30,7 +30,7 @@ import gen_hyperframes as GH  # noqa: E402
 NS = "http://www.w3.org/2000/svg"
 
 # manifest 的句子层是必填的（空列表直接拒），给一条最小合法句
-_SENT = [{"index": 1, "text": "x", "start_time": 0.0, "duration": 1.0}]
+_SENT = [{"index": 0, "text": "x", "start_time": 0.0, "duration": 1.0}]
 
 
 def _source(name):
@@ -252,21 +252,14 @@ class MediaVerdictSingleSource(unittest.TestCase):
 
 
 class OnScreenTextContractShared(unittest.TestCase):
-    """「上墙一行不收分号」这条约束，写稿入口与手写 manifest 入口同一份。
-
-    修复前：`_source_schema` 对 title/tagline/takeaway/cta 走
-    `_validate_display_text`，`_manifest_schema` 连这个函数都没导入——
-    manifest 是文档明写"确需手写可按格式提供"的接口，正是手写最容易撞的地方。
-    同一句带分号的标题：写稿时被拒，写进 manifest 就静默上墙，而 agenda 行宽
-    是死的，第二件事在成片里被 nameTrim 悄悄裁掉。
-    """
+    """上墙文字与 manifest 句子规范化：两个入口都不能静默改变渲染。"""
 
     def test_both_entrypoints_share_the_field_list(self):
         self.assertEqual(SS.ON_SCREEN_SEGMENT_KEYS, MS.ON_SCREEN_SEGMENT_KEYS)
         self.assertNotIn("ON_SCREEN_SEGMENT_KEYS = ", _source("_manifest_schema.py"),
                          "manifest 侧不许自己列一份上墙字段清单")
 
-    def test_semicolon_rejected_in_both_entrypoints(self):
+    def test_both_entrypoints_enforce_render_contracts(self):
         src_seg = {"id": "seg1", "title": "甲；乙", "text": "口播稿不受这条约束"}
         with self.assertRaises(ValueError) as src_ctx:
             SS.validate_segments_source({"segments": [src_seg]})
@@ -285,6 +278,70 @@ class OnScreenTextContractShared(unittest.TestCase):
                                          "sentences": _SENT, "total_duration": 1.0,
                                          "closing_cta": "甲；乙"})
         self.assertIn("分号", str(cta_ctx.exception))
+
+        def segment_sentence(m, idx):
+            return next(s for sg in m["segments"] for s in sg["sentences"]
+                        if s["index"] == idx)
+
+        # 原始句序只要求唯一、严格递增：前句失败/丢弃后允许跳号，甚至从 1 起。
+        MS.validate_timing_manifest(H.make_manifest())
+        for remap, name in ((lambda idx: idx + 10, "top gap"),
+                            (lambda idx: idx + 1, "first sentence dropped")):
+            m = H.make_manifest()
+            for s in m["sentences"]:
+                s["index"] = remap(s["index"])
+            for sg in m["segments"]:
+                for s in sg["sentences"]:
+                    s["index"] = remap(s["index"])
+            with self.subTest(name=name):
+                MS.validate_timing_manifest(m)
+
+        bad_cases = []
+        m = H.make_manifest()
+        m["sentences"][1]["index"] = m["sentences"][0]["index"]
+        bad_cases.append(("top duplicate index", m, "重复"))
+        m = H.make_manifest()
+        m["sentences"][0]["index"], m["sentences"][1]["index"] = 1, 0
+        bad_cases.append(("top reverse index", m, "严格递增"))
+        m = H.make_manifest()
+        ss = next(sg["sentences"] for sg in m["segments"]
+                  if len(sg["sentences"]) >= 2)
+        ss.reverse()
+        bad_cases.append(("segment reverse index", m, "严格递增"))
+        m = H.make_manifest()
+        m["segments"].reverse()
+        bad_cases.append(("cross-segment reverse index", m, "严格递增"))
+        m = H.make_manifest()
+        ss = next(sg["sentences"] for sg in m["segments"] if sg["sentences"])
+        ss[0]["index"] = 99
+        bad_cases.append(("missing sentence reference", m, "不存在"))
+        m = H.make_manifest()
+        ss = next(sg["sentences"] for sg in m["segments"] if sg["sentences"])
+        ss.append(dict(ss[0]))
+        bad_cases.append(("segment duplicate reference", m, "重复"))
+
+        # speaker / onset / voiced 都会改变实际画面，段内副本不能与顶层分家。
+        for field, value in (("speaker", "other"), ("onset", 0.2),
+                             ("voiced", 1.1)):
+            m = H.make_manifest()
+            top = m["sentences"][0]
+            top.update({"speaker": "host", "onset": 0.1, "voiced": 1.0})
+            seg = segment_sentence(m, 0)
+            seg.update({"speaker": "host", "onset": 0.1, "voiced": 1.0})
+            seg[field] = value
+            bad_cases.append((field + " mismatch", m, "speaker/onset/voiced"))
+        for name, manifest, contains in bad_cases:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, contains):
+                    MS.validate_timing_manifest(manifest)
+
+        # 三个渲染字段一致时放行。
+        m = H.make_manifest()
+        m["sentences"][0].update(
+            {"speaker": "host", "onset": 0.1, "voiced": 1.0})
+        segment_sentence(m, 0).update(
+            {"speaker": "host", "onset": 0.1, "voiced": 1.0})
+        MS.validate_timing_manifest(m)
 
 
 class CssColorTableSelfConsistent(unittest.TestCase):
